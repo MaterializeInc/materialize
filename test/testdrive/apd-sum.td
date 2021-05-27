@@ -219,7 +219,7 @@ NaN
 $ file-append path=scaled_values.csv
 1.2
 2.3
-3.4
+3.4001
 
 > CREATE MATERIALIZED SOURCE apd_csv_2
   FROM FILE '${testdrive.temp-dir}/scaled_values.csv' WITH (tail = true)
@@ -232,10 +232,12 @@ $ file-append path=scaled_values.csv
 > CREATE MATERIALIZED VIEW apd_scaled_values_sum AS
     SELECT sum(a)::apd(39, 3) AS sum_a FROM apd_scaled_values;
 
+# Even though the sum is supposed to be rescaled to 3 decimals, the reudction
+# before packing the values into a row trims the trailing zeroes. However, the # rescale still works because the values are rounded to 3 units of scale.
 > SELECT sum_a::text AS sum_a FROM apd_scaled_values_sum;
 sum_a
 ----
-6.900
+6.9
 
 $ file-append path=scaled_values.csv
 0.0
@@ -243,17 +245,17 @@ $ file-append path=scaled_values.csv
 > SELECT sum_a::text AS sum_a FROM apd_scaled_values_sum;
 sum_a
 ----
-6.900
+6.9
 
 $ file-append path=scaled_values.csv
 -1.2
 -2.3
--3.4
+-3.4001
 
 > SELECT sum_a::text AS sum_a FROM apd_scaled_values_sum;
 sum_a
 ----
-0.000
+0
 
 # Values < 5e(-scale) round to a version of zero
 $ file-append path=scaled_values.csv
@@ -262,7 +264,7 @@ $ file-append path=scaled_values.csv
 > SELECT sum_a::text AS sum_a FROM apd_scaled_values_sum;
 sum_a
 ----
-0.000
+0
 
 $ file-append path=scaled_values.csv
 0.0005
@@ -346,7 +348,7 @@ sum_a
 0
 
 # Inputing values that are invalid for the scale generates errors, equivalent to
-# overflow
+# overflow.
 $ file-append path=scaled_inputs.csv
 1e38
 
@@ -356,7 +358,8 @@ $ file-append path=scaled_inputs.csv
 Evaluation error: numeric field overflow
 
 # Errored state is NOT invertible; would require retracting value that caused
-# error in apd_scaled_inputs
+# error in apd_scaled_inputs, which is a feature append-only sources do not
+# support.
 $ file-append path=scaled_inputs.csv
 -1e38
 
