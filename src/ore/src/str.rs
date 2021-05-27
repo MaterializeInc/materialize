@@ -71,3 +71,66 @@ impl<'a> Deref for QuotedStr<'a> {
         &self.0
     }
 }
+
+/// Creates a type whose [`fmt::Display`] implementation outputs item preceded
+/// by `open` and followed by `close`.
+pub fn bracketed<'a, D>(open: &'a str, close: &'a str, contents: D) -> impl fmt::Display + 'a
+where
+    D: fmt::Display + 'a,
+{
+    struct Bracketed<'a, D> {
+        open: &'a str,
+        close: &'a str,
+        contents: D,
+    }
+
+    impl<'a, D> fmt::Display for Bracketed<'a, D>
+    where
+        D: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}{}{}", self.open, self.contents, self.close)
+        }
+    }
+
+    Bracketed {
+        open,
+        close,
+        contents,
+    }
+}
+
+/// Creates a type whose [`fmt::Display`] implementation outputs each item in
+/// `iter` separated by `separator`.
+pub fn separated<'a, I>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
+where
+    I: IntoIterator,
+    I::IntoIter: Clone + 'a,
+    I::Item: fmt::Display + 'a,
+{
+    struct Separated<'a, I> {
+        separator: &'a str,
+        iter: I,
+    }
+
+    impl<'a, I> fmt::Display for Separated<'a, I>
+    where
+        I: Iterator + Clone,
+        I::Item: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            for (i, item) in self.iter.clone().enumerate() {
+                if i != 0 {
+                    write!(f, "{}", self.separator)?;
+                }
+                write!(f, "{}", item)?;
+            }
+            Ok(())
+        }
+    }
+
+    Separated {
+        separator,
+        iter: iter.into_iter(),
+    }
+}
