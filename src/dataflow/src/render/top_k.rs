@@ -59,7 +59,14 @@ where
                     // Materialize and commonly used by users.
                     render_top1_monotonic(ok_input, group_key, order_key)
                 } else if *monotonic && *offset == 0 {
-                    // For monotonic inputs, we are able to retract inputs not produced as outputs.
+                    // For monotonic inputs, we are able to retract inputs that can no longer be produced
+                    // as outputs. Any inputs beyond `offset + limit` will never again be produced as
+                    // outputs, and can be removed. The simplest form of this is when `offset == 0` and
+                    // these removeable records are those in the input not produced in the output.
+                    // TODO: consider broadening this optimization to `offset > 0` by first filtering
+                    // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
+                    // of `offset` and `limit`, discarding only the records not produced in the intermediate
+                    // stage.
                     use differential_dataflow::operators::iterate::Variable;
                     let delay = std::time::Duration::from_nanos(10_000_000_000);
                     let retractions =
