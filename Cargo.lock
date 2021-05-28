@@ -903,6 +903,7 @@ checksum = "915134aa3f3670c6dfd8b7bfda62cfc3025fb319dd08245e9d58df33183830c2"
 dependencies = [
  "decnumber-sys",
  "libc",
+ "serde",
  "static_assertions",
 ]
 

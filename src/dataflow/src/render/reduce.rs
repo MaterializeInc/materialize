@@ -78,8 +78,10 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
+use dec::OrderedDecimal;
 use expr::{AggregateExpr, AggregateFunc, MirRelationExpr};
 use ore::cast::CastFrom;
+use repr::adt::apd::{self, Apd, ApdAgg};
 use repr::{Datum, DatumList, Row, RowArena};
 
 use super::context::Context;
@@ -1077,6 +1079,19 @@ enum AccumInner {
         /// The number of non-NULL values observed.
         non_nulls: isize,
     },
+    /// Accumulates arbitrary precision decimals.
+    APD {
+        /// Accumulates non-special values
+        accum: OrderedDecimal<ApdAgg>,
+        /// Counts +inf
+        pos_infs: isize,
+        /// Counts -inf
+        neg_infs: isize,
+        /// Counts NaNs
+        nans: isize,
+        /// Counts non-NULL values
+        non_nulls: isize,
+    },
 }
 
 impl Semigroup for AccumInner {
@@ -1084,6 +1099,19 @@ impl Semigroup for AccumInner {
         match self {
             AccumInner::Bool { trues, falses } => trues.is_zero() && falses.is_zero(),
             AccumInner::SimpleNumber { accum, non_nulls } => accum.is_zero() && non_nulls.is_zero(),
+            AccumInner::APD {
+                accum,
+                pos_infs,
+                neg_infs,
+                nans,
+                non_nulls,
+            } => {
+                accum.0.is_zero()
+                    && pos_infs.is_zero()
+                    && neg_infs.is_zero()
+                    && nans.is_zero()
+                    && non_nulls.is_zero()
+            }
         }
     }
 
@@ -1109,6 +1137,54 @@ impl Semigroup for AccumInner {
                 *accum += other_accum;
                 *non_nulls += other_non_nulls;
             }
+            (
+                AccumInner::APD {
+                    accum,
+                    pos_infs,
+                    neg_infs,
+                    nans,
+                    non_nulls,
+                },
+                AccumInner::APD {
+                    accum: other_accum,
+                    pos_infs: other_pos_infs,
+                    neg_infs: other_neg_infs,
+                    nans: other_nans,
+                    non_nulls: other_non_nulls,
+                },
+            ) => {
+                let mut cx_agg = apd::cx_agg();
+                cx_agg.add(&mut accum.0, &other_accum.0);
+                // `rounded` signals we have exceeded the aggregator's max
+                // precision, which means we've lost commutativity and
+                // associativity; nothing to be done here, so panic. For more
+                // context, see the DEC_Rounded definition at
+                // http://speleotrove.com/decimal/dncont.html
+                assert!(!cx_agg.status().rounded(), "AccumInner::APD overflow");
+                // Reduce to reclaim unused decimal precision. Note that this
+                // reduction must happen somewhere to make the following
+                // invertible:
+                // ```
+                // CREATE TABLE a (a apd);
+                // CREATE MATERIALIZED VIEW t as SELECT sum(a) FROM a;
+                // INSERT INTO a VALUES ('9e39'), ('9e-39');
+                // ```
+                // This will now return infinity. However, we can retract the
+                // value that blew up its precision:
+                // ```
+                // INSERT INTO a VALUES ('-9e-39');
+                // ```
+                // This leaves `t`'s aggregator with a value of 9e39. However,
+                // without doing a reduction, `libdecnum` will store the value
+                // as 9e39+0e-39, which still exceeds the narrower context's
+                // precision. By doing the reduction, we can "reclaim" the 39
+                // digits of precision.
+                cx_agg.reduce(&mut accum.0);
+                *pos_infs += other_pos_infs;
+                *neg_infs += other_neg_infs;
+                *nans += other_nans;
+                *non_nulls += other_non_nulls;
+            }
             (l, r) => unreachable!(
                 "Accumulator::plus_equals called with non-matching variants: {:?} vs {:?}",
                 l, r
@@ -1131,6 +1207,33 @@ impl Multiply<isize> for AccumInner {
                 accum: accum * i128::cast_from(factor),
                 non_nulls: non_nulls * factor,
             },
+            AccumInner::APD {
+                accum,
+                pos_infs,
+                neg_infs,
+                nans,
+                non_nulls,
+            } => {
+                let mut cx = apd::cx_agg();
+                let mut f = ApdAgg::from(factor);
+                // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
+                // always be an integer, i.e. we are never increasing the
+                // values' scale.
+                cx.mul(&mut f, &accum.0);
+                // `rounded` signals we have exceeded the aggregator's max
+                // precision, which means we've lost commutativity and
+                // associativity; nothing to be done here, so panic. For more
+                // context, see the DEC_Rounded definition at
+                // http://speleotrove.com/decimal/dncont.html
+                assert!(!cx.status().rounded(), "AccumInner::APD multiply overflow");
+                AccumInner::APD {
+                    accum: OrderedDecimal(f),
+                    pos_infs: pos_infs * factor,
+                    neg_infs: neg_infs * factor,
+                    nans: nans * factor,
+                    non_nulls: non_nulls * factor,
+                }
+            }
         }
     }
 }
@@ -1213,6 +1316,13 @@ where
                     trues: 0,
                     falses: 0,
                 },
+                AggregateFunc::SumAPD => AccumInner::APD {
+                    accum: OrderedDecimal(ApdAgg::zero()),
+                    pos_infs: 0,
+                    neg_infs: 0,
+                    nans: 0,
+                    non_nulls: 0,
+                },
                 _ => AccumInner::SimpleNumber {
                     accum: 0,
                     non_nulls: 0,
@@ -1250,6 +1360,40 @@ where
                     non_nulls: 0,
                 },
                 x => panic!("Invalid argument to AggregateFunc::Dummy: {:?}", x),
+            },
+            AggregateFunc::SumAPD => match datum {
+                Datum::APD(n) => {
+                    let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
+                        if n.0.is_negative() {
+                            (ApdAgg::zero(), 0, 1, 0)
+                        } else {
+                            (ApdAgg::zero(), 1, 0, 0)
+                        }
+                    } else if n.0.is_nan() {
+                        (ApdAgg::zero(), 0, 0, 1)
+                    } else {
+                        // Take a narrow decimal (datum) into a wide decimal
+                        // (aggregator).
+                        let mut cx_agg = apd::cx_agg();
+                        (cx_agg.to_width(n.0), 0, 0, 0)
+                    };
+
+                    AccumInner::APD {
+                        accum: OrderedDecimal(accum),
+                        pos_infs,
+                        neg_infs,
+                        nans,
+                        non_nulls: 1,
+                    }
+                }
+                Datum::Null => AccumInner::APD {
+                    accum: OrderedDecimal(ApdAgg::zero()),
+                    pos_infs: 0,
+                    neg_infs: 0,
+                    nans: 0,
+                    non_nulls: 0,
+                },
+                x => panic!("Invalid argument to AggregateFunc::SumAPD: {:?}", x),
             },
             _ => {
                 // Other accumulations need to disentangle the accumulable
@@ -1413,6 +1557,41 @@ where
                             (AggregateFunc::SumDecimal, AccumInner::SimpleNumber { accum, .. }) => {
                                 Datum::from(*accum)
                             }
+                            (
+                                AggregateFunc::SumAPD,
+                                AccumInner::APD {
+                                    accum,
+                                    pos_infs,
+                                    neg_infs,
+                                    nans,
+                                    non_nulls,
+                                },
+                            ) => {
+                                let mut cx_datum = apd::cx_datum();
+                                let d = cx_datum.to_width(accum.0);
+                                // Take a wide decimal (aggregator) into a
+                                // narrow decimal (datum). If this operation
+                                // overflows the datum, this new value will be
+                                // +/- infinity. However, the aggregator tracks
+                                // the amount of overflow, making it invertible.
+                                let inf_d = d.is_infinite();
+                                let neg_d = d.is_negative();
+                                let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
+                                let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
+                                if *non_nulls == 0 {
+                                    Datum::Null
+                                } else if *nans > 0 || (pos_inf && neg_inf) {
+                                    // NaNs are NaNs and cases where we've seen a
+                                    // mixture of positive and negative infinities.
+                                    Datum::APD(OrderedDecimal(Apd::nan()))
+                                } else if pos_inf {
+                                    Datum::APD(OrderedDecimal(Apd::infinity()))
+                                } else if neg_inf {
+                                    Datum::APD(OrderedDecimal(-Apd::infinity()))
+                                } else {
+                                    Datum::APD(OrderedDecimal(d))
+                                }
+                            }
                             _ => panic!(
                                 "Unexpected accumulation (aggr={:?}, accum={:?})",
                                 aggr.func, accum
@@ -1473,6 +1652,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
         | AggregateFunc::SumDecimal
+        | AggregateFunc::SumAPD
         | AggregateFunc::Count
         | AggregateFunc::Any
         | AggregateFunc::All
@@ -1602,6 +1782,7 @@ pub mod monoids {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumDecimal
+            | AggregateFunc::SumAPD
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All
