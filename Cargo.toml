@@ -11,6 +11,7 @@ members = [
     "src/build-info",
     "src/ccsr",
     "src/coord",
+    "src/coordtest",
     "src/dataflow-bin",
     "src/dataflow-types",
     "src/dataflow",

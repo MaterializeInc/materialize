@@ -42,4 +42,4 @@ url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [dev-dependencies]
-datadriven = "0.5.0"
+datadriven = "0.6.0"

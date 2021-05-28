@@ -125,7 +125,7 @@ impl ConnCatalog<'_> {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Database {
     pub name: String,
     pub id: i64,
@@ -134,7 +134,7 @@ pub struct Database {
     pub schemas: BTreeMap<String, Schema>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Schema {
     pub name: SchemaName,
     pub id: i64,

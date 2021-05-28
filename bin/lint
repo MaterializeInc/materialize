@@ -58,6 +58,7 @@ copyright_files=$(grep -vE \
     -e 'demo/chbench/chbench' \
     -e 'test/sqllogictest/postgres/testdata/.*\.data' \
     -e 'test/pgtest/.*\.pt' \
+    -e 'test/coordtest/.*\.ct' \
     -e 'gen/.*\.rs' \
     <<< "$files"
 )

@@ -15,4 +15,4 @@ repr_test_util = {path = "../repr-test-util"}
 serde_json = "1.0.64"
 
 [dev-dependencies]
-datadriven = "0.5.0"
+datadriven = "0.6.0"
