@@ -258,6 +258,11 @@ pub enum ExecuteResponse {
 /// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
 #[derive(Debug, Serialize)]
 pub struct SimpleExecuteResponse {
+    pub results: Vec<SimpleResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SimpleResult {
     pub rows: Vec<Vec<serde_json::Value>>,
     pub col_names: Vec<Option<String>>,
 }
