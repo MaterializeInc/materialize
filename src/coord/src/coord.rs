@@ -41,18 +41,20 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use self::prometheus::{Scraper, ScraperMessage};
 use anyhow::{anyhow, Context};
+use build_info::DUMMY_BUILD_INFO;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
@@ -76,7 +78,7 @@ use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
-use ore::now::{system_time, to_datetime, NowFn};
+use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
@@ -3460,6 +3462,132 @@ pub async fn serve(
         }
         Err(e) => Err(e),
     }
+}
+
+pub fn serve_debug(
+    catalog_path: &Path,
+) -> (
+    JoinOnDropHandle<()>,
+    Client,
+    tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
+    tokio::sync::mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
+    Arc<Mutex<u64>>,
+) {
+    lazy_static! {
+        static ref DEBUG_TIMESTAMP: Arc<Mutex<EpochMillis>> = Arc::new(Mutex::new(0));
+    }
+    pub fn get_debug_timestamp() -> EpochMillis {
+        *DEBUG_TIMESTAMP.lock().unwrap()
+    }
+
+    let (catalog, builtin_table_updates) = catalog::Catalog::open(&catalog::Config {
+        path: catalog_path,
+        enable_logging: true,
+        experimental_mode: None,
+        safe_mode: false,
+        cache_directory: None,
+        build_info: &DUMMY_BUILD_INFO,
+        num_workers: 0,
+        timestamp_frequency: Duration::from_millis(1),
+        now: get_debug_timestamp,
+    })
+    .unwrap();
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+    let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
+    let worker_guards = dataflow::serve(dataflow::Config {
+        command_receivers: vec![worker_rx],
+        timely_worker: timely::WorkerConfig::default(),
+        experimental_mode: true,
+        now: get_debug_timestamp,
+    })
+    .unwrap();
+
+    // We want to be able to control communication from dataflow to the
+    // coordinator, so setup an additional channel pair.
+    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
+    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+
+    let executor = TokioHandle::current();
+    let (ts_tx, ts_rx) = std::sync::mpsc::channel();
+    let timestamper_thread_handle = thread::Builder::new()
+        .name("timestamper".to_string())
+        .spawn(move || {
+            let _executor_guard = executor.enter();
+            loop {
+                match ts_rx.recv().unwrap() {
+                    TimestampMessage::Shutdown => break,
+
+                    // Allow local and file sources only. We don't need to do anything for these.
+                    TimestampMessage::Add(
+                        GlobalId::System(_),
+                        SourceConnector::Local(Timeline::EpochMilliseconds),
+                    )
+                    | TimestampMessage::Add(
+                        GlobalId::User(_),
+                        SourceConnector::External {
+                            connector: ExternalSourceConnector::File(_),
+                            ..
+                        },
+                    ) => {}
+                    // Panic on anything else (like Kafka sources) until we support them.
+                    msg => panic!("unexpected {:?}", msg),
+                }
+            }
+        })
+        .unwrap()
+        .join_on_drop();
+
+    let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
+    let handle = TokioHandle::current();
+    let thread = thread::spawn(move || {
+        let mut coord = Coordinator {
+            worker_guards,
+            worker_txs: vec![worker_tx],
+            optimizer: Default::default(),
+            catalog,
+            symbiosis: None,
+            indexes: ArrangementFrontiers::default(),
+            sources: ArrangementFrontiers::default(),
+            logging_granularity: None,
+            logical_compaction_window_ms: None,
+            internal_cmd_tx,
+            ts_tx,
+            metric_scraper_tx: None,
+            cache_tx: None,
+            closed_up_to: 1,
+            read_lower_bound: 1,
+            last_op_was_read: false,
+            need_advance: true,
+            transient_id_counter: 1,
+            active_conns: HashMap::new(),
+            txn_reads: HashMap::new(),
+            since_handles: HashMap::new(),
+            since_updates: Rc::new(RefCell::new(HashMap::new())),
+            sink_writes: HashMap::new(),
+            now: get_debug_timestamp,
+        };
+        coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
+        let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
+        bootstrap_tx.send(bootstrap).unwrap();
+        handle.block_on(coord.serve(
+            internal_cmd_rx,
+            cmd_rx,
+            feedback_rx,
+            timestamper_thread_handle,
+            None,
+        ))
+    })
+    .join_on_drop();
+    bootstrap_rx.recv().unwrap().unwrap();
+    let client = Client::new(cmd_tx);
+    (
+        thread,
+        client,
+        inner_feedback_tx,
+        inner_feedback_rx,
+        DEBUG_TIMESTAMP.clone(),
+    )
 }
 
 /// The styles in which an expression can be prepared.

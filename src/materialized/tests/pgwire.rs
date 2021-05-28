@@ -448,3 +448,14 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_coordtest() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let dir: PathBuf = ["..", "..", "test", "coordtest"].iter().collect();
+
+    coordtest::walk(dir.to_str().unwrap()).await;
+
+    Ok(())
+}

@@ -563,7 +563,7 @@ where
                         worker_id: self.timely_worker.index(),
                         message: WorkerFeedback::FrontierUppers(progress),
                     })
-                    .expect("feedback receriver should not drop first");
+                    .expect("feedback receiver should not drop first");
             }
         }
     }

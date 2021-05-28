@@ -14,5 +14,5 @@ quote = "1.0.9"
 syn = { version = "1.0.72", features = ["extra-traits", "full", "parsing"] }
 
 [dev-dependencies]
-datadriven = "0.5.0"
+datadriven = "0.6.0"
 tempfile = "3.2.0"
