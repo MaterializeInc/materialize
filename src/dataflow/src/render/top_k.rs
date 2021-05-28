@@ -40,38 +40,43 @@ where
             let arity = input.arity();
             let (ok_input, err_input) = self.collection(input).unwrap();
 
-            if *monotonic && *offset == 0 && *limit == Some(1) {
-                // If the input to a TopK is monotonic (aka append-only aka no retractions) then we
-                // don't have to worry about keeping every row we've seen around forever. Instead,
-                // the reduce can incrementally compute a new answer by looking at just the old TopK
-                // for a key and the incremental data.
-                //
-                // This optimization generalizes to any TopK over a monotonic source, but we special
-                // case only TopK with offset=0 and limit=1 (aka Top1) for now. This is because (1)
-                // Top1 can merge in each incremental row in constant space and time while the
-                // generalized solution needs something like a priority queue and (2) we expect Top1
-                // will be a common pattern used to turn a Kafka source's "upsert" semantics into
-                // differential's semantics. (2) is especially interesting because Kafka is
-                // monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
-                // Materialize and commonly used by users.
-                let result = self.render_top1_monotonic(ok_input, group_key, order_key);
-                self.collections
-                    .insert(relation_expr.clone(), (result, err_input));
-            } else if *monotonic {
-                // For monotonic inputs, we are able to retract inputs not produced as outputs.
-                use differential_dataflow::operators::iterate::Variable;
-                let delay = std::time::Duration::from_nanos(10_000_000_000);
-                let retractions = Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
-                let thinned = ok_input.concat(&retractions.negate());
-                let result = build_topk(thinned, group_key, order_key, *offset, *limit, arity);
-                retractions.set(&ok_input.concat(&result.negate()));
-                self.collections
-                    .insert(relation_expr.clone(), (result, err_input));
-            } else {
-                let result = build_topk(ok_input, group_key, order_key, *offset, *limit, arity);
-                self.collections
-                    .insert(relation_expr.clone(), (result, err_input));
-            }
+            // We create a new region to compartmentalize the topk logic.
+            let ok_result = ok_input.scope().clone().region_named("TopK", |inner| {
+                let ok_input = ok_input.enter(inner);
+                let ok_result = if *monotonic && *offset == 0 && *limit == Some(1) {
+                    // If the input to a TopK is monotonic (aka append-only aka no retractions) then we
+                    // don't have to worry about keeping every row we've seen around forever. Instead,
+                    // the reduce can incrementally compute a new answer by looking at just the old TopK
+                    // for a key and the incremental data.
+                    //
+                    // This optimization generalizes to any TopK over a monotonic source, but we special
+                    // case only TopK with offset=0 and limit=1 (aka Top1) for now. This is because (1)
+                    // Top1 can merge in each incremental row in constant space and time while the
+                    // generalized solution needs something like a priority queue and (2) we expect Top1
+                    // will be a common pattern used to turn a Kafka source's "upsert" semantics into
+                    // differential's semantics. (2) is especially interesting because Kafka is
+                    // monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
+                    // Materialize and commonly used by users.
+                    render_top1_monotonic(ok_input, group_key, order_key)
+                } else if *monotonic {
+                    // For monotonic inputs, we are able to retract inputs not produced as outputs.
+                    use differential_dataflow::operators::iterate::Variable;
+                    let delay = std::time::Duration::from_nanos(10_000_000_000);
+                    let retractions =
+                        Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
+                    let thinned = ok_input.concat(&retractions.negate());
+                    let result = build_topk(thinned, group_key, order_key, *offset, *limit, arity);
+                    retractions.set(&ok_input.concat(&result.negate()));
+                    result
+                } else {
+                    build_topk(ok_input, group_key, order_key, *offset, *limit, arity)
+                };
+                // Extract the results from the region.
+                ok_result.leave_region()
+            });
+
+            self.collections
+                .insert(relation_expr.clone(), (ok_result, err_input));
 
             /// Constructs a TopK dataflow subgraph.
             fn build_topk<G>(
@@ -224,64 +229,67 @@ where
 
                 negated_output.negate().concat(&input).consolidate()
             }
-        }
-    }
 
-    fn render_top1_monotonic(
-        &self,
-        collection: Collection<G, Row, Diff>,
-        group_key: &[usize],
-        order_key: &[expr::ColumnOrder],
-    ) -> Collection<G, Row, Diff> {
-        // We can place our rows directly into the diff field, and only keep the relevant one
-        // corresponding to evaluating our aggregate, instead of having to do a hierarchical
-        // reduction.
-        use timely::dataflow::operators::Map;
+            fn render_top1_monotonic<G>(
+                collection: Collection<G, Row, Diff>,
+                group_key: &[usize],
+                order_key: &[expr::ColumnOrder],
+            ) -> Collection<G, Row, Diff>
+            where
+                G: Scope,
+                G::Timestamp: Lattice,
+            {
+                // We can place our rows directly into the diff field, and only keep the relevant one
+                // corresponding to evaluating our aggregate, instead of having to do a hierarchical
+                // reduction.
+                use timely::dataflow::operators::Map;
 
-        let group_clone = group_key.to_vec();
-        let collection = collection.map({
-            move |row| {
-                let datums = row.unpack();
-                let iterator = group_clone.iter().map(|i| datums[*i]);
-                let total_size = repr::datums_size(iterator.clone());
-                let mut group_key = Row::with_capacity(total_size);
-                group_key.extend(iterator);
-                (group_key, row)
+                let group_clone = group_key.to_vec();
+                let collection = collection.map({
+                    move |row| {
+                        let datums = row.unpack();
+                        let iterator = group_clone.iter().map(|i| datums[*i]);
+                        let total_size = repr::datums_size(iterator.clone());
+                        let mut group_key = Row::with_capacity(total_size);
+                        group_key.extend(iterator);
+                        (group_key, row)
+                    }
+                });
+
+                // We arrange the inputs ourself to force it into a leaner structure because we know we
+                // won't care about values.
+                //
+                // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
+                // for the monoid, unclear if it's worth it.
+                let order_clone = order_key.to_vec();
+                let partial: Collection<G, Row, monoids::Top1Monoid> = collection
+                    .consolidate()
+                    .inner
+                    .map(move |((group_key, row), time, diff)| {
+                        assert!(diff > 0);
+                        // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
+                        // general TopK monoid would have to account for diff.
+                        (
+                            group_key,
+                            time,
+                            monoids::Top1Monoid {
+                                row,
+                                order_key: order_clone.clone(),
+                            },
+                        )
+                    })
+                    .as_collection();
+                let result = partial
+                    .arrange_by_self()
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
+                        move |_key, input, output| {
+                            let accum = &input[0].1;
+                            output.push((accum.row.clone(), 1));
+                        }
+                    });
+                result.as_collection(|_k, v| v.clone())
             }
-        });
-
-        // We arrange the inputs ourself to force it into a leaner structure because we know we
-        // won't care about values.
-        //
-        // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
-        // for the monoid, unclear if it's worth it.
-        let order_clone = order_key.to_vec();
-        let partial: Collection<G, Row, monoids::Top1Monoid> = collection
-            .consolidate()
-            .inner
-            .map(move |((group_key, row), time, diff)| {
-                assert!(diff > 0);
-                // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
-                // general TopK monoid would have to account for diff.
-                (
-                    group_key,
-                    time,
-                    monoids::Top1Monoid {
-                        row,
-                        order_key: order_clone.clone(),
-                    },
-                )
-            })
-            .as_collection();
-        let result = partial
-            .arrange_by_self()
-            .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
-                move |_key, input, output| {
-                    let accum = &input[0].1;
-                    output.push((accum.row.clone(), 1));
-                }
-            });
-        result.as_collection(|_k, v| v.clone())
+        }
     }
 }
 
