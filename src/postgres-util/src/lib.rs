@@ -14,8 +14,9 @@ use std::fmt;
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
-use tokio_postgres::{config::SslMode, types::Type as PgType};
-use tokio_postgres::{Client, Config};
+use tokio_postgres::config::SslMode;
+use tokio_postgres::types::Type as PgType;
+use tokio_postgres::Config;
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::Ident;
@@ -250,7 +251,29 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
     tokio::spawn(connection);
 
     for slot in slots {
-        let active_pid = query_pg_replication_slots(&client, slot).await?;
+        let rows = client
+            .query(
+                "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
+                &[&slot],
+            )
+            .await?;
+        let active_pid: Option<i32> = match rows.len() {
+            0 => {
+                // pg_drop_replication_slot will error if the slot does not exist
+                // todo@jldlaughlin: don't let invalid Postgres sources ship!
+                continue;
+            }
+            1 => {
+                let row = rows.get(0).expect("row must exist");
+                row.get(0)
+            }
+            _ => {
+                return Err(anyhow!(
+                    "multiple pg_replication_slots entries for slot {}",
+                    &slot
+                ))
+            }
+        };
         if let Some(pid) = active_pid {
             client
                 .query("SELECT pg_terminate_backend($1)", &[&pid])
@@ -261,17 +284,4 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
             .await?;
     }
     Ok(())
-}
-
-pub async fn query_pg_replication_slots(
-    client: &Client,
-    slot: &str,
-) -> Result<Option<i32>, anyhow::Error> {
-    let row = client
-        .query_one(
-            "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
-            &[&slot],
-        )
-        .await?;
-    Ok(row.get(0))
 }

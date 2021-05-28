@@ -112,6 +112,11 @@ db error: FATAL: database "no_such_dbname" does not exist
   PUBLICATION 'no_such_publication';
 # TODO: This should produce an error
 
+# Invalid sources that are shipped should still be able to be dropped
+# Related issue: https://github.com/MaterializeInc/materialize/issues/6823
+> DROP SOURCE "no_such_password"
+
+> DROP SOURCE "no_such_publication"
 
 > CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
