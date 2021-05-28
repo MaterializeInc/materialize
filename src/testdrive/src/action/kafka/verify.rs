@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::str;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -17,7 +18,7 @@ use rdkafka::message::Message;
 use tokio::pin;
 use tokio_stream::StreamExt;
 
-use crate::action::{Action, State};
+use crate::action::{Action, Context, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
 
@@ -30,9 +31,10 @@ pub struct VerifyAction {
     consistency: Option<SinkConsistencyFormat>,
     sort_messages: bool,
     expected_messages: Vec<String>,
+    context: Context,
 }
 
-pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
+pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyAction, String> {
     let _format = cmd.args.string("format")?;
     let sink = cmd.args.string("sink")?;
     let consistency = match cmd.args.opt_string("consistency").as_deref() {
@@ -49,6 +51,7 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
         consistency,
         sort_messages,
         expected_messages,
+        context,
     })
 }
 
@@ -162,10 +165,12 @@ impl Action for VerifyAction {
                 .map_err(|e| format!("storing message offset: {}", e.to_string()))?;
 
             let bytes = message.payload();
+
             let value_datum = match bytes {
                 None => None,
                 Some(bytes) => Some(avro_from_bytes(value_schema, bytes)?),
             };
+
             let key_datum = key_schema
                 .as_ref()
                 .map(|key_schema| {
@@ -188,6 +193,8 @@ impl Action for VerifyAction {
             value_schema,
             &self.expected_messages,
             &actual_messages,
+            &self.context.regex,
+            &self.context.regex_replacement,
         )
     }
 }

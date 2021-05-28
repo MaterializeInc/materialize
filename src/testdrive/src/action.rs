@@ -113,7 +113,7 @@ pub struct State {
 }
 
 #[derive(Clone)]
-pub struct SqlContext {
+pub struct Context {
     timeout: Duration,
     regex: Option<Regex>,
     regex_replacement: String,
@@ -308,7 +308,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     let mut out = Vec::new();
     let mut vars = HashMap::new();
 
-    let mut sql_context = SqlContext {
+    let mut context = Context {
         timeout: state.default_timeout,
         regex: None,
         regex_replacement: DEFAULT_REGEX_REPLACEMENT.to_string(),
@@ -401,9 +401,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "avro-ocf-append" => {
                         Box::new(avro_ocf::build_append(builtin).map_err(wrap_err)?)
                     }
-                    "avro-ocf-verify" => {
-                        Box::new(avro_ocf::build_verify(builtin).map_err(wrap_err)?)
-                    }
+                    "avro-ocf-verify" => Box::new(
+                        avro_ocf::build_verify(builtin, context.clone()).map_err(wrap_err)?,
+                    ),
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
                     "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
                     "http-request" => Box::new(http::build_request(builtin).map_err(wrap_err)?),
@@ -414,7 +414,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(kafka::build_create_topic(builtin).map_err(wrap_err)?)
                     }
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
-                    "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
+                    "kafka-verify" => {
+                        Box::new(kafka::build_verify(builtin, context.clone()).map_err(wrap_err)?)
+                    }
                     "kinesis-create-stream" => {
                         Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
                     }
@@ -440,9 +442,8 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
                     "set-regex" => {
-                        sql_context.regex = Some(builtin.args.parse("match").map_err(wrap_err)?);
-                        sql_context.regex_replacement = match builtin.args.opt_string("replacement")
-                        {
+                        context.regex = Some(builtin.args.parse("match").map_err(wrap_err)?);
+                        context.regex_replacement = match builtin.args.opt_string("replacement") {
                             None => DEFAULT_REGEX_REPLACEMENT.into(),
                             Some(replacement) => replacement,
                         };
@@ -451,9 +452,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
-                            sql_context.timeout = state.default_timeout;
+                            context.timeout = state.default_timeout;
                         } else {
-                            sql_context.timeout = parse_duration::parse(&duration)
+                            context.timeout = parse_duration::parse(&duration)
                                 .map_err(|e| wrap_err(e.to_string()))?;
                         }
                         continue;
@@ -487,12 +488,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         }
                     }
                 }
-                Box::new(sql::build_sql(sql, sql_context.clone()).map_err(wrap_err)?)
+                Box::new(sql::build_sql(sql, context.clone()).map_err(wrap_err)?)
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
                 sql.expected_error = subst(&sql.expected_error)?;
-                Box::new(sql::build_fail_sql(sql, sql_context.clone()).map_err(wrap_err)?)
+                Box::new(sql::build_fail_sql(sql, context.clone()).map_err(wrap_err)?)
             }
         };
         out.push(PosAction {

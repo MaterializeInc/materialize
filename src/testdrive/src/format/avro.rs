@@ -21,6 +21,8 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 
+use regex::Regex;
+
 use serde_json::Value as JsonValue;
 
 // Re-export components from the various other Avro libraries, so that other
@@ -229,6 +231,8 @@ pub fn validate_sink<I>(
     value_schema: &Schema,
     expected: I,
     actual: &[(Option<Value>, Option<Value>)],
+    regex: &Option<Regex>,
+    regex_replacement: &String,
 ) -> Result<(), String>
 where
     I: IntoIterator,
@@ -264,10 +268,18 @@ where
         let i = index.next().expect("known to exist");
         match (expected.next(), actual.next()) {
             (Some(e), Some(a)) => {
-                if e != a {
+                let e_str = format!("{:#?}", e);
+                let a_str = match &regex {
+                    Some(regex) => regex
+                        .replace_all(&format!("{:#?}", a).to_string(), regex_replacement.as_str())
+                        .to_string(),
+                    _ => format!("{:#?}", a),
+                };
+
+                if e_str != a_str {
                     return Err(format!(
-                        "record {} did not match\nexpected:\n{:#?}\n\nactual:\n{:#?}",
-                        i, e, a
+                        "record {} did not match\nexpected:\n{}\n\nactual:\n{}",
+                        i, e_str, a_str
                     ));
                 }
             }
