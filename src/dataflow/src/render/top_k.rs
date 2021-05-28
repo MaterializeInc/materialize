@@ -58,7 +58,7 @@ where
                     // monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
                     // Materialize and commonly used by users.
                     render_top1_monotonic(ok_input, group_key, order_key)
-                } else if *monotonic {
+                } else if *monotonic && *offset == 0 {
                     // For monotonic inputs, we are able to retract inputs not produced as outputs.
                     use differential_dataflow::operators::iterate::Variable;
                     let delay = std::time::Duration::from_nanos(10_000_000_000);
