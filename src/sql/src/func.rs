@@ -1405,6 +1405,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::ExpDecimal(s)))
                 }), 1732;
+                params!(APD{scale:None}) => UnaryFunc::ExpAPD, 17320;
             },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
@@ -1473,6 +1474,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::LnDecimal(s)))
                 }), 1734;
+                params!(APD{scale:None}) => UnaryFunc::LnAPD, 17340;
             },
             "log10" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1194;
@@ -1487,10 +1489,12 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
                 }), 1741;
+                params!(APD{scale:None}) => UnaryFunc::Log10APD, 17410;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::LogDecimal(s)))
                 }), 1736;
+                params!(APD{scale:None},APD{scale:None}) => BinaryFunc::LogAPD, 17360;
             },
             "lower" => Scalar {
                 params!(String) => UnaryFunc::Lower, 870;

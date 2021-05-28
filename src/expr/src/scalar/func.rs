@@ -36,7 +36,7 @@ use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use ore::str::StrExt;
 use pgrepr::Type;
-use repr::adt::apd;
+use repr::adt::apd::{self, Apd};
 use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
@@ -1538,6 +1538,56 @@ fn log<'a, 'b, F: Fn(f64) -> f64>(
     Ok(Datum::from(logic(f)))
 }
 
+fn log_guard_apd(val: &Apd, function_name: &str) -> Result<(), EvalError> {
+    if val.is_negative() {
+        return Err(EvalError::NegativeOutOfDomain(function_name.to_owned()));
+    }
+    if val.is_zero() {
+        return Err(EvalError::ZeroOutOfDomain(function_name.to_owned()));
+    }
+    Ok(())
+}
+
+// From the `decNumber` library's documentation:
+// > Inexact results will almost always be correctly rounded, but may be up to 1
+// > ulp (unit in last place) in error in rare cases.
+//
+// See decNumberLn documentation at http://speleotrove.com/decimal/dnnumb.html
+fn log_base_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd().0;
+    log_guard_apd(&a, "log")?;
+    let mut b = b.unwrap_apd().0;
+    log_guard_apd(&b, "log")?;
+    let mut cx = apd::cx_datum();
+    cx.ln(&mut a);
+    cx.ln(&mut b);
+    cx.div(&mut b, &a);
+    if a.is_zero() {
+        Err(EvalError::DivisionByZero)
+    } else {
+        apd::munge_apd(&mut b).unwrap();
+        Ok(Datum::APD(OrderedDecimal(b)))
+    }
+}
+
+// From the `decNumber` library's documentation:
+// > Inexact results will almost always be correctly rounded, but may be up to 1
+// > ulp (unit in last place) in error in rare cases.
+//
+// See decNumberLog10 documentation at http://speleotrove.com/decimal/dnnumb.html
+fn log_apd<'a, 'b, F: Fn(&mut dec::Context<Apd>, &mut Apd)>(
+    a: Datum<'a>,
+    logic: F,
+    name: &'b str,
+) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd();
+    log_guard_apd(&a.0, name)?;
+    let mut cx = apd::cx_datum();
+    logic(&mut cx, &mut a.0);
+    apd::munge_apd(&mut a.0).unwrap();
+    Ok(Datum::APD(a))
+}
+
 fn exp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(a.unwrap_float64().exp()))
 }
@@ -1546,6 +1596,21 @@ fn exp_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     let significand = cast_significand_to_float64(a);
     let a = significand.unwrap_float64() / 10_f64.powi(i32::from(scale));
     Ok(cast_float64_to_decimal(Datum::from(a.exp()), scale)?)
+}
+
+fn exp_apd<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd();
+    let mut cx = apd::cx_datum();
+    cx.exp(&mut a.0);
+    let cx_status = cx.status();
+    if cx_status.overflow() {
+        Err(EvalError::FloatOverflow)
+    } else if cx_status.subnormal() {
+        Err(EvalError::FloatUnderflow)
+    } else {
+        apd::munge_apd(&mut a.0).unwrap();
+        Ok(Datum::APD(a))
+    }
 }
 
 fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2608,6 +2673,7 @@ pub enum BinaryFunc {
     Encode,
     Decode,
     LogDecimal(u8),
+    LogAPD,
     Power,
     PowerDecimal(u8),
 }
@@ -2769,6 +2835,7 @@ impl BinaryFunc {
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
             BinaryFunc::LogDecimal(scale) => eager!(log_base, *scale),
+            BinaryFunc::LogAPD => eager!(log_base_apd),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
@@ -2946,7 +3013,7 @@ impl BinaryFunc {
             Position => ScalarType::Int32.nullable(in_nullable),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
-            LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
+            LogDecimal(_) | LogAPD => input1_type.scalar_type.nullable(in_nullable),
             Power => ScalarType::Float64.nullable(in_nullable),
             PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
             RepeatString => input1_type.scalar_type.nullable(in_nullable),
@@ -3143,6 +3210,7 @@ impl BinaryFunc {
             | Encode
             | Decode
             | LogDecimal(_)
+            | LogAPD
             | Power
             | PowerDecimal(_)
             | RepeatString => false,
@@ -3285,6 +3353,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
             BinaryFunc::LogDecimal(_) => f.write_str("log"),
+            BinaryFunc::LogAPD => f.write_str("log"),
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
@@ -3478,10 +3547,13 @@ pub enum UnaryFunc {
     Cot,
     Log10,
     Log10Decimal(u8),
+    Log10APD,
     Ln,
     LnDecimal(u8),
+    LnAPD,
     Exp,
     ExpDecimal(u8),
+    ExpAPD,
     Sleep,
     RescaleAPD(u8),
     PgColumnSize,
@@ -3672,10 +3744,13 @@ impl UnaryFunc {
             UnaryFunc::Cot => cot(a),
             UnaryFunc::Log10 => log(a, f64::log10, "log10"),
             UnaryFunc::Log10Decimal(scale) => log_dec(a, f64::log10, "log10", *scale),
+            UnaryFunc::Log10APD => log_apd(a, dec::Context::log10, "log10"),
             UnaryFunc::Ln => log(a, f64::ln, "ln"),
             UnaryFunc::LnDecimal(scale) => log_dec(a, f64::ln, "ln", *scale),
+            UnaryFunc::LnAPD => log_apd(a, dec::Context::ln, "ln"),
             UnaryFunc::Exp => exp(a),
             UnaryFunc::ExpDecimal(scale) => exp_dec(a, *scale),
+            UnaryFunc::ExpAPD => exp_apd(a),
             UnaryFunc::Sleep => sleep(a),
             UnaryFunc::RescaleAPD(scale) => rescale_apd(a, *scale),
             UnaryFunc::PgColumnSize => pg_column_size(a),
@@ -3854,7 +3929,9 @@ impl UnaryFunc {
             Tanh => ScalarType::Float64.nullable(in_nullable),
             Cot => ScalarType::Float64.nullable(in_nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
-            Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
+            Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) | Log10APD | ExpAPD | LnAPD => {
+                input_type
+            }
             Sleep => ScalarType::TimestampTz.nullable(true),
             RescaleAPD(scale) => ScalarType::APD {
                 scale: Some(*scale),
@@ -4052,9 +4129,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Cot => f.write_str("cot"),
             UnaryFunc::Log10 => f.write_str("log10f64"),
             UnaryFunc::Log10Decimal(_) => f.write_str("log10dec"),
+            UnaryFunc::Log10APD => f.write_str("log10apd"),
             UnaryFunc::Ln => f.write_str("lnf64"),
             UnaryFunc::LnDecimal(_) => f.write_str("lndec"),
+            UnaryFunc::LnAPD => f.write_str("lnapd"),
             UnaryFunc::ExpDecimal(_) => f.write_str("expdec"),
+            UnaryFunc::ExpAPD => f.write_str("expapd"),
             UnaryFunc::Exp => f.write_str("expf64"),
             UnaryFunc::Sleep => f.write_str("mz_sleep"),
             UnaryFunc::RescaleAPD(..) => f.write_str("rescale_apd"),

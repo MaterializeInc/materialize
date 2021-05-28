@@ -759,6 +759,127 @@ SELECT floor('1.234'::apd)::text, floor('-1.234'::apd)::text, floor('NaN'::apd):
 ----
 1  -2  NaN
 
+# Exp, i.e. e^x
+query T
+SELECT exp('1'::apd)::text
+----
+2.71828182845904523536028747135266249776
+
+query T
+SELECT exp('2'::apd)::text
+----
+7.38905609893065022723042746057500781318
+
+query T
+SELECT exp('2.0'::apd)::text
+----
+7.38905609893065022723042746057500781318
+
+query T
+SELECT exp('-1'::apd)::text
+----
+0.367879441171442321595523770161460867446
+
+query T
+SELECT exp('-1.0'::apd)::text
+----
+0.367879441171442321595523770161460867446
+
+query T
+SELECT exp('1.5'::apd)::text
+----
+4.48168907033806482260205546011927581901
+
+query T
+SELECT exp('.5'::apd)::text
+----
+1.64872127070012814684865078781416357165
+
+query T
+SELECT exp('NaN'::apd)::text
+----
+NaN
+
+query error value out of range: overflow
+SELECT exp('50000'::apd)::text
+
+query error value out of range: underflow
+SELECT exp('-50000'::apd)::text
+
+# Logarithmic calculations
+
+query TTT
+SELECT ln('2.0'::apd)::text, ln('2.5'::apd)::text, ln('5000'::apd)::text
+----
+0.693147180559945309417232121458176568076  0.91629073187415506518352721176801107145  8.51719319141623742665473369727928026233
+
+query error function ln is not defined for negative numbers
+SELECT ln('-100.000'::apd)::text
+
+query error function ln is not defined for zero
+SELECT ln('0'::apd)::text
+
+query TTT
+SELECT log('10.0'::apd)::text, log('100.000'::apd)::text, log('5000'::apd)::text
+----
+1  2  3.69897000433601880478626110527550697323
+
+query T
+SELECT ln(exp('2'::apd))::text
+----
+2
+
+query error function log10 is not defined for negative numbers
+SELECT log('-100.000'::apd)::text
+
+query error function log10 is not defined for zero
+SELECT log('0'::apd)::text
+
+# This documented behavior of the library:
+# > Inexact results will almost always be correctly rounded, but may be up to 1
+# > ulp (unit in last place) in error in rare cases.
+# See decNumberLog10 at http://speleotrove.com/decimal/dnnumb.html
+query T
+SELECT log('2'::apd, '64'::apd)::text
+----
+5.99999999999999999999999999999999999999
+
+# However, doesn't happen everywhere
+query T
+SELECT log('2'::apd, '128'::apd)::text
+----
+7
+
+query T
+SELECT log('128'::apd, '2'::apd)::text
+----
+0.142857142857142857142857142857142857143
+
+query T
+SELECT log('9e38'::apd, '1e-39'::apd)::text
+----
+-1.00117464716582763094927800807557636035
+
+query T
+SELECT log('1e-39'::apd, '9e38'::apd)::text
+----
+-0.99882673101126474037410399503872386201
+
+query error function log is not defined for zero
+SELECT log('0'::apd, '2'::apd)::text
+
+query error function log is not defined for negative numbers
+SELECT log('-1'::apd, '2'::apd)::text
+
+query error function log is not defined for zero
+SELECT log('128'::apd, '0'::apd)::text
+
+query error function log is not defined for negative numbers
+SELECT log('128'::apd, '-1'::apd)::text
+
+query error division by zero
+select log('1'::apd, '2'::apd)::text;
+
 # Equality
 # Tests binary combination of values from set {0, 0.00, 1, 1.00, 1.2, -1.00, NaN}
 # including self-combinations using each equality operator
