@@ -41,7 +41,7 @@ where
             let (ok_input, err_input) = self.collection(input).unwrap();
 
             // We create a new region to compartmentalize the topk logic.
-            let ok_result = ok_input.scope().clone().region_named("TopK", |inner| {
+            let ok_result = ok_input.scope().region_named("TopK", |inner| {
                 let ok_input = ok_input.enter(inner);
                 let ok_result = if *monotonic && *offset == 0 && *limit == Some(1) {
                     // If the input to a TopK is monotonic (aka append-only aka no retractions) then we
