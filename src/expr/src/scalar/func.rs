@@ -1153,12 +1153,7 @@ fn mul_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else if cx_status.subnormal() {
         Err(EvalError::FloatUnderflow)
     } else {
-        // If neither over- nor underflow, rounding is infallible.
-        apd::rescale_within_max_precision(&mut a).unwrap();
-        // Prevent leaking -0
-        if a.is_zero() && a.is_negative() {
-            cx.neg(&mut a);
-        }
+        apd::munge_apd(&mut a).unwrap();
         Ok(Datum::APD(OrderedDecimal(a)))
     }
 }
@@ -1234,12 +1229,7 @@ fn div_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else if cx_status.subnormal() {
         Err(EvalError::FloatUnderflow)
     } else {
-        // If neither over- nor underflow, rounding is infallible.
-        apd::rescale_within_max_precision(&mut a).unwrap();
-        // Prevent leaking -0.
-        if a.is_zero() && a.is_negative() {
-            cx.neg(&mut a);
-        }
+        apd::munge_apd(&mut a).unwrap();
         Ok(Datum::APD(OrderedDecimal(a)))
     }
 }
@@ -1323,11 +1313,8 @@ fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn neg_apd<'a>(a: Datum<'a>) -> Datum<'a> {
     let mut a = a.unwrap_apd();
-    // 0 and NaN can be negated in the underlying library, but must not be
-    // negated in SQL.
-    if !(a.0.is_zero() || a.0.is_nan()) {
-        apd::cx_datum().neg(&mut a.0);
-    }
+    apd::cx_datum().neg(&mut a.0);
+    apd::munge_apd(&mut a.0).unwrap();
     Datum::APD(a)
 }
 

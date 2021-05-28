@@ -625,7 +625,7 @@ fn pack_value(v: Value, mut row: Row, n: SchemaNode) -> anyhow::Result<Row> {
             let mut cx = apd::cx_datum();
             let mut n = cx.from_i128(coefficient);
             n.set_exponent(-i32::try_from(scale).unwrap());
-            apd::rescale_within_max_precision(&mut n)?;
+            apd::munge_apd(&mut n)?;
             row.push(Datum::APD(OrderedDecimal(n)))
         }
         Value::Bytes(b) => row.push(Datum::Bytes(&b)),

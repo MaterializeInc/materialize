@@ -96,9 +96,23 @@ pub fn get_scale(n: &Apd) -> u8 {
     u8::try_from(-n.exponent()).unwrap()
 }
 
+/// Ensures [`Apd`] values are:
+/// - Within `Apd`'s max precision ([`APD_DATUM_MAX_PRECISION`]), or errors if not.
+/// - Never possible but invalid representations (i.e. never -Nan or -0).
+///
+/// Should be called after any operation that can change an [`Apd`]'s scale or
+/// generate negative values (except addition and subtraction).
+pub fn munge_apd(n: &mut Apd) -> Result<(), anyhow::Error> {
+    rescale_within_max_precision(n)?;
+    if (n.is_zero() || n.is_nan()) && n.is_negative() {
+        cx_datum().neg(n);
+    }
+    Ok(())
+}
+
 /// Rescale's `n` to fit within [`Apd`]'s max precision or error if not
 /// possible.
-pub fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
+fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
     let current_precision = get_precision(n);
     if current_precision > APD_DATUM_MAX_PRECISION as u32 {
         if n.exponent() < 0 {
@@ -119,7 +133,8 @@ pub fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
 
 /// Rescale `n` as an `OrderedDecimal` with the described scale, or error if:
 /// - Rescaling exceeds max precision
-/// - `n` requires > [`APD_DATUM_MAX_PRECISION`] - `scale` digits of precision left of the decimal point
+/// - `n` requires > [`APD_DATUM_MAX_PRECISION`] - `scale` digits of precision
+///   left of the decimal point
 pub fn rescale(n: &mut Apd, scale: u8) -> Result<(), anyhow::Error> {
     let mut cx = cx_datum();
     cx.rescale(n, &Apd::from(-i32::from(scale)));
