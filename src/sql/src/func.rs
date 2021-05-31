@@ -1594,6 +1594,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
                 }), 2169;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::PowerAPD, 21690;
             },
             "repeat" => Scalar {
                 params!(String, Int32) => BinaryFunc::RepeatString, 1622;

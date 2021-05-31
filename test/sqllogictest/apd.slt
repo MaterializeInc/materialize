@@ -759,7 +759,47 @@ SELECT floor('1.234'::apd)::text, floor('-1.234'::apd)::text, floor('NaN'::apd):
 ----
 1  -2  NaN
 
-# Exp, i.e. e^x
+# Exponential calculations
+
+## Pow
+query TT
+SELECT pow('2'::apd, '3'::apd)::text, pow('2.5'::apd, '-3.5'::apd)::text
+----
+8 0.040477154050155255449585837368738797232
+
+query TT
+SELECT pow('1'::apd, '9e38'::apd)::text, pow('9e38'::apd, '1'::apd)::text
+----
+1  900000000000000000000000000000000000000
+
+query TT
+SELECT pow('0'::apd, '0'::apd)::text, pow('0.00'::apd, '-0.000'::apd)::text
+----
+1  1
+
+query TT
+SELECT pow('1'::apd, '9e-39'::apd)::text, pow('9e-39'::apd, '1'::apd)::text
+----
+1  0.000000000000000000000000000000000000009
+
+query TT
+SELECT pow('NaN'::apd, '-2.5'::apd)::text, pow('-2.5'::apd, 'NaN'::apd)::text;
+----
+NaN NaN
+
+query error value out of range: overflow
+SELECT pow('999'::apd, '9999'::apd)::text;
+
+query error value out of range: underflow
+SELECT pow('999'::apd, '-9999'::apd)::text;
+
+query error zero raised to a negative power is undefined
+SELECT pow('0'::apd, '-1'::apd)::text
+
+query error function pow cannot return complex numbers
+SELECT pow('-1'::apd, '-.1'::apd)::text
+
+## Exp, i.e. e^x
 query T
 SELECT exp('1'::apd)::text
 ----

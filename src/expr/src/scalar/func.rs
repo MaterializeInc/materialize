@@ -1625,6 +1625,37 @@ fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eva
     cast_float64_to_decimal(Datum::from(a.powf(b)), scale)
 }
 
+fn power_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd().0;
+    let b = b.unwrap_apd().0;
+    if a.is_zero() {
+        if b.is_zero() {
+            return Ok(Datum::APD(OrderedDecimal(Apd::from(1))));
+        }
+        if b.is_negative() {
+            return Err(EvalError::Undefined(
+                "zero raised to a negative power".to_owned(),
+            ));
+        }
+    }
+    if a.is_negative() && b.exponent() < 0 {
+        // Equivalent to PG error:
+        // > a negative number raised to a non-integer power yields a complex result
+        return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
+    }
+    let mut cx = apd::cx_datum();
+    cx.pow(&mut a, &b);
+    let cx_status = cx.status();
+    if cx_status.overflow() {
+        Err(EvalError::FloatOverflow)
+    } else if cx_status.subnormal() {
+        Err(EvalError::FloatUnderflow)
+    } else {
+        apd::munge_apd(&mut a).unwrap();
+        Ok(Datum::APD(OrderedDecimal(a)))
+    }
+}
+
 fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let duration = std::time::Duration::from_secs_f64(a.unwrap_float64());
     thread::sleep(duration);
@@ -2676,6 +2707,7 @@ pub enum BinaryFunc {
     LogAPD,
     Power,
     PowerDecimal(u8),
+    PowerAPD,
 }
 
 impl BinaryFunc {
@@ -2838,6 +2870,7 @@ impl BinaryFunc {
             BinaryFunc::LogAPD => eager!(log_base_apd),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
+            BinaryFunc::PowerAPD => eager!(power_apd),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -3015,7 +3048,7 @@ impl BinaryFunc {
             Decode => ScalarType::Bytes.nullable(in_nullable),
             LogDecimal(_) | LogAPD => input1_type.scalar_type.nullable(in_nullable),
             Power => ScalarType::Float64.nullable(in_nullable),
-            PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
+            PowerDecimal(_) | PowerAPD => input1_type.scalar_type.nullable(in_nullable),
             RepeatString => input1_type.scalar_type.nullable(in_nullable),
         }
     }
@@ -3213,6 +3246,7 @@ impl BinaryFunc {
             | LogAPD
             | Power
             | PowerDecimal(_)
+            | PowerAPD
             | RepeatString => false,
         }
     }
@@ -3356,6 +3390,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::LogAPD => f.write_str("log"),
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
+            BinaryFunc::PowerAPD => f.write_str("power_apd"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
         }
     }
