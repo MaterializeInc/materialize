@@ -1153,12 +1153,7 @@ fn mul_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else if cx_status.subnormal() {
         Err(EvalError::FloatUnderflow)
     } else {
-        // If neither over- nor underflow, rounding is infallible.
-        apd::rescale_within_max_precision(&mut a).unwrap();
-        // Prevent leaking -0
-        if a.is_zero() && a.is_negative() {
-            cx.neg(&mut a);
-        }
+        apd::munge_apd(&mut a).unwrap();
         Ok(Datum::APD(OrderedDecimal(a)))
     }
 }
@@ -1234,12 +1229,7 @@ fn div_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else if cx_status.subnormal() {
         Err(EvalError::FloatUnderflow)
     } else {
-        // If neither over- nor underflow, rounding is infallible.
-        apd::rescale_within_max_precision(&mut a).unwrap();
-        // Prevent leaking -0.
-        if a.is_zero() && a.is_negative() {
-            cx.neg(&mut a);
-        }
+        apd::munge_apd(&mut a).unwrap();
         Ok(Datum::APD(OrderedDecimal(a)))
     }
 }
@@ -1319,6 +1309,13 @@ fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_decimal())
+}
+
+fn neg_apd<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_apd();
+    apd::cx_datum().neg(&mut a.0);
+    apd::munge_apd(&mut a.0).unwrap();
+    Datum::APD(a)
 }
 
 pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -3117,6 +3114,7 @@ pub enum UnaryFunc {
     NegFloat32,
     NegFloat64,
     NegDecimal,
+    NegAPD,
     NegInterval,
     SqrtFloat64,
     SqrtDec(u8),
@@ -3306,6 +3304,7 @@ impl UnaryFunc {
             UnaryFunc::NegFloat32 => Ok(neg_float32(a)),
             UnaryFunc::NegFloat64 => Ok(neg_float64(a)),
             UnaryFunc::NegDecimal => Ok(neg_decimal(a)),
+            UnaryFunc::NegAPD => Ok(neg_apd(a)),
             UnaryFunc::NegInterval => Ok(neg_interval(a)),
             UnaryFunc::AbsInt32 => Ok(abs_int32(a)),
             UnaryFunc::AbsInt64 => Ok(abs_int64(a)),
@@ -3603,8 +3602,10 @@ impl UnaryFunc {
 
             CbrtFloat64 => ScalarType::Float64.nullable(true),
 
-            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
-            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
+            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegAPD
+            | NegInterval | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => {
+                input_type
+            }
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(in_nullable)
@@ -3664,6 +3665,7 @@ impl UnaryFunc {
                 | UnaryFunc::NegFloat32
                 | UnaryFunc::NegFloat64
                 | UnaryFunc::NegDecimal
+                | UnaryFunc::NegAPD
                 | UnaryFunc::CastBoolToString
                 | UnaryFunc::CastBoolToStringNonstandard
                 | UnaryFunc::CastInt32ToInt64
@@ -3692,6 +3694,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::NegFloat32 => f.write_str("-"),
             UnaryFunc::NegFloat64 => f.write_str("-"),
             UnaryFunc::NegDecimal => f.write_str("-"),
+            UnaryFunc::NegAPD => f.write_str("-"),
             UnaryFunc::NegInterval => f.write_str("-"),
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
