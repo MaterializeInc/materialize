@@ -40,6 +40,7 @@ where
     pub(crate) fn export_sink(
         &mut self,
         render_state: &mut RenderState,
+        scope: &mut Child<'g, G, G::Timestamp>,
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
@@ -173,6 +174,11 @@ where
                     }
                 }
 
+                use differential_dataflow::Hashable;
+                let active_write_worker =
+                    (usize::cast_from(sink_id.hashed()) % scope.peers()) == scope.index();
+                let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(0)));
+
                 let token = sink::kafka(
                     collection,
                     sink_id,
@@ -181,7 +187,14 @@ where
                     sink.value_desc.clone(),
                     sink.as_of.clone(),
                     source_ts_histories,
+                    shared_frontier.clone(),
                 );
+
+                if active_write_worker {
+                    render_state
+                        .sink_write_frontiers
+                        .insert(sink_id, shared_frontier);
+                }
                 needed_sink_tokens.push(token);
             }
             SinkConnector::Tail(c) => {
