@@ -1671,6 +1671,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 }), 1730;
+                params!(APD{scale:None}) => UnaryFunc::SqrtAPD, 17300;
             },
             "tan" => Scalar {
                 params!(Float64) => UnaryFunc::Tan, 1606;

@@ -799,6 +799,25 @@ SELECT pow('0'::apd, '-1'::apd)::text
 query error function pow cannot return complex numbers
 SELECT pow('-1'::apd, '-.1'::apd)::text
 
+# Square root
+query TTT
+SELECT sqrt('2'::apd)::text, sqrt('3'::apd)::text, sqrt('0'::apd)::text
+----
+1.41421356237309504880168872420969807857  1.73205080756887729352744634150587236694  0
+
+query T
+SELECT sqrt('.98765432109876543210'::apd)::text
+----
+0.993807990055808231173954156543476014651
+
+query TT
+SELECT sqrt('9e38'::apd)::text, sqrt('9e-39'::apd)::text
+----
+30000000000000000000  0.00000000000000000009486832980505137996
+
+query error cannot take square root of a negative number
+SELECT sqrt('-2'::apd)::text
+
 ## Exp, i.e. e^x
 query T
 SELECT exp('1'::apd)::text

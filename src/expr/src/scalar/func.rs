@@ -1451,6 +1451,17 @@ fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
     cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), scale)
 }
 
+fn sqrt_apd<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
+    let mut a = a.unwrap_apd();
+    if a.0.is_negative() {
+        return Err(EvalError::NegSqrt);
+    }
+    let mut cx = apd::cx_datum();
+    cx.sqrt(&mut a.0);
+    apd::munge_apd(&mut a.0).unwrap();
+    Ok(Datum::APD(a))
+}
+
 fn cbrt_float64<'a>(a: Datum<'a>) -> Datum {
     Datum::from(a.unwrap_float64().cbrt())
 }
@@ -3413,6 +3424,7 @@ pub enum UnaryFunc {
     NegInterval,
     SqrtFloat64,
     SqrtDec(u8),
+    SqrtAPD,
     CbrtFloat64,
     AbsInt32,
     AbsInt64,
@@ -3727,6 +3739,7 @@ impl UnaryFunc {
             UnaryFunc::FloorAPD => Ok(floor_apd(a)),
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
+            UnaryFunc::SqrtAPD => sqrt_apd(a),
             UnaryFunc::CbrtFloat64 => Ok(cbrt_float64(a)),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::BitLengthString => bit_length(a.unwrap_str()),
@@ -3922,7 +3935,9 @@ impl UnaryFunc {
                 input_type.scalar_type.nullable(in_nullable)
             }
 
-            CeilAPD | FloorAPD | RoundAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
+            CeilAPD | FloorAPD | RoundAPD | SqrtAPD => {
+                ScalarType::APD { scale: None }.nullable(in_nullable)
+            }
 
             SqrtFloat64 => ScalarType::Float64.nullable(true),
 
@@ -4122,6 +4137,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::FloorAPD => f.write_str("floorapd"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::SqrtDec(_) => f.write_str("sqrtdec"),
+            UnaryFunc::SqrtAPD => f.write_str("sqrtapd"),
             UnaryFunc::CbrtFloat64 => f.write_str("cbrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::CharLength => f.write_str("char_length"),
