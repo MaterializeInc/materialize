@@ -14,9 +14,9 @@ use std::fmt;
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
-use tokio_postgres::config::SslMode;
+use tokio_postgres::config::{ReplicationMode, SslMode};
 use tokio_postgres::types::Type as PgType;
-use tokio_postgres::Config;
+use tokio_postgres::{Client, Config};
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::Ident;
@@ -250,6 +250,7 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
     let (client, connection) = tokio_postgres::connect(&conn, tls).await?;
     tokio::spawn(connection);
 
+    let replication_client = connect_replication(conn).await?;
     for slot in slots {
         let rows = client
             .query(
@@ -257,15 +258,16 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
                 &[&slot],
             )
             .await?;
-        let active_pid: Option<i32> = match rows.len() {
+        match rows.len() {
             0 => {
-                // pg_drop_replication_slot will error if the slot does not exist
+                // DROP_REPLICATION_SLOT will error if the slot does not exist
                 // todo@jldlaughlin: don't let invalid Postgres sources ship!
                 continue;
             }
             1 => {
-                let row = rows.get(0).expect("row must exist");
-                row.get(0)
+                replication_client
+                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
+                    .await?;
             }
             _ => {
                 return Err(anyhow!(
@@ -273,15 +275,19 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
                     &slot
                 ))
             }
-        };
-        if let Some(pid) = active_pid {
-            client
-                .query("SELECT pg_terminate_backend($1)", &[&pid])
-                .await?;
         }
-        client
-            .query("SELECT pg_drop_replication_slot($1)", &[&slot])
-            .await?;
     }
     Ok(())
+}
+
+/// Starts a replication connection to the upstream database
+pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
+    let mut config: Config = conn.parse()?;
+    let tls = make_tls(&config)?;
+    let (client, conn) = config
+        .replication_mode(ReplicationMode::Logical)
+        .connect(tls)
+        .await?;
+    tokio::spawn(conn);
+    Ok(client)
 }
