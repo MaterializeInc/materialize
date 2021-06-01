@@ -97,7 +97,7 @@ use sql::plan::{
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
 
-use self::arrangement_state::{ArrangementFrontiers, Frontiers};
+use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
@@ -238,6 +238,8 @@ pub struct Coordinator {
     /// an in-progress transaction.
     // TODO(mjibson): Should this live on a Session?
     txn_reads: HashMap<u32, TxnReads>,
+    /// Tracks write frontiers for active exactly-once sinks.
+    sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 }
 
 /// Metadata about an active connection.
@@ -1041,6 +1043,16 @@ impl Coordinator {
                     }
                 }
             }
+        } else if let Some(sink_state) = self.sink_writes.get_mut(&feedback.id) {
+            let changes: Vec<_> = sink_state
+                .frontier
+                .update_iter(feedback.changes.drain())
+                .collect();
+
+            if !changes.is_empty() {
+                // FIXME maybe this api should be better
+                sink_state.advance(sink_state.frontier.frontier().to_owned());
+            }
         }
     }
 
@@ -1244,10 +1256,25 @@ impl Coordinator {
             name.to_string(),
             id,
             sink.from,
-            connector,
+            connector.clone(),
             sink.envelope,
             as_of,
         );
+
+        if let SinkConnector::Kafka(kafka_sink) = connector {
+            if let Some(sources) = kafka_sink.exactly_once {
+                let mut tokens = Vec::new();
+
+                for id in sources {
+                    if let Some(token) = self.since_handles.get(&id) {
+                        tokens.push(token.clone());
+                    }
+                }
+
+                let sink_writes = SinkWrites::new(tokens);
+                self.sink_writes.insert(id, sink_writes);
+            }
+        }
         Ok(self.ship_dataflow(df).await)
     }
 
@@ -2847,6 +2874,9 @@ impl Coordinator {
             self.broadcast(SequencedCommand::DropSources(sources_to_drop));
         }
         if !sinks_to_drop.is_empty() {
+            for id in sinks_to_drop.iter() {
+                self.sink_writes.remove(id);
+            }
             self.broadcast(SequencedCommand::DropSinks(sinks_to_drop));
         }
         if !indexes_to_drop.is_empty() {
@@ -3273,6 +3303,7 @@ pub async fn serve(
             txn_reads: HashMap::new(),
             since_handles: HashMap::new(),
             since_updates: Rc::new(RefCell::new(HashMap::new())),
+            sink_writes: HashMap::new(),
         };
         coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
         if let Some(config) = &logging {

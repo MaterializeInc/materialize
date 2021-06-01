@@ -171,6 +171,29 @@ impl<T: Timestamp + Copy> Frontiers<T> {
     }
 }
 
+pub struct SinkWrites<T: Timestamp> {
+    pub frontier: MutableAntichain<T>,
+    pub source_handles: Vec<AntichainToken<T>>,
+}
+
+impl<T: Timestamp> SinkWrites<T> {
+    pub fn new(source_handles: Vec<AntichainToken<T>>) -> Self {
+        let mut frontier = MutableAntichain::new();
+        frontier.update_iter(Some((T::minimum(), 1)));
+
+        SinkWrites {
+            frontier,
+            source_handles,
+        }
+    }
+
+    pub fn advance(&mut self, new_frontier: Antichain<T>) {
+        for handle in self.source_handles.iter_mut() {
+            handle.maybe_advance(new_frontier.elements().iter().cloned());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
