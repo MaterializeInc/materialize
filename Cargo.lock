@@ -2036,9 +2036,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.94"
+version = "0.2.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18794a8ad5b29321f790b55d93dfba91e125cb1a9edbd4f8e3150acc771c1a5e"
+checksum = "789da6d93f1b866ffe175afc5322a4d76c038605a1c3319bb57b06967ca98a36"
 
 [[package]]
 name = "libm"
@@ -2671,11 +2671,12 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "2.2.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b50b8919aecb97e5ee9aceef27e24f39c46b11831130f4a6b7b091ec5de0de12"
+checksum = "809348965973b261c3e504c8d0434e465274f78c880e10039914f2c5dcf49461"
 dependencies = [
  "num-traits",
+ "rand 0.8.3",
  "serde",
 ]
 
@@ -4527,9 +4528,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.17.5"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9d811a7fd68bad355ff84f7d8ad58b33415bccdfce499f98a9ce30471888e05"
+checksum = "e37b3919b7246dabcdc1b19cdec84a81a96ad36f3966fd8f9d5abd335452126f"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
