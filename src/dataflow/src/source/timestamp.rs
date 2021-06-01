@@ -28,7 +28,7 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::{Instant, UNIX_EPOCH};
 
-use log::debug;
+use log::{debug, error};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -74,7 +74,7 @@ impl TimestampProposer {
     /// `time` is 0, which is accepted to bootstrap the timestamp proposal.
     fn propose_binding(&mut self, partition: PartitionId, time: Timestamp, offset: MzOffset) {
         if time != self.timestamp && time != 0 {
-            debug!("Invalid proposed time {} expected {}", time, self.timestamp);
+            error!("Invalid proposed time {} expected {}", time, self.timestamp);
             return;
         }
 
@@ -163,7 +163,9 @@ impl PartitionTimestamps {
         }
 
         let mut new_bindings = Vec::with_capacity(self.bindings.len());
-        // Now let's only keep the largest binding for each offset
+        // Now let's only keep the largest binding for each timestamp, ie lets merge bindings
+        // of the form (timestamp1, offset1), (timestamp1, offset2), (timestamp1, offset3) =>
+        // (timestamp1, offset3)
         for i in 0..(self.bindings.len() - 1) {
             if self.bindings[i].0 != self.bindings[i + 1].0 {
                 new_bindings.push(self.bindings[i]);

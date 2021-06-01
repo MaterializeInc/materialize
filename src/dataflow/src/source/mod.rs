@@ -496,6 +496,9 @@ impl ConsInfo {
         if offset.is_some() {
             self.update_timestamp_fixed(timestamp, offset.expect("known to exist"));
         } else {
+            // We only got a new timestamp, and no new upper bound. Let's declare the
+            // upper bound to be equal to the current maximum processed offset and go
+            // from there.
             assert!(timestamp >= self.current_ts);
             let old_upper = self.current_upper_bound.inner();
             self.current_upper_bound = TimestampUpperBound::Tentative(old_upper);

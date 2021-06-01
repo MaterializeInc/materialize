@@ -503,6 +503,12 @@ where
             }
         }
     }
+
+    /// Instruct all real-time sources managed by the worker to close their current
+    /// timestamp and move to the next wall clock time.
+    ///
+    /// Needs to be called periodically (ideally once per "timestamp_frequency" in order
+    /// for real time sources to make progress.
     fn update_rt_timestamps(&self) {
         for (_, history) in self.render_state.ts_histories.iter() {
             history.update_timestamp();
