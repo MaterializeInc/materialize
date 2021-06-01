@@ -548,6 +548,21 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn compact_timestamps(
+        &self,
+        source_id: GlobalId,
+        frontier: Timestamp,
+    ) -> Result<(), Error> {
+        match self
+            .inner
+            .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND timestamp < ?")?
+            .execute(params![SqlVal(&source_id), frontier])
+        {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn remove_database(&self, name: &str) -> Result<(), Error> {
         let n = self
             .inner

@@ -1290,6 +1290,20 @@ impl Catalog {
         Ok(())
     }
 
+    pub fn compact_timestamps(
+        &mut self,
+        source_id: GlobalId,
+        frontier: Timestamp,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.compact_timestamps(source_id, frontier)?;
+        tx.commit()?;
+
+        Ok(())
+    }
+
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {
         trace!("transact: {:?}", ops);
 

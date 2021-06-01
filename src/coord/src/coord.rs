@@ -54,6 +54,7 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
+use timely::order::PartialOrder;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
@@ -1071,6 +1072,20 @@ impl Coordinator {
             .drain()
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
+
+        for (id, frontier) in since_updates.iter() {
+            if let Some(source_state) = self.sources.get(id) {
+                if <_ as PartialOrder>::less_equal(frontier, &source_state.durability) {
+                    self.catalog
+                        .compact_timestamps(
+                            *id,
+                            *frontier.elements().first().expect("known to exist"),
+                        )
+                        .expect("fixme");
+                }
+            }
+        }
+
         if !since_updates.is_empty() {
             if let Some(tables) = &mut self.persisted_tables {
                 tables.allow_compaction(&since_updates);
@@ -3075,7 +3090,6 @@ impl Coordinator {
             if let Some(as_of) = &mut dataflow.as_of {
                 // It should not be possible to request an invalid time. SINK doesn't support
                 // AS OF. TAIL and Peek check that their AS OF is >= since.
-                use timely::order::PartialOrder;
                 assert!(
                     <_ as PartialOrder>::less_equal(&since, as_of),
                     "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
