@@ -323,8 +323,8 @@ impl<'a> ViewExplanation<'a> {
                 writeln!(f, " offset={}", offset)?
             }
             Negate { .. } => writeln!(f, "| Negate")?,
-            Threshold { .. } => write!(f, "| Threshold")?,
-            DeclareKeys { input: _, keys } => write!(
+            Threshold { .. } => writeln!(f, "| Threshold")?,
+            DeclareKeys { input: _, keys } => writeln!(
                 f,
                 "| Declare primary keys {}",
                 separated(
