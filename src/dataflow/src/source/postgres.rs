@@ -368,9 +368,12 @@ impl SimpleSource for PostgresSourceReader {
 
         loop {
             match self.produce_replication(timestamper).await {
-                Ok(_) => log::info!("replication interrupted with no error"),
                 Err(ReplicationError::Recoverable(e)) => {
-                    log::info!("replication interrupted: {}", e)
+                    log::warn!(
+                        "replication for source {} interrupted, retrying: {}",
+                        &self.source_name,
+                        e
+                    )
                 }
                 Err(ReplicationError::Fatal(e)) => {
                     return Err(SourceError {
@@ -378,10 +381,12 @@ impl SimpleSource for PostgresSourceReader {
                         error: SourceErrorDetails::FileIO(e.to_string()),
                     })
                 }
+                Ok(_) => unreachable!("replication stream cannot exit without an error"),
             }
 
             // TODO(petrosagg): implement exponential back-off
             tokio::time::sleep(Duration::from_secs(3)).await;
+            log::info!("resuming replication for source {}", &self.source_name);
         }
     }
 }
