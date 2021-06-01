@@ -490,7 +490,7 @@ where
                 let lower = self
                     .reported_frontiers
                     .get_mut(&id)
-                    .expect("Frontier missing!");
+                    .expect("index frontier missing!");
                 if lower != &upper {
                     add_progress(*id, &upper, &lower, None, &mut progress);
                     lower.clone_from(&upper);
@@ -503,7 +503,7 @@ where
                 let lower = self
                     .reported_frontiers
                     .get_mut(&id)
-                    .expect("Frontier missing!");
+                    .expect("source frontier missing!");
                 assert!(<_ as PartialOrder>::less_equal(lower, &upper));
                 if lower != &upper {
                     let bindings = history.get_bindings_in_range(lower.borrow(), upper.borrow());
@@ -516,7 +516,7 @@ where
                 let lower = self
                     .reported_frontiers
                     .get_mut(&id)
-                    .expect("Frontier missing!");
+                    .expect("sink frontier missing!");
                 assert!(<_ as PartialOrder>::less_equal(lower, &upper));
                 if lower != &upper {
                     add_progress(*id, &upper, &lower, None, &mut progress);
@@ -582,6 +582,7 @@ where
             SequencedCommand::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
+                    self.render_state.sink_write_frontiers.remove(&id);
                     self.render_state.dataflow_tokens.remove(&id);
                 }
             }
