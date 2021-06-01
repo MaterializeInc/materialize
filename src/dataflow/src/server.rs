@@ -437,15 +437,15 @@ where
     fn report_frontiers(&mut self) {
         fn add_progress(
             id: GlobalId,
-            upper: &Antichain<Timestamp>,
-            lower: &Antichain<Timestamp>,
+            new_frontier: &Antichain<Timestamp>,
+            prev_frontier: &Antichain<Timestamp>,
             progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
         ) {
             let mut changes = ChangeBatch::new();
-            for time in lower.elements().iter() {
+            for time in prev_frontier.elements().iter() {
                 changes.update(time.clone(), -1);
             }
-            for time in upper.elements().iter() {
+            for time in new_frontier.elements().iter() {
                 changes.update(time.clone(), 1);
             }
             changes.compact();
@@ -455,32 +455,35 @@ where
         }
 
         if let Some(feedback_tx) = &mut self.feedback_tx {
-            let mut upper = Antichain::new();
+            let mut new_frontier = Antichain::new();
             let mut progress = Vec::new();
             for (id, traces) in self.render_state.traces.traces.iter_mut() {
                 // Read the upper frontier and compare to what we've reported.
-                traces.oks_mut().read_upper(&mut upper);
-                let lower = self
+                traces.oks_mut().read_upper(&mut new_frontier);
+                let prev_frontier = self
                     .reported_frontiers
                     .get_mut(&id)
                     .expect("Frontier missing!");
-                if lower != &upper {
-                    add_progress(*id, &upper, &lower, &mut progress);
-                    lower.clone_from(&upper);
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
                 }
             }
 
             for (id, history) in self.render_state.ts_histories.iter() {
                 // Read the upper frontier and compare to what we've reported.
-                history.read_upper(&mut upper);
-                let lower = self
+                history.read_upper(&mut new_frontier);
+                let prev_frontier = self
                     .reported_frontiers
                     .get_mut(&id)
                     .expect("Frontier missing!");
-                assert!(<_ as PartialOrder>::less_equal(lower, &upper));
-                if lower != &upper {
-                    add_progress(*id, &upper, &lower, &mut progress);
-                    lower.clone_from(&upper);
+                assert!(<_ as PartialOrder>::less_equal(
+                    prev_frontier,
+                    &new_frontier
+                ));
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
                 }
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
