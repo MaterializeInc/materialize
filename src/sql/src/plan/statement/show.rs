@@ -207,7 +207,7 @@ pub fn show_databases<'a>(
     ShowDatabasesStatement { filter }: ShowDatabasesStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let query = "SELECT name FROM mz_catalog.mz_databases".to_string();
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 pub fn show_objects<'a>(
@@ -273,7 +273,7 @@ fn show_schemas<'a>(
             database.id(),
         )
     };
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 fn show_tables<'a>(
@@ -303,7 +303,7 @@ fn show_tables<'a>(
         query = format!("SELECT name FROM ({})", query);
     }
 
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 fn show_sources<'a>(
@@ -350,7 +350,7 @@ fn show_sources<'a>(
             schema.id(),
         )
     };
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 fn show_views<'a>(
@@ -397,7 +397,7 @@ fn show_views<'a>(
             schema.id(),
         )
     };
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 fn show_sinks<'a>(
@@ -425,7 +425,7 @@ fn show_sinks<'a>(
             schema.id(),
         )
     };
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 fn show_types<'a>(
@@ -455,7 +455,7 @@ fn show_types<'a>(
         query = format!("SELECT name FROM ({})", query);
     }
 
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 fn show_all_objects<'a>(
@@ -485,7 +485,7 @@ fn show_all_objects<'a>(
         query = format!("SELECT name FROM ({})", query);
     }
 
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 pub fn show_indexes<'a>(
@@ -529,7 +529,7 @@ pub fn show_indexes<'a>(
             objs.id = '{}'",
         from.id(),
     );
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(scx, query, filter, None, None))
 }
 
 pub fn show_columns<'a>(
@@ -554,12 +554,19 @@ pub fn show_columns<'a>(
         "SELECT
             mz_columns.name,
             mz_columns.nullable,
-            mz_columns.type
+            mz_columns.type,
+            mz_columns.position
          FROM mz_catalog.mz_columns AS mz_columns
          WHERE mz_columns.id = '{}'",
         entry.id(),
     );
-    Ok(ShowSelect::new(scx, query, filter))
+    Ok(ShowSelect::new(
+        scx,
+        query,
+        filter,
+        Some("position"),
+        Some(&["name", "nullable", "type"]),
+    ))
 }
 
 /// An intermediate result when planning a `SHOW` query.
@@ -572,23 +579,34 @@ pub struct ShowSelect<'a> {
 
 impl<'a> ShowSelect<'a> {
     /// Constructs a new [`ShowSelect`] from a query that provides the base
-    /// data and an optional user-supplied filter on that data.
+    /// data and an optional user-supplied filter, order column, and
+    /// projection on that data.
     ///
     /// Note that the query must return a column named `name`, as the filter
     /// may implicitly reference this column. Any `ORDER BY` in the query is
     /// ignored. `ShowSelects`s are always ordered in ascending order by all
-    /// columns from left to right.
+    /// columns from left to right unless an order field is supplied.
     fn new(
         scx: &'a StatementContext,
         query: String,
         filter: Option<ShowStatementFilter<Raw>>,
+        order: Option<&str>,
+        projection: Option<&[&str]>,
     ) -> ShowSelect<'a> {
         let filter = match filter {
             Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
             Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
             None => "true".to_string(),
         };
-        let query = format!("SELECT * FROM ({}) q WHERE {} ORDER BY q.*", query, filter);
+        let query = format!(
+            "SELECT {} FROM ({}) q WHERE {} ORDER BY {}",
+            projection
+                .map(|ps| ps.join(", "))
+                .unwrap_or_else(|| "*".into()),
+            query,
+            filter,
+            order.unwrap_or("q.*")
+        );
         let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
         let stmt = match stmts.into_element() {
             Statement::Select(select) => select,

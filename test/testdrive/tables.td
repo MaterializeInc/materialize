@@ -351,3 +351,11 @@ INSERT has more expressions than target columns
 2
 > SELECT count(DISTINCT *) FROM nocols
 1
+
+# Test that show columns preserves the column order
+> CREATE TABLE column_order (b int, a int);
+> SHOW COLUMNS FROM column_order
+name nullable type
+-----------------------
+b    true     integer
+a    true     integer
