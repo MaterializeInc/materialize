@@ -24,8 +24,9 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::rc::Rc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, UNIX_EPOCH};
 
 use log::debug;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
@@ -53,10 +54,12 @@ impl TimestampProposer {
     fn new(update_interval: u64) -> Self {
         Self {
             bindings: HashMap::new(),
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_millis() as u64,
+            timestamp: UNIX_EPOCH
+                .elapsed()
+                .expect("system clock before 1970")
+                .as_millis()
+                .try_into()
+                .expect("materialize has existed for more than 500M years"),
             last_update_time: Instant::now(),
             update_interval,
         }
@@ -98,20 +101,28 @@ impl TimestampProposer {
             return None;
         }
 
-        // First need to fetch all of the existing bindings
-        let bindings: Vec<_> = self.bindings.iter().map(|(p, o)| (p.clone(), *o)).collect();
-        let old_timestamp = self.timestamp;
+        // We need to determine the new timestamp
+        let mut new_ts = UNIX_EPOCH
+            .elapsed()
+            .expect("system clock before 1970")
+            .as_millis()
+            .try_into()
+            .expect("materialize has existed for more than 500M years");
+        new_ts += self.update_interval - (new_ts % self.update_interval);
 
-        // Now we need to update the old timestamp
-        let mut new_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .as_millis() as u64;
-        new_ts = new_ts + self.update_interval - (new_ts % self.update_interval);
+        if self.timestamp < new_ts {
+            // Now we need to fetch all of the existing bindings
+            let bindings: Vec<_> = self.bindings.iter().map(|(p, o)| (p.clone(), *o)).collect();
+            let old_timestamp = self.timestamp;
 
-        self.timestamp = new_ts;
-        self.last_update_time = Instant::now();
-        Some((old_timestamp, bindings))
+            self.timestamp = new_ts;
+            self.last_update_time = Instant::now();
+            Some((old_timestamp, bindings))
+        } else {
+            // We could not determine a suitable new timestamp, and so we
+            // cannot finalize any current proposals.
+            None
+        }
     }
 
     /// Returns the current upper frontier (timestamp at which all future updates
