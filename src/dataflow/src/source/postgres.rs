@@ -58,6 +58,7 @@ impl ErrorExt for tokio_postgres::Error {
                         db_err.code() == &SqlState::CONNECTION_EXCEPTION
                             || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
                             || db_err.code() == &SqlState::CONNECTION_FAILURE
+                            || db_err.code() == &SqlState::TOO_MANY_CONNECTIONS
                             || db_err.code() == &SqlState::CANNOT_CONNECT_NOW
                             || db_err.code() == &SqlState::ADMIN_SHUTDOWN
                             || db_err.code() == &SqlState::CRASH_SHUTDOWN
