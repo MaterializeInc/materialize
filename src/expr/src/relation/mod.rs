@@ -259,12 +259,11 @@ impl MirRelationExpr {
                             }
                         }
                     }
-                    let keyless_typ = RelationType::new(typ.column_types.clone());
                     if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
-                        keyless_typ.with_key(vec![])
+                        RelationType::new(typ.column_types.clone()).with_key(vec![])
                     } else {
                         // XXX - Multi-column keys are not detected.
-                        keyless_typ.with_keys(
+                        typ.clone().with_keys(
                             unique_values_per_col
                                 .into_iter()
                                 .enumerate()
