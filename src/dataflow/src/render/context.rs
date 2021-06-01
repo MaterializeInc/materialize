@@ -10,9 +10,7 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
-use std::rc::Rc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -31,8 +29,6 @@ use timely::progress::{Antichain, Timestamp};
 
 use dataflow_types::{DataflowDesc, DataflowError};
 use expr::{GlobalId, MirScalarExpr};
-
-use crate::source::SourceToken;
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
@@ -83,12 +79,6 @@ where
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
     pub as_of_frontier: Antichain<repr::Timestamp>,
-    /// The source tokens for all sources that have been built in this context.
-    pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
-    /// Any other tokens that need to be dropped when an object is dropped.
-    pub additional_tokens: HashMap<GlobalId, Vec<Rc<dyn Any>>>,
-    /// Tokens for CDCv2 capture sources that have been built in this context.
-    pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
     /// Dataflow local collections.
     pub collections: HashMap<P, (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
     /// Dataflow local arrangements.
@@ -125,12 +115,9 @@ where
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,
-            source_tokens: HashMap::new(),
-            additional_tokens: HashMap::new(),
             collections: HashMap::new(),
             local: HashMap::new(),
             trace: HashMap::new(),
-            cdc_tokens: HashMap::new(),
         }
     }
 

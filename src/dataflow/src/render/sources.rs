@@ -37,7 +37,7 @@ use crate::logging::materialized::Logger;
 use crate::metrics;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
-use crate::render::RenderState;
+use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
 use crate::source::DecodeResult;
 use crate::source::SourceConfig;
@@ -54,6 +54,7 @@ where
     pub(crate) fn import_source(
         &mut self,
         render_state: &mut RenderState,
+        tokens: &mut RelevantTokens,
         scope: &mut Child<'g, G, G::Timestamp>,
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
@@ -260,7 +261,8 @@ where
                                     schema_registry_config,
                                     confluent_wire_format,
                                 );
-                                self.additional_tokens
+                                tokens
+                                    .additional_tokens
                                     .entry(src_id)
                                     .or_insert_with(Vec::new)
                                     .push(Rc::new(token));
@@ -288,7 +290,8 @@ where
                                     )
                                 };
                                 if let Some(tok) = extra_token {
-                                    self.additional_tokens
+                                    tokens
+                                        .additional_tokens
                                         .entry(src_id)
                                         .or_insert_with(Vec::new)
                                         .push(Rc::new(tok));
@@ -493,7 +496,7 @@ where
                 self.collections.insert(get, (collection, err_collection));
 
                 let token = Rc::new(capability);
-                self.source_tokens.insert(src_id, token.clone());
+                tokens.source_tokens.insert(src_id, token.clone());
 
                 // We also need to keep track of this mapping globally to activate sources
                 // on timestamp advancement queries

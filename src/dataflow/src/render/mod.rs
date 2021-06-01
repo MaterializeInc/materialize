@@ -139,7 +139,7 @@ mod threshold;
 mod top_k;
 mod upsert;
 
-/// Worker-local state used during rendering.
+/// Worker-local state that is maintained across dataflows.
 pub struct RenderState {
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
@@ -154,6 +154,21 @@ pub struct RenderState {
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
     /// Sender to give data to be cached.
     pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
+}
+
+/// A container for "tokens" that are relevant to an in-construction dataflow.
+///
+/// Tokens are used by consumers of data to keep their sources of data running.
+/// Once all tokens referencing a source are dropped, the source can shut down,
+/// which will wind down (eventually) the dataflow containing it.
+#[derive(Default)]
+pub struct RelevantTokens {
+    /// The source tokens for all sources that have been built in this context.
+    pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
+    /// Any other tokens that need to be dropped when an object is dropped.
+    pub additional_tokens: HashMap<GlobalId, Vec<Rc<dyn Any>>>,
+    /// Tokens for CDCv2 capture sources that have been built in this context.
+    pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
 }
 
 /// Build a dataflow from a description.
@@ -173,6 +188,7 @@ pub fn build_dataflow<A: Allocate>(
         // alternate type signatures.
         scope.clone().region(|region| {
             let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
+            let mut tokens = RelevantTokens::default();
 
             assert!(
                 !dataflow
@@ -187,6 +203,7 @@ pub fn build_dataflow<A: Allocate>(
             for (src_id, (src, orig_id)) in dataflow.source_imports.clone() {
                 context.import_source(
                     render_state,
+                    &mut tokens,
                     region,
                     materialized_logging.clone(),
                     src_id,
@@ -197,7 +214,7 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(render_state, scope, region, *idx_id, idx);
+                context.import_index(render_state, &mut tokens, scope, region, *idx_id, idx);
             }
 
             // Build declared objects.
@@ -208,13 +225,13 @@ pub fn build_dataflow<A: Allocate>(
             // Export declared indexes.
             for (idx_id, idx, typ) in &dataflow.index_exports {
                 let imports = dataflow.get_imports(&idx.on_id);
-                context.export_index(render_state, imports, *idx_id, idx, typ);
+                context.export_index(render_state, &mut tokens, imports, *idx_id, idx, typ);
             }
 
             // Export declared sinks.
             for (sink_id, sink) in &dataflow.sink_exports {
                 let imports = dataflow.get_imports(&sink.from);
-                context.export_sink(render_state, imports, *sink_id, sink);
+                context.export_sink(render_state, &mut tokens, imports, *sink_id, sink);
             }
         });
     })
@@ -227,6 +244,7 @@ where
     fn import_index(
         &mut self,
         render_state: &mut RenderState,
+        tokens: &mut RelevantTokens,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
@@ -248,7 +266,8 @@ where
             let err_arranged = err_arranged.enter(region);
             let get_expr = MirRelationExpr::global_get(idx.on_id, typ.clone());
             self.set_trace(idx_id, &get_expr, &idx.keys, (ok_arranged, err_arranged));
-            self.additional_tokens
+            tokens
+                .additional_tokens
                 .entry(idx_id)
                 .or_insert_with(Vec::new)
                 .push(Rc::new((
@@ -308,6 +327,7 @@ where
     fn export_index(
         &mut self,
         render_state: &mut RenderState,
+        tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
@@ -317,10 +337,10 @@ where
         let mut needed_source_tokens = Vec::new();
         let mut needed_additional_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(addls) = self.additional_tokens.get(&import_id) {
+            if let Some(addls) = tokens.additional_tokens.get(&import_id) {
                 needed_additional_tokens.extend_from_slice(addls);
             }
-            if let Some(source_token) = self.source_tokens.get(&import_id) {
+            if let Some(source_token) = tokens.source_tokens.get(&import_id) {
                 needed_source_tokens.push(source_token.clone());
             }
         }

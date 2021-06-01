@@ -28,7 +28,7 @@ use repr::adt::decimal::Significand;
 use repr::{Datum, Row, Timestamp};
 
 use crate::render::context::Context;
-use crate::render::RenderState;
+use crate::render::{RelevantTokens, RenderState};
 use crate::sink;
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
@@ -39,6 +39,7 @@ where
     pub(crate) fn export_sink(
         &mut self,
         render_state: &mut RenderState,
+        tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
@@ -48,10 +49,10 @@ where
         let mut needed_additional_tokens = Vec::new();
         let mut needed_sink_tokens = Vec::new();
         for import_id in import_ids {
-            if let Some(addls) = self.additional_tokens.get(&import_id) {
+            if let Some(addls) = tokens.additional_tokens.get(&import_id) {
                 needed_additional_tokens.extend_from_slice(addls);
             }
-            if let Some(source_token) = self.source_tokens.get(&import_id) {
+            if let Some(source_token) = tokens.source_tokens.get(&import_id) {
                 needed_source_tokens.push(source_token.clone());
             }
         }
