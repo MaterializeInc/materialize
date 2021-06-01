@@ -147,6 +147,17 @@ def trim_pipeline(pipeline: Any) -> None:
         if have_paths_changed(inputs):
             changed.add(step.id)
 
+    # Find all steps that have had their dependencies changed, but which have not themselves changed
+    retry = True
+    while retry:
+        retry = False
+        for step in steps.values():
+            if step.id not in changed:
+                for dep in step.step_dependencies:
+                    if steps[dep].id in changed:
+                        changed.add(step.id)
+                        retry = True
+
     # Then collect all changed steps, and all the steps that those changed steps
     # depend on.
     needed = set()
