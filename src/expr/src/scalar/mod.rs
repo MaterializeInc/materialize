@@ -14,6 +14,7 @@ use std::mem;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
+use ore::str::separated;
 use repr::adt::array::InvalidArrayError;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::regex::Regex;
@@ -21,7 +22,6 @@ use repr::strconv::{ParseError, ParseHexError};
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::explain;
 use crate::scalar::func::parse_timezone;
 
 pub mod func;
@@ -869,7 +869,7 @@ impl fmt::Display for MirScalarExpr {
                 }
             }
             CallVariadic { func, exprs } => {
-                write!(f, "{}({})", func, explain::separated(", ", exprs.clone()))?;
+                write!(f, "{}({})", func, separated(", ", exprs.clone()))?;
             }
             If { cond, then, els } => {
                 write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;

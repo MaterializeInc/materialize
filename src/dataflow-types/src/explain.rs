@@ -32,8 +32,9 @@ use std::fmt;
 
 use crate::{DataflowDesc, LinearOperator};
 
-use expr::explain::*;
+use expr::explain::{Indices, ViewExplanation};
 use expr::{ExprHumanizer, GlobalId, MirRelationExpr, RowSetFinishing};
+use ore::str::{bracketed, separated};
 
 /// An `Explanation` facilitates pretty-printing of the parts of a
 /// [`DataflowDesc`] that are relevant to dataflow rendering.

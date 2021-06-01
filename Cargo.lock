@@ -861,6 +861,7 @@ dependencies = [
  "interchange",
  "kafka-util",
  "log",
+ "ore",
  "regex",
  "repr",
  "rusoto_core",
