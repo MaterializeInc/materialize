@@ -712,10 +712,15 @@ impl Timestamper {
                 .unwrap(),
         );
 
-        thread::spawn({
-            let connector = connector.clone();
-            move || rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
-        });
+        thread::Builder::new()
+            .name("rt_kafka_meta".to_string())
+            .spawn({
+                let connector = connector.clone();
+                move || {
+                    rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
+                }
+            })
+            .unwrap();
 
         Some(connector)
     }
