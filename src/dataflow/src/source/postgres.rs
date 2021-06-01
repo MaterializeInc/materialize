@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::TryStreamExt;
 use lazy_static::lazy_static;
 
 use postgres_protocol::message::backend::{
@@ -43,9 +43,54 @@ pub struct PostgresSourceReader {
     lsn: PgLsn,
 }
 
+trait ErrorExt {
+    fn is_recoverable(&self) -> bool;
+}
+
+impl ErrorExt for tokio_postgres::Error {
+    fn is_recoverable(&self) -> bool {
+        match self.source() {
+            Some(err) => {
+                match err.downcast_ref::<DbError>() {
+                    Some(db_err) => {
+                        use Severity::*;
+                        // Connection and non-fatal errors
+                        db_err.code() == &SqlState::CONNECTION_EXCEPTION
+                            || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
+                            || db_err.code() == &SqlState::CONNECTION_FAILURE
+                            || !matches!(
+                                db_err.parsed_severity(),
+                                Some(Error) | Some(Fatal) | Some(Panic)
+                            )
+                    }
+                    // IO errors
+                    None => err.is::<std::io::Error>(),
+                }
+            }
+            // We have no information about what happened, it might be a fatal error or
+            // it might not. Unexpected errors can happen if the upstream crashes for
+            // example in which case we should retry.
+            //
+            // Therefore, we adopt a "recoverable unless proven otherwise" policy and
+            // keep retrying in the event of unexpected errors.
+            None => true,
+        }
+    }
+}
+
 enum ReplicationError {
     Recoverable(anyhow::Error),
     Fatal(anyhow::Error),
+}
+
+impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
+    fn from(err: E) -> Self {
+        if err.is_recoverable() {
+            Self::Recoverable(err.into())
+        } else {
+            Self::Fatal(err.into())
+        }
+    }
 }
 
 macro_rules! try_fatal {
@@ -212,7 +257,7 @@ impl PostgresSourceReader {
         let mut last_keepalive = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
-        while let Some(item) = stream.next().await {
+        while let Some(item) = stream.try_next().await? {
             use ReplicationMessage::*;
             // The upstream will periodically request keepalive responses by setting the reply field
             // to 1. However, we cannot rely on these messages arriving on time. For example, when
@@ -221,7 +266,7 @@ impl PostgresSourceReader {
             // every 30 seconds.
             //
             // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
-            if matches!(item, Ok(PrimaryKeepAlive(ref k)) if k.reply() == 1)
+            if matches!(item, PrimaryKeepAlive(ref k) if k.reply() == 1)
                 || last_keepalive.elapsed() > Duration::from_secs(30)
             {
                 let ts: i64 = PG_EPOCH
@@ -240,7 +285,7 @@ impl PostgresSourceReader {
                 last_keepalive = Instant::now();
             }
             match item {
-                Ok(XLogData(xlog_data)) => {
+                XLogData(xlog_data) => {
                     use LogicalReplicationMessage::*;
 
                     match xlog_data.data() {
@@ -296,41 +341,7 @@ impl PostgresSourceReader {
                     }
                 }
                 // Handled above
-                Ok(PrimaryKeepAlive(_)) => {}
-                Err(err) => {
-                    let recoverable = match err.source() {
-                        Some(err) => {
-                            match err.downcast_ref::<DbError>() {
-                                Some(db_err) => {
-                                    use Severity::*;
-                                    // Connection and non-fatal errors
-                                    db_err.code() == &SqlState::CONNECTION_EXCEPTION
-                                        || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
-                                        || db_err.code() == &SqlState::CONNECTION_FAILURE
-                                        || !matches!(
-                                            db_err.parsed_severity(),
-                                            Some(Error) | Some(Fatal) | Some(Panic)
-                                        )
-                                }
-                                // IO errors
-                                None => err.is::<std::io::Error>(),
-                            }
-                        }
-                        // We have no information about what happened, it might be a fatal error or
-                        // it might not. Unexpected errors can happen if the upstream crashes for
-                        // example in which case we should retry.
-                        //
-                        // Therefore, we adopt a "recoverable unless proven otherwise" policy and
-                        // keep retrying in the event of unexpected errors.
-                        None => true,
-                    };
-
-                    if recoverable {
-                        return Err(Recoverable(err.into()));
-                    } else {
-                        return Err(Fatal(err.into()));
-                    }
-                }
+                PrimaryKeepAlive(_) => {}
                 // The enum is marked non_exaustive, better be conservative
                 _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
             }
