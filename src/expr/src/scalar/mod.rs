@@ -22,7 +22,6 @@ use repr::strconv::{ParseError, ParseHexError};
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::explain;
 use crate::scalar::func::parse_timezone;
 
 pub mod func;
