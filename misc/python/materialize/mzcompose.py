@@ -1220,7 +1220,11 @@ class WorkflowWorkflowStep(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         try:
             # Run the specified workflow with the context of the parent workflow
-            workflow.composition.get_workflow(workflow.env, self._workflow).run()
+            child_workflow = workflow.composition.get_workflow(
+                workflow.env, self._workflow
+            )
+            print(f"Running workflow {child_workflow.name} ...")
+            child_workflow.run()
         except KeyError:
             raise errors.UnknownItem(
                 f"workflow in {workflow.composition.name}",
