@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fmt;
 
 use itertools::Itertools;
@@ -234,8 +235,13 @@ impl MirRelationExpr {
         match self {
             MirRelationExpr::Constant { rows, typ } => {
                 if let Ok(rows) = rows {
+                    let n_cols = typ.arity();
+                    // If the `i`th entry is `Some`, then we have not yet observed non-uniqueness in the `i`th column.
+                    let mut unique_values_per_col = vec![Some(HashSet::<Datum>::default()); n_cols];
                     for (row, _diff) in rows {
-                        for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
+                        for (i, (datum, column_typ)) in
+                            row.iter().zip(typ.column_types.iter()).enumerate()
+                        {
                             // If the record will be observed, we should validate its type.
                             if datum != Datum::Dummy {
                                 assert!(
@@ -244,15 +250,28 @@ impl MirRelationExpr {
                                     column_typ,
                                     datum
                                 );
+                                if let Some(unique_vals) = &mut unique_values_per_col[i] {
+                                    let is_dupe = !unique_vals.insert(datum);
+                                    if is_dupe {
+                                        unique_values_per_col[i] = None;
+                                    }
+                                }
                             }
                         }
                     }
+                    let keyless_typ = RelationType::new(typ.column_types.clone());
                     if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
-                        RelationType::new(typ.column_types.clone()).with_key(vec![])
+                        keyless_typ.with_key(vec![])
                     } else {
-                        // TODO: Have the keys of the constant be the columns
-                        // containing unique values
-                        typ.clone()
+                        // XXX - Multi-column keys are not detected.
+                        keyless_typ.with_keys(
+                            unique_values_per_col
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(_idx, unique_vals)| unique_vals.is_some())
+                                .map(|(idx, _)| vec![idx])
+                                .collect(),
+                        )
                     }
                 } else {
                     typ.clone()
