@@ -32,3 +32,15 @@ EXPLAIN TYPED PLAN FOR (VALUES (1, 2, 3))
 | | keys = (())
 
 EOF
+
+# Each detected-unique column belongs in a separate key.
+
+query T multiline
+EXPLAIN TYPED PLAN FOR (VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1))
+----
+%0 =
+| Constant (1, 1, 1) (2, 2, 1) (3, 3, 1)
+| | types = (integer, integer, integer)
+| | keys = ((#0), (#1))
+
+EOF
