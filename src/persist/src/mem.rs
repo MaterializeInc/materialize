@@ -10,36 +10,70 @@
 //! In-memory implementations for testing and benchmarking.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
 use crate::persister::{Meta, Persister, Snapshot, Write};
-use crate::storage::{Blob, Buffer};
+use crate::storage::{Blob, Buffer, SeqNo};
 use crate::{Id, Token};
 
 /// An in-memory implementation of [Buffer].
 pub struct MemBuffer {
+    seqno: Range<SeqNo>,
     dataz: Vec<Vec<u8>>,
 }
 
 impl MemBuffer {
     /// Constructs a new, empty MemBuffer.
     pub fn new() -> Self {
-        MemBuffer { dataz: Vec::new() }
+        MemBuffer {
+            seqno: SeqNo(0)..SeqNo(0),
+            dataz: Vec::new(),
+        }
     }
 }
 
 impl Buffer for MemBuffer {
-    fn write_sync(&mut self, buf: Vec<u8>) -> Result<(), Error> {
+    fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
+        self.seqno = self.seqno.start..SeqNo(self.seqno.end.0 + 1);
         self.dataz.push(buf);
-        Ok(())
+        debug_assert_eq!(
+            (self.seqno.end.0 - self.seqno.start.0) as usize,
+            self.dataz.len()
+        );
+        Ok(self.seqno.end)
     }
 
-    fn snapshot<F>(&self, mut logic: F) -> Result<(), Error>
+    fn snapshot<F>(&self, mut logic: F) -> Result<Range<SeqNo>, Error>
     where
-        F: FnMut(&[u8]) -> Result<(), Error>,
+        F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
     {
-        self.dataz.iter().map(|x| logic(&x[..])).collect()
+        self.dataz
+            .iter()
+            .enumerate()
+            .map(|(idx, x)| logic(SeqNo(self.seqno.start.0 + idx as u64), &x[..]))
+            .collect::<Result<(), Error>>()?;
+        Ok(self.seqno.clone())
+    }
+
+    fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
+        // TODO: Test the edge cases here.
+        if upper <= self.seqno.start || upper > self.seqno.end {
+            return Err(format!(
+                "invalid truncation {:?} for buffer containing: {:?}",
+                upper, self.seqno
+            )
+            .into());
+        }
+        let removed = upper.0 - self.seqno.start.0;
+        self.seqno = upper..self.seqno.end;
+        self.dataz.drain(0..removed as usize);
+        debug_assert_eq!(
+            (self.seqno.end.0 - self.seqno.start.0) as usize,
+            self.dataz.len()
+        );
+        Ok(())
     }
 }
 
@@ -149,6 +183,11 @@ impl MemStream {
 impl Write for MemStream {
     fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error> {
         self.dataz.lock()?.extend_from_slice(&updates);
+        Ok(())
+    }
+
+    fn seal(&mut self, _upper: u64) -> Result<(), Error> {
+        // No-op for now.
         Ok(())
     }
 }

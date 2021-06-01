@@ -16,6 +16,10 @@ use crate::{Id, Token};
 pub trait Write {
     /// Synchronously writes (Key, Value, Time, Diff) updates.
     fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error>;
+
+    /// Closes the stream at the given timestamp, migrating data strictly less
+    /// than it into the trace.
+    fn seal(&mut self, upper: u64) -> Result<(), Error>;
 }
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)

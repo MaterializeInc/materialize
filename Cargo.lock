@@ -2883,7 +2883,10 @@ dependencies = [
 name = "persist"
 version = "0.0.0"
 dependencies = [
+ "abomonation",
+ "abomonation_derive",
  "criterion",
+ "differential-dataflow",
  "tempfile",
  "timely",
 ]
