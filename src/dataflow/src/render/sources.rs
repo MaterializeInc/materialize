@@ -147,6 +147,10 @@ where
                     None
                 };
 
+                let timestamp_histories = render_state
+                    .ts_histories
+                    .get(&orig_id)
+                    .map(|history| history.clone());
                 let source_config = SourceConfig {
                     name: format!("{}-{}", connector.name(), uid),
                     sql_name: src.name.clone(),
@@ -155,7 +159,7 @@ where
                     scope,
                     // Distribute read responsibility among workers.
                     active: active_read_worker,
-                    timestamp_histories: render_state.ts_histories.clone(),
+                    timestamp_histories,
                     consistency,
                     timestamp_frequency: ts_frequency,
                     worker_id: scope.index(),

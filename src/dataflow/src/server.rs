@@ -9,7 +9,8 @@
 
 //! An interactive dataflow server.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::convert::TryInto;
 use std::sync::Mutex;
 use std::time::{Instant, UNIX_EPOCH};
 
@@ -45,7 +46,7 @@ use crate::operator::CollectionExt;
 use crate::render::{self, RenderState};
 use crate::server::metrics::Metrics;
 use crate::source::cache::WorkerCacheData;
-use crate::source::timestamp::{TimestampBindingRc, TimestampDataUpdate};
+use crate::source::timestamp::TimestampBindingRc;
 
 mod metrics;
 
@@ -207,7 +208,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     traces: TraceManager::new(worker_idx),
                     local_inputs: HashMap::new(),
                     ts_source_mapping: HashMap::new(),
-                    ts_histories: Default::default(),
+                    ts_histories: HashMap::default(),
                     dataflow_tokens: HashMap::new(),
                     caching_tx: None,
                 },
@@ -413,6 +414,7 @@ where
 
             // Report frontier information back the coordinator.
             self.report_frontiers();
+            self.update_rt_timestamps();
 
             // Handle any received commands.
             let cmds: Vec<_> = self.command_rx.try_iter().collect();
@@ -435,15 +437,15 @@ where
     fn report_frontiers(&mut self) {
         fn add_progress(
             id: GlobalId,
-            upper: &Antichain<Timestamp>,
-            lower: &Antichain<Timestamp>,
+            new_frontier: &Antichain<Timestamp>,
+            prev_frontier: &Antichain<Timestamp>,
             progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
         ) {
             let mut changes = ChangeBatch::new();
-            for time in lower.elements().iter() {
+            for time in prev_frontier.elements().iter() {
                 changes.update(time.clone(), -1);
             }
-            for time in upper.elements().iter() {
+            for time in new_frontier.elements().iter() {
                 changes.update(time.clone(), 1);
             }
             changes.compact();
@@ -453,38 +455,35 @@ where
         }
 
         if let Some(feedback_tx) = &mut self.feedback_tx {
-            let mut upper = Antichain::new();
+            let mut new_frontier = Antichain::new();
             let mut progress = Vec::new();
             for (id, traces) in self.render_state.traces.traces.iter_mut() {
                 // Read the upper frontier and compare to what we've reported.
-                traces.oks_mut().read_upper(&mut upper);
-                let lower = self
+                traces.oks_mut().read_upper(&mut new_frontier);
+                let prev_frontier = self
                     .reported_frontiers
                     .get_mut(&id)
                     .expect("Frontier missing!");
-                if lower != &upper {
-                    add_progress(*id, &upper, &lower, &mut progress);
-                    lower.clone_from(&upper);
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
                 }
             }
 
-            for (id, source_ts_history) in self.render_state.ts_histories.borrow().iter() {
-                // Only send upper frontier information for BYO sources at the moment.
-                // TODO(rkhaitan): get rid of this distinction.
-                match source_ts_history {
-                    TimestampDataUpdate::RealTime(_) => continue,
-                    TimestampDataUpdate::BringYourOwn(history) => {
-                        // Read the upper frontier and compare to what we've reported.
-                        history.read_upper(&mut upper);
-                        let lower = self
-                            .reported_frontiers
-                            .get_mut(&id)
-                            .expect("Frontier missing!");
-                        if lower != &upper {
-                            add_progress(*id, &upper, &lower, &mut progress);
-                            lower.clone_from(&upper);
-                        }
-                    }
+            for (id, history) in self.render_state.ts_histories.iter() {
+                // Read the upper frontier and compare to what we've reported.
+                history.read_upper(&mut new_frontier);
+                let prev_frontier = self
+                    .reported_frontiers
+                    .get_mut(&id)
+                    .expect("Frontier missing!");
+                assert!(<_ as PartialOrder>::less_equal(
+                    prev_frontier,
+                    &new_frontier
+                ));
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
                 }
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
@@ -502,6 +501,17 @@ where
                     })
                     .expect("feedback receriver should not drop first");
             }
+        }
+    }
+
+    /// Instruct all real-time sources managed by the worker to close their current
+    /// timestamp and move to the next wall clock time.
+    ///
+    /// Needs to be called periodically (ideally once per "timestamp_frequency" in order
+    /// for real time sources to make progress.
+    fn update_rt_timestamps(&self) {
+        for (_, history) in self.render_state.ts_histories.iter() {
+            history.update_timestamp();
         }
     }
 
@@ -651,15 +661,8 @@ where
                     self.render_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
-                    if let Some(ts_history) =
-                        self.render_state.ts_histories.borrow_mut().get_mut(&id)
-                    {
-                        match ts_history {
-                            TimestampDataUpdate::BringYourOwn(history) => {
-                                history.set_compaction_frontier(frontier.borrow());
-                            }
-                            _ => (),
-                        }
+                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
+                        ts_history.set_compaction_frontier(frontier.borrow());
                     }
                 }
             }
@@ -679,48 +682,48 @@ where
                 self.shutdown_logging();
             }
             SequencedCommand::AddSourceTimestamping { id, connector } => {
-                let byo_default = TimestampDataUpdate::BringYourOwn(TimestampBindingRc::new());
-
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
                     consistency,
+                    ts_frequency,
                     ..
                 } = connector
                 {
+                    let byo_default = TimestampBindingRc::new(None);
+                    let rt_default =
+                        TimestampBindingRc::new(Some(ts_frequency.as_millis().try_into().unwrap()));
                     match (connector, consistency) {
                         (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
+                            byo_default.add_partition(PartitionId::Kafka(0));
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
-                            let mut partitions = HashSet::new();
-                            partitions.insert(PartitionId::Kafka(0));
-                            Some(TimestampDataUpdate::RealTime(partitions))
+                            rt_default.add_partition(PartitionId::Kafka(0));
+                            Some(rt_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
+                            byo_default.add_partition(PartitionId::File);
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
-                            let mut partitions = HashSet::new();
-                            partitions.insert(PartitionId::File);
-                            Some(TimestampDataUpdate::RealTime(partitions))
+                            rt_default.add_partition(PartitionId::File);
+                            Some(rt_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
+                            byo_default.add_partition(PartitionId::File);
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::RealTime) => {
-                            let mut partitions = HashSet::new();
-                            partitions.insert(PartitionId::File);
-                            Some(TimestampDataUpdate::RealTime(partitions))
+                            rt_default.add_partition(PartitionId::File);
+                            Some(rt_default)
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
-                            let mut partitions = HashSet::new();
-                            partitions.insert(PartitionId::Kinesis);
-                            Some(TimestampDataUpdate::RealTime(partitions))
+                            rt_default.add_partition(PartitionId::Kinesis);
+                            Some(rt_default)
                         }
                         (ExternalSourceConnector::S3(_), Consistency::RealTime) => {
-                            let mut partitions = HashSet::new();
-                            partitions.insert(PartitionId::S3);
-                            Some(TimestampDataUpdate::RealTime(partitions))
+                            rt_default.add_partition(PartitionId::S3);
+                            Some(rt_default)
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
                             log::error!("BYO timestamping not supported for Kinesis sources");
@@ -752,32 +755,23 @@ where
                 };
 
                 if let Some(data) = source_timestamp_data {
-                    let prev = self.render_state.ts_histories.borrow_mut().insert(id, data);
+                    let prev = self.render_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
                     self.reported_frontiers.insert(id, Antichain::from_elem(0));
                 }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
-                let mut timestamps = self.render_state.ts_histories.borrow_mut();
-                if let Some(ts_entries) = timestamps.get_mut(&id) {
-                    match ts_entries {
-                        TimestampDataUpdate::BringYourOwn(history) => {
-                            if let TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) =
-                                update
-                            {
-                                history.add_binding(pid, timestamp, offset);
-                            } else {
-                                panic!("Unexpected message type. Expected BYO update.")
-                            }
+                if let Some(history) = self.render_state.ts_histories.get_mut(&id) {
+                    match update {
+                        TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
+                            // TODO: change the interface between the dataflow server and the
+                            // timestamper.
+                            history.add_binding(pid, timestamp, offset + 1, false);
                         }
-                        TimestampDataUpdate::RealTime(partitions) => {
-                            if let TimestampSourceUpdate::RealTime(new_partition) = update {
-                                partitions.insert(new_partition);
-                            } else {
-                                panic!("Expected message type. Expected RT update.");
-                            }
+                        TimestampSourceUpdate::RealTime(new_partition) => {
+                            history.add_partition(new_partition);
                         }
-                    }
+                    };
 
                     let sources = self
                         .render_state
@@ -794,8 +788,7 @@ where
                 }
             }
             SequencedCommand::DropSourceTimestamping { id } => {
-                let mut timestamps = self.render_state.ts_histories.borrow_mut();
-                let prev = timestamps.remove(&id);
+                let prev = self.render_state.ts_histories.remove(&id);
 
                 if prev.is_none() {
                     log::debug!("Attempted to drop timestamping for source {} that was not previously known", id);

@@ -151,7 +151,7 @@ async fn create_upsert_text_source(
             query_prefix
         )
     } else {
-        format!("{} FORMAT TEXT ENVELOPE UPSERT", query_prefix)
+        format!("{} FORMAT BYTES ENVELOPE NONE", query_prefix)
     };
     log::debug!("creating source=> {}", query);
 
