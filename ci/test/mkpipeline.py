@@ -57,8 +57,9 @@ def main() -> int:
 
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         print("On main branch or tag, so not trimming pipeline")
-    elif have_paths_changed(CI_GLUE_GLOBS):
-        print("Repository glue code has changed, so not trimming pipeline")
+    # DEBUG! testing changes
+    # elif have_paths_changed(CI_GLUE_GLOBS):
+    #     print("Repository glue code has changed, so not trimming pipeline")
     else:
         print("--- Trimming unchanged steps from pipeline")
         trim_pipeline(pipeline)
