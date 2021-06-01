@@ -23,6 +23,7 @@ members = [
     "src/mz-process-collector",
     "src/ore",
     "src/peeker",
+    "src/persist",
     "src/pgrepr",
     "src/pgtest",
     "src/pgwire",
