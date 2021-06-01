@@ -3161,11 +3161,14 @@ pub async fn serve(
             internal_cmd_tx.clone(),
         );
         let executor = TokioHandle::current();
-        let scraper_thread_handle = thread::spawn(move || {
-            let _executor_guard = executor.enter();
-            scraper.run();
-        })
-        .join_on_drop();
+        let scraper_thread_handle = thread::Builder::new()
+            .name("scraper".to_string())
+            .spawn(move || {
+                let _executor_guard = executor.enter();
+                scraper.run();
+            })
+            .unwrap()
+            .join_on_drop();
         (Some(scraper_thread_handle), Some(tx))
     } else {
         (None, None)
@@ -3177,81 +3180,87 @@ pub async fn serve(
     let mut timestamper =
         Timestamper::new(Duration::from_millis(10), internal_cmd_tx.clone(), ts_rx);
     let executor = TokioHandle::current();
-    let timestamper_thread_handle = thread::spawn(move || {
-        let _executor_guard = executor.enter();
-        timestamper.run();
-    })
-    .join_on_drop();
+    let timestamper_thread_handle = thread::Builder::new()
+        .name("timestamper".to_string())
+        .spawn(move || {
+            let _executor_guard = executor.enter();
+            timestamper.run();
+        })
+        .unwrap()
+        .join_on_drop();
 
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
     let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
     let handle = TokioHandle::current();
-    let thread = thread::spawn(move || {
-        let mut coord = Coordinator {
-            worker_guards,
-            worker_txs,
-            optimizer: Default::default(),
-            catalog,
-            symbiosis,
-            indexes: ArrangementFrontiers::default(),
-            sources: ArrangementFrontiers::default(),
-            logging_granularity: logging
-                .as_ref()
-                .and_then(|c| c.granularity.as_millis().try_into().ok()),
-            logical_compaction_window_ms: logical_compaction_window
-                .map(duration_to_timestamp_millis),
-            internal_cmd_tx,
-            ts_tx: ts_tx.clone(),
-            metric_scraper_tx: metric_scraper_tx.clone(),
-            cache_tx,
-            closed_up_to: 1,
-            read_lower_bound: 1,
-            last_op_was_read: false,
-            need_advance: true,
-            transient_id_counter: 1,
-            active_conns: HashMap::new(),
-            persisted_tables,
-            txn_reads: HashMap::new(),
-            since_handles: HashMap::new(),
-            since_updates: Rc::new(RefCell::new(HashMap::new())),
-        };
-        coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
-        if let Some(config) = &logging {
-            coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
-                granularity_ns: config.granularity.as_nanos(),
-                active_logs: BUILTINS
-                    .logs()
-                    .map(|src| (src.variant.clone(), src.index_id))
-                    .collect(),
-                log_logging: config.log_logging,
-            }));
-        }
-        if let Some(cache_tx) = &coord.cache_tx {
-            coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
-        }
-        let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
-        let ok = bootstrap.is_ok();
-        bootstrap_tx.send(bootstrap).unwrap();
-        if !ok {
-            metric_scraper_tx.map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
-            // Tell the timestamper thread to shut down.
-            ts_tx.send(TimestampMessage::Shutdown).unwrap();
-            // Explicitly drop the timestamper handle here so we can wait for
-            // the thread to return.
-            drop(timestamper_thread_handle);
-            coord.broadcast(SequencedCommand::Shutdown);
-            return;
-        }
-        handle.block_on(coord.serve(
-            internal_cmd_rx,
-            cmd_rx,
-            feedback_rx,
-            timestamper_thread_handle,
-            metric_scraper_handle,
-        ))
-    });
+    let thread = thread::Builder::new()
+        .name("coordinator".to_string())
+        .spawn(move || {
+            let mut coord = Coordinator {
+                worker_guards,
+                worker_txs,
+                optimizer: Default::default(),
+                catalog,
+                symbiosis,
+                indexes: ArrangementFrontiers::default(),
+                sources: ArrangementFrontiers::default(),
+                logging_granularity: logging
+                    .as_ref()
+                    .and_then(|c| c.granularity.as_millis().try_into().ok()),
+                logical_compaction_window_ms: logical_compaction_window
+                    .map(duration_to_timestamp_millis),
+                internal_cmd_tx,
+                ts_tx: ts_tx.clone(),
+                metric_scraper_tx: metric_scraper_tx.clone(),
+                cache_tx,
+                closed_up_to: 1,
+                read_lower_bound: 1,
+                last_op_was_read: false,
+                need_advance: true,
+                transient_id_counter: 1,
+                active_conns: HashMap::new(),
+                persisted_tables,
+                txn_reads: HashMap::new(),
+                since_handles: HashMap::new(),
+                since_updates: Rc::new(RefCell::new(HashMap::new())),
+            };
+            coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
+            if let Some(config) = &logging {
+                coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
+                    granularity_ns: config.granularity.as_nanos(),
+                    active_logs: BUILTINS
+                        .logs()
+                        .map(|src| (src.variant.clone(), src.index_id))
+                        .collect(),
+                    log_logging: config.log_logging,
+                }));
+            }
+            if let Some(cache_tx) = &coord.cache_tx {
+                coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
+            }
+            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
+            let ok = bootstrap.is_ok();
+            bootstrap_tx.send(bootstrap).unwrap();
+            if !ok {
+                metric_scraper_tx.map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
+                // Tell the timestamper thread to shut down.
+                ts_tx.send(TimestampMessage::Shutdown).unwrap();
+                // Explicitly drop the timestamper handle here so we can wait for
+                // the thread to return.
+                drop(timestamper_thread_handle);
+                coord.broadcast(SequencedCommand::Shutdown);
+                return;
+            }
+            handle.block_on(coord.serve(
+                internal_cmd_rx,
+                cmd_rx,
+                feedback_rx,
+                timestamper_thread_handle,
+                metric_scraper_handle,
+            ))
+        })
+        .unwrap();
     match bootstrap_rx.recv().unwrap() {
         Ok(()) => {
             let handle = Handle {
