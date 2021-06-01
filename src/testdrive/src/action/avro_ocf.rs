@@ -17,7 +17,7 @@ use async_trait::async_trait;
 
 use ore::retry::Retry;
 
-use crate::action::{Action, State, SyncAction};
+use crate::action::{Action, Context, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
 
@@ -126,9 +126,10 @@ where
 pub struct VerifyAction {
     sink: String,
     expected: Vec<String>,
+    context: Context,
 }
 
-pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
+pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyAction, String> {
     let sink = cmd.args.string("sink")?;
     let expected = cmd.input;
     cmd.args.done()?;
@@ -136,7 +137,11 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
         // The goal isn't security, but preventing mistakes.
         return Err("separators in file sink names are forbidden".into());
     }
-    Ok(VerifyAction { sink, expected })
+    Ok(VerifyAction {
+        sink,
+        expected,
+        context,
+    })
 }
 
 #[async_trait]
@@ -178,7 +183,14 @@ impl Action for VerifyAction {
                 .map(|res| res.map(|val| (None, Some(val))))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("reading avro values from file: {}", e))?;
-            avro::validate_sink(None, &schema, &self.expected, &actual)
+            avro::validate_sink(
+                None,
+                &schema,
+                &self.expected,
+                &actual,
+                &self.context.regex,
+                &self.context.regex_replacement,
+            )
         })
     }
 }
