@@ -45,8 +45,9 @@ impl ReduceElision {
         } = relation
         {
             let input_type = input.typ();
-            if input_type.keys.iter().any(|keys| {
-                keys.iter()
+            if input_type.keys.elements().iter().any(|key| {
+                key.indices()
+                    .iter()
                     .all(|k| group_key.contains(&expr::MirScalarExpr::Column(*k)))
             }) {
                 use expr::{AggregateFunc, UnaryFunc, VariadicFunc};

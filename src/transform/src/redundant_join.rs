@@ -115,11 +115,16 @@ impl RedundantJoin {
                 // does not have keys, as it cannot be redundant in that case.
                 if let Some((input, bindings)) = (0..input_types.len())
                     .rev()
-                    .filter(|i| !input_types[*i].keys.is_empty())
+                    .filter(|i| !input_types[*i].keys.elements().is_empty())
                     .flat_map(|i| {
                         find_redundancy(
                             i,
-                            &input_types[i].keys,
+                            &input_types[i]
+                                .keys
+                                .elements()
+                                .iter()
+                                .map(|key| key.indices().to_vec())
+                                .collect::<Vec<_>>(),
                             &old_input_mapper,
                             equivalences,
                             &input_prov[..],

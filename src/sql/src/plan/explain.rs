@@ -378,7 +378,10 @@ impl<'a> Explanation<'a> {
             writeln!(
                 f,
                 "| | keys = ({})",
-                separated(", ", keys.iter().map(|key| Indices(key)))
+                separated(
+                    ", ",
+                    keys.elements().iter().map(|key| Indices(key.indices()))
+                )
             )?;
         }
 

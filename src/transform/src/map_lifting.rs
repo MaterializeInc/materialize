@@ -26,7 +26,8 @@ use itertools::Itertools;
 
 use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use repr::Row;
+use repr::{Key, Row};
+use timely::progress::Antichain;
 
 use crate::TransformArgs;
 
@@ -153,16 +154,18 @@ impl LiteralLifting {
                         }
                         typ.column_types = new_column_types;
 
+                        let mut new_keys = Antichain::new();
                         // Tidy up the type information of `relation`.
-                        for key in typ.keys.iter_mut() {
-                            *key = key
+                        for key in typ.keys.elements().iter() {
+                            let indices = key
+                                .indices()
                                 .iter()
                                 .filter(|x| !the_same[**x])
                                 .map(|x| projection[*x])
                                 .collect::<Vec<usize>>();
+                            new_keys.insert(Key::new(indices));
                         }
-                        typ.keys.sort();
-                        typ.keys.dedup();
+                        typ.keys = new_keys;
 
                         let remove_extracted_literals = |row: &mut Row| {
                             let mut new_row = Row::default();
@@ -186,11 +189,17 @@ impl LiteralLifting {
                             .project(projection);
                     } else if !literals.is_empty() {
                         // Tidy up the type information of `relation`.
-                        for key in typ.keys.iter_mut() {
-                            key.retain(|k| k < &data.len());
+                        let mut new_keys = Antichain::new();
+                        for key in typ.keys.elements().iter() {
+                            let indices = key
+                                .indices()
+                                .iter()
+                                .cloned()
+                                .filter(|k| k < &data.len())
+                                .collect();
+                            new_keys.insert(Key::new(indices));
                         }
-                        typ.keys.sort();
-                        typ.keys.dedup();
+                        typ.keys = new_keys;
 
                         row.truncate_datums(typ.arity());
                         for (row, _cnt) in rows.iter_mut() {
@@ -215,11 +224,17 @@ impl LiteralLifting {
                         typ.column_types.pop();
                     }
                     let columns = typ.column_types.len();
-                    for key in typ.keys.iter_mut() {
-                        key.retain(|k| k < &columns);
+                    let mut new_keys = Antichain::new();
+                    for key in typ.keys.elements().iter() {
+                        let indices = key
+                            .indices()
+                            .iter()
+                            .cloned()
+                            .filter(|k| k < &columns)
+                            .collect();
+                        new_keys.insert(Key::new(indices));
                     }
-                    typ.keys.sort();
-                    typ.keys.dedup();
+                    typ.keys = new_keys;
                 }
                 literals
             }

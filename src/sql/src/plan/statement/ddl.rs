@@ -1361,10 +1361,12 @@ pub fn plan_create_sink(
                         Ok(name_idx)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let is_valid_key =
-                    desc.typ().keys.iter().any(|key_columns| {
-                        key_columns.iter().all(|column| indices.contains(column))
-                    });
+                let is_valid_key = desc
+                    .typ()
+                    .keys
+                    .elements()
+                    .iter()
+                    .any(|key| key.indices().iter().all(|column| indices.contains(column)));
                 if !is_valid_key && envelope == SinkEnvelope::Upsert {
                     return Err(invalid_upsert_key_err(&desc, &key));
                 }
@@ -1381,7 +1383,13 @@ pub fn plan_create_sink(
     };
 
     // pick the first valid natural relation key, if any
-    let relation_key_indices = desc.typ().keys.get(0).cloned();
+    let relation_key_indices = desc
+        .typ()
+        .keys
+        .elements()
+        .get(0)
+        .cloned()
+        .map(|key| key.into_indices());
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
         let cols = desc.clone().into_iter().collect::<Vec<_>>();
@@ -1461,15 +1469,16 @@ fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]
         .map(|column| column.as_str())
         .join(", ");
     let requested_user_key = format!("({})", requested_user_key);
-    let valid_keys = if desc.typ().keys.is_empty() {
+    let valid_keys = if desc.typ().keys.elements().is_empty() {
         "there are no valid keys".to_owned()
     } else {
         let valid_keys = desc
             .typ()
             .keys
+            .elements()
             .iter()
-            .map(|key_columns| {
-                let columns_string = key_columns
+            .map(|key| {
+                let columns_string = key.indices()
                     .iter()
                     .map(|col| desc.get_name(*col).expect("known to exist").as_str())
                     .join(", ");

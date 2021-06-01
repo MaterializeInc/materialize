@@ -8,11 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::hash::Hash;
 use std::iter;
 use std::vec;
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
+use timely::PartialOrder;
 
 use crate::ScalarType;
 
@@ -100,7 +103,7 @@ impl ColumnType {
 }
 
 /// The type of a relation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,
@@ -113,7 +116,68 @@ pub struct RelationType {
     ///
     /// A collection can contain multiple sets of keys, although it is common to
     /// have either zero or one sets of key indices.
-    pub keys: Vec<Vec<usize>>,
+    pub keys: Antichain<Key>,
+}
+
+impl Hash for RelationType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.column_types.hash(state);
+        let mut keys = self.keys.clone();
+        keys.sort();
+        for elt in keys.elements() {
+            elt.hash(state);
+        }
+    }
+}
+
+/// A key for a relation; i.e., a set of columns such that for every unique combination of
+/// values for those columns, the relation has zero or one rows with those values.
+///
+/// We use this wrapper type, rather than the underlying `Vec<usize>`, so that we can implement
+/// `PartialOrder` on it, allowing us to use Timely's Antichain type to filter out redundant keys for free.
+/// Thus, we define `PartialOrder` such that a key is less than or equal to another iff the former key
+/// logically implies the latter (that is, the former key's columns are a subset of the latter's).
+#[derive(PartialEq, Eq, Serialize, Deserialize, Clone, Debug, Hash, PartialOrd, Ord)]
+pub struct Key {
+    /// The column indices of the key. These must be sorted and contain no duplicates.
+    indices: Vec<usize>,
+}
+
+impl Key {
+    pub fn new(mut indices: Vec<usize>) -> Self {
+        indices.sort_unstable();
+        indices.dedup();
+        Self { indices }
+    }
+
+    pub fn indices(&self) -> &[usize] {
+        &self.indices
+    }
+
+    pub fn into_indices(self) -> Vec<usize> {
+        self.indices
+    }
+}
+
+impl PartialOrder for Key {
+    fn less_equal(&self, other: &Self) -> bool {
+        // A key logically implies another key if all the former's columns are columns of the latter.
+        // Because `indices` is guaranteed to be sorted and not contain duplicates, we can
+        // compute this property by iterating them in parallel.
+        let mut other_cursor = 0;
+        for &col_idx in self.indices.iter() {
+            loop {
+                let other_idx = other.indices.get(other_cursor).copied();
+                other_cursor += 1;
+                match other_idx {
+                    Some(other_idx) if other_idx == col_idx => break,
+                    Some(other_idx) if other_idx > col_idx => return false,
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
 }
 
 impl RelationType {
@@ -129,16 +193,13 @@ impl RelationType {
     pub fn new(column_types: Vec<ColumnType>) -> Self {
         RelationType {
             column_types,
-            keys: Vec::new(),
+            keys: Antichain::new(),
         }
     }
 
     /// Adds a new key for the relation.
-    pub fn with_key(mut self, mut indices: Vec<usize>) -> Self {
-        indices.sort_unstable();
-        if !self.keys.contains(&indices) {
-            self.keys.push(indices);
-        }
+    pub fn with_key(mut self, indices: Vec<usize>) -> Self {
+        self.keys.insert(Key::new(indices));
         self
     }
 
@@ -156,11 +217,11 @@ impl RelationType {
 
     /// Gets the index of the columns used when creating a default index.
     pub fn default_key(&self) -> Vec<usize> {
-        if let Some(key) = self.keys.first() {
-            if key.is_empty() {
+        if let Some(Key { indices }) = &self.keys.elements().first() {
+            if indices.is_empty() {
                 (0..self.column_types.len()).collect()
             } else {
-                key.clone()
+                indices.clone()
             }
         } else {
             (0..self.column_types.len()).collect()
@@ -242,7 +303,7 @@ impl From<&ColumnName> for ColumnName {
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RelationDesc {
     typ: RelationType,
     names: Vec<Option<ColumnName>>,
@@ -286,19 +347,6 @@ impl RelationDesc {
         let typ = RelationType::new(types);
         Self::new(typ, names)
     }
-    /// Concatenates a `RelationDesc` onto the end of this `RelationDesc`.
-    pub fn concat(mut self, other: Self) -> Self {
-        let self_len = self.typ.column_types.len();
-        self.names.extend(other.names);
-        self.typ.column_types.extend(other.typ.column_types);
-        for k in other.typ.keys {
-            let k = k.into_iter().map(|idx| idx + self_len).collect();
-            self = self.with_key(k);
-        }
-        self
-    }
-
-    /// Appends an optionally named column with the specified column type.
     pub fn with_column<N>(mut self, name: Option<N>, column_type: ColumnType) -> Self
     where
         N: Into<ColumnName>,

@@ -101,7 +101,13 @@ impl JoinImplementation {
 
             let unique_keys = input_types
                 .into_iter()
-                .map(|typ| typ.keys)
+                .map(|typ| {
+                    typ.keys
+                        .elements()
+                        .iter()
+                        .map(|key| key.indices().to_vec())
+                        .collect()
+                })
                 .collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
             for index in 0..inputs.len() {
