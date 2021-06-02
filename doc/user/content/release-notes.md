@@ -55,6 +55,8 @@ Wrap your release notes at the 80 character mark.
 
 - Support casting single-dimensional [arrays](/sql/types/array/) from [`text`].
 
+- Support the `#>` and `#>>` [`jsonb`](/sql/types/jsonb/) operators.
+
 - **Breaking change.** Sort `NULL`s last, to match the default sort order in
   PostgreSQL.
 

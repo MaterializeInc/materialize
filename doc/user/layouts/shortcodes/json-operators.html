@@ -1,9 +1,11 @@
 Operator | RHS Type | Description
 ---------|----------|-------------
-`->` | `string`, `int`| Access field by name or index position, and return `jsonb` ([docs](/sql/types/jsonb/#field-access-as-jsonb--))
-`->>` | `string`, `int`| Access field by name or index position, and return `string` ([docs](/sql/types/jsonb/#field-access-as-string--))
+`->` | `text`, `int`| Access field by name or index position, and return `jsonb` ([docs](/sql/types/jsonb/#field-access-as-jsonb--))
+`->>` | `text`, `int`| Access field by name or index position, and return `text` ([docs](/sql/types/jsonb/#field-access-as-text--))
+`#>` | `text[]` | Access field by path, and return `jsonb` ([docs](/sql/types/jsonb/#path-access-as-jsonb-))
+`#>>` | `text[]` | Access field by path, and return `text` ([docs](/sql/types/jsonb/#path-access-as-text-))
 <code>&vert;&vert;</code> | `jsonb` | Concatenate LHS and RHS ([docs](/sql/types/jsonb/#jsonb-concat-))
-`-` | `string` | Delete all values with key of RHS ([docs](/sql/types/jsonb/#remove-key--))
+`-` | `text` | Delete all values with key of RHS ([docs](/sql/types/jsonb/#remove-key--))
 `@>` | `jsonb` | Does element contain RHS? ([docs](/sql/types/jsonb/#lhs-contains-rhs-))
 <code>&lt;@</code> | `jsonb` | Does RHS contain element? ([docs](/sql/types/jsonb/#rhs-contains-lhs-))
-`?` | `string` | Is RHS a top-level key? ([docs](/sql/types/jsonb/#search-top-level-keys-))
+`?` | `text` | Is RHS a top-level key? ([docs](/sql/types/jsonb/#search-top-level-keys-))

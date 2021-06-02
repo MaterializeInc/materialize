@@ -1571,6 +1571,47 @@ fn jsonb_get_string<'a>(
     }
 }
 
+fn jsonb_get_path<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+    stringify: bool,
+) -> Datum<'a> {
+    let mut json = a;
+    let path = b.unwrap_array().elements();
+    for key in path.iter() {
+        let key = match key {
+            Datum::String(s) => s,
+            Datum::Null => return Datum::Null,
+            _ => unreachable!("keys in jsonb_get_path known to be strings"),
+        };
+        json = match json {
+            Datum::Map(map) => match map.iter().find(|(k, _)| key == *k) {
+                Some((_k, v)) => v,
+                None => return Datum::Null,
+            },
+            Datum::List(list) => match strconv::parse_int64(key) {
+                Ok(i) => {
+                    let i = if i >= 0 {
+                        i
+                    } else {
+                        // index backwards from the end
+                        (list.iter().count() as i64) + i
+                    };
+                    list.iter().nth(i as usize).unwrap_or(Datum::Null)
+                }
+                Err(_) => return Datum::Null,
+            },
+            _ => return Datum::Null,
+        }
+    }
+    if stringify {
+        jsonb_stringify(json, temp_storage)
+    } else {
+        json
+    }
+}
+
 fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let k = b.unwrap_str();
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -2418,6 +2459,7 @@ pub enum BinaryFunc {
     TextConcat,
     JsonbGetInt64 { stringify: bool },
     JsonbGetString { stringify: bool },
+    JsonbGetPath { stringify: bool },
     JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
@@ -2573,6 +2615,9 @@ impl BinaryFunc {
             }
             BinaryFunc::JsonbGetString { stringify } => {
                 Ok(eager!(jsonb_get_string, temp_storage, *stringify))
+            }
+            BinaryFunc::JsonbGetPath { stringify } => {
+                Ok(eager!(jsonb_get_path, temp_storage, *stringify))
             }
             BinaryFunc::JsonbContainsString => Ok(eager!(jsonb_contains_string)),
             BinaryFunc::JsonbConcat => Ok(eager!(jsonb_concat, temp_storage)),
@@ -2739,12 +2784,13 @@ impl BinaryFunc {
 
             MzRenderTypemod | TextConcat => ScalarType::String.nullable(in_nullable),
 
-            JsonbGetInt64 { stringify: true } | JsonbGetString { stringify: true } => {
-                ScalarType::String.nullable(true)
-            }
+            JsonbGetInt64 { stringify: true }
+            | JsonbGetString { stringify: true }
+            | JsonbGetPath { stringify: true } => ScalarType::String.nullable(true),
 
             JsonbGetInt64 { stringify: false }
             | JsonbGetString { stringify: false }
+            | JsonbGetPath { stringify: false }
             | JsonbConcat
             | JsonbDeleteInt64
             | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
@@ -2928,6 +2974,7 @@ impl BinaryFunc {
             | JsonbContainsJsonb
             | JsonbGetInt64 { .. }
             | JsonbGetString { .. }
+            | JsonbGetPath { .. }
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
@@ -3080,8 +3127,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
             BinaryFunc::TextConcat => f.write_str("||"),
-            BinaryFunc::JsonbGetInt64 { .. } => f.write_str("->"),
-            BinaryFunc::JsonbGetString { .. } => f.write_str("->"),
+            BinaryFunc::JsonbGetInt64 { stringify: false } => f.write_str("->"),
+            BinaryFunc::JsonbGetInt64 { stringify: true } => f.write_str("->>"),
+            BinaryFunc::JsonbGetString { stringify: false } => f.write_str("->"),
+            BinaryFunc::JsonbGetString { stringify: true } => f.write_str("->>"),
+            BinaryFunc::JsonbGetPath { stringify: false } => f.write_str("#>"),
+            BinaryFunc::JsonbGetPath { stringify: true } => f.write_str("#>>"),
             BinaryFunc::JsonbContainsString | BinaryFunc::MapContainsKey => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
             BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),

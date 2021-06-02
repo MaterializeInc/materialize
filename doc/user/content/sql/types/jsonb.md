@@ -13,7 +13,7 @@ PostgreSQL's implementation.
 
 Detail | Info
 -------|------
-**Quick Syntax** | `'{"1":2,"3":4}'::JSONB`
+**Quick Syntax** | `'{"1":2,"3":4}'::jsonb`
 **Size** | Variable
 **Catalog name** | `pg_catalog.jsonb`
 **OID** | 3802
@@ -29,7 +29,7 @@ Field | Use
 ------|-----
 _json&lowbar;string_ | A well-formed [JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON).
 
-## JSONB functions + operators
+## `jsonb` functions + operators
 
 Materialize supports the following operators and functions.
 
@@ -48,7 +48,7 @@ as tables, i.e. you cannot use them as scalar values. For example, you can only
 use `jsonb_object_keys` in the following way:
 
 ```sql
-SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB);
+SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::jsonb);
 ```
 
 ## Details
@@ -83,12 +83,12 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
 #### Notes about converting `jsonb` to `text`
 
 `jsonb` can have some odd-feeling corner cases when converting to or from
-`string` (also known as `text`).
+[`text`](/sql/types/text).
 
 - `jsonb::text` always produces the printed version of the JSON.
 
     ```sql
-    SELECT ('"a"'::JSONB)::STRING AS jsonb_elem;
+    SELECT ('"a"'::jsonb)::text AS jsonb_elem;
     ```
     ```nofmt
      jsonb_elem
@@ -98,10 +98,10 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
 
 - `->>` and the `_text` functions produce the printed version of the inner
   element, unless the output is a single JSON string in which case they print it
-  without quotes, i.e. as a SQL `string`.
+  without quotes, i.e. as a SQL `text` value.
 
     ```sql
-    SELECT ('"a"'::JSONB)->>0 AS string_elem;
+    SELECT ('"a"'::jsonb)->>0 AS string_elem;
     ```
     ```nofmt
      jsonb_elem
@@ -109,7 +109,7 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
      a
     ```
 
-- `string` values passed to `to_jsonb` with quotes (`"`) produced JSONB Strings
+- `text` values passed to `to_jsonb` with quotes (`"`) produced `jsonb` strings
   with the quotes escaped.
 
     ```sql
@@ -132,7 +132,7 @@ The type of JSON element you're accessing dictates the RHS's type.
 - JSON objects require a `string`:
 
   ```sql
-  SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB->'1' AS field_jsonb;
+  SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'1' AS field_jsonb;
   ```
   ```nofmt
    field_jsonb
@@ -143,7 +143,7 @@ The type of JSON element you're accessing dictates the RHS's type.
 - JSON arrays require an `int`:
 
   ```sql
-  SELECT '["1", "a", 2]'::JSONB->1 AS field_jsonb;
+  SELECT '["1", "a", 2]'::jsonb->1 AS field_jsonb;
   ```
   ```nofmt
    field_jsonb
@@ -153,7 +153,7 @@ The type of JSON element you're accessing dictates the RHS's type.
 Field accessors can also be chained together.
 
 ```sql
-SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB->'a'->1 AS field_jsonb;
+SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'a'->1 AS field_jsonb;
 ```
 ```nofmt
  field_jsonb
@@ -165,17 +165,17 @@ Note that all returned values are `jsonb`.
 
 <hr/>
 
-#### Field access as `string` (`->>`)
+#### Field access as `text` (`->>`)
 
 The type of JSON element you're accessing dictates the RHS's type.
 
-- JSON objects require a `string`:
+- JSON objects require `text`:
 
   ```sql
-  SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB->>'1' AS field_jsonb;
+  SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->>'1' AS field_text;
   ```
   ```nofmt
-   field_jsonb
+   field_text
   -------------
    2.0
   ```
@@ -183,10 +183,10 @@ The type of JSON element you're accessing dictates the RHS's type.
 - JSON arrays require an `int`:
 
   ```sql
-  SELECT '["1", "a", 2]'::JSONB->>1 AS field_jsonb;
+  SELECT '["1", "a", 2]'::text->>1 AS field_text;
   ```
   ```nofmt
-   field_jsonb
+   field_text
   -------------
    a
   ```
@@ -195,23 +195,55 @@ Field accessors can also be chained together, as long as the LHS remains
 `jsonb`.
 
 ```sql
-SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB->'a'->>1 AS field_jsonb;
+SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'a'->>1 AS field_text;
 ```
 ```nofmt
- field_jsonb
+ field_text
 -------------
  c
 ```
 
 Note that all returned values are `string`.
 
+#### Path access as `jsonb` (`#>`)
+
+You can access specific elements in a `jsonb` value using a "path", which is a
+[text array](/sql/types/array) where each element is either a field key or an
+array element:
+
+```sql
+SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #> '{a,1}' AS field_jsonb;
+```
+```nofmt
+ field_jsonb
+-------------
+ "c"
+```
+
+The operator returns a value of type `jsonb`. If the path is invalid, it returns
+`NULL`.
+
+#### Path access as `text` (`#>>`)
+
+The `#>>` operator is equivalent to the [`#>`](#path-access-as-jsonb-) operator,
+except that the operator returns a value of type `text`.
+
+```sql
+SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #>> '{a,1}' AS field_text;
+```
+```nofmt
+ field_text
+-------------
+ c
+```
+
 <hr/>
 
 #### `jsonb` concat (`||`)
 
 ```sql
-SELECT '{"1": 2}'::JSONB ||
-       '{"a": ["b", "c"]}'::JSONB AS concat;
+SELECT '{"1": 2}'::jsonb ||
+       '{"a": ["b", "c"]}'::jsonb AS concat;
 ```
 ```nofmt
              concat
@@ -224,7 +256,7 @@ SELECT '{"1": 2}'::JSONB ||
 #### Remove key (`-`)
 
 ```sql
- SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB - 'a' AS rm_key;
+ SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb - 'a' AS rm_key;
 ```
 ```nofmt
   rm_key
@@ -237,8 +269,8 @@ SELECT '{"1": 2}'::JSONB ||
 #### LHS contains RHS (`@>`)
 
 ```sql
-SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB @>
-       '{"1": 2}'::JSONB AS lhs_contains_rhs;
+SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb @>
+       '{"1": 2}'::jsonb AS lhs_contains_rhs;
 ```
 ```nofmt
  lhs_contains_rhs
@@ -251,8 +283,8 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB @>
 #### RHS contains LHS (`<@`)
 
 ```sql
-SELECT '{"1": 2}'::JSONB <@
-       '{"1": 2, "a": ["b", "c"]}'::JSONB AS lhs_contains_rhs;
+SELECT '{"1": 2}'::jsonb <@
+       '{"1": 2, "a": ["b", "c"]}'::jsonb AS lhs_contains_rhs;
 ```
 ```nofmt
  rhs_contains_lhs
@@ -265,7 +297,7 @@ SELECT '{"1": 2}'::JSONB <@
 #### Search top-level keys (`?`)
 
 ```sql
-SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB ? 'a' AS search_for_key;
+SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'a' AS search_for_key;
 ```
 ```nofmt
  search_for_key
@@ -274,7 +306,7 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB ? 'a' AS search_for_key;
 ```
 
 ```sql
-SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB ? 'b' AS search_for_key;
+SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'b' AS search_for_key;
 ```
 ```nofmt
  search_for_key
@@ -287,7 +319,7 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::JSONB ? 'b' AS search_for_key;
 #### `jsonb_array_elements`
 
 ```sql
-SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::JSONB);
+SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
 ```
 ```nofmt
    value
@@ -307,7 +339,7 @@ Note that the `value` column is `jsonb`.
 #### `jsonb_array_elements_text`
 
 ```sql
-SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::JSONB);
+SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb);
 ```
 ```nofmt
    value
@@ -326,7 +358,7 @@ Note that the `value` column is `string`.
 #### `jsonb_array_length`
 
 ```sql
-SELECT jsonb_array_length('[true, 1, "a", {"b": 2}, null]'::JSONB);
+SELECT jsonb_array_length('[true, 1, "a", {"b": 2}, null]'::jsonb);
 ```
 ```nofmt
  jsonb_array_length
@@ -365,7 +397,7 @@ SELECT jsonb_build_object(2::float, 'b', 'a', 1::float);
 #### `jsonb_each`
 
 ```sql
-SELECT * FROM jsonb_each('{"1": 2, "a": ["b", "c"]}'::JSONB);
+SELECT * FROM jsonb_each('{"1": 2, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  key |   value
@@ -381,7 +413,7 @@ Note that the `value` column is `jsonb`.
 #### `jsonb_each_text`
 
 ```sql
-SELECT * FROM jsonb_each_text('{"1": 2, "a": ["b", "c"]}'::JSONB);
+SELECT * FROM jsonb_each_text('{"1": 2, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  key |   value
@@ -397,7 +429,7 @@ Note that the `value` column is `string`.
 #### `jsonb_object_keys`
 
 ```sql
-SELECT * FROM jsonb_object_keys('{"1": 2, "a": ["b", "c"]}'::JSONB);
+SELECT * FROM jsonb_object_keys('{"1": 2, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  jsonb_object_keys
@@ -411,7 +443,7 @@ SELECT * FROM jsonb_object_keys('{"1": 2, "a": ["b", "c"]}'::JSONB);
 #### `jsonb_pretty`
 
 ```sql
-SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::JSONB);
+SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  jsonb_pretty
@@ -430,7 +462,7 @@ SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::JSONB);
 #### `jsonb_typeof`
 
 ```sql
-SELECT jsonb_typeof('[true, 1, "a", {"b": 2}, null]'::JSONB);
+SELECT jsonb_typeof('[true, 1, "a", {"b": 2}, null]'::jsonb);
 ```
 ```nofmt
  jsonb_typeof
@@ -439,7 +471,7 @@ SELECT jsonb_typeof('[true, 1, "a", {"b": 2}, null]'::JSONB);
 ```
 
 ```sql
-SELECT * FROM jsonb_typeof('{"1": 2, "a": ["b", "c"]}'::JSONB);
+SELECT * FROM jsonb_typeof('{"1": 2, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  jsonb_typeof
@@ -452,7 +484,7 @@ SELECT * FROM jsonb_typeof('{"1": 2, "a": ["b", "c"]}'::JSONB);
 #### `jsonb_strip_nulls`
 
 ```sql
-SELECT jsonb_strip_nulls('[{"1":"a","2":null},"b",null,"c"]'::JSONB);
+SELECT jsonb_strip_nulls('[{"1":"a","2":null},"b",null,"c"]'::jsonb);
 ```
 ```nofmt
     jsonb_strip_nulls
