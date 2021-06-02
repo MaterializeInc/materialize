@@ -56,6 +56,8 @@ services:
     mzbuild: postgres
     ports:
       - 5432
+    environment:
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - ./pg_hba.conf:/share/conf/pg_hba.conf
     command: >
