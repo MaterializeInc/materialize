@@ -17,6 +17,8 @@ CREATE TABLE replica_identity_default (f1 INTEGER, f2 INTEGER, f3 INTEGER, PRIMA
 ALTER TABLE replica_identity_default REPLICA IDENTITY DEFAULT;
 INSERT INTO replica_identity_default VALUES (1,1,1), (2,2,2), (3,3,3), (4,4,4);
 
+$ schema-registry-wait-schema schema=postgres.public.replica_identity_default-value
+
 > CREATE MATERIALIZED SOURCE replica_identity_default
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.replica_identity_default'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

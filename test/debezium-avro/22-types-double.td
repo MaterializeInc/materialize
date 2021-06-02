@@ -16,6 +16,8 @@ CREATE TABLE double_type (f1 DOUBLE PRECISION);
 ALTER TABLE double_type REPLICA IDENTITY FULL;
 INSERT INTO double_type VALUES (NULL), ('Infinity'),('-Infinity'), ('NaN');
 
+$ schema-registry-wait-schema schema=postgres.public.double_type-value
+
 > CREATE MATERIALIZED SOURCE double_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.double_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

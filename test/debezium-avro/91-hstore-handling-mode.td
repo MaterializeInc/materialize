@@ -41,6 +41,8 @@ CREATE TABLE hstore_map (f1 hstore);
 ALTER TABLE hstore_map REPLICA IDENTITY FULL;
 INSERT INTO hstore_map VALUES (NULL), ('a=>1'::hstore);
 
+$ schema-registry-wait-schema schema=postgres.public.hstore_map-value
+
 ! CREATE MATERIALIZED SOURCE hstore_map
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.hstore_map'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

@@ -18,6 +18,8 @@ CREATE TABLE alter_add_column_with_delete (f1 INTEGER);
 ALTER TABLE alter_add_column_with_delete REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column_with_delete VALUES (123),(123),(123),(123);
 
+$ schema-registry-wait-schema schema=postgres.public.alter_add_column_with_delete-value
+
 > CREATE MATERIALIZED SOURCE alter_add_column_with_delete
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_add_column_with_delete'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

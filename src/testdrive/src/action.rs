@@ -41,6 +41,7 @@ mod kafka;
 mod kinesis;
 mod postgres;
 mod s3;
+mod schema_registry;
 mod sleep;
 mod sql;
 
@@ -403,6 +404,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "avro-ocf-verify" => Box::new(
                         avro_ocf::build_verify(builtin, context.clone()).map_err(wrap_err)?,
+                    ),
+                    "schema-registry-wait-schema" => Box::new(
+                        schema_registry::build_wait(builtin, context.clone()).map_err(wrap_err)?,
                     ),
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
                     "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
