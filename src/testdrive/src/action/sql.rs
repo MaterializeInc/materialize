@@ -26,7 +26,7 @@ use ore::retry::Retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, FetchStatement, Raw, Statement, ViewDefinition,
+    CreateViewStatement, Raw, Statement, ViewDefinition,
 };
 
 use crate::action::{Action, Context, State};
@@ -102,13 +102,23 @@ impl Action for SqlAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
+        use Statement::*;
+
         let query = &self.cmd.query;
         print_query(&query);
 
-        // Do not retry FETCH statements as subsequent executions are likely
-        // to return an empty result. The original result would thus be lost.
         let should_retry = match &self.stmt {
-            Statement::Fetch(FetchStatement { .. }) => false,
+            // Do not retry FETCH statements as subsequent executions are likely
+            // to return an empty result. The original result would thus be lost.
+            Fetch(_) => false,
+            // DDL statements should always provide the expected result on the first try
+            CreateDatabase(_) | CreateSchema(_) | CreateSource(_) | CreateSink(_)
+            | CreateView(_) | CreateViews(_) | CreateTable(_) | CreateIndex(_) | CreateType(_)
+            | CreateRole(_) | AlterObjectRename(_) | AlterIndexOptions(_) | Discard(_)
+            | DropDatabase(_) | DropObjects(_) | SetVariable(_) | ShowDatabases(_)
+            | ShowObjects(_) | ShowIndexes(_) | ShowColumns(_) | ShowCreateView(_)
+            | ShowCreateSource(_) | ShowCreateTable(_) | ShowCreateSink(_) | ShowCreateIndex(_)
+            | ShowVariable(_) => false,
             _ => true,
         };
 

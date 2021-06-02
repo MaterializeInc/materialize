@@ -17,6 +17,8 @@ ALTER TABLE boolean_type REPLICA IDENTITY FULL;
 INSERT INTO boolean_type VALUES (TRUE, TRUE);
 INSERT INTO boolean_type VALUES (FALSE, FALSE);
 
+$ schema-registry-wait-schema schema=postgres.public.boolean_type-value
+
 > CREATE MATERIALIZED SOURCE boolean_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.boolean_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

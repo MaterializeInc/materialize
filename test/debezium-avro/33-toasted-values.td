@@ -20,6 +20,8 @@ CREATE TABLE toasted_full (f1 text);
 ALTER TABLE toasted_full REPLICA IDENTITY FULL;
 INSERT INTO toasted_full VALUES (NULL), (REPEAT('a', 32 * 1024) || 'b');
 
+$ schema-registry-wait-schema schema=postgres.public.toasted_full-value
+
 > CREATE MATERIALIZED SOURCE toasted_full
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.toasted_full'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

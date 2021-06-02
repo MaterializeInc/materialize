@@ -16,6 +16,8 @@ CREATE TABLE uuid_type (pk_col UUID PRIMARY KEY, nopk_col UUID);
 ALTER TABLE uuid_type REPLICA IDENTITY FULL;
 INSERT INTO uuid_type VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
 
+$ schema-registry-wait-schema schema=postgres.public.uuid_type-value
+
 > CREATE MATERIALIZED SOURCE uuid_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.uuid_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
