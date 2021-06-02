@@ -708,7 +708,7 @@ impl SourceReader for S3SourceReader {
                 receiver_stream: receiver,
                 offset: S3Offset(0),
             },
-            Some(PartitionId::S3),
+            Some(PartitionId::None),
         ))
     }
 
@@ -717,7 +717,7 @@ impl SourceReader for S3SourceReader {
             Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::S3,
+                    partition: PartitionId::None,
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: None,

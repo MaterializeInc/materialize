@@ -702,27 +702,27 @@ where
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
-                            byo_default.add_partition(PartitionId::File);
+                            byo_default.add_partition(PartitionId::None);
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::File);
+                            rt_default.add_partition(PartitionId::None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
-                            byo_default.add_partition(PartitionId::File);
+                            byo_default.add_partition(PartitionId::None);
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::File);
+                            rt_default.add_partition(PartitionId::None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::Kinesis);
+                            rt_default.add_partition(PartitionId::None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::S3(_), Consistency::RealTime) => {
-                            rt_default.add_partition(PartitionId::S3);
+                            rt_default.add_partition(PartitionId::None);
                             Some(rt_default)
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {

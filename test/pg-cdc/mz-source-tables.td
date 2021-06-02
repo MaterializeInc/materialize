@@ -27,5 +27,5 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > SELECt id LIKE 'u%', oid > 0, schema_id > 1, volatility = 'unknown' FROM mz_sources WHERE name = 'mz_source';
 true true true true
 
-> SELECT partition_id = 'none', "offset" = timestamp, timestamp > 0, source_id like 'u%', dataflow_id > 0 FROM mz_source_info WHERE source_name LIKE '%postgres%';
+> SELECT partition_id IS NULL, "offset" = timestamp, timestamp > 0, source_id like 'u%', dataflow_id > 0 FROM mz_source_info WHERE source_name LIKE '%postgres%';
 true true true true true

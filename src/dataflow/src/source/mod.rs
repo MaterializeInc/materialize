@@ -607,9 +607,7 @@ impl ConsistencyInfo {
     /// Returns true if this worker is responsible for handling this partition
     fn responsible_for(&self, pid: &PartitionId) -> bool {
         match pid {
-            PartitionId::File | PartitionId::S3 | PartitionId::Kinesis | PartitionId::None => {
-                self.active
-            }
+            PartitionId::None => self.active,
             PartitionId::Kafka(p) => {
                 // We want to distribute partitions across workers evenly, such that
                 // - different partitions for the same source are uniformly distributed across workers
@@ -639,7 +637,7 @@ impl ConsistencyInfo {
     /// ingest from `pid`.
     fn add_partition(&mut self, pid: &PartitionId) {
         if self.partition_metadata.contains_key(pid) {
-            error!("Incorrectly attempting to add a partition twice for source: {} partion: {}. Ignoring",
+            error!("Incorrectly attempting to add a partition twice for source: {} partition: {}. Ignoring",
                    self.source_id,
                    pid
             );
@@ -889,7 +887,7 @@ impl Drop for SourceMetrics {
                 logger.log(MaterializedEvent::SourceInfo {
                     source_name: self.source_name.clone(),
                     source_id: self.source_id,
-                    partition_id: partition.to_string(),
+                    partition_id: partition.into(),
                     offset: -metric.last_offset,
                     timestamp: -metric.last_timestamp,
                 });
@@ -926,7 +924,7 @@ impl PartitionMetrics {
         logger.log(MaterializedEvent::SourceInfo {
             source_name: source_name.to_string(),
             source_id,
-            partition_id: partition_id.to_string(),
+            partition_id: partition_id.into(),
             offset: offset - self.last_offset,
             timestamp: timestamp - self.last_timestamp,
         });
