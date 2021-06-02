@@ -1326,6 +1326,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::CeilDecimal(s)))
                 }), 1711;
+                params!(APD{scale:None}) => UnaryFunc::CeilAPD, 17110;
             },
             "char_length" => Scalar {
                 params!(String) => UnaryFunc::CharLength, 1381;
@@ -1412,6 +1413,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 }), 1712;
+                params!(APD{scale:None}) => UnaryFunc::FloorAPD, 17120;
             },
             "format_type" => Scalar {
                 params!(Oid, Int32) => sql_op!(
@@ -1609,10 +1611,12 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::RoundDecimal(s)))
                 }), 1708;
+                params!(APD{scale:None}) => UnaryFunc::RoundAPD, 17080;
                 params!(DecimalAny, Int64) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s)))
                 }), 1707;
+                params!(APD{scale:None}, Int32) => BinaryFunc::RoundAPD, 17070;
             },
             "rtrim" => Scalar {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
