@@ -633,8 +633,8 @@ where
 }
 
 // `parse_list_inner`'s separation from `parse_list` simplifies error handling
-// by allowing subprocesses to return `String` errors.
-pub fn parse_list_inner<'a, T, E>(
+// by allowing subprocedures to return `String` errors.
+fn parse_list_inner<'a, T, E>(
     s: &'a str,
     is_element_type_list: bool,
     mut make_null: impl FnMut() -> T,
@@ -840,7 +840,7 @@ where
         .map_err(|details| ParseError::invalid_input_syntax("map", s).with_details(details))
 }
 
-pub fn parse_map_inner<'a, V, E>(
+fn parse_map_inner<'a, V, E>(
     s: &'a str,
     is_value_type_map: bool,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
