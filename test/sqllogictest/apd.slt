@@ -132,6 +132,46 @@ SELECT ('Infinity'::apd)::text
 query error invalid input syntax for type apd: "-Infinity"
 SELECT ('-Infinity'::apd)::text
 
+# Casts
+
+## int4 to apd
+query TTT
+SELECT 7::apd::text, -7::apd::text, 0::apd::text
+----
+7  -7  0
+
+query TTT
+SELECT 7::apd(39,3)::text, -7::apd(39,3)::text, 0::apd(39,3)::text
+----
+7  -7  0
+
+query TT
+SELECT 2147483647::apd::text, -2147483648::apd::text
+----
+2147483647  -2147483648
+
+query error numeric field overflow
+SELECT 12::apd(39,38)::text
+
+## int8 to apd
+query TTT
+SELECT 7::int8::apd::text, -7::int8::apd::text, 0::int8::apd::text
+----
+7  -7  0
+
+query TTT
+SELECT 7::int8::apd(39,3)::text, -7::int8::apd(39,3)::text, 0::int8::apd(39,3)::text
+----
+7  -7  0
+
+query TT
+SELECT 9223372036854775807::apd::text, -9223372036854775808::apd::text
+----
+9223372036854775807  -9223372036854775808
+
+query error numeric field overflow
+SELECT 12::int8::apd(39,38)::text
+
 # Addition
 query T
 SELECT ('1'::apd + '2'::apd)::text
