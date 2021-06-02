@@ -19,11 +19,10 @@ use lazy_static::lazy_static;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, Tuple, TupleData,
 };
-use tokio_postgres::config::{Config, ReplicationMode};
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::{Client, SimpleQueryMessage};
+use tokio_postgres::SimpleQueryMessage;
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
 use dataflow_types::{PostgresSourceConnector, SourceErrorDetails};
@@ -124,24 +123,12 @@ impl PostgresSourceReader {
         }
     }
 
-    /// Starts a replication connection to the upstream database
-    async fn connect_replication(&self) -> Result<Client, anyhow::Error> {
-        let mut config: Config = self.connector.conn.parse()?;
-        let tls = postgres_util::make_tls(&config)?;
-        let (client, conn) = config
-            .replication_mode(ReplicationMode::Logical)
-            .connect(tls)
-            .await?;
-        tokio::spawn(conn);
-        Ok(client)
-    }
-
     /// Creates the replication slot and produces the initial snapshot of the data
     ///
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self, timestamper: &Timestamper) -> Result<(), anyhow::Error> {
-        let client = self.connect_replication().await?;
+        let client = postgres_util::connect_replication(&self.connector.conn).await?;
 
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
@@ -244,7 +231,8 @@ impl PostgresSourceReader {
     ) -> Result<(), ReplicationError> {
         use ReplicationError::*;
 
-        let client = try_recoverable!(self.connect_replication().await);
+        let client =
+            try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
