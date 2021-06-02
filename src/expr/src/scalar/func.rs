@@ -347,6 +347,26 @@ fn cast_decimal_to_int64<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
     Datum::from((decimal.round(0).significand() / factor) as i64)
 }
 
+fn cast_apd_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd().0;
+    let mut cx = apd::cx_datum();
+    cx.round(&mut a);
+    match cx.try_into_i32(a) {
+        Ok(i) => Ok(Datum::from(i)),
+        Err(_) => Err(EvalError::Int32OutOfRange),
+    }
+}
+
+fn cast_apd_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd().0;
+    let mut cx = apd::cx_datum();
+    cx.round(&mut a);
+    match cx.try_into_i64(a) {
+        Ok(i) => Ok(Datum::from(i)),
+        Err(_) => Err(EvalError::Int64OutOfRange),
+    }
+}
+
 fn cast_significand_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f32)
@@ -3250,6 +3270,8 @@ pub enum UnaryFunc {
     CastDecimalToInt32(u8),
     CastDecimalToInt64(u8),
     CastDecimalToString(u8),
+    CastAPDToInt32,
+    CastAPDToInt64,
     CastAPDToString,
     CastSignificandToFloat32,
     CastSignificandToFloat64,
@@ -3479,6 +3501,8 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToString(scale) => {
                 Ok(cast_decimal_to_string(a, *scale, temp_storage))
             }
+            UnaryFunc::CastAPDToInt32 => cast_apd_to_int32(a),
+            UnaryFunc::CastAPDToInt64 => cast_apd_to_int64(a),
             UnaryFunc::CastAPDToString => Ok(cast_apd_to_string(a, temp_storage)),
             UnaryFunc::CastTimeToInterval => cast_time_to_interval(a),
             UnaryFunc::CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
@@ -3646,13 +3670,17 @@ impl UnaryFunc {
                 ScalarType::Decimal(MAX_DECIMAL_PRECISION, *s).nullable(in_nullable)
             }
 
-            CastInt64ToInt32 | CastDecimalToInt32(_) => ScalarType::Int32.nullable(in_nullable),
+            CastInt64ToInt32 | CastDecimalToInt32(_) | CastAPDToInt32 => {
+                ScalarType::Int32.nullable(in_nullable)
+            }
 
             CastFloat32ToInt32 | CastFloat64ToInt32 => ScalarType::Int32.nullable(true),
 
-            CastInt32ToInt64 | CastDecimalToInt64(_) | CastFloat32ToInt64 | CastFloat64ToInt64 => {
-                ScalarType::Int64.nullable(in_nullable)
-            }
+            CastInt32ToInt64
+            | CastDecimalToInt64(_)
+            | CastFloat32ToInt64
+            | CastFloat64ToInt64
+            | CastAPDToInt64 => ScalarType::Int64.nullable(in_nullable),
 
             CastInt32ToDecimal => ScalarType::Decimal(0, 0).nullable(in_nullable),
             CastInt64ToDecimal => ScalarType::Decimal(0, 0).nullable(in_nullable),
@@ -3844,6 +3872,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat64ToDecimal(_) => f.write_str("f64todec"),
             UnaryFunc::CastDecimalToInt32(_) => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64(_) => f.write_str("dectoi64"),
+            UnaryFunc::CastAPDToInt32 => f.write_str("apdtoi32"),
+            UnaryFunc::CastAPDToInt64 => f.write_str("apdtoi64"),
             UnaryFunc::CastDecimalToString(_) => f.write_str("dectostr"),
             UnaryFunc::CastAPDToString => f.write_str("numerictostr"),
             UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),

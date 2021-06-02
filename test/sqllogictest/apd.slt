@@ -153,6 +153,28 @@ SELECT 2147483647::apd::text, -2147483648::apd::text
 query error numeric field overflow
 SELECT 12::apd(39,38)::text
 
+## apd to int4
+query III
+SELECT '7'::apd::int, '7.3'::apd::int, '7.5'::apd::int
+----
+7  7  8
+
+query III
+SELECT '-7'::apd::int, '-7.3'::apd::int, '-7.5'::apd::int
+----
+-7  -7  -8
+
+query II
+SELECT '0'::apd::int, '-0'::apd::int
+----
+0  0
+
+query error integer out of range
+SELECT '2147483648'::apd::int4
+
+query error integer out of range
+SELECT '-2147483649'::apd::int4
+
 ## int8 to apd
 query TTT
 SELECT 7::int8::apd::text, -7::int8::apd::text, 0::int8::apd::text
@@ -171,6 +193,28 @@ SELECT 9223372036854775807::apd::text, -9223372036854775808::apd::text
 
 query error numeric field overflow
 SELECT 12::int8::apd(39,38)::text
+
+## apd to int8
+query III
+SELECT '7'::apd::int8, '7.3'::apd::int8, '7.5'::apd::int8
+----
+7  7  8
+
+query III
+SELECT '-7'::apd::int8, '-7.3'::apd::int8, '-7.5'::apd::int8
+----
+-7  -7  -8
+
+query II
+SELECT '0'::apd::int8, '-0'::apd::int8
+----
+0  0
+
+query error integer out of range
+SELECT '9223372036854775808'::apd::int4
+
+query error integer out of range
+SELECT '-9223372036854775809'::apd::int4
 
 # Addition
 query T
