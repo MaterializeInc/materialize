@@ -18,6 +18,8 @@ steps:
   - id: build
     label: ":docker: build"
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build
+    inputs:
+      - "*"
     timeout_in_minutes: 30
     agents:
       queue: builder
