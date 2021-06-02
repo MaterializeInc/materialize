@@ -832,6 +832,7 @@ dependencies = [
  "rusoto_sqs",
  "serde",
  "serde_json",
+ "tempfile",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -2189,7 +2190,7 @@ dependencies = [
  "repr",
  "reqwest",
  "rlimit",
- "semver 0.11.0",
+ "semver 1.0.2",
  "serde",
  "serde_json",
  "sha2",
@@ -3982,6 +3983,12 @@ checksum = "f301af10236f6df4160f7c3f04eec6dbc70ace82d23326abad5edee88801c6b6"
 dependencies = [
  "semver-parser 0.10.1",
 ]
+
+[[package]]
+name = "semver"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "965645ad4a66d27024921aa1e2e47a76524a4cfd55e038b62104eca65c363230"
 
 [[package]]
 name = "semver-parser"
