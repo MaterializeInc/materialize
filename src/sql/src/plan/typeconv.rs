@@ -247,6 +247,15 @@ lazy_static! {
             (String, Bytes) => Explicit: CastStringToBytes,
             (String, Jsonb) => Explicit: CastStringToJsonb,
             (String, Uuid) => Explicit: CastStringToUuid,
+            (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+                let return_ty = to_type.clone();
+                let to_el_type = to_type.unwrap_array_element_type();
+                let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToArray {
+                    return_ty,
+                    cast_expr: Box::new(cast_expr),
+                }))
+            }),
             (String, List) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_list_element_type();

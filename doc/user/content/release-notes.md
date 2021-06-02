@@ -51,6 +51,10 @@ Wrap your release notes at the 80 character mark.
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
   table via the PostgreSQL [`COPY` protocol][pg-copy].
 
+- Stabilize the [`ARRAY`](/sql/types/array/#construction) constructor.
+
+- Support casting single-dimensional [arrays](/sql/types/array/) from [`text`].
+
 - **Breaking change.** Sort `NULL`s last, to match the default sort order in
   PostgreSQL.
 

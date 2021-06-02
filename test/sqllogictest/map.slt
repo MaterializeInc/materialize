@@ -182,7 +182,7 @@ SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 
 true
 
 ## ?&
-query error string literal does not support casting from text to text\[\]
+query error malformed array literal: missing opening left brace
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& 'a'
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -195,6 +195,11 @@ query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY[NULL]
 ----
 false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?& '{a}'
+----
+true
 
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ?& ARRAY['a']
@@ -240,7 +245,7 @@ SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text
 false
 
 ## ?|
-query error string literal does not support casting from text to text\[\]
+query error malformed array literal: missing opening left brace
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| 'a'
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -250,6 +255,11 @@ query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY[NULL]
 ----
 false
+
+query T
+SELECT '{a=>1, b=>2}'::map[text=>int] ?| '{a}'
+----
+true
 
 query T
 SELECT '{a=>1, b=>2}'::map[text=>int] ?| ARRAY['a']

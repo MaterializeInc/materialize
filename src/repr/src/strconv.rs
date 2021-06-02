@@ -619,6 +619,69 @@ where
     }
 }
 
+pub fn parse_array<'a, T, E>(
+    s: &'a str,
+    make_null: impl FnMut() -> T,
+    gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
+) -> Result<Vec<T>, ParseError>
+where
+    E: fmt::Display,
+{
+    parse_array_inner(s, make_null, gen_elem)
+        .map_err(|details| ParseError::invalid_input_syntax("array", s).with_details(details))
+}
+
+fn parse_array_inner<'a, T, E>(
+    s: &'a str,
+    mut make_null: impl FnMut() -> T,
+    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
+) -> Result<Vec<T>, String>
+where
+    E: fmt::Display,
+{
+    let mut elems = vec![];
+    let buf = &mut LexBuf::new(s);
+
+    if !buf.consume('{') {
+        bail!("malformed array literal: missing opening left brace");
+    }
+
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
+    let is_end_of_literal = |c| matches!(c, ',' | '}');
+
+    loop {
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+        match buf.next() {
+            Some('}') => break,
+            _ if elems.len() == 0 => {
+                buf.prev();
+            }
+            Some(',') => {}
+            Some(c) => bail!("expected ',' or '}}', got '{}'", c),
+            None => bail!("unexpected end of input"),
+        }
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+
+        let elem = match buf.peek() {
+            Some('"') => gen(lex_quoted_element(buf)?)?,
+            Some('{') => bail!("parsing multi-dimensional arrays is not supported"),
+            Some(_) => match lex_unquoted_element(buf, is_special_char, is_end_of_literal)? {
+                Some(elem) => gen(elem)?,
+                None => make_null(),
+            },
+            None => bail!("unexpected end of input"),
+        };
+        elems.push(elem);
+    }
+
+    if buf.next().is_some() {
+        bail!("malformed array literal: junk after closing right brace");
+    }
+
+    Ok(elems)
+}
+
 pub fn parse_list<'a, T, E>(
     s: &'a str,
     is_element_type_list: bool,
