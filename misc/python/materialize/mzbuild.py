@@ -127,6 +127,20 @@ def docker_images() -> Set[str]:
     )
 
 
+def is_docker_image_pushed(name: str) -> bool:
+    """Check whether the named image is pushed to Docker Hub.
+
+    Note that this operation requires a rather slow network request.
+    """
+    proc = subprocess.run(
+        ["docker", "manifest", "inspect", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+    )
+    return proc.returncode == 0
+
+
 def chmod_x(path: Path) -> None:
     """Set the executable bit on a file or directory."""
     # https://stackoverflow.com/a/30463972/1122351
@@ -517,27 +531,6 @@ class ResolvedImage:
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
-    def push(self) -> None:
-        """Push the image to Docker Hub.
-
-        The image is pushed under the Docker identifier returned by
-        `ResolvedImage.spec`.
-        """
-        spawn.runv(["docker", "push", self.spec()])
-
-    def pushed(self) -> bool:
-        """Check whether the image is pushed to Docker Hub.
-
-        Note that this operation requires a rather slow network request.
-        """
-        proc = subprocess.run(
-            ["docker", "manifest", "inspect", self.spec()],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
-        )
-        return proc.returncode == 0
-
     def run(self, args: List[str] = []) -> None:
         """Run a command in the image.
 
@@ -670,6 +663,25 @@ class DependencySet:
                     acquired_from = d.acquire()
             else:
                 announce(f"Already built {spec}")
+
+    def push(self) -> None:
+        """Push all publishable images in this dependency set to Docker Hub.
+
+        Images are pushed using their spec as their tag. All images must have
+        been acquired (e.g., by `DependencySet.acquire`) before calling this
+        method.
+        """
+        for dep in self:
+            if dep.publish and not is_docker_image_pushed(dep.spec()):
+                spawn.runv(["docker", "push", dep.spec()])
+
+    def push_tagged(self, tag: str) -> None:
+        """Like push, but use the specified tag instead of the image's spec."""
+        for dep in self:
+            name = dep.image.docker_name(tag)
+            if dep.publish and not is_docker_image_pushed(name):
+                spawn.runv(["docker", "tag", dep.spec(), name])
+                spawn.runv(["docker", "push", name])
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self.dependencies.values())

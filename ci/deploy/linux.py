@@ -41,12 +41,18 @@ def main() -> None:
         publish_deb("materialized-unstable", deb.unstable_version(workspace))
 
     print(f"--- Tagging Docker images")
+    deps = repo.resolve_dependencies(image for image in repo if image.publish)
+    deps.acquire()
+
     if buildkite_tag:
-        tag_docker(repo, buildkite_tag)
-        tag_docker_latest_maybe(repo, buildkite_tag)
-    else:
-        tag_docker(repo, f'unstable-{git.rev_parse("HEAD")}')
-        tag_docker(repo, "unstable")
+        # On tag builds, always tag the images as such.
+        deps.push_tagged(buildkite_tag)
+
+        # Also tag the images as `latest` if this is the latest version.
+        version = semver.VersionInfo.parse(buildkite_tag.lstrip("v"))
+        latest_version = next(t for t in git.get_version_tags() if t.prerelease is None)
+        if version == latest_version:
+            deps.push_tagged("latest")
 
     print("--- Uploading binary tarball")
     mz_path = Path("materialized")
@@ -80,27 +86,6 @@ def publish_deb(package: str, version: str) -> None:
             f"./materialized-{version}.deb",
         ]
     )
-
-
-def tag_docker(repo: mzbuild.Repository, tag: str) -> None:
-    deps = repo.resolve_dependencies(image for image in repo if image.publish)
-    deps.acquire()
-    for dep in deps:
-        if dep.publish:
-            name = dep.image.docker_name(tag)
-            spawn.runv(["docker", "tag", dep.spec(), name])
-            spawn.runv(["docker", "push", name])
-
-
-def tag_docker_latest_maybe(repo: mzbuild.Repository, tag: str) -> None:
-    """If this tag is greater than all other tags, and is a release, tag it `latest`"""
-    this_tag = semver.VersionInfo.parse(tag.lstrip("v"))
-    if this_tag.prerelease is not None:
-        return
-
-    highest_release = next(t for t in git.get_version_tags() if t.prerelease is None)
-    if this_tag == highest_release:
-        tag_docker(repo, "latest")
 
 
 if __name__ == "__main__":
