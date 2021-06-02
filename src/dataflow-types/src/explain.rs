@@ -91,7 +91,7 @@ impl<'a> Explanation<'a> {
             .map(|build_desc| {
                 (
                     build_desc.id,
-                    ViewExplanation::new(build_desc.relation_expr.as_ref(), expr_humanizer),
+                    ViewExplanation::new(&build_desc.relation_expr, expr_humanizer),
                 )
             })
             .collect::<Vec<_>>();

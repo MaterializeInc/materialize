@@ -151,7 +151,7 @@ impl DataflowDesc {
         expr: OptimizedMirRelationExpr,
         typ: RelationType,
     ) {
-        for get_id in expr.as_ref().global_uses() {
+        for get_id in expr.global_uses() {
             self.add_dependency(id, get_id);
         }
         self.objects_to_build.push(BuildDesc {
@@ -293,7 +293,7 @@ impl DataflowDesc {
         }
         for desc in self.objects_to_build.iter() {
             if &desc.id == id {
-                return desc.relation_expr.as_ref().arity();
+                return desc.relation_expr.arity();
             }
         }
         panic!("GlobalId {} not found in DataflowDesc", id);

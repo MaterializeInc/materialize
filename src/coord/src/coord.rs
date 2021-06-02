@@ -1753,7 +1753,7 @@ impl Coordinator {
         let view_oid = self.catalog.allocate_oid()?;
         // Optimize the expression so that we can form an accurately typed description.
         let optimized_expr = self.prep_relation_expr(view.expr, ExprPrepStyle::Static)?;
-        let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
+        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
             plan_cx: pcx,
@@ -2164,7 +2164,7 @@ impl Coordinator {
         )?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
-        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = &*source {
             let rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.clone().into()),
@@ -2197,7 +2197,7 @@ impl Coordinator {
             // Extract any surrounding linear operators to determine if we can simply read
             // out the contents from an existing arrangement.
             let (mut map_filter_project, inner) =
-                expr::MapFilterProject::extract_from_expression(source.as_ref());
+                expr::MapFilterProject::extract_from_expression(&source);
             map_filter_project.optimize();
 
             // We can use a fast path approach if our query corresponds to a read out of
@@ -2242,7 +2242,7 @@ impl Coordinator {
                 // Slow path. We need to perform some computation, so build
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
-                let typ = source.as_ref().typ();
+                let typ = source.typ();
                 map_filter_project = expr::MapFilterProject::new(typ.arity());
                 let key: Vec<_> = (0..typ.arity()).map(MirScalarExpr::Column).collect();
                 let view_id = self.allocate_transient_id()?;
