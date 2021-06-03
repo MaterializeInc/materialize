@@ -203,13 +203,13 @@ pub struct Coordinator {
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     logging_granularity: Option<u64>,
-    // Channel to manange internal commands from the coordinator to itself.
+    /// Channel to manange internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
-    // Channel to communicate source status updates to the timestamper thread.
+    /// Channel to communicate source status updates to the timestamper thread.
     ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
     metric_scraper_tx: Option<std::sync::mpsc::Sender<ScraperMessage>>,
-    // Channel to communicate source status updates and shutdown notifications to the cacher
-    // thread.
+    /// Channel to communicate source status updates and shutdown notifications to the cacher
+    /// thread.
     cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
@@ -218,11 +218,11 @@ pub struct Coordinator {
     /// Whether or not the most recent operation was a read.
     last_op_was_read: bool,
     /// Whether we need to advance local inputs (i.e., did someone observe a timestamp).
-    /// TODO(justin): this is a hack, and does not work right with TAIL.
+    // TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
-    // active connections.
+    /// active connections.
     active_conns: HashMap<u32, ConnMeta>,
     /// Map of all persisted tables.
     persisted_tables: Option<PersistentTables>,
@@ -1148,7 +1148,7 @@ impl Coordinator {
 
     /// Handle termination of a client session.
     ///
-    // This cleans up any state in the coordinator associated with the session.
+    /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
         let (drop_sinks, _) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
@@ -1160,8 +1160,8 @@ impl Coordinator {
         self.active_conns.remove(&session.conn_id());
     }
 
-    // Removes all temporary items created by the specified connection, though
-    // not the temporary schema itself.
+    /// Removes all temporary items created by the specified connection, though
+    /// not the temporary schema itself.
     async fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
@@ -3359,8 +3359,8 @@ pub fn index_sql(
     .to_ast_string_stable()
 }
 
-// Convert a Duration to a Timestamp representing the number
-// of milliseconds contained in that Duration
+/// Converts a Duration to a Timestamp representing the number
+/// of milliseconds contained in that Duration
 fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
     let millis = d.as_millis();
     if millis > Timestamp::max_value() as u128 {
