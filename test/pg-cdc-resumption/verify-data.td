@@ -7,7 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 > SELECT COUNT(*) = 500000 FROM t1;
 true
 > SELECT COUNT(*) = 500000 FROM t2;
+true
+> SELECT COUNT(*) = 1000000 FROM t3;
+true
+> SELECT COUNT(*) = 2000010 FROM mz_source;
 true

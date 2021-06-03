@@ -8,6 +8,4 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
-GRANT ALL PRIVILEGES ON DATABASE "postgres" TO debezium;
-GRANT ALL PRIVILEGES ON SCHEMA "public" TO debezium;
+DELETE FROM t3 WHERE f1 % 2 = 1;

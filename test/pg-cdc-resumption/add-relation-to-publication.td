@@ -8,6 +8,12 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
-GRANT ALL PRIVILEGES ON DATABASE "postgres" TO debezium;
-GRANT ALL PRIVILEGES ON SCHEMA "public" TO debezium;
+ALTER PUBLICATION mz_source ADD TABLE t3;
+INSERT INTO t3 SELECT a1.f1 + a6.f1 , E'abc\nxyz' FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
+
+> CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (t3);
+
+$ set-sql-timeout duration=120s
+
+> SELECT COUNT(*) = 2000000 FROM t3
+true

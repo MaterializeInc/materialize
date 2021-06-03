@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::error::Error;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -26,6 +27,8 @@ use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
+use tokio_postgres::{Client, SimpleQueryRow};
+use uuid::Uuid;
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use dataflow_types::{PostgresSourceConnector, SourceErrorDetails};
@@ -43,6 +46,14 @@ pub struct PostgresSourceReader {
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
+    /// Upstream relation ids that have been successfully
+    /// synced to this source
+    synced_relids: HashSet<u32>,
+    /// Mapping of relation ids that are currently being synced
+    /// to the source to the consistent LSN of their snapshots
+    pending_relids: HashMap<u32, PgLsn>,
+    /// Buffered snapshot rows of pending relations to be inserted
+    buffered_snapshots: Option<tokio::fs::File>,
 }
 
 trait ErrorExt {
@@ -123,6 +134,9 @@ impl PostgresSourceReader {
             source_name,
             connector,
             lsn: 0.into(),
+            synced_relids: HashSet::new(),
+            pending_relids: HashMap::new(),
+            buffered_snapshots: None,
         }
     }
 
@@ -132,39 +146,143 @@ impl PostgresSourceReader {
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot<W: AsyncWrite + Unpin>(
         &mut self,
-        snapshot_tx: &mut SourceTransaction<'_>,
         buffer: &mut W,
-    ) -> Result<(), ReplicationError> {
+        snapshot_tx: Option<&mut SourceTransaction<'_>>,
+        lsn: Option<PgLsn>,
+    ) -> Result<Option<(PgLsn, Vec<u32>)>, ReplicationError> {
+        let initial_sync = snapshot_tx.is_some();
+
         let client =
             try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
 
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
-        let _ = client
-            .simple_query(&format!(
-                "DROP_REPLICATION_SLOT {:?}",
-                &self.connector.slot_name
-            ))
-            .await;
+        let slot_name = if initial_sync {
+            self.connector.slot_name.clone()
+        } else {
+            let mut temp_slot_name = format!(
+                "{}_{}",
+                &self.connector.slot_name,
+                Uuid::new_v4().to_string().replace('-', "")
+            );
+            // Postgres slot names cannot be longer than 63 characters
+            temp_slot_name.truncate(63);
+            temp_slot_name
+        };
+        let _ = self.drop_replication_slot(&client, &slot_name).await;
 
-        // Get all the relevant tables for this publication
-        let publication_tables = try_recoverable!(
-            postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
+        // Get all the tables for this publication and filter down to the relevant ones
+        let target_tables: Vec<postgres_util::TableInfo> = try_recoverable!(
+            postgres_util::publication_info(&self.connector.conn, &self.connector.publication,)
                 .await
-        );
+        )
+        .into_iter()
+        .filter(|t| !self.synced_relids.contains(&t.rel_id))
+        .collect();
 
-        // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
+        // Start a transaction and immediately create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
         // identical.
         client
             .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
             .await?;
 
+        let slot_row = self
+            .create_replication_slot(&client, &slot_name, !initial_sync)
+            .await?;
+
+        // Store the lsn at which we will need to start the replication stream from
+        let consistent_point = try_recoverable!(slot_row
+            .get("consistent_point")
+            .ok_or_else(|| anyhow!("missing expected column: `consistent_point`")));
+        let consistent_lsn: PgLsn = try_fatal!(consistent_point
+            .parse()
+            .or_else(|_| Err(anyhow!("invalid lsn"))));
+        if initial_sync {
+            self.lsn = consistent_lsn;
+        } else {
+            if let Some(lsn) = lsn {
+                if consistent_lsn <= lsn {
+                    log::info!(
+                        "source {}: snapshot LSN ({:#?}) is less than synced LSN ({:#?}) for relids {:#?}, skipping snapshot",
+                        &self.source_name,
+                        &consistent_lsn,
+                        &lsn,
+                        &target_tables.iter().map(|t| t.rel_id).collect::<Vec<u32>>()
+                    )
+                }
+                return Ok(None);
+            }
+        }
+
+        for info in &target_tables {
+            // TODO(petrosagg): use a COPY statement here for more efficient network transfer
+            let data = client
+                .simple_query(&format!(
+                    "SELECT * FROM {:?}.{:?}",
+                    info.namespace, info.name
+                ))
+                .await?;
+            for msg in data {
+                if let SimpleQueryMessage::Row(row) = msg {
+                    let mz_row = try_fatal!(self.row_from_query_row(info.rel_id, row));
+                    if let Some(snapshot_tx) = &snapshot_tx {
+                        try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
+                    }
+                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+                }
+            }
+        }
+        client.simple_query("COMMIT;").await?;
+        let synced_relids: Vec<u32> = target_tables.iter().map(|t| t.rel_id).collect();
+        if initial_sync {
+            self.synced_relids.extend(&synced_relids);
+        } else {
+            self.drop_replication_slot(&client, &slot_name).await?;
+        }
+        Ok(Some((consistent_lsn, synced_relids)))
+    }
+
+    /// Processes a buffered snapshot file. If insert is true, it inserts the
+    /// contained rows into the transaction. If false, it retracts them.
+    async fn process_snapshot_file<R: Read + Seek>(
+        &self,
+        snapshot_tx: &mut SourceTransaction<'_>,
+        mut reader: R,
+        insert: bool,
+    ) -> Result<(), anyhow::Error> {
+        tokio::task::block_in_place(|| -> Result<(), anyhow::Error> {
+            let len = reader.seek(SeekFrom::Current(0))?;
+            reader.seek(SeekFrom::Start(0))?;
+            let mut reader = reader.take(len);
+            let handle = Handle::current();
+            if insert {
+                while reader.limit() > 0 {
+                    let row = bincode::deserialize_from(&mut reader)?;
+                    handle.block_on(snapshot_tx.insert(row))?;
+                }
+            } else {
+                while reader.limit() > 0 {
+                    let row = bincode::deserialize_from(&mut reader)?;
+                    handle.block_on(snapshot_tx.delete(row))?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    async fn create_replication_slot(
+        &self,
+        client: &Client,
+        slot_name: &str,
+        temporary: bool,
+    ) -> Result<SimpleQueryRow, ReplicationError> {
         let slot_query = format!(
-            r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-            &self.connector.slot_name
+            r#"CREATE_REPLICATION_SLOT {}{}LOGICAL "pgoutput" USE_SNAPSHOT"#,
+            slot_name,
+            if temporary { " TEMPORARY " } else { " " }
         );
-        let slot_row = client
+        let row = client
             .simple_query(&slot_query)
             .await?
             .into_iter()
@@ -178,58 +296,44 @@ impl PostgresSourceReader {
                     "empty result after creating replication slot"
                 ))
             })?;
+        log::info!(
+            "source {}: created Postgres replication slot {}",
+            &self.source_name,
+            slot_name
+        );
+        Ok(row)
+    }
 
-        // Store the lsn at which we will need to start the replication stream from
-        let consistent_point = try_recoverable!(slot_row
-            .get("consistent_point")
-            .ok_or_else(|| anyhow!("missing expected column: `consistent_point`")));
-        self.lsn = try_fatal!(consistent_point
-            .parse()
-            .or_else(|_| Err(anyhow!("invalid lsn"))));
-
-        for info in publication_tables {
-            // TODO(petrosagg): use a COPY statement here for more efficient network transfer
-            let data = client
-                .simple_query(&format!(
-                    "SELECT * FROM {:?}.{:?}",
-                    info.namespace, info.name
-                ))
-                .await?;
-            for msg in data {
-                if let SimpleQueryMessage::Row(row) = msg {
-                    let mut mz_row = Row::default();
-                    let rel_id: Datum = (info.rel_id as i32).into();
-                    mz_row.push(rel_id);
-                    mz_row.push_list((0..row.len()).map(|n| {
-                        let a: Datum = row.get(n).into();
-                        a
-                    }));
-                    try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
-                }
-            }
-        }
-        client.simple_query("COMMIT;").await?;
+    async fn drop_replication_slot(
+        &self,
+        client: &Client,
+        slot_name: &str,
+    ) -> Result<(), ReplicationError> {
+        let _ = client
+            .simple_query(&format!("DROP_REPLICATION_SLOT {:?} WAIT", slot_name))
+            .await?;
+        log::info!(
+            "source {}: dropped Postgres replication slot {}",
+            &self.source_name,
+            slot_name
+        );
         Ok(())
     }
 
-    /// Reverts a failed snapshot by deleting any processed rows from the dataflow.
-    async fn revert_snapshot<R: Read + Seek>(
+    /// Converts a SimpleQueryRow of a snapshot into a Row instance.
+    fn row_from_query_row(
         &self,
-        snapshot_tx: &mut SourceTransaction<'_>,
-        mut reader: R,
-    ) -> Result<(), anyhow::Error> {
-        tokio::task::block_in_place(|| -> Result<(), anyhow::Error> {
-            let len = reader.seek(SeekFrom::Current(0))?;
-            reader.seek(SeekFrom::Start(0))?;
-            let mut reader = reader.take(len);
-            let handle = Handle::current();
-            while reader.limit() > 0 {
-                let row = bincode::deserialize_from(&mut reader)?;
-                handle.block_on(snapshot_tx.delete(row))?;
-            }
-            Ok(())
-        })
+        rel_id: u32,
+        query_row: SimpleQueryRow,
+    ) -> Result<Row, anyhow::Error> {
+        let mut mz_row = Row::default();
+        let rel_id: Datum = (rel_id as i32).into();
+        mz_row.push(rel_id);
+        mz_row.push_list((0..query_row.len()).map(|n| {
+            let a: Datum = query_row.get(n).into();
+            a
+        }));
+        Ok(mz_row)
     }
 
     /// Converts a Tuple received in the replication stream into a Row instance. The logical
@@ -310,6 +414,23 @@ impl PostgresSourceReader {
                 XLogData(xlog_data) => {
                     use LogicalReplicationMessage::*;
 
+                    // If we are still catching up with a relation added to the upstream
+                    // publication, skip any inserts, updates, or deletes that would have
+                    // been captured in the inital snapshot of the relation.
+                    if !self.pending_relids.is_empty() {
+                        let snapshot_lsn = match xlog_data.data() {
+                            Insert(insert) => self.pending_relids.get(&insert.rel_id()),
+                            Update(update) => self.pending_relids.get(&update.rel_id()),
+                            Delete(delete) => self.pending_relids.get(&delete.rel_id()),
+                            _ => None,
+                        };
+                        if let Some(lsn) = snapshot_lsn {
+                            if &PgLsn::from(xlog_data.wal_start()) < lsn {
+                                continue;
+                            }
+                        }
+                    }
+
                     match xlog_data.data() {
                         Begin(_) => {
                             if !inserts.is_empty() || !deletes.is_empty() {
@@ -344,18 +465,109 @@ impl PostgresSourceReader {
                             deletes.push(row);
                         }
                         Commit(commit) => {
-                            self.lsn = commit.end_lsn().into();
-
-                            let tx = timestamper.start_tx().await;
-
+                            let commit_lsn: PgLsn = commit.end_lsn().into();
+                            self.lsn = commit_lsn;
+                            let mut tx = timestamper.start_tx().await;
                             for row in deletes.drain(..) {
                                 try_fatal!(tx.delete(row).await);
                             }
                             for row in inserts.drain(..) {
                                 try_fatal!(tx.insert(row).await);
                             }
+
+                            if let Some(max_pending_lsn) = self.pending_relids.values().max() {
+                                if max_pending_lsn > &commit_lsn {
+                                    log::info!(
+                                        "source {}: added relations not synced at LSN {:#?}, waiting until LSN {:#?} to maintain consistency: {:?}",
+                                        &self.source_name,
+                                        &commit_lsn,
+                                        &max_pending_lsn,
+                                        &self.pending_relids.keys().collect::<Vec<&u32>>()
+                                    );
+                                } else {
+                                    let file = self.buffered_snapshots.take().expect("must exist");
+                                    let reader = BufReader::new(file.into_std().await);
+                                    self.process_snapshot_file(&mut tx, reader, true)
+                                        .await
+                                        .map_err(|e| {
+                                            ReplicationError::Fatal(anyhow!(e.to_string()))
+                                        })?;
+                                    for (relid, _) in self.pending_relids.drain() {
+                                        self.synced_relids.insert(relid);
+                                        log::info!(
+                                            "source {}: replication snapshot for relation {} succeeded",
+                                            &self.source_name,
+                                            relid,
+                                        );
+                                    }
+                                }
+                            }
                         }
-                        Origin(_) | Relation(_) | Type(_) => (),
+                        Relation(relation) => {
+                            // Relation messages indicate that we're either receiving messages for the relation for
+                            // the first time this session or that the relation definition has changed.
+                            // Currently, we only handle new relations, not definition updates.
+                            let relid = relation.rel_id();
+                            if self.synced_relids.contains(&relid) {
+                                log::warn!("source {}: definition for upstream relation {} may have changed, update will be ignored", &self.source_name, relid);
+                                continue;
+                            }
+
+                            let prev_lsn = self.pending_relids.get(&relid).cloned();
+                            loop {
+                                let file = if self.buffered_snapshots.is_some() {
+                                    self.buffered_snapshots.take().unwrap()
+                                } else {
+                                    tokio::fs::File::from_std(tempfile::tempfile().map_err(
+                                        |e| ReplicationError::Fatal(anyhow!(e.to_string())),
+                                    )?)
+                                };
+                                let prev_len = file
+                                    .metadata()
+                                    .await
+                                    .map_err(|e| ReplicationError::Fatal(anyhow!(e.to_string())))?
+                                    .len();
+                                let mut writer = tokio::io::BufWriter::new(file);
+                                match self.produce_snapshot(&mut writer, None, prev_lsn).await {
+                                    Ok(res) => {
+                                        writer.flush().await.map_err(|e| {
+                                            ReplicationError::Fatal(anyhow!(e.to_string()))
+                                        })?;
+                                        self.buffered_snapshots = Some(writer.into_inner());
+                                        if let Some((lsn, relids)) = res {
+                                            for relid in relids {
+                                                self.pending_relids.insert(relid, lsn);
+                                            }
+                                        }
+                                        break;
+                                    }
+                                    Err(ReplicationError::Recoverable(e)) => {
+                                        writer.flush().await.map_err(|e| {
+                                            ReplicationError::Fatal(anyhow!(e.to_string()))
+                                        })?;
+                                        let file = writer.into_inner();
+                                        file.set_len(prev_len).await.map_err(|e| {
+                                            ReplicationError::Fatal(anyhow!(e.to_string()))
+                                        })?;
+                                        self.buffered_snapshots = Some(file);
+
+                                        log::warn!(
+                                            "replication snapshot for source {} relid {} failed, retrying: {}",
+                                            &self.source_name,
+                                            relid,
+                                            e
+                                        );
+                                    }
+                                    Err(ReplicationError::Fatal(e)) => {
+                                        return Err(ReplicationError::Fatal(anyhow!(e.to_string())))
+                                    }
+                                }
+
+                                // TODO(petrosagg): implement exponential back-off
+                                tokio::time::sleep(Duration::from_secs(3)).await;
+                            }
+                        }
+                        Origin(_) | Type(_) => (),
                         Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
@@ -387,10 +599,13 @@ impl SimpleSource for PostgresSourceReader {
                         error: SourceErrorDetails::FileIO(e.to_string()),
                     })?);
                 let mut writer = tokio::io::BufWriter::new(file);
-                match self.produce_snapshot(&mut snapshot_tx, &mut writer).await {
+                match self
+                    .produce_snapshot(&mut writer, Some(&mut snapshot_tx), None)
+                    .await
+                {
                     Ok(_) => {
                         log::info!(
-                            "replication snapshot for source {} succeeded",
+                            "source {}: replication snapshot succeeded",
                             &self.source_name
                         );
                         break;
@@ -401,12 +616,12 @@ impl SimpleSource for PostgresSourceReader {
                             error: SourceErrorDetails::Initialization(e.to_string()),
                         })?;
                         log::warn!(
-                            "replication snapshot for source {} failed, retrying: {}",
+                            "source {}: replication snapshot for failed, retrying: {}",
                             &self.source_name,
                             e
                         );
                         let reader = BufReader::new(writer.into_inner().into_std().await);
-                        self.revert_snapshot(&mut snapshot_tx, reader)
+                        self.process_snapshot_file(&mut snapshot_tx, reader, false)
                             .await
                             .map_err(|e| SourceError {
                                 source_name: self.source_name.clone(),
@@ -415,7 +630,7 @@ impl SimpleSource for PostgresSourceReader {
                     }
                     Err(ReplicationError::Fatal(e)) => {
                         return Err(SourceError {
-                            source_name: self.source_name,
+                            source_name: self.source_name.clone(),
                             error: SourceErrorDetails::Initialization(e.to_string()),
                         })
                     }
@@ -433,7 +648,7 @@ impl SimpleSource for PostgresSourceReader {
                         "replication for source {} interrupted, retrying: {}",
                         &self.source_name,
                         e
-                    )
+                    );
                 }
                 Err(ReplicationError::Fatal(e)) => {
                     return Err(SourceError {

@@ -28,3 +28,12 @@ CREATE TABLE t2 (f1 INTEGER, f2 TEXT);
 ALTER TABLE t2 REPLICA IDENTITY FULL;
 
 INSERT INTO t2 SELECT a1.f1 + a6.f1 , E'abc\nxyz' FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
+
+DROP TABLE IF EXISTS t3;
+CREATE TABLE t3 (f1 INTEGER, f2 TEXT);
+ALTER TABLE t3 REPLICA IDENTITY FULL;
+
+INSERT INTO t3 SELECT a1.f1 + a6.f1 , E'abc\nxyz' FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
+
+DROP PUBLICATION IF EXISTS mz_source;
+CREATE PUBLICATION mz_source FOR TABLE ten, t0, t1, t2;

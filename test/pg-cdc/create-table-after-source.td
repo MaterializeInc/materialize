@@ -32,5 +32,11 @@ INSERT INTO t1 VALUES (1);
 
 > CREATE VIEWS FROM SOURCE mz_source (t1);
 
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO t1 VALUES (1);
+
+$ set-sql-timeout duration=60s
+
 > SELECT * FROM t1;
+1
 1

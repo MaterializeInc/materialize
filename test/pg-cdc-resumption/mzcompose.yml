@@ -61,6 +61,8 @@ mzworkflows:
            - toxiproxy-restore-connection.td
            - delete-rows-t1.td
            - delete-rows-t2.td
+           - add-relation-to-publication.td
+           - delete-rows-t3.td
            - verify-data.td
            - toxiproxy-remove.td
 
@@ -68,7 +70,11 @@ mzworkflows:
     steps:
       - step: run
         service: testdrive-svc
-        command: --no-reset configure-toxiproxy.td populate-tables.td configure-materalize.td
+        command:
+          - --no-reset
+          - configure-toxiproxy.td
+          - populate-tables.td
+          - configure-materalize.td
 
       - step: kill-services
         services: [postgres]
@@ -81,14 +87,26 @@ mzworkflows:
 
       - step: run
         service: testdrive-svc
-        command: --no-reset delete-rows-t1.td delete-rows-t2.td verify-data.td toxiproxy-remove.td
+        command:
+          - --no-reset
+          - add-relation-to-publication.td
+          - delete-rows-t1.td
+          - delete-rows-t2.td
+          - delete-rows-t3.td
+          - verify-data.td
+          - toxiproxy-remove.td
 
 
   restart-mz-during-snapshot:
     steps:
       - step: run
         service: testdrive-svc
-        command: --no-reset configure-toxiproxy.td populate-tables.td configure-materalize.td
+        command:
+          - --no-reset
+          - configure-toxiproxy.td
+          - populate-tables.td
+          - configure-materalize.td
+          - add-relation-to-publication.td
 
       - step: kill-services
         services: [materialized]
@@ -100,7 +118,7 @@ mzworkflows:
 
       - step: run
         service: testdrive-svc
-        command: --no-reset delete-rows-t1.td delete-rows-t2.td verify-data.td toxiproxy-remove.td
+        command: --no-reset delete-rows-t1.td delete-rows-t2.td delete-rows-t3.td verify-data.td toxiproxy-remove.td
 
 
   disconnect-pg-during-replication:
@@ -113,10 +131,12 @@ mzworkflows:
           - populate-tables.td
           - configure-materalize.td
           - wait-for-snapshot.td
+          - add-relation-to-publication.td
           - delete-rows-t1.td
           - delete-rows-t2.td
           - toxiproxy-close-connection.td
           - toxiproxy-restore-connection.td
+          - delete-rows-t3.td
           - verify-data.td
           - toxiproxy-remove.td
 
@@ -132,6 +152,7 @@ mzworkflows:
           - configure-materalize.td
           - wait-for-snapshot.td
           - delete-rows-t1.td
+          - add-relation-to-publication.td
 
       - step: kill-services
         services: [postgres]
@@ -144,7 +165,12 @@ mzworkflows:
 
       - step: run
         service: testdrive-svc
-        command: --no-reset delete-rows-t2.td verify-data.td toxiproxy-remove.td
+        command:
+          - --no-reset
+          - delete-rows-t2.td
+          - delete-rows-t3.td
+          - verify-data.td
+          - toxiproxy-remove.td
 
 
   restart-mz-during-replication:
@@ -158,6 +184,7 @@ mzworkflows:
           - configure-materalize.td
           - wait-for-snapshot.td
           - delete-rows-t1.td
+          - add-relation-to-publication.td
 
       - step: kill-services
         services: [materialized]
@@ -169,7 +196,12 @@ mzworkflows:
 
       - step: run
         service: testdrive-svc
-        command: --no-reset delete-rows-t2.td verify-data.td toxiproxy-remove.td
+        command:
+          - --no-reset
+          - delete-rows-t2.td
+          - delete-rows-t3.td
+          - verify-data.td
+          - toxiproxy-remove.td
 
 
 services:
