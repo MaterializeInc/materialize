@@ -265,6 +265,15 @@ steps:
           composition: pg-cdc
           run: pg-cdc
 
+  - id: pg-cdc-resumption
+    label: "Postgres CDC test (Resumption logic)"
+    depends_on: build
+    inputs: [test/pg-cdc-resumption]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: pg-cdc-resumption
+          run: pg-cdc-resumption
+
   - id: persistent-tables
     label: "Test for --persistent-tables"
     depends_on: build
