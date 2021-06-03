@@ -92,7 +92,39 @@ pub fn purify(
 
                     // Verify that the provided security options are valid and then test them.
                     config_options = kafka_util::extract_config(&mut with_options_map)?;
-                    kafka_util::test_config(&broker, &topic, &config_options).await?;
+                    let consumer =
+                        kafka_util::create_consumer(&broker, &topic, &config_options).await?;
+
+                    // Translate `kafka_time_offset` to `start_offset`.
+                    match kafka_util::lookup_start_offsets(
+                        consumer.clone(),
+                        &topic,
+                        &with_options_map,
+                    )
+                    .await?
+                    {
+                        Some(start_offsets) => {
+                            // Drop `kafka_time_offset`
+                            with_options.retain(|val| match val {
+                                sql_parser::ast::SqlOption::Value { name, .. } => {
+                                    name.as_str() != "kafka_time_offset"
+                                }
+                                _ => true,
+                            });
+
+                            // Add `start_offset`
+                            with_options.push(sql_parser::ast::SqlOption::Value {
+                                name: sql_parser::ast::Ident::new("start_offset"),
+                                value: sql_parser::ast::Value::Array(
+                                    start_offsets
+                                        .iter()
+                                        .map(|offset| Value::Number(offset.to_string()))
+                                        .collect(),
+                                ),
+                            });
+                        }
+                        _ => {}
+                    }
                 }
                 Connector::AvroOcf { path, .. } => {
                     let path = path.clone();
