@@ -284,6 +284,24 @@ SELECT (key).text, text FROM text_text;
 
 Which is just sort of annoying.
 
+### Alternative syntax: Require SQL column renaming syntax to handle duplicate columns
+
+We support renaming columns as part of create source statements using syntax
+like:
+
+```sql
+CREATE SOURCE table_name(column1_name, column2_name, ..) FROM
+```
+
+Where each column must be explicitly named or renamed in order. Any columns not
+included in the renaming are optimized out, and cannot be referred to in
+downstream views. This will always be available to users.
+
+The downside to not providing an explicit key-renaming syntax is increased
+fragility in user views, requiring them to duplicate column names from schemas.
+It is also true that the syntax may be ambiguous or fragile in the face of
+upstream schema migrations.
+
 ## Open questions
 
 <!--
