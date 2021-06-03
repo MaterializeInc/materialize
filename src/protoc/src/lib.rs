@@ -156,7 +156,7 @@ impl Protoc {
             writeln!(f, "#[allow(dead_code)]")?;
             writeln!(f, "pub fn file_descriptor_set() -> &'static protobuf::descriptor::FileDescriptorSet {{")?;
             writeln!(f, "    static LAZY: protobuf::rt::LazyV2<protobuf::descriptor::FileDescriptorSet> = protobuf::rt::LazyV2::INIT;")?;
-            writeln!(f, "    LAZY.get(|| protobuf::parse_from_bytes(FILE_DESCRIPTOR_SET_DATA).unwrap())")?;
+            writeln!(f, "    LAZY.get(|| protobuf::Message::parse_from_bytes(FILE_DESCRIPTOR_SET_DATA).unwrap())")?;
             writeln!(f, "}}")?;
 
             let mut f = File::create(out_dir.join("file_descriptor_set.pb"))

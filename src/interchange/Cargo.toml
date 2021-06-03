@@ -28,7 +28,7 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
 ordered-float = { version = "2.5.0", features = ["serde"] }
 ore = { path = "../ore" }
-protobuf = "2.17.0"
+protobuf = "2.23.0"
 repr = { path = "../repr" }
 serde = { version = "1.0.126", features = ["derive"] }
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }

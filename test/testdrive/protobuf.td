@@ -54,7 +54,7 @@ $ kafka-ingest format=protobuf topic=corrupted-messages message=struct timestamp
 {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
 
 ! SELECT * from corrupted_proto_messages
-Decode error: Text: protobuf deserialization error: Deserializing into rust object: protobuf error: incorrect tag
+Decode error: Text: protobuf deserialization error: Deserializing into rust object: protobuf error
 
 > CREATE MATERIALIZED SOURCE protomessages3 FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
