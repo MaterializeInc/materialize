@@ -2940,10 +2940,6 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
-            AddAPD | SubAPD | ModAPD | MulAPD | DivAPD | RoundAPD => {
-                ScalarType::APD { scale: None }.nullable(in_nullable)
-            }
-
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
             // decimal precision. Should either remove or fix.
@@ -3057,10 +3053,14 @@ impl BinaryFunc {
             Position => ScalarType::Int32.nullable(in_nullable),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
-            LogDecimal(_) | LogAPD => input1_type.scalar_type.nullable(in_nullable),
+            LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
             Power => ScalarType::Float64.nullable(in_nullable),
-            PowerDecimal(_) | PowerAPD => input1_type.scalar_type.nullable(in_nullable),
+            PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
             RepeatString => input1_type.scalar_type.nullable(in_nullable),
+
+            AddAPD | DivAPD | LogAPD | ModAPD | MulAPD | PowerAPD | RoundAPD | SubAPD => {
+                ScalarType::APD { scale: None }.nullable(in_nullable)
+            }
         }
     }
 
@@ -3935,18 +3935,12 @@ impl UnaryFunc {
                 input_type.scalar_type.nullable(in_nullable)
             }
 
-            CeilAPD | FloorAPD | RoundAPD | SqrtAPD => {
-                ScalarType::APD { scale: None }.nullable(in_nullable)
-            }
-
             SqrtFloat64 => ScalarType::Float64.nullable(true),
 
             CbrtFloat64 => ScalarType::Float64.nullable(true),
 
-            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegAPD | AbsAPD
-            | NegInterval | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => {
-                input_type
-            }
+            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
+            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(in_nullable)
@@ -3979,9 +3973,7 @@ impl UnaryFunc {
             Tanh => ScalarType::Float64.nullable(in_nullable),
             Cot => ScalarType::Float64.nullable(in_nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
-            Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) | Log10APD | ExpAPD | LnAPD => {
-                input_type
-            }
+            Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
             Sleep => ScalarType::TimestampTz.nullable(true),
             RescaleAPD(scale) => ScalarType::APD {
                 scale: Some(*scale),
@@ -3989,6 +3981,9 @@ impl UnaryFunc {
             .nullable(true),
             PgColumnSize => ScalarType::Int32.nullable(in_nullable),
             MzRowSize => ScalarType::Int32.nullable(in_nullable),
+
+            AbsAPD | CeilAPD | ExpAPD | FloorAPD | LnAPD | Log10APD | NegAPD | RoundAPD
+            | SqrtAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
         }
     }
 
