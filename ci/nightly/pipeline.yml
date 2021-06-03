@@ -7,6 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+- id: build-nightly-compiler
+  label: ":docker: build with the Nightly compiler"
+  command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.test.build
+  timeout_in_minutes: 30
+  agents:
+    queue: builder
+
+
 - id: sqlsmith
   label: SQLsmith fuzzing
   timeout_in_minutes: 240
