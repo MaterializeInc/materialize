@@ -79,8 +79,8 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOO_TICK_TIME: 500
+      - ZOOKEEPER_CLIENT_PORT=2181
+      - ZOO_TICK_TIME=500
 
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
@@ -93,11 +93,11 @@ services:
     image: confluentinc/cp-kafka:5.5.4
     hostname: kafka1
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_HOST_NAME: kafka1
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_HOST_NAME=kafka1
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka1:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=2
     depends_on: [zookeeper]
     ports: [9092]
 
@@ -105,11 +105,11 @@ services:
     image: confluentinc/cp-kafka:5.5.4
     hostname: kafka2
     environment:
-      KAFKA_BROKER_ID: 2
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_HOST_NAME: kafka2
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      - KAFKA_BROKER_ID=2
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_HOST_NAME=kafka2
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka2:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=2
     depends_on: [zookeeper]
     ports: [9092]
 
@@ -117,10 +117,10 @@ services:
     image: confluentinc/cp-kafka:5.5.4
     hostname: kafka3
     environment:
-      KAFKA_BROKER_ID: 3
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_HOST_NAME: kafka3
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      - KAFKA_BROKER_ID=3
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_HOST_NAME=kafka3
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka3:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=2
     depends_on: [zookeeper]
     ports: [9092]

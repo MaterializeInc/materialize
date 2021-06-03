@@ -62,7 +62,7 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+    - ZOOKEEPER_CLIENT_PORT=2181
     volumes:
       - zookeeper:/var/lib/zookeeper
   kafka:
@@ -72,20 +72,18 @@ services:
       - *kafka-external
     depends_on: [zookeeper]
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
-      KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
-      KAFKA_BROKER_ID: 1
-      KAFKA_LOG_RETENTION_HOURS: -1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      #KAFKA_LOG_CLEANUP_POLICY: "compact"
-      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
-      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
-      # To avoid race condition with control-center
-      CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
-      KAFKA_JMX_PORT: 9991
+    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+    - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
+    - KAFKA_METRIC_REPORTERS="io.confluent.metrics.reporter.ConfluentMetricsReporter"
+    - KAFKA_BROKER_ID=1
+    - KAFKA_LOG_RETENTION_HOURS=-1
+    - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    - CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS=kafka:9092
+    - CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS=1
+    - CONFLUENT_METRICS_REPORTER_TOPIC_CREATE=false
+    - KAFKA_JMX_PORT=9991
     volumes:
       - kafka:/var/lib/kafka/data
   connect:
@@ -93,16 +91,16 @@ services:
     ports:
       - *connect
     environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      CONFIG_STORAGE_TOPIC: connect_configs
-      OFFSET_STORAGE_TOPIC: connect_offsets
-      STATUS_STORAGE_TOPIC: connect_statuses
+      - BOOTSTRAP_SERVERS=kafka:9092
+      - CONFIG_STORAGE_TOPIC=connect_configs
+      - OFFSET_STORAGE_TOPIC=connect_offsets
+      - STATUS_STORAGE_TOPIC=connect_statuses
       # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
       # record the schema
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      - KEY_CONVERTER=io.confluent.connect.avro.AvroConverter
+      - VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter
+      - CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+      - CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
     depends_on: [kafka, schema-registry]
   debezium-mysql-gen:
     mzbuild: debezium-mysql-gen
@@ -127,20 +125,20 @@ services:
     ports:
       - *control-center
     environment:
-      CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:9092"
-      CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      CONTROL_CENTER_REPLICATION_FACTOR: 1
-      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_INTERNAL_TOPICS_REPLICATION: 1
-      CONTROL_CENTER_COMMAND_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_METRICS_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
-      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
-      CONTROL_CENTER_METRICS_TOPIC_PARTITIONS: 1
-      CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS: 1
-      CONTROL_CENTER_CONNECT_CLUSTER: "http://connect:8083"
-      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
-      CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
+      - CONTROL_CENTER_BOOTSTRAP_SERVERS=kafka:9092
+      - CONTROL_CENTER_ZOOKEEPER_CONNECT=zookeeper:2181
+      - CONTROL_CENTER_REPLICATION_FACTOR=1
+      - CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_REPLICATION=1
+      - CONTROL_CENTER_INTERNAL_TOPICS_REPLICATION=1
+      - CONTROL_CENTER_COMMAND_TOPIC_REPLICATION=1
+      - CONTROL_CENTER_METRICS_TOPIC_REPLICATION=1
+      - CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS=1
+      - CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS=1
+      - CONTROL_CENTER_METRICS_TOPIC_PARTITIONS=1
+      - CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS=1
+      - CONTROL_CENTER_CONNECT_CLUSTER=http://connect:8083
+      - CONTROL_CENTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+      - CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE=true
 
 
 volumes:
