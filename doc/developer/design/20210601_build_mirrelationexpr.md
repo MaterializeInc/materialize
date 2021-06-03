@@ -41,8 +41,8 @@ let mut test_expr = MirRelationExpr::Filter {
 };
 ```
 
-Justin had started on a system, which can be found at 
-[/src/transform/tests](/src/transform/tests) 
+Justin had started on a system, which can be found at
+[/src/transform/tests](/src/transform/tests)
 where you can specify a `Mir{Relation, Scalar}Expr` using a much more readable
 and simple syntax:
 ```
@@ -89,14 +89,14 @@ documented in the comments of [#5684].
 * Allow the easy construction of all, or at
   least the vast majority of, `Mir{Relation, Scalar}Expr`. Being able to do this
   will help a lot with:
-  * Optimization/transform unit testing. 
+  * Optimization/transform unit testing.
   * Testing the dataflow layer directly. Currently, there are some branches
     that exist so Materialize does not crash if there are optimizer bugs. These
     branches end up untested because we have eliminated all known optimizer
     bugs that would trigger those branches.
   * Experimentation. Being able to construct arbitrary `Mir`s can allow for
     testing the effects of proposed transforms without having to write code for
-    the transform. 
+    the transform.
   * Debugging. Often times you want to find a simpler reproduction for a
     complicated query that is failing, but changing the SQL may result in a
     complete different `Mir` representation.
@@ -104,7 +104,7 @@ documented in the comments of [#5684].
   of other complex internal expressions so that we don't have to go through
   this again if we want to test or play around with other stuff. Example other
   internal expressions:
-  * `LIRR`
+  * `ReducePlan` (a.k.a `LIRR`, "LIR for Reduce")
   * future `Lir` expressions
   * possibly `Hir` expressions? We have been talking about doing some rewrites before the decorrelation stage.
   * `DataflowDescs` to test optimization across dataflows?
@@ -123,75 +123,71 @@ documented in the comments of [#5684].
 
 Let's call this approach "Minimal boilerplate".
 
-The goal is to convert Justin's syntax into a JSON string such that
-deserializing the JSON using [`serde_json`](https://docs.serde.rs/serde_json/)
-will produce your desired enum.
+I propose to retain Justin's syntax and invest in a mechanism that can
+automatically convert it in to a JSON formatted string that can be correctly
+deserialized by [serde_json].
 
-To get from `(map (get x) [(null int32)])` to
-```
-{"Map":
-    {"input":
-        {"Get":
-            {"id":{"Global":{"User":0}},
-            "typ":{
-                "column_types":[
-                    {"nullable":true,"scalar_type":"Int32"},
-                    {"nullable":true,"scalar_type":"Int64"}],
-                "keys":[]}}},
-    "scalars":[{"Literal":[{"Ok":{"data":[0]}},{"nullable":true,"scalar_type":"Int32"}]}]}}
-```
-requires resolving the arguments inside (more on that later) and then looking
-up the fields of `MirRelationExpr::Map`. A derive macro on
-`MirRelationExpr` will generate a method that returns a mapping from variant
-names to the names and types of their corresponding fields. 
+The mechanism has 3 components:
+(1) A parser. See the section [Parser changes](#parser-changes) for more
+details.
 
-The specification for most enums can be automatically converted to a JSON
-string via looking up what fields correspond to the ident that is the first
-argument. 
+(2) A derive macro that generates, for each enum, a mapping from the enum's
+variants to the names and the types of the variant's fields.
 
-If there are less arguments than fields of a variant, the spec-to-JSON code will
-assume that those fields are optional and not add those fields to the JSON
-string. For example, if you have the spec `(join <input> <equivalences>)`, it
-will get turned into the json 
+(3) Code that constructs the JSON formatted string, stitching the parsed tokens
+to the information about the enums.
+
+Pseudocode for (3) looks like this:
+To construct the JSON string for an enum of type `type` specified as
+`(variant <arg1> .. <argn>)`:
+1. If the context passed in determines that `(type, variant)` combination
+   requires special action, take it.
+   Otherwise, construct the JSON string in the default manner, which is:
+2. Look up the names and the types of the fields of `Type::Variant`
+3. Construct the JSON strings for the objects corresponding to `<argi>`
+   based on the type information.
+4. The JSON string, if the variant has named fields, looks like
+   `{"Variant": {"Arg1Name": <arg1_json>, ... "ArgNName": <argn_json>}}`.
+   If the variant has unnamed fields, it looks like
+   `{"Variant": [<arg1_json>, .., <argn_json>]}`. If the variant has no fields,
+   it looks like `"Variant"`.
+
+(3) supports optional arguments. For example, if you have the spec
+`(join <input> <equivalences>)`, the corresponding JSON string
 ```
 {"Join": {"input": <input>, "equivalences": <equivalences>}}
 ```
-And this will deserialize fine into a `MirRelationExpr::Join` as long as you add
-the attribute `#[serde(default)]` to the definition of the optional fields 
+will deserialize fine into a `MirRelationExpr::Join` as long as you add
+the attribute `#[serde(default)]` to the definition of the optional fields
 `implementation` and `demand`.
 
-There are a few enums where constructing the JSON string based on what is
-provided in the spec is hard. For example, going from `(null int32)` to 
+Step 1 in the pseudocode enables support for irregular syntax. For example, the
+syntax `(null int32)` corresponds to the `MirScalarExpr` null literal, which has
+a corresponding JSON string
 `{"Literal":[{"Ok":{"data":[0]}},{"nullable":true,"scalar_type":"Int32"}]}`.
-The code that converts Justin's syntax to a JSON string will take a context
-that overrides the default rules with boilerplate covering certain combinations
-of types and first arguments. 
-
-For example, in the case of the spec `(map (get x) [(null int32)])`, looking up
-the fields of `MirRelationExpr::Map` makes us aware that `(null int32)` is
-supposed to be a `MirScalarExpr`. The rule override code sees a `MirScalarExpr`
+In this case, `MirScalarExpr` `null`
 with first argument `null` and goes to a separate branch to construct a
 `MirScalarExpr::Literal`. The `MirScalarExpr::Literal` gets re-serialized into
 JSON and pasted into the string for the map.
 
-While I have focused on constructing enums, this approach can also work for
-making Justin's syntax work with automatically constructing structs.
-For a struct, the syntax would look like
-`(arg1_value arg2_value ... argn_value)`. A similar macro can generate a mapping
-of the names and types of its fields, and a standard method can easily conver
-the spec to `{"arg1_name": arg1_value, ..., "argn_name": argn_value}`.
+While I have been focusing on describing how to convert Justin's syntax into a
+string that [serde_json] will correctly deserialize as an enum, it should be
+easy to see how the mechanism can support converting the syntax into a string
+that [serde_json] will correctly deserialize as a struct. 
 
-### Other changes
+[serde_json]: https://docs.serde.rs/serde_json/
 
-I propose replacing the Justin's existing sexp [parser] with 
+### Parser changes
+
+I propose replacing the Justin's existing sexp [parser] with
 [proc_macro2::TokenStream].
 
-The primary motivation is "why write your own parser when you don't have to?" 
+The primary motivation is "why write your own parser when you don't have to?"
 
 Also, I like how despite its name, `proc_macro2::TokenStream` turns the syntax
 into a tree that mirrors the structure of the tree that we're trying to build.
 
-For example, `proc_macro2::TokenStream` parses into 
+For example, `proc_macro2::TokenStream` parses into
 `(map (get x) [(null int32)])` into something like:
 ```
 ParenGroup [0]         [1]                           [2]
@@ -209,7 +205,7 @@ ParenGroup [0]         [1]                           [2]
 A consequence of doing this replacement is that idents in Justin's original
 syntax that are in kebab-case need to be changed to snake_case because the
 parser will recognize `stuff_in_snake_case` as one ident but will think
-`stuff-in-kebab-case` is four different idents separated by '-'. 
+`stuff-in-kebab-case` is four different idents separated by '-'.
 
 [parser]: https://github.com/MaterializeInc/materialize/blob/9188ac95ffc03b598b1118e4e88df6867e4b718e/src/transform/tests/test_runner.rs#L22
 [proc_macro2::TokenStream]: https://docs.rs/proc-macro2/1.0.27/proc_macro2/struct.TokenStream.html
@@ -231,7 +227,7 @@ insufficiently mature to depend on.
 
 It should also be noted that for enum variants with fields, the macro will
 populate the fields with default values, so:
-1.  the macro will not work for enums with `Box` fields like 
+1.  the macro will not work for enums with `Box` fields like
     `MirRelationExpr::Map`.
 2.  even if the enum does not have a `Box` field, it will take extra
     boilerplate code to enable specifiying an enum with non-default values.
@@ -256,7 +252,7 @@ There is also the question of, "Why construct a JSON string and then deserialize
 that instead of creating a macro generates a method that directly converts
 Justin's syntax to the expression?"
 
-My belief is that macros are hard to write, introspect, and debug. Using 
+My belief is that macros are hard to write, introspect, and debug. Using
 `serde_json` gets string to enum conversion with a lot less coding effort and
 with more insight on where you may have made a mistake in your syntax if the
 deserialization fails.
@@ -276,10 +272,10 @@ match func {
 }
 ```
 
-This is essentially the current state of unit testing with 
-`Mir{Relation, Scalar}Expr`. 
+This is essentially the current state of unit testing with
+`Mir{Relation, Scalar}Expr`.
 
-Pros: No macros required.
+Pros: No macros required. No major syntax change.
 
 Cons: There are a lot of enums and enum variants. This is especially the case
 for enums whose type names end in `Func`. Also, new variants for enums
@@ -303,11 +299,12 @@ The idea here is to take advantage of the fact that while enums whose names end
 with `Func` have an ever-increasing number of variants, the number of variants
 for enums whose names end in `Expr` are pretty stable.
 
-Construct `MirRelationExpr` and `MirScalarExpr` with boilerplate, but construct
-`*Func` enums as JSON strings that can be deserialized using `serde`.
+Keep Justin's syntax for `MirRelationExpr` and `MirScalarExpr` and implement
+Justin's syntax with boilerplate. But specify `*Func` enums using JSON strings
+can be correctly deserialized using [serde_json].
 
 Most `*Func` variants are unit variants, and you can get the unit enum variant
-of your choice by using `serde` to deserialize the name. 
+of your choice by using [serde_json] to deserialize the name.
 ```
 serde_json::from_str::<TableFunc>("GenerateSeriesInt32")
 ```
@@ -330,7 +327,7 @@ onerous to specify, for example `TableFunc::RegexpExtract`:
 ```
 which we can address by either:
 * hoping that people will only rarely want to construct expressions with difficult
-  functions
+  functions.
 * adding boilerplate for constructing the worst-case variants.
 
 This approach requires no macros. It involves less boilerplate required than the
