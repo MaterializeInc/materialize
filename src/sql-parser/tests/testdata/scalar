@@ -115,7 +115,7 @@ id::timestamptz
 parse-scalar roundtrip
 (id::timestamp with time zone::timestamp without time zone  )  ::  double precision::text
 ----
-(id::timestamptz::timestamp)::float8::text
+(id::timestamptz::"timestamp")::float8::text
 
 parse-scalar roundtrip
 CAST(c::jsonb->>'f' AS timestamptz)

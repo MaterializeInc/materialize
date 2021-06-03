@@ -282,7 +282,7 @@ ShowVariable(ShowVariableStatement { variable: Ident("a") })
 parse-statement
 SHOW ALL
 ----
-SHOW all
+SHOW "all"
 =>
 ShowVariable(ShowVariableStatement { variable: Ident("all") })
 
@@ -310,7 +310,7 @@ SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Li
 parse-statement
 SET a = default
 ----
-SET a = default
+SET a = "default"
 =>
 SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Ident(Ident("default")) })
 
