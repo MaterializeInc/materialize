@@ -28,7 +28,7 @@ ore = { path = "../ore" }
 parse_duration = "2.1.1"
 pgrepr = { path = "../pgrepr" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
-protobuf = { version = "2.17.0", features = ["with-serde"] }
+protobuf = { version = "2.23.0", features = ["with-serde"] }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.4.6"

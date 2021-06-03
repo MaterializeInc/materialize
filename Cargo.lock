@@ -3299,9 +3299,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf"
-version = "2.17.0"
+version = "2.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb14183cc7f213ee2410067e1ceeadba2a7478a59432ff0747a335202798b1e2"
+checksum = "45604fc7a88158e7d514d8e22e14ac746081e7a70d7690074dd0029ee37458d6"
 dependencies = [
  "serde",
  "serde_derive",
@@ -3309,18 +3309,18 @@ dependencies = [
 
 [[package]]
 name = "protobuf-codegen"
-version = "2.17.0"
+version = "2.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3360a1e017386e7d9fc65f7425bef9bcf1e62871f8b5a7b0570ef2ff5073f9a0"
+checksum = "cb87f342b585958c1c086313dbc468dcac3edf5e90362111c26d7a58127ac095"
 dependencies = [
  "protobuf",
 ]
 
 [[package]]
 name = "protobuf-codegen-pure"
-version = "2.17.0"
+version = "2.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "899e61d9d3db627471119baf57db06385c12723c2f47a03dd4244c693ca6d85e"
+checksum = "8ca6e0e2f898f7856a6328650abc9b2df71b7c1a5f39be0800d19051ad0214b2"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
@@ -4011,7 +4011,7 @@ dependencies = [
 [[package]]
 name = "serde-protobuf"
 version = "0.8.2-alpha.0"
-source = "git+https://github.com/MaterializeInc/serde-protobuf.git?branch=add-iter-messages#fae1e0306be1d1473a895a64c630475948869518"
+source = "git+https://github.com/MaterializeInc/serde-protobuf.git?branch=add-iter-messages#d7c4767e6bb0238562e88c782084e750175b575b"
 dependencies = [
  "failure",
  "linked-hash-map",
