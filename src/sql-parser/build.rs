@@ -32,14 +32,21 @@ fn main() -> Result<()> {
     {
         let file = fs::read_to_string(KEYWORDS_LIST)?;
 
-        let keywords: Vec<_> = file
+        let keywords: Vec<(String, String)> = file
             .lines()
             .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-            .collect();
+            .map(|l| {
+                let parts: Vec<_> = l.split_whitespace().collect();
+                if parts.len() != 2 {
+                    bail!("malformed keyword: {}", l);
+                }
+                Ok((parts[0].to_owned(), parts[1].to_owned()))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // Enforce that the keywords file is kept sorted. This is purely
         // cosmetic, but it cuts down on diff noise and merge conflicts.
-        if let Some([a, b]) = keywords.windows(2).find(|w| w[0] > w[1]) {
+        if let Some([(_, a), (_, b)]) = keywords.windows(2).find(|w| w[0].1 > w[1].1) {
             bail!("keywords list is not sorted: {:?} precedes {:?}", a, b);
         }
 
@@ -47,7 +54,7 @@ fn main() -> Result<()> {
 
         buf.writeln("#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]");
         buf.start_block("pub enum Keyword");
-        for kw in &keywords {
+        for (_, kw) in &keywords {
             buf.writeln(format!("{},", kw));
         }
         buf.end_block();
@@ -55,14 +62,22 @@ fn main() -> Result<()> {
         buf.start_block("impl Keyword");
         buf.start_block("pub fn as_str(&self) -> &'static str");
         buf.start_block("match self");
-        for kw in &keywords {
+        for (_, kw) in &keywords {
             buf.writeln(format!("Keyword::{} => {:?},", kw, kw.to_uppercase()));
+        }
+        buf.end_block();
+        buf.end_block();
+
+        buf.start_block("pub fn reserve_type(&self) -> ReserveType");
+        buf.start_block("match self");
+        for (reserve_type, kw) in &keywords {
+            buf.writeln(format!("Keyword::{} => ReserveType::{},", kw, reserve_type));
         }
         buf.end_block();
         buf.end_block();
         buf.end_block();
 
-        for kw in &keywords {
+        for (_, kw) in &keywords {
             buf.writeln(format!(
                 "pub const {}: Keyword = Keyword::{};",
                 kw.to_uppercase(),
@@ -71,7 +86,7 @@ fn main() -> Result<()> {
         }
 
         let mut phf = phf_codegen::Map::new();
-        for kw in &keywords {
+        for (_, kw) in &keywords {
             phf.entry(UncasedStr::new(kw), &format!("Keyword::{}", kw));
         }
         buf.writeln(format!(

@@ -51,11 +51,24 @@ use crate::ast::Ident;
 //                 Keyword::Select => "SELECT",
 //             }
 //         }
+//         pub fn reserve_type(&self) -> ReserveType {
+//             match self {
+//                 Keyword::Insert => ReserveType::Unreserved,
+//                 Keyword::Select => ReserveType::Reserved,
+//             }
+//         }
 //     }
 //
 //     static KEYWORDS: phf::Map<&'static UncasedStr, Keyword> = { /* ... */ };
 //
 include!(concat!(env!("OUT_DIR"), "/keywords.rs"));
+
+pub enum ReserveType {
+    Reserved,
+    ColumnName,
+    TableAlias,
+    Unreserved,
+}
 
 impl Keyword {
     pub fn into_ident(self) -> Ident {
@@ -68,13 +81,7 @@ impl Keyword {
     /// The only exception to the rule is when the keyword follows `AS` in a
     /// column or table alias.
     pub fn is_reserved(self) -> bool {
-        matches!(
-            self,
-            // Keywords that can appear at the top-level of a SELECT statement.
-            WITH | SELECT | FROM | WHERE | GROUP | HAVING | ORDER | LIMIT | OFFSET | FETCH | OPTION |
-            // Set operations.
-            UNION | EXCEPT | INTERSECT
-        )
+        matches!(self.reserve_type(), ReserveType::Reserved)
     }
 
     /// Reports whether this keyword requires quoting when used as a table
@@ -87,15 +94,9 @@ impl Keyword {
     /// unambiguously.
     pub fn is_reserved_in_table_alias(self) -> bool {
         matches!(
-            self,
-            // These keywords are ambiguous when used as a table alias, as they
-            // conflict with the syntax for joins.
-            ON | JOIN | INNER | CROSS | FULL | LEFT | RIGHT | NATURAL | USING |
-            // `OUTER` is not strictly ambiguous, but it prevents `a OUTER JOIN
-            // b` from parsing as `a AS outer JOIN b`, instead producing a nice
-            // syntax error.
-            OUTER
-        ) || self.is_reserved()
+            self.reserve_type(),
+            ReserveType::TableAlias | ReserveType::Reserved
+        )
     }
 
     /// Reports whether this keyword requires quoting when used as a column
@@ -109,21 +110,15 @@ impl Keyword {
     /// unambiguously.
     pub fn is_reserved_in_column_alias(self) -> bool {
         matches!(
-            self,
-            // These timelike keywords conflict with interval timeframe
-            // suffixes. They are not strictly ambiguous, but marking them
-            // reserved prevents e.g. `SELECT pg_catalog.interval '1' year` from
-            // parsing as `SELECT pg_catalog.interval '1' AS YEAR`.
-            YEAR | MONTH | DAY | HOUR | MINUTE | SECOND
-        ) || self.is_reserved()
+            self.reserve_type(),
+            ReserveType::ColumnName | ReserveType::Reserved
+        )
     }
 
     /// Reports whether a keyword is considered reserved in any context:
     /// either in table aliases, column aliases, or in all contexts.
     pub fn is_sometimes_reserved(self) -> bool {
-        self.is_reserved()
-            || self.is_reserved_in_table_alias()
-            || self.is_reserved_in_column_alias()
+        !matches!(self.reserve_type(), ReserveType::Unreserved)
     }
 }
 

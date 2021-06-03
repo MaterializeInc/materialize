@@ -16,265 +16,272 @@
 # This file contains the keywords known to the Materialize SQL parser.
 #
 # The format is as follows. Blank lines and lines that start with a '#' are
-# ignored. All other lines must contain exactly one keyword with no leading or
-# trailing space. Keywords must appear in sorted order. Keyword names are used
-# directly as an enum variant, so they follow the standard Rust CamelCase
-# capitalization convention and not the SQL ALLCAPS convention.
+# ignored. All other lines must contain a reservation type that can be one of
+# Reserved, ColumnName, TableAlias, or Unreserved followed exactly one keyword
+# with no leading or trailing space. Keywords must appear in sorted order.
+# Keyword names are used directly as an enum variant, so they follow the
+# standard Rust CamelCase capitalization convention and not the SQL ALLCAPS
+# convention.
+#
+# For keywords also used in Postgres the reservation type should follow the list defined here:
+# https://github.com/postgres/postgres/blob/master/src/include/parser/kwlist.h
 #
 # For details on the code that is generated, see keywords.rs.
 
-All
-Alter
-And
-Any
-Arn
-Array
-As
-Asc
-At
-Avro
-Begin
-Between
-Bigint
-Boolean
-Both
-Bpchar
-Broker
-Bucket
-By
-Bytes
-Cascade
-Case
-Cast
-Chain
-Channel
-Char
-Character
-Check
-Close
-Coalesce
-Collate
-Columns
-Commit
-Committed
-Compression
-Confluent
-Constraint
-Copy
-Create
-Cross
-Csv
-Current
-Cursor
-Database
-Databases
-Day
-Days
-Debezium
-Dec
-Decimal
-Declare
-Decorrelated
-Default
-Delete
-Delimited
-Desc
-Discard
-Discover
-Distinct
-Double
-Drop
-Else
-End
-Envelope
-Except
-Exists
-Explain
-Extended
-Extract
-False
-Fetch
-Fields
-File
-Filter
-First
-Float
-Following
-For
-Foreign
-Format
-Forward
-From
-Full
-Group
-Groups
-Gzip
-Having
-Header
-Headers
-Hold
-Host
-Hour
-Hours
-If
-Ilike
-In
-Index
-Indexes
-Inner
-Insert
-Int
-Integer
-Intersect
-Interval
-Into
-Is
-Isnull
-Isolation
-Join
-Json
-Kafka
-Key
-Keys
-Kinesis
-Lateral
-Leading
-Left
-Level
-Like
-Limit
-List
-Local
-Login
-Map
-Matching
-Materialize
-Materialized
-Message
-Minute
-Minutes
-Month
-Months
-Natural
-Next
-No
-Nologin
-None
-Nosuperuser
-Not
-Notifications
-Null
-Nullif
-Objects
-Ocf
-Of
-Offset
-On
-Only
-Optimized
-Option
-Or
-Order
-Outer
-Over
-Partition
-Plan
-Plans
-Position
-Postgres
-Preceding
-Precision
-Primary
-Protobuf
-Publication
-Pubnub
-Range
-Raw
-Read
-Real
-References
-Regclass
-Regex
-Registry
-Rename
-Repeatable
-Replace
-Reset
-Restrict
-Right
-Role
-Roles
-Rollback
-Row
-Rows
-S3
-Scan
-Schema
-Schemas
-Second
-Seconds
-Seed
-Select
-Sequences
-Serializable
-Session
-Set
-Show
-Sink
-Sinks
-Slot
-Smallint
-Snapshot
-Some
-Source
-Sources
-Sqs
-Start
-Stdin
-Stdout
-String
-Subscribe
-Superuser
-Table
-Tables
-Tail
-Temp
-Temporary
-Text
-Then
-Ties
-Time
-Timestamp
-To
-Topic
-Trailing
-Transaction
-Trim
-True
-Type
-Typed
-Types
-Unbounded
-Uncommitted
-Union
-Unique
-Update
-Upsert
-User
-Users
-Using
-Value
-Values
-Varchar
-Varying
-View
-Views
-When
-Where
-With
-Without
-Work
-Write
-Year
-Years
-Zone
+# TODO(petrosagg): Interval and Option deviate from the postgres definition
+
+Reserved    All
+Unreserved  Alter
+Reserved    And
+Reserved    Any
+Unknown     Arn
+Reserved    Array
+Reserved    As
+Reserved    Asc
+Unreserved  At
+Unknown     Avro
+Unreserved  Begin
+ColumnName  Between
+ColumnName  Bigint
+ColumnName  Boolean
+Reserved    Both
+Unknown     Bpchar
+Unknown     Broker
+Unknown     Bucket
+Unreserved  By
+Unknown     Bytes
+Unreserved  Cascade
+Reserved    Case
+Reserved    Cast
+Unreserved  Chain
+Unknown     Channel
+ColumnName  Char
+ColumnName  Character
+Reserved    Check
+Unreserved  Close
+ColumnName  Coalesce
+Reserved    Collate
+Unreserved  Columns
+Unreserved  Commit
+Unreserved  Committed
+Unknown     Compression
+Unknown     Confluent
+Reserved    Constraint
+Unreserved  Copy
+Reserved    Create
+TableAlias  Cross
+Unreserved  Csv
+Unreserved  Current
+Unreserved  Cursor
+Unreserved  Database
+Unknown     Databases
+Unreserved  Day
+Unknown     Days
+Unknown     Debezium
+ColumnName  Dec
+ColumnName  Decimal
+Unreserved  Declare
+Unknown     Decorrelated
+Reserved    Default
+Unreserved  Delete
+Unknown     Delimited
+Reserved    Desc
+Unreserved  Discard
+Unknown     Discover
+Reserved    Distinct
+Unreserved  Double
+Unreserved  Drop
+Reserved    Else
+Reserved    End
+Unknown     Envelope
+Reserved    Except
+ColumnName  Exists
+Unreserved  Explain
+Unknown     Extended
+ColumnName  Extract
+Reserved    False
+Reserved    Fetch
+Unknown     Fields
+Unknown     File
+Unreserved  Filter
+Unreserved  First
+ColumnName  Float
+Unreserved  Following
+Reserved    For
+Reserved    Foreign
+Unknown     Format
+Unreserved  Forward
+Reserved    From
+TableAlias  Full
+Reserved    Group
+Unreserved  Groups
+Unknown     Gzip
+Reserved    Having
+Unreserved  Header
+Unknown     Headers
+Unreserved  Hold
+Unknown     Host
+ColumnName  Hour
+Unknown     Hours
+Unreserved  If
+TableAlias  Ilike
+Reserved    In
+Unreserved  Index
+Unreserved  Indexes
+TableAlias  Inner
+Unreserved  Insert
+ColumnName  Int
+ColumnName  Integer
+Reserved    Intersect
+Unreserved  Interval
+Reserved    Into
+TableAlias  Is
+TableAlias  Isnull
+Unreserved  Isolation
+TableAlias  Join
+Unknown     Json
+Unknown     Kafka
+Unreserved  Key
+Unknown     Keys
+Unknown     Kinesis
+Reserved    Lateral
+Reserved    Leading
+TableAlias  Left
+Unreserved  Level
+TableAlias  Like
+Reserved    Limit
+Unknown     List
+Unreserved  Local
+Unknown     Login
+Unknown     Map
+Unknown     Matching
+Unknown     Materialize
+Unreserved  Materialized
+Unknown     Message
+ColumnName  Minute
+Unknown     Minutes
+ColumnName  Month
+Unknown     Months
+TableAlias  Natural
+Unreserved  Next
+Unreserved  No
+Unknown     Nologin
+ColumnName  None
+Unknown     Nosuperuser
+Reserved    Not
+Unknown     Notifications
+Reserved    Null
+ColumnName  Nullif
+Unknown     Objects
+Unknown     Ocf
+Unreserved  Of
+Reserved    Offset
+Reserved    On
+Reserved    Only
+Unknown     Optimized
+Reserved    Option
+Reserved    Or
+Reserved    Order
+TableAlias  Outer
+Unreserved  Over
+Unreserved  Partition
+Unknown     Plan
+Unreserved  Plans
+ColumnName  Position
+Unknown     Postgres
+Unreserved  Preceding
+ColumnName  Precision
+Reserved    Primary
+Unknown     Protobuf
+Unreserved  Publication
+Unknown     Pubnub
+Unreserved  Range
+Unknown     Raw
+Unreserved  Read
+ColumnName  Real
+Reserved    References
+Unknown     Regclass
+Unknown     Regex
+Unknown     Registry
+Unreserved  Rename
+Unreserved  Repeatable
+Unreserved  Replace
+Unreserved  Reset
+Unreserved  Restrict
+TableAlias  Right
+Unreserved  Role
+Unknown     Roles
+Unreserved  Rollback
+ColumnName  Row
+Unreserved  Rows
+Unknown     S3
+Unknown     Scan
+Unreserved  Schema
+Unreserved  Schemas
+ColumnName  Second
+Unknown     Seconds
+Unknown     Seed
+Reserved    Select
+Unreserved  Sequences
+Unreserved  Serializable
+Unreserved  Session
+Unreserved  Set
+Unreserved  Show
+Unknown     Sink
+Unknown     Sinks
+Unknown     Slot
+ColumnName  Smallint
+Unreserved  Snapshot
+Reserved    Some
+Unknown     Source
+Unknown     Sources
+Unknown     Sqs
+Unreserved  Start
+Unreserved  Stdin
+Unreserved  Stdout
+Unknown     String
+Unknown     Subscribe
+Unknown     Superuser
+Reserved    Table
+Unreserved  Tables
+Unknown     Tail
+Unreserved  Temp
+Unreserved  Temporary
+Unreserved  Text
+Reserved    Then
+Unreserved  Ties
+ColumnName  Time
+ColumnName  Timestamp
+Reserved    To
+Unknown     Topic
+Reserved    Trailing
+Unreserved  Transaction
+ColumnName  Trim
+Reserved    True
+Unreserved  Type
+Unknown     Typed
+Unreserved  Types
+Unreserved  Unbounded
+Unreserved  Uncommitted
+Reserved    Union
+Reserved    Unique
+Unreserved  Update
+Unknown     Upsert
+Reserved    User
+Unknown     Users
+Reserved    Using
+Unreserved  Value
+ColumnName  Values
+ColumnName  Varchar
+Unreserved  Varying
+Unreserved  View
+Unreserved  Views
+Reserved    When
+Reserved    Where
+Reserved    With
+Unreserved  Without
+Unreserved  Work
+Unreserved  Write
+ColumnName  Year
+Unreserved  Years
+Unreserved  Zone
