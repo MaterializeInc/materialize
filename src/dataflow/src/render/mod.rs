@@ -284,14 +284,14 @@ where
     }
 
     fn build_object(&mut self, scope: &mut Child<'g, G, G::Timestamp>, object: &BuildDesc) {
-        self.ensure_rendered(object.relation_expr.as_ref(), scope, scope.index());
+        self.ensure_rendered(&object.relation_expr, scope, scope.index());
         if let Some(typ) = &object.typ {
             self.clone_from_to(
-                &object.relation_expr.as_ref(),
+                &object.relation_expr,
                 &MirRelationExpr::global_get(object.id, typ.clone()),
             );
         } else {
-            self.render_arrangeby(&object.relation_expr.as_ref(), Some(&object.id.to_string()));
+            self.render_arrangeby(&object.relation_expr, Some(&object.id.to_string()));
             // Under the premise that this is always an arrange_by aroung a global get,
             // this will leave behind the arrangements bound to the global get, so that
             // we will not tidy them up in the next pass.

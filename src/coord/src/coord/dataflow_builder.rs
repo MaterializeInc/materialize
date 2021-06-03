@@ -159,11 +159,11 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
     ) {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        for get_id in view.as_ref().global_uses() {
+        for get_id in view.global_uses() {
             self.import_into_dataflow(&get_id, dataflow);
         }
         // Collect sources, views, and indexes used.
-        view.as_ref().visit(&mut |e| {
+        view.visit(&mut |e| {
             if let MirRelationExpr::ArrangeBy { input, keys } = e {
                 if let MirRelationExpr::Get {
                     id: Id::Global(on_id),
@@ -186,7 +186,7 @@ impl<'a> DataflowBuilder<'a> {
                 }
             }
         });
-        dataflow.add_view_to_build(*view_id, view.clone(), view.as_ref().typ());
+        dataflow.add_view_to_build(*view_id, view.clone(), view.typ());
     }
 
     /// Builds a dataflow description for the index with the specified ID.
