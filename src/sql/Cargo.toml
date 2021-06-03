@@ -29,7 +29,7 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", b
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 postgres-util = { path = "../postgres-util" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
-regex = "1.4.6"
+regex = "1.5.4"
 repr = { path = "../repr" }
 reqwest = "0.11.3"
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }

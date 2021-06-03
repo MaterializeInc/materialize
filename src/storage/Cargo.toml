@@ -13,7 +13,7 @@ dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 lazy_static = "1.4.0"
 log = "0.4.13"
-regex = "1.4.6"
+regex = "1.5.4"
 repr = { path = "../repr" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.6.0"
