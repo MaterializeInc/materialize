@@ -620,6 +620,7 @@ mod tests {
         match name {
             "ColumnKnowledge" => Ok(Box::new(transform::column_knowledge::ColumnKnowledge)),
             "Demand" => Ok(Box::new(transform::demand::Demand)),
+            "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting)),
             "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
             "ProjectionExtraction" => Ok(Box::new(
