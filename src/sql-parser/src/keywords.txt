@@ -28,7 +28,7 @@
 #
 # For details on the code that is generated, see keywords.rs.
 
-# TODO(petrosagg): Interval and Option deviate from the postgres definition
+# TODO(petrosagg): Interval, Null and Option deviate from the postgres definition
 
 Reserved    All
 Unreserved  Alter
@@ -170,7 +170,7 @@ ColumnName  None
 Unreserved  Nosuperuser
 Reserved    Not
 Unreserved  Notifications
-Reserved    Null
+Unreserved  Null
 ColumnName  Nullif
 Unreserved  Objects
 Unreserved  Ocf
