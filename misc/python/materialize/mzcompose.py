@@ -98,6 +98,13 @@ def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> N
         elif "mzbuild" not in service and "image" in service:
             lint_image_name(path, service["image"], errors)
 
+        if isinstance(service.get("environment"), dict):
+            errors.append(
+                LintError(
+                    path, f"environment for service {name} uses dict instead of list"
+                )
+            )
+
 
 def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
     match = re.search(r"((?P<repo>[^/]+)/)?(?P<image>[^:]+)(:(?P<tag>.*))?", spec)
