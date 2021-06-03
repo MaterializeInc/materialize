@@ -57,6 +57,7 @@ impl Join {
             let mut new_inputs = Vec::new();
             let mut new_equivalences = Vec::new();
             let mut new_columns = 0;
+            let mut new_filters = Vec::new();
 
             // We scan through each input, digesting any joins that we find and updating their equivalence classes.
             // We retain any existing equivalence classes, as they are already with respect to the cross product.
@@ -80,6 +81,49 @@ impl Join {
                     }
                     // Add all of the inputs.
                     for input in inputs.drain(..) {
+                        new_columns += input.arity();
+                        new_inputs.push(input);
+                    }
+                } else if let MirRelationExpr::Filter {
+                    input,
+                    mut predicates,
+                } = input
+                {
+                    if let MirRelationExpr::Join {
+                        mut inputs,
+                        mut equivalences,
+                        ..
+                    } = *input
+                    {
+                        // Update and push all of the variables.
+                        for mut equivalence in equivalences.drain(..) {
+                            for expr in equivalence.iter_mut() {
+                                expr.visit_mut(&mut |e| {
+                                    if let MirScalarExpr::Column(c) = e {
+                                        *c += new_columns;
+                                    }
+                                });
+                            }
+                            new_equivalences.push(equivalence);
+                        }
+
+                        // Update and push all the filters
+                        for mut expr in predicates.drain(..) {
+                            expr.visit_mut(&mut |e| {
+                                if let MirScalarExpr::Column(c) = e {
+                                    *c += new_columns;
+                                }
+                            });
+                            new_filters.push(expr);
+                        }
+
+                        // Add all of the inputs.
+                        for input in inputs.drain(..) {
+                            new_columns += input.arity();
+                            new_inputs.push(input);
+                        }
+                    } else {
+                        let input = input.filter(predicates);
                         new_columns += input.arity();
                         new_inputs.push(input);
                     }
@@ -128,6 +172,10 @@ impl Join {
                     }
                 }
                 _ => {}
+            }
+
+            if !new_filters.is_empty() {
+                *relation = relation.take_dangerous().filter(new_filters);
             }
         }
     }
