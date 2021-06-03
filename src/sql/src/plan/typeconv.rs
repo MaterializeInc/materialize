@@ -333,6 +333,8 @@ lazy_static! {
             (Uuid, String) => Assignment: CastUuidToString,
 
             // APD
+            (APD, Float32) => Assignment: CastAPDToFloat32,
+            (APD, Float64) => Assignment: CastAPDToFloat64,
             (APD, Int32) => Assignment: CastAPDToInt32,
             (APD, Int64) => Assignment: CastAPDToInt64,
             (APD, String) => Assignment: CastAPDToString
