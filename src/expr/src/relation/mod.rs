@@ -17,7 +17,8 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, RelationType, Row};
+use repr::{ColumnType, Datum, Key, RelationType, Row};
+use timely::progress::Antichain;
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
@@ -286,10 +287,11 @@ impl MirRelationExpr {
                         .map(|&i| input_typ.column_types[i].clone())
                         .collect(),
                 );
-                for keys in input_typ.keys {
-                    if keys.iter().all(|k| outputs.contains(k)) {
+                for key in input_typ.keys.elements() {
+                    if key.indices().iter().all(|k| outputs.contains(k)) {
                         output_typ = output_typ.with_key(
-                            keys.iter()
+                            key.indices()
+                                .iter()
                                 .map(|c| outputs.iter().position(|o| o == c).unwrap())
                                 .collect(),
                         );
@@ -333,10 +335,14 @@ impl MirRelationExpr {
                 if remappings.len() == 1 {
                     let (old, new) = remappings.pop().unwrap();
                     let mut new_keys = Vec::new();
-                    for key in typ.keys.iter() {
-                        if key.contains(&old) {
-                            let mut new_key: Vec<usize> =
-                                key.iter().cloned().filter(|k| k != &old).collect();
+                    for key in typ.keys.elements().iter() {
+                        if key.indices().contains(&old) {
+                            let mut new_key: Vec<usize> = key
+                                .indices()
+                                .iter()
+                                .cloned()
+                                .filter(|k| k != &old)
+                                .collect();
                             new_key.push(new);
                             new_key.sort_unstable();
                             new_keys.push(new_key);
@@ -367,7 +373,7 @@ impl MirRelationExpr {
                 // A filter inherits the keys of its input unless the filters
                 // have reduced the input to a single row, in which case the
                 // keys of the input are `()`.
-                let mut input_typ = input.typ();
+                let input_typ = input.typ();
                 let cols_equal_to_literal = predicates
                     .iter()
                     .filter_map(|p| {
@@ -386,10 +392,25 @@ impl MirRelationExpr {
                         None
                     })
                     .collect::<Vec<_>>();
-                for key_set in &mut input_typ.keys {
-                    key_set.retain(|k| !cols_equal_to_literal.contains(&k));
+
+                let mut new_keys = Antichain::new();
+                let RelationType {
+                    column_types: input_column_types,
+                    keys: input_keys,
+                } = input_typ;
+                for key in input_keys.elements().iter() {
+                    new_keys.insert(Key::new(
+                        key.indices()
+                            .iter()
+                            .filter(|k| !cols_equal_to_literal.contains(k))
+                            .cloned()
+                            .collect(),
+                    ));
                 }
-                input_typ
+                RelationType {
+                    column_types: input_column_types,
+                    keys: new_keys,
+                }
             }
             MirRelationExpr::Join {
                 inputs,
@@ -415,7 +436,13 @@ impl MirRelationExpr {
                 let global_keys = input_mapper.global_keys(
                     &input_types
                         .iter()
-                        .map(|t| t.keys.clone())
+                        .map(|t| {
+                            t.keys
+                                .elements()
+                                .iter()
+                                .map(|key| key.indices().to_vec())
+                                .collect()
+                        })
                         .collect::<Vec<_>>(),
                     equivalences,
                 );
@@ -444,13 +471,15 @@ impl MirRelationExpr {
                 // keys that are subsets of the group key, and should retain
                 // those instead, if so.
                 let mut keys = Vec::new();
-                for key in input_typ.keys.iter() {
+                for key in input_typ.keys.elements().iter() {
                     if key
+                        .indices()
                         .iter()
                         .all(|k| group_key.contains(&MirScalarExpr::Column(*k)))
                     {
                         keys.push(
-                            key.iter()
+                            key.indices()
+                                .iter()
                                 .map(|i| {
                                     group_key
                                         .iter()
@@ -553,15 +582,24 @@ impl MirRelationExpr {
                                             {
                                                 if first_id == second_id {
                                                     keys.extend(
-                                                        inputs[0].typ().keys.drain(..).filter(
-                                                            |key| {
-                                                                key.iter().all(|c| {
+                                                        inputs[0]
+                                                            .typ()
+                                                            .keys
+                                                            .elements()
+                                                            .to_vec()
+                                                            .drain(..)
+                                                            .filter_map(|key| {
+                                                                let indices = key.into_indices();
+                                                                if indices.iter().all(|c| {
                                                                     outputs.get(*c) == Some(c)
                                                                         && base_projection.get(*c)
                                                                             == Some(c)
-                                                                })
-                                                            },
-                                                        ),
+                                                                }) {
+                                                                    Some(indices)
+                                                                } else {
+                                                                    None
+                                                                }
+                                                            }),
                                                     );
                                                 }
                                             }

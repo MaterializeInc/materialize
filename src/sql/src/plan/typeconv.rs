@@ -21,7 +21,9 @@ use anyhow::bail;
 use lazy_static::lazy_static;
 
 use expr::VariadicFunc;
+use repr::Key;
 use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
+use timely::progress::Antichain;
 
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
@@ -613,7 +615,7 @@ pub fn plan_hypothetical_cast(
             nullable: true,
             scalar_type: from.clone(),
         }],
-        keys: vec![vec![0]],
+        keys: Antichain::from_elem(Key::new(vec![0])),
     };
     let ecx = ExprContext {
         qcx: &qcx,

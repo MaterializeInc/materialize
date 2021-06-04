@@ -1203,6 +1203,7 @@ dependencies = [
  "serde_json",
  "sha-1",
  "sha2",
+ "timely",
  "unicase",
 ]
 
@@ -3665,6 +3666,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "smallvec",
+ "timely",
  "uuid",
 ]
 
@@ -4249,6 +4251,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sql-parser",
+ "timely",
  "tokio",
  "tokio-postgres",
  "unicase",
@@ -4470,6 +4473,7 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
+ "timely",
  "tokio",
  "tokio-postgres",
  "uuid",
@@ -5048,6 +5052,7 @@ dependencies = [
  "expr",
  "itertools",
  "repr",
+ "timely",
 ]
 
 [[package]]

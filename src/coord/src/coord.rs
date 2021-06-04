@@ -451,10 +451,11 @@ impl Coordinator {
                         .desc()
                         .typ()
                         .keys
+                        .elements()
                         .iter()
                         .enumerate()
                         .flat_map(move |(index, key)| {
-                            key.iter().map(move |k| {
+                            key.indices().iter().map(move |k| {
                                 let row = Row::pack_slice(&[
                                     Datum::String(log_id),
                                     Datum::Int64(*k as i64),

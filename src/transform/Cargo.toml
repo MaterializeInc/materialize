@@ -10,6 +10,7 @@ dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 itertools = "0.9.0"
 repr = { path = "../repr" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 
 [dev-dependencies]
 anyhow = "1.0.40"

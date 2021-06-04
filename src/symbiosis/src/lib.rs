@@ -33,6 +33,8 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
 use chrono::Utc;
+use repr::Key;
+use timely::progress::Antichain;
 use tokio_postgres::types::FromSql;
 use uuid::Uuid;
 
@@ -168,7 +170,7 @@ END $$;
                 let mut column_types = Vec::with_capacity(columns.len());
                 let mut defaults = Vec::with_capacity(columns.len());
                 let mut depends_on = Vec::new();
-                let mut keys = vec![];
+                let mut keys = Antichain::new();
 
                 let mut sql_types: Vec<_> = Vec::with_capacity(columns.len());
                 for (index, column) in columns.iter().enumerate() {
@@ -189,7 +191,7 @@ END $$;
                             }
                             // PRIMARY KEY implies UNIQUE and NOT NULL.
                             ColumnOption::Unique { is_primary } => {
-                                keys.push(vec![index]);
+                                keys.insert(Key::new(vec![index]));
                                 if *is_primary {
                                     nullable = false;
                                 }

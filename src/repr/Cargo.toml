@@ -33,6 +33,7 @@ serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.64"
 serde_regex = "1.1.0"
 smallvec = { version = "1.5.1", features = ["serde", "union"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 uuid = "0.8.2"
 
 [dev-dependencies]

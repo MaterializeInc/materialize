@@ -70,8 +70,10 @@ impl LogVariant {
         let arity = desc.arity();
         desc.typ()
             .keys
+            .elements()
             .get(0)
             .cloned()
+            .map(|key| key.into_indices())
             .unwrap_or_else(|| (0..arity).collect())
     }
 

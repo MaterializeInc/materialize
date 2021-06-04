@@ -363,7 +363,7 @@ impl SourceDataEncoding {
                             key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
 
                         // It doesn't make sense for the key to have keys.
-                        assert!(key_desc.typ().keys.is_empty());
+                        assert!(key_desc.typ().keys.elements().is_empty());
 
                         // Add the key columns as a key.
                         let key_indices = (0..key_desc.arity()).collect();

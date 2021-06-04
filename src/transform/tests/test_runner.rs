@@ -138,7 +138,9 @@ mod tests {
         DummyHumanizer, ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, MirRelationExpr,
         MirScalarExpr,
     };
+    use repr::Key;
     use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
+    use timely::progress::Antichain;
     use transform::{Optimizer, Transform, TransformArgs};
 
     use super::{Sexp, SexpParser};
@@ -487,7 +489,10 @@ mod tests {
                 let mut typ = parse_type_list(nth(&s, 2)?)?;
 
                 if let Ok(sexp) = nth(&s, 3) {
-                    typ.keys = parse_key_list(sexp)?;
+                    let key_indices = parse_key_list(sexp)?;
+                    let mut keys = Antichain::new();
+                    keys.extend(key_indices.into_iter().map(|indices| Key::new(indices)));
+                    typ.keys = keys;
                 }
                 cat.insert(&name, typ);
                 Ok(())

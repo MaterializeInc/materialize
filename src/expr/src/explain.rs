@@ -366,7 +366,9 @@ impl<'a> ViewExplanation<'a> {
                 "| | keys = ({})",
                 separated(
                     ", ",
-                    keys.iter().map(|key| bracketed("(", ")", Indices(key)))
+                    keys.elements()
+                        .iter()
+                        .map(|key| bracketed("(", ")", Indices(key.indices())))
                 )
             )?;
         }
