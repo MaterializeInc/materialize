@@ -114,8 +114,23 @@ impl JoinBuilder {
     }
 
     fn add_input(&mut self, input: MirRelationExpr) {
-        self.num_columns += input.arity();
-        self.inputs.push(input);
+        // Filter join identities out of the inputs.
+        // The join identity is a single 0-ary row constant expression.
+        let insert = {
+            if let MirRelationExpr::Constant {
+                rows: Ok(rows),
+                typ,
+            } = &input
+            {
+                !(rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1)
+            } else {
+                true
+            }
+        };
+        if insert {
+            self.num_columns += input.arity();
+            self.inputs.push(input);
+        }
     }
 
     fn add_subjoin<I>(
@@ -156,20 +171,6 @@ impl JoinBuilder {
     }
 
     fn build(mut self) -> MirRelationExpr {
-        // Filter join identities out of the inputs.
-        // The join identity is a single 0-ary row constant expression.
-        self.inputs.retain(|input| {
-            if let MirRelationExpr::Constant {
-                rows: Ok(rows),
-                typ,
-            } = &input
-            {
-                !(rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1)
-            } else {
-                true
-            }
-        });
-
         expr::canonicalize::canonicalize_equivalences(&mut self.equivalences);
 
         // If `inputs` is now empty or a singleton (without constraints),
