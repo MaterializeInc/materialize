@@ -199,7 +199,7 @@ class Composition:
 
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
-        for config in compose["services"].values():
+        for name, config in compose["services"].items():
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
 
@@ -223,6 +223,17 @@ class Composition:
                 if "propagate-uid-gid" in config:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
                     del config["propagate-uid-gid"]
+
+            if self.repo.rd.coverage:
+                # Emit coverage information to a file in a directory that is
+                # bind-mounted to the "coverage" directory on the host. We
+                # inject the configuration to all services for simplicity, but
+                # this only have an effect if the service runs instrumented Rust
+                # binaries.
+                config.setdefault("environment", []).append(
+                    f"LLVM_PROFILE_FILE=/coverage/{name}-%m.profraw"
+                )
+                config.setdefault("volumes", []).append("./coverage:/coverage")
 
         deps = self.repo.resolve_dependencies(self.images)
         for config in compose["services"].values():

@@ -67,6 +67,8 @@ do_cargo() {
         # Otherwise, build inside the CI builder image, unless we're already
         # inside of it.
         command+=("$root"/bin/ci-builder run stable env "RUSTFLAGS=${XCOMPILE_RUSTFLAGS:-}")
+    else
+        export RUSTFLAGS=${XCOMPILE_RUSTFLAGS:-}
     fi
 
     subcommand="$1"

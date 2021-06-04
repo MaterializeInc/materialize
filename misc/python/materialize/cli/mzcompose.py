@@ -49,7 +49,11 @@ def main(argv: List[str]) -> int:
 
     # Load repository.
     root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(root, release_mode=(args.mz_build_mode == "release"))
+    repo = mzbuild.Repository(
+        root,
+        release_mode=(args.mz_build_mode == "release"),
+        coverage=args.mz_coverage,
+    )
 
     # Handle special mzcompose commands that apply to the repo.
     if args.command == "gen-shortcuts":
@@ -109,6 +113,12 @@ def main(argv: List[str]) -> int:
 
     # The `run` command requires special handling.
     if args.command == "run":
+        if args.mz_coverage:
+            # If the user has requested coverage information, create the
+            # coverage directory as the current user, so Docker doesn't create
+            # it as root.
+            (composition.path.parent / "coverage").mkdir(exist_ok=True)
+
         try:
             workflow = composition.get_workflow(
                 dict(os.environ), args.first_command_arg
@@ -234,6 +244,7 @@ class ArgumentParser(argparse.ArgumentParser):
         self.add_argument(
             "--mz-build-mode", default="release", choices=["dev", "release"]
         )
+        self.add_argument("--mz-coverage", action="store_true", default=None)
         self.add_argument("-f", "--file")
         self.add_argument("--project-directory")
         self.add_argument("command", nargs="?")
@@ -269,6 +280,7 @@ Options:
   --mz-build-mode <dev|release>
                      Specify the Cargo profile to use when compiling Rust
                      crates (default: release)
+  --mz-coverage      Emit code coverage reports to the "coverage" directory
   --mz-find DIR      Use the mzcompose.yml file from DIR, rather than the
                      current directory
   --mz-quiet         Suppress Materialize-specific informational messages
