@@ -28,6 +28,7 @@ use repr::RelationType;
 /// Fuses multiple `Join` operators into one `Join` operator.
 ///
 /// Removes unit collections from joins, and joins with fewer than two inputs.
+/// Filters on top of nested joins are lifted so the nested joins can be fused.
 #[derive(Debug)]
 pub struct Join;
 
