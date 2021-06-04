@@ -65,7 +65,7 @@ impl Join {
                         ..
                     } => {
                         // Merge the inputs into the new join being built.
-                        join_builder.add_inputs(inputs, equivalences, None);
+                        join_builder.add_subjoin(inputs, equivalences, None);
                     }
                     MirRelationExpr::Filter { input, predicates } => {
                         if let MirRelationExpr::Join {
@@ -75,7 +75,7 @@ impl Join {
                         } = *input
                         {
                             // Merge the inputs and the predicates into the new join being built.
-                            join_builder.add_inputs(inputs, equivalences, Some(predicates));
+                            join_builder.add_subjoin(inputs, equivalences, Some(predicates));
                         } else {
                             // Retain the input.
                             let input = input.filter(predicates);
@@ -118,7 +118,7 @@ impl JoinBuilder {
         self.inputs.push(input);
     }
 
-    fn add_inputs<I>(
+    fn add_subjoin<I>(
         &mut self,
         inputs: I,
         mut equivalences: Vec<Vec<MirScalarExpr>>,
