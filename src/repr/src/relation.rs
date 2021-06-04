@@ -172,6 +172,7 @@ impl PartialOrder for Key {
                 match other_idx {
                     Some(other_idx) if other_idx == col_idx => break,
                     Some(other_idx) if other_idx > col_idx => return false,
+                    None => return false,
                     _ => {}
                 }
             }
