@@ -240,6 +240,28 @@ SELECT '9E-39'::apd::float4;
 query error real out of range
 SELECT '9E+38'::apd::float4
 
+# float4 to apd
+query TTT
+SELECT 1.23::float4::apd::text, -1.23::float4::apd::text, 1.23::float4::apd(38,1)::text
+----
+1.23  -1.23  1.2
+
+query TT
+SELECT 'NaN'::float4::apd::text, '-NaN'::float4::apd::text;
+----
+NaN NaN
+
+query TT
+SELECT '3.40282347E+38'::float4::apd::text, '-3.40282347E+38'::float4::apd::text
+----
+340282350000000000000000000000000000000  -340282350000000000000000000000000000000
+
+query error function casting real to apd is only defined for finite arguments
+SELECT 'infinity'::float4::apd::text
+
+query error numeric field overflow
+SELECT '12.34'::float4::apd(39,38)::text;
+
 # apd to float8
 query RRRR
 SELECT '1.234'::apd::float8, '1234.567891234567'::apd::float8, '0.000000000000000123456789123456789012345'::apd::float8, '-0.000000000000000123456789123456789012345'::apd::float8
@@ -260,6 +282,34 @@ query RR
 SELECT '9E-39'::apd::float8, '9E+38'::apd::float8;
 ----
 0.000000000000000000000000000000000000008999999999999999  900000000000000000000000000000000000000
+
+# float8 to apd
+query TTT
+SELECT 1.23::float8::apd::text, -1.23::float8::apd::text, 1.23::float8::apd(38,1)::text
+----
+1.23  -1.23  1.2
+
+query TT
+SELECT 'NaN'::float8::apd::text, '-NaN'::float8::apd::text;
+----
+NaN NaN
+
+query TT
+SELECT '3.40282347E+38'::float8::apd::text, '-3.40282347E+38'::float8::apd::text
+----
+340282347000000000000000000000000000000  -340282347000000000000000000000000000000
+
+query error numeric field overflow
+SELECT '1.7976931348623157E+308'::float8::apd::text
+
+query error numeric field overflow
+SELECT '-1.7976931348623157E+308'::float8::apd::text
+
+query error function casting double precision to apd is only defined for finite arguments
+SELECT 'infinity'::float8::apd::text
+
+query error numeric field overflow
+SELECT '12.34'::float8::apd(39,38)::text;
 
 # Addition
 query T

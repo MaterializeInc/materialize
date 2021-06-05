@@ -329,6 +329,42 @@ fn cast_float64_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eva
     Ok(Datum::from((f * 10_f64.powi(i32::from(scale))) as i128))
 }
 
+fn cast_float32_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float32();
+    if a.is_infinite() {
+        return Err(EvalError::InfinityOutOfDomain(
+            "casting real to apd".to_owned(),
+        ));
+    }
+    let mut a = Apd::from(a);
+    if let Some(scale) = scale {
+        if apd::rescale(&mut a, scale).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
+        }
+    }
+    apd::munge_apd(&mut a).unwrap();
+    Ok(Datum::APD(OrderedDecimal(a)))
+}
+
+fn cast_float64_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float64();
+    if a.is_infinite() {
+        return Err(EvalError::InfinityOutOfDomain(
+            "casting double precision to apd".to_owned(),
+        ));
+    }
+    let mut a = Apd::from(a);
+    if let Some(scale) = scale {
+        if apd::rescale(&mut a, scale).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
+        }
+    }
+    match apd::munge_apd(&mut a) {
+        Ok(_) => Ok(Datum::APD(OrderedDecimal(a))),
+        Err(_) => Err(EvalError::NumericFieldOverflow),
+    }
+}
+
 fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     strconv::format_float64(&mut buf, a.unwrap_float64());
@@ -3279,6 +3315,8 @@ pub enum UnaryFunc {
     CastFloat32ToString,
     CastFloat32ToDecimal(u8),
     CastFloat64ToDecimal(u8),
+    CastFloat32ToAPD(Option<u8>),
+    CastFloat64ToAPD(Option<u8>),
     CastFloat64ToInt32,
     CastFloat64ToInt64,
     CastFloat64ToFloat32,
@@ -3459,6 +3497,8 @@ impl UnaryFunc {
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
             UnaryFunc::CastFloat32ToDecimal(scale) => cast_float32_to_decimal(a, *scale),
             UnaryFunc::CastFloat64ToDecimal(scale) => cast_float64_to_decimal(a, *scale),
+            UnaryFunc::CastFloat32ToAPD(scale) => cast_float32_to_apd(a, *scale),
+            UnaryFunc::CastFloat64ToAPD(scale) => cast_float64_to_apd(a, *scale),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
             UnaryFunc::CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
@@ -3706,9 +3746,10 @@ impl UnaryFunc {
 
             CastInt32ToDecimal => ScalarType::Decimal(0, 0).nullable(in_nullable),
             CastInt64ToDecimal => ScalarType::Decimal(0, 0).nullable(in_nullable),
-            CastInt32ToAPD(scale) | CastInt64ToAPD(scale) => {
-                ScalarType::APD { scale: *scale }.nullable(in_nullable)
-            }
+            CastInt32ToAPD(scale)
+            | CastInt64ToAPD(scale)
+            | CastFloat32ToAPD(scale)
+            | CastFloat64ToAPD(scale) => ScalarType::APD { scale: *scale }.nullable(in_nullable),
 
             CastInt32ToOid => ScalarType::Oid.nullable(in_nullable),
             CastOidToInt32 => ScalarType::Oid.nullable(in_nullable),
@@ -3887,11 +3928,13 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat32ToString => f.write_str("f32tostr"),
             UnaryFunc::CastFloat32ToInt32 => f.write_str("f32toi32"),
             UnaryFunc::CastFloat32ToDecimal(_) => f.write_str("f32todec"),
+            UnaryFunc::CastFloat32ToAPD(_) => f.write_str("f32toapd"),
             UnaryFunc::CastFloat64ToInt32 => f.write_str("f64toi32"),
             UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
             UnaryFunc::CastFloat64ToFloat32 => f.write_str("f64tof32"),
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
             UnaryFunc::CastFloat64ToDecimal(_) => f.write_str("f64todec"),
+            UnaryFunc::CastFloat64ToAPD(_) => f.write_str("f32toapd"),
             UnaryFunc::CastDecimalToInt32(_) => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64(_) => f.write_str("dectoi64"),
             UnaryFunc::CastAPDToInt32 => f.write_str("apdtoi32"),
