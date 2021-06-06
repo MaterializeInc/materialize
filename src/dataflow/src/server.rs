@@ -174,9 +174,6 @@ pub struct FrontierFeedback {
     pub id: GlobalId,
     /// Upper frontier changes
     pub changes: ChangeBatch<Timestamp>,
-    /// New timestamp bindings for sources within this frontier
-    /// change.
-    pub bindings: Option<Vec<(PartitionId, Timestamp, MzOffset)>>,
 }
 
 /// Responses the worker can provide back to the coordinator.
@@ -460,7 +457,6 @@ where
             id: GlobalId,
             new_frontier: &Antichain<Timestamp>,
             prev_frontier: &Antichain<Timestamp>,
-            bindings: Option<Vec<(PartitionId, Timestamp, MzOffset)>>,
             progress: &mut Vec<FrontierFeedback>,
         ) {
             let mut changes = ChangeBatch::new();
@@ -472,11 +468,7 @@ where
             }
             changes.compact();
             if !changes.is_empty() {
-                progress.push(FrontierFeedback {
-                    id,
-                    changes,
-                    bindings,
-                });
+                progress.push(FrontierFeedback { id, changes });
             }
         }
 
@@ -491,7 +483,7 @@ where
                     .get_mut(&id)
                     .expect("Frontier missing!");
                 if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, None, &mut progress);
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
                 }
             }
@@ -509,15 +501,7 @@ where
                 ));
                 if prev_frontier != &new_frontier {
                     // Add all timestamp bindings we know about between the old and new frontier.
-                    let bindings = history
-                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow());
-                    add_progress(
-                        *id,
-                        &new_frontier,
-                        &prev_frontier,
-                        Some(bindings),
-                        &mut progress,
-                    );
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
                 }
             }

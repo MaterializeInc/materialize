@@ -600,16 +600,10 @@ impl Coordinator {
     ) {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
-                let mut durability_updates = Vec::new();
                 for feedback in updates {
-                    self.update_upper(feedback, &mut durability_updates);
+                    self.update_upper(feedback);
                 }
                 self.maintenance().await;
-                if !durability_updates.is_empty() {
-                    self.broadcast(SequencedCommand::DurabilityFrontierUpdates(
-                        durability_updates,
-                    ));
-                }
             }
         }
     }
@@ -959,14 +953,8 @@ impl Coordinator {
     }
 
     /// Updates the upper frontier of a named view.
-    fn update_upper(
-        &mut self,
-        mut feedback: FrontierFeedback,
-        durability_updates: &mut Vec<(GlobalId, Antichain<Timestamp>)>,
-    ) {
+    fn update_upper(&mut self, mut feedback: FrontierFeedback) {
         if let Some(index_state) = self.indexes.get_mut(&feedback.id) {
-            // We should never get timestamp bindings with index frontier updates.
-            assert!(feedback.bindings.is_none());
             let changes: Vec<_> = index_state
                 .upper
                 .update_iter(feedback.changes.drain())
@@ -1009,25 +997,6 @@ impl Coordinator {
                 .update_iter(feedback.changes.drain())
                 .collect();
 
-            // Persist any timestamp bindings the dataflow worker sent us.
-            if let Some(bindings) = &feedback.bindings {
-                let bindings: Vec<_> = bindings
-                    .iter()
-                    .map(|(pid, ts, offset)| (feedback.id, pid.to_string(), *ts, offset.offset))
-                    .collect();
-                self.catalog
-                    .insert_timestamps(&bindings)
-                    .expect("inserting timestamps to sqlite cannot fail");
-            }
-
-            // The dataflow layer is responsible for sending all the updates we need.
-            if source_state.durability.borrow() != source_state.upper.frontier() {
-                source_state.durability = source_state.upper.frontier().to_owned();
-
-                if source_state.durability != Antichain::new() {
-                    durability_updates.push((feedback.id, source_state.durability.clone()));
-                }
-            }
             if !changes.is_empty() {
                 // The source's upper frontier changed as a result of the updates sent over
                 // by the dataflow workers. Advance the source's compaction frontier to trail
