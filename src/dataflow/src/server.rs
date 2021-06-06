@@ -166,7 +166,7 @@ pub enum CacheMessage {
     DropSource(GlobalId),
 }
 
-/// Data about upper frontiers and timestamp bindings that dataflow workers
+/// Data about upper frontiers that dataflow workers
 /// send to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FrontierFeedback {
@@ -176,11 +176,22 @@ pub struct FrontierFeedback {
     pub changes: ChangeBatch<Timestamp>,
 }
 
+/// Data about timestamp bindings that dataflow workers send to the coordinator
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TimestampBindingFeedback {
+    /// Durability frontier changes
+    pub changes: Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+    /// Timestamp bindings for all of those frontier changes
+    pub bindings: Vec<(GlobalId, PartitionId, Timestamp, MzOffset)>,
+}
+
 /// Responses the worker can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<FrontierFeedback>),
+    /// FIXME
+    TimestampBindings(TimestampBindingFeedback),
 }
 
 /// Configures a dataflow server.
@@ -235,6 +246,8 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 pending_peeks: Vec::new(),
                 feedback_tx: None,
                 reported_frontiers: HashMap::new(),
+                reported_bindings_frontiers: HashMap::new(),
+                last_bindings_feedback: Instant::now(),
                 metrics: Metrics::for_worker_id(worker_idx),
             }
             .run()
@@ -264,6 +277,10 @@ where
     feedback_tx: Option<mpsc::UnboundedSender<WorkerFeedbackWithMeta>>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Tracks the timestamp binding durability information that has been sent over `feedback_tx`.
+    reported_bindings_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Tracks the last time we sent binding durability info over `feedback_tx`.
+    last_bindings_feedback: Instant,
     /// Metrics bundle.
     metrics: Metrics,
 }
@@ -433,6 +450,7 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
             self.update_rt_timestamps();
+            self.report_timestamp_bindings();
 
             // Handle any received commands.
             let cmds: Vec<_> = self.command_rx.try_iter().collect();
@@ -500,7 +518,6 @@ where
                     &new_frontier
                 ));
                 if prev_frontier != &new_frontier {
-                    // Add all timestamp bindings we know about between the old and new frontier.
                     add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
                 }
@@ -523,6 +540,69 @@ where
         }
     }
 
+    fn report_timestamp_bindings(&mut self) {
+        // FIXME: properly encode this number
+        if self.feedback_tx.is_none() || self.last_bindings_feedback.elapsed().as_millis() < 1_000 {
+            return;
+        }
+
+        let mut changes = Vec::new();
+        let mut bindings = Vec::new();
+        let mut new_frontier = Antichain::new();
+
+        // Need to go through all sources that are generating timestamp bindings, and extract their upper frontiers.
+        // If that frontier is different than the durability frontier we've previously reported then we also need to
+        // get the new bindings we've produced and send them to the coordinator.
+
+        for (id, history) in self.render_state.ts_histories.iter() {
+            // Read the upper frontier and compare to what we've reported.
+            history.read_upper(&mut new_frontier);
+            let prev_frontier = self
+                .reported_bindings_frontiers
+                .get_mut(&id)
+                .expect("Frontier missing!");
+            assert!(<_ as PartialOrder>::less_equal(
+                prev_frontier,
+                &new_frontier
+            ));
+            if prev_frontier != &new_frontier {
+                let mut change_batch = ChangeBatch::new();
+                for time in prev_frontier.elements().iter() {
+                    change_batch.update(time.clone(), -1);
+                }
+                for time in new_frontier.elements().iter() {
+                    change_batch.update(time.clone(), 1);
+                }
+                change_batch.compact();
+                if !change_batch.is_empty() {
+                    changes.push((*id, change_batch));
+                }
+                prev_frontier.clone_from(&new_frontier);
+                // Add all timestamp bindings we know about between the old and new frontier.
+                bindings.extend(
+                    history
+                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow())
+                        .into_iter()
+                        .map(|(pid, ts, offset)| (*id, pid, ts, offset)),
+                );
+            }
+        }
+
+        if !changes.is_empty() || !bindings.is_empty() {
+            self.feedback_tx
+                .as_mut()
+                .expect("known to exist")
+                .send(WorkerFeedbackWithMeta {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
+                        changes,
+                        bindings,
+                    }),
+                })
+                .expect("feedback receriver should not drop first");
+        }
+        self.last_bindings_feedback = Instant::now();
+    }
     /// Instruct all real-time sources managed by the worker to close their current
     /// timestamp and move to the next wall clock time.
     ///
@@ -792,8 +872,9 @@ where
                     }
                     let prev = self.render_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
-                    let prev = self.reported_frontiers.insert(id, Antichain::from_elem(0));
-                    assert!(prev.is_none());
+                    self.reported_frontiers.insert(id, Antichain::from_elem(0));
+                    self.reported_bindings_frontiers
+                        .insert(id, Antichain::from_elem(0));
                 } else {
                     assert!(bindings.is_empty());
                 }
@@ -846,6 +927,7 @@ where
                 }
 
                 self.reported_frontiers.remove(&id);
+                self.reported_bindings_frontiers.remove(&id);
             }
         }
     }
