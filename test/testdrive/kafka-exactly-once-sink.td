@@ -150,8 +150,7 @@ all inputs of an exactly-once Kafka sink must be sources, materialize.public.inp
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-! CREATE SINK output13 FROM input_csv
+> CREATE SINK output13 FROM input_csv
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_csv is not
