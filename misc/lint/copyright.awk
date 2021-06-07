@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -19,9 +19,9 @@ function done()
     if (!copyright) {
         err(FILENAME " is missing copyright header")
         exit 1
-    } else if (copyright !~ /Copyright Materialize, Inc\./) {
+    } else if (copyright !~ /Copyright Materialize, Inc\. and contributors\./) {
         err(FILENAME " has malformatted copyright header")
-        print "hint: line " copyright_line " does not include the exact text \"Copyright Materialize, Inc.\""
+        print "hint: line " copyright_line " does not include the exact text \"Copyright Materialize, Inc. and contributors.\""
         exit 1
     }
     exit 0

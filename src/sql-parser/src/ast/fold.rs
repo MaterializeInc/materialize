@@ -1,5 +1,5 @@
 // Copyright Syn Developers.
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // This file is derived from the syn project, available at
 // https://github.com/dtolnay/syn. It was incorporated
