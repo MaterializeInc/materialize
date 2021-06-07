@@ -10,15 +10,18 @@
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
 use std::collections::BTreeMap;
-use std::convert;
+use std::convert::{self, TryInto};
 use std::fs::File;
 use std::io::Read;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use anyhow::bail;
 use log::{debug, error, info, warn};
+use ore::collections::CollectionExt;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::{Offset, TopicPartitionList};
 use reqwest::Url;
 use tokio::task;
 use tokio::time::Duration;
@@ -191,11 +194,11 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 ///   For example, when using Kerberos auth, and the named principal does not
 ///   exist.
-pub async fn test_config(
+pub async fn create_consumer(
     broker: &str,
     topic: &str,
     options: &BTreeMap<String, String>,
-) -> Result<(), anyhow::Error> {
+) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
@@ -204,7 +207,7 @@ pub async fn test_config(
 
     match config.create_with_context(KafkaErrCheckContext::default()) {
         Ok(consumer) => {
-            let consumer: BaseConsumer<KafkaErrCheckContext> = consumer;
+            let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> = Arc::new(consumer);
             let context = consumer.context().clone();
             let topic = String::from(topic);
             // Wait for a metadata request for up to one second. This greatly
@@ -212,14 +215,18 @@ pub async fn test_config(
             // e.g. the hostname was mistyped. librdkafka doesn't expose a
             // better API for asking whether a connection succeeded or failed,
             // unfortunately.
-            task::spawn_blocking(move || {
-                let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
+            task::spawn_blocking({
+                let consumer = consumer.clone();
+                move || {
+                    let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
+                }
             })
             .await?;
             let error = context.error.lock().expect("lock poisoned");
             if let Some(error) = &*error {
                 bail!("librdkafka: {}", error)
             }
+            Ok(consumer)
         }
         Err(e) => {
             match e {
@@ -243,12 +250,146 @@ pub async fn test_config(
             }
         }
     }
-    Ok(())
+}
+
+/// Returns start offsets for the partitions of `topic` and the provided
+/// `kafka_time_offset` option.
+///
+/// For each partition, the returned offset is the earliest offset whose
+/// timestamp is greater than or equal to the given timestamp for the
+/// partition. If no such message exists (or the Kafka broker is before
+/// 0.10.0), the current end offset is returned for the partition.
+///
+/// The provided `kafka_time_offset` option must be a non-zero number:
+/// * Non-Negative numbers will used as is (e.g. `1622659034343`)
+/// * Negative numbers will be translated to a timestamp in millis
+///   before now (e.g. `-10` means 10 millis ago)
+///
+/// If `kafka_time_offset` has not been configured, an empty Option is
+/// returned.
+pub async fn lookup_start_offsets(
+    consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
+    topic: &str,
+    with_options: &BTreeMap<String, Value>,
+) -> Result<Option<Vec<i64>>, anyhow::Error> {
+    let time_offset = with_options.get("kafka_time_offset");
+    if time_offset.is_none() {
+        return Ok(None);
+    } else if with_options.contains_key("start_offset") {
+        bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
+    }
+
+    // Validate and resolve `kafka_time_offset`.
+    let time_offset = match time_offset.unwrap() {
+        Value::Number(s) => match s.parse::<i64>() {
+            // Timestamp in millis *before* now (e.g. -10 means 10 millis ago)
+            Ok(ts) if ts < 0 => {
+                let now: i64 = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)?
+                    .as_millis()
+                    .try_into()?;
+                let ts = now - ts.abs();
+                if ts <= 0 {
+                    bail!("Relative `kafka_time_offset` must be smaller than current system timestamp")
+                }
+                ts
+            }
+            // Timestamp in millis (e.g. 1622659034343)
+            Ok(ts) => ts,
+            _ => bail!("`kafka_time_offset` must be a number"),
+        },
+        _ => bail!("`kafka_time_offset` must be a number"),
+    };
+
+    // Lookup offsets
+    task::spawn_blocking({
+        let topic = topic.to_string();
+        move || {
+            // There cannot be more than i32 partitions
+            let num_partitions =
+                get_partitions(consumer.as_ref(), &topic, Duration::from_secs(10))?.len();
+
+            let mut tpl = TopicPartitionList::with_capacity(1);
+            tpl.add_partition_range(&topic, 0, num_partitions as i32 - 1);
+            tpl.set_all_offsets(Offset::Offset(time_offset))?;
+
+            let offsets_for_times = consumer.offsets_for_times(tpl, Duration::from_secs(10))?;
+
+            // Translate to `start_offsets`
+            let start_offsets = offsets_for_times
+                .elements()
+                .iter()
+                .map(|elem| match elem.offset() {
+                    Offset::Offset(offset) => Ok(offset),
+                    Offset::End => fetch_end_offset(&consumer, &topic, elem.partition()),
+                    _ => bail!(
+                        "Unexpected offset {:?} for partition {}",
+                        elem.offset(),
+                        elem.partition()
+                    ),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            if start_offsets.len() != num_partitions {
+                bail!(
+                    "Expected offsets for {} partitions, but recevied {}",
+                    num_partitions,
+                    start_offsets.len(),
+                );
+            }
+
+            Ok(Some(start_offsets))
+        }
+    })
+    .await?
+}
+
+// Kafka supports bulk lookup of watermarks, but it is not exposed in rdkafka.
+// If that ever changes, we will want to first collect all pids that have no
+// offset for a given timestamp and then do a single request (instead of doing
+// a request for each paritition individually).
+fn fetch_end_offset(
+    consumer: &BaseConsumer<KafkaErrCheckContext>,
+    topic: &str,
+    pid: i32,
+) -> Result<i64, anyhow::Error> {
+    let (_low, high) = consumer.fetch_watermarks(topic, pid, Duration::from_secs(10))?;
+    Ok(high)
+}
+
+// Return the list of partition ids associated with a specific topic
+pub fn get_partitions<C: ConsumerContext>(
+    consumer: &BaseConsumer<C>,
+    topic: &str,
+    timeout: Duration,
+) -> Result<Vec<i32>, anyhow::Error> {
+    let meta = consumer.fetch_metadata(Some(&topic), timeout)?;
+    if meta.topics().len() != 1 {
+        bail!(
+            "topic {} has {} metadata entries; expected 1",
+            topic,
+            meta.topics().len()
+        );
+    }
+    let meta_topic = meta.topics().into_element();
+    if meta_topic.name() != topic {
+        bail!(
+            "got results for wrong topic {} (expected {})",
+            meta_topic.name(),
+            topic
+        );
+    }
+
+    if meta_topic.partitions().len() == 0 {
+        bail!("topic {} does not exist", topic);
+    }
+
+    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
 }
 
 /// Gets error strings from `rdkafka` when creating test consumers.
-#[derive(Default)]
-struct KafkaErrCheckContext {
+#[derive(Default, Debug)]
+pub struct KafkaErrCheckContext {
     pub error: Mutex<Option<String>>,
 }
 
