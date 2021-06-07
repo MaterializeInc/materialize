@@ -39,9 +39,9 @@ whenever possible.
 
 ### Construction
 
-{{< experimental v0.5.0 >}}
-The `ARRAY` expression syntax
-{{< /experimental >}}
+{{< version-added v0.7.4 >}}
+The `ARRAY` expression syntax.
+{{< /version-added >}}
 
 You can construct arrays using the special `ARRAY` expression:
 
@@ -76,7 +76,7 @@ SELECT ARRAY[ARRAY[1, 2], ARRAY[3]]
 ERROR:  number of array elements (3) does not match declared cardinality (4)
 ```
 
-### Output format
+### Textual format
 
 The textual representation of an array consists of an opening curly brace (`{`),
 followed by the textual representation of each element separated by commas
@@ -135,9 +135,23 @@ Array element | Catalog name | OID
 You can [cast](/sql/functions/cast) all array types to
 [`text`](/sql/types/text) by assignment.
 
-You cannot presently cast any other type to an array type.
+
+{{< version-added v0.7.4 >}}
+You can cast `text` to any array type. The input must conform to the [textual
+format](#textual-format) described above, with the additional restriction that
+you cannot yet use a cast to construct a multidimensional array.
+{{< /version-added >}}
 
 ## Examples
+
+```sql
+SELECT '{1,2,3}'::int[]
+```
+```nofmt
+  int4
+---------
+ {1,2,3}
+```
 
 ```sql
 SELECT ARRAY[ARRAY[1, 2], ARRAY[NULL, 4]]::text

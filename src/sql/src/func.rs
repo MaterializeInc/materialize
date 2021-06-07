@@ -2388,6 +2388,12 @@ lazy_static! {
                 params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true }, 3481;
                 params!(Jsonb, String) => JsonbGetString { stringify: true }, 3477;
             },
+            "#>" => Scalar {
+                params!(Jsonb, Plain(Array(Box::new(String)))) => JsonbGetPath { stringify: false }, 3213;
+            },
+            "#>>" => Scalar {
+                params!(Jsonb, Plain(Array(Box::new(String)))) => JsonbGetPath { stringify: true }, 3206;
+            },
             "@>" => Scalar {
                 params!(Jsonb, Jsonb) => JsonbContainsJsonb, 3246;
                 params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
