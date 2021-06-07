@@ -22,7 +22,7 @@ ordered-float = { version = "2.5.0", features = ["serde"] }
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
 pgrepr = { path = "../pgrepr" }
-regex = "1.4.6"
+regex = "1.5.4"
 regex-syntax = "0.6.25"
 repr = { path = "../repr" }
 serde = { version = "1.0.126", features = ["derive"] }

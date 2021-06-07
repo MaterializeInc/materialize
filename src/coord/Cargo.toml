@@ -33,7 +33,7 @@ postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-regex = "1.4.6"
+regex = "1.5.4"
 repr = { path = "../repr" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 rusqlite = { version = "0.25.1", features = ["bundled", "unlock_notify"] }

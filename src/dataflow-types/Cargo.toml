@@ -15,7 +15,7 @@ interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.13"
 ore = { path = "../ore" }
-regex = "1.4.6"
+regex = "1.5.4"
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.126", features = ["derive"] }
