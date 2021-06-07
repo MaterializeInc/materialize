@@ -92,9 +92,6 @@ class SuccessOutputBench(Bench):
             ("grafana_url", False),
         ]
 
-    # def setup(self) -> None:
-    #     pass
-    #
     def run(
         self, git_revision: Optional[str], num_workers: int, mzbench_id: str
     ) -> Dict[str, Any]:
@@ -140,6 +137,9 @@ class SuccessOutputBench(Bench):
             "rows_per_second": rows_per_second,
             "grafana_url": grafana_url,
         }
+
+    def teardown(self) -> None:
+        pass
 
 
 def mzbuild_tag(git_ref: str) -> str:
@@ -263,6 +263,8 @@ def main(args: argparse.Namespace) -> None:
                 if (k in metadata_field_names or k in metrics)
             }
         )
+
+    bench.teardown()
 
 
 def enumerate_cpu_counts() -> typing.List[int]:
