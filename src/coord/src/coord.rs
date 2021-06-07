@@ -1417,7 +1417,10 @@ impl Coordinator {
         ];
         match self.catalog_transact(ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1434,7 +1437,10 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::SchemaAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1524,7 +1530,10 @@ impl Coordinator {
                 self.ship_dataflow(df).await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1560,7 +1569,10 @@ impl Coordinator {
                 self.ship_sources(metadata).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1702,7 +1714,10 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]).await {
             Ok(()) => (),
-            Err(_) if if_not_exists => {
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => {
                 tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
                 return;
             }
@@ -1820,7 +1835,10 @@ impl Coordinator {
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1897,7 +1915,10 @@ impl Coordinator {
                 self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
             Err(err) => Err(err),
         }
     }

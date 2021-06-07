@@ -21,7 +21,7 @@ pub struct Error {
 }
 
 #[derive(Debug)]
-pub(crate) enum ErrorKind {
+pub enum ErrorKind {
     Corruption {
         detail: String,
     },
