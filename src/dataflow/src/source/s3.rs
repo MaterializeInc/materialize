@@ -165,13 +165,13 @@ async fn download_objects_task(
 
                     retries_available -= 1;
 
-                    if retries_available > 0 {
-                        log::warn!(
-                            "unable to read object {} ({} retries remaining)",
-                            source_id,
-                            retries_available
-                        );
+                    log::warn!(
+                        "unable to read object {} ({} retries remaining)",
+                        source_id,
+                        retries_available
+                    );
 
+                    if retries_available > 0 {
                         time::sleep(Duration::from_secs(1)).await;
                     } else {
                         tx.send(Err(S3Error::RetryFailed)).unwrap_or_else(|e| {
