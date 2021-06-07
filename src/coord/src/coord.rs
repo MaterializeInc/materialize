@@ -54,6 +54,7 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
+use timely::order::PartialOrder;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
@@ -98,7 +99,7 @@ use sql::plan::{
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
 
-use self::arrangement_state::{ArrangementFrontiers, Frontiers};
+use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
@@ -239,6 +240,8 @@ pub struct Coordinator {
     /// an in-progress transaction.
     // TODO(mjibson): Should this live on a Session?
     txn_reads: HashMap<u32, TxnReads>,
+    /// Tracks write frontiers for active exactly-once sinks.
+    sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 }
 
 /// Metadata about an active connection.
@@ -1054,6 +1057,15 @@ impl Coordinator {
                     }
                 }
             }
+        } else if let Some(sink_state) = self.sink_writes.get_mut(&feedback.id) {
+            let changes: Vec<_> = sink_state
+                .frontier
+                .update_iter(feedback.changes.drain())
+                .collect();
+
+            if !changes.is_empty() {
+                sink_state.advance_source_handles();
+            }
         }
     }
 
@@ -1072,6 +1084,23 @@ impl Coordinator {
             .drain()
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
+
+        for (id, frontier) in since_updates.iter() {
+            if let Some(source_state) = self.sources.get(id) {
+                if <_ as PartialOrder>::less_equal(
+                    &frontier.borrow(),
+                    &source_state.durability.frontier(),
+                ) {
+                    self.catalog
+                        .compact_timestamps(
+                            *id,
+                            *frontier.elements().first().expect("known to exist"),
+                        )
+                        .expect("compacting source timestamp bindings cannot fail");
+                }
+            }
+        }
+
         if !since_updates.is_empty() {
             if let Some(tables) = &mut self.persisted_tables {
                 tables.allow_compaction(&since_updates);
@@ -1257,10 +1286,31 @@ impl Coordinator {
             name.to_string(),
             id,
             sink.from,
-            connector,
+            connector.clone(),
             sink.envelope,
             as_of,
         );
+
+        if let SinkConnector::Kafka(kafka_sink) = connector {
+            // For exactly-once Kafka sinks, we need to block compaction of each timestamp binding
+            // until all sinks that depend on a given source have finished writing out that timestamp.
+            // To achieve that, each sink will hold a AntichainToken for all of the sources it depends
+            // on, and will advance all of its source dependencies' compaction frontiers as it completes
+            // writes.
+            if let Some(sources) = kafka_sink.exactly_once {
+                let mut tokens = Vec::new();
+
+                // Collect AntichainTokens from all of the sources that have them.
+                for id in sources {
+                    if let Some(token) = self.since_handles.get(&id) {
+                        tokens.push(token.clone());
+                    }
+                }
+
+                let sink_writes = SinkWrites::new(tokens);
+                self.sink_writes.insert(id, sink_writes);
+            }
+        }
         Ok(self.ship_dataflow(df).await)
     }
 
@@ -2860,6 +2910,9 @@ impl Coordinator {
             self.broadcast(SequencedCommand::DropSources(sources_to_drop));
         }
         if !sinks_to_drop.is_empty() {
+            for id in sinks_to_drop.iter() {
+                self.sink_writes.remove(id);
+            }
             self.broadcast(SequencedCommand::DropSinks(sinks_to_drop));
         }
         if !indexes_to_drop.is_empty() {
@@ -3058,7 +3111,6 @@ impl Coordinator {
             if let Some(as_of) = &mut dataflow.as_of {
                 // It should not be possible to request an invalid time. SINK doesn't support
                 // AS OF. TAIL and Peek check that their AS OF is >= since.
-                use timely::order::PartialOrder;
                 assert!(
                     <_ as PartialOrder>::less_equal(&since, as_of),
                     "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
@@ -3296,6 +3348,7 @@ pub async fn serve(
                 txn_reads: HashMap::new(),
                 since_handles: HashMap::new(),
                 since_updates: Rc::new(RefCell::new(HashMap::new())),
+                sink_writes: HashMap::new(),
             };
             coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
             if let Some(config) = &logging {

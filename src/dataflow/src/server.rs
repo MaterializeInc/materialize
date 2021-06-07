@@ -240,6 +240,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     ts_histories: HashMap::default(),
                     dataflow_tokens: HashMap::new(),
                     caching_tx: None,
+                    sink_write_frontiers: HashMap::new(),
                 },
                 materialized_logger: None,
                 command_rx,
@@ -499,7 +500,7 @@ where
                 let prev_frontier = self
                     .reported_frontiers
                     .get_mut(&id)
-                    .expect("Frontier missing!");
+                    .expect("Index frontier missing!");
                 if prev_frontier != &new_frontier {
                     add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
@@ -512,13 +513,28 @@ where
                 let prev_frontier = self
                     .reported_frontiers
                     .get_mut(&id)
-                    .expect("Frontier missing!");
+                    .expect("Source frontier missing!");
                 assert!(<_ as PartialOrder>::less_equal(
                     prev_frontier,
                     &new_frontier
                 ));
                 if prev_frontier != &new_frontier {
                     add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
+                }
+            }
+            for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+                new_frontier.clone_from(&frontier.borrow());
+                let prev_frontier = self
+                    .reported_frontiers
+                    .get_mut(&id)
+                    .expect("Sink frontier missing!");
+                assert!(<_ as PartialOrder>::less_equal(
+                    prev_frontier,
+                    &new_frontier
+                ));
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &prev_frontier, &new_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
                 }
             }
@@ -529,6 +545,7 @@ where
                     }
                 }
             }
+
             if !progress.is_empty() {
                 feedback_tx
                     .send(WorkerFeedbackWithMeta {
@@ -618,6 +635,10 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        self.reported_frontiers
+                            .insert(*sink_id, Antichain::from_elem(0));
+                    }
                     for (idx_id, idx, _) in dataflow.index_exports.iter() {
                         self.reported_frontiers
                             .insert(*idx_id, Antichain::from_elem(0));
@@ -644,6 +665,8 @@ where
             }
             SequencedCommand::DropSinks(ids) => {
                 for id in ids {
+                    self.reported_frontiers.remove(&id);
+                    self.render_state.sink_write_frontiers.remove(&id);
                     self.render_state.dataflow_tokens.remove(&id);
                 }
             }
