@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::cmp;
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -244,6 +246,7 @@ pub fn kafka<G>(
     value_desc: RelationDesc,
     as_of: SinkAsOf,
     source_timestamp_histories: Vec<TimestampBindingRc>,
+    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -277,6 +280,7 @@ where
         connector,
         as_of,
         source_timestamp_histories,
+        write_frontier,
     )
 }
 
@@ -298,6 +302,7 @@ pub fn produce_to_kafka<G>(
     connector: KafkaSinkConnector,
     as_of: SinkAsOf,
     source_timestamp_histories: Vec<TimestampBindingRc>,
+    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -572,6 +577,9 @@ where
 
                         match result {
                             Ok(()) => {
+                                assert!(write_frontier.borrow().less_equal(ts));
+                                write_frontier.borrow_mut().clear();
+                                write_frontier.borrow_mut().insert(*ts);
                                 ready_rows.pop_front();
                                 SendState::BeginTxn
                             }

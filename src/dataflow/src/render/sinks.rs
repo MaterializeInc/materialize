@@ -44,6 +44,8 @@ where
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
+        worker_index: usize,
+        peers: usize,
     ) {
         // put together tokens that belong to the export
         let mut needed_source_tokens = Vec::new();
@@ -221,6 +223,14 @@ where
                     }
                 }
 
+                // TODO: this is a brittle way to indicate the worker that will write to the sink
+                // because it relies on us continuing to hash on the sink_id, with the same hash
+                // function, and for the Exchange pact to continue to distribute by modulo number
+                // of workers.
+                let active_write_worker =
+                    (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
+                let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(0)));
+
                 let token = sink::kafka(
                     collection,
                     sink_id,
@@ -229,7 +239,14 @@ where
                     sink.value_desc.clone(),
                     sink.as_of.clone(),
                     source_ts_histories,
+                    shared_frontier.clone(),
                 );
+
+                if active_write_worker {
+                    render_state
+                        .sink_write_frontiers
+                        .insert(sink_id, shared_frontier);
+                }
                 needed_sink_tokens.push(token);
             }
             SinkConnector::Tail(c) => {
