@@ -1302,6 +1302,24 @@ impl Catalog {
         Ok(())
     }
 
+    /// Compact timestamp bindings for a source
+    ///
+    /// In practice this ends up being "remove all bindings less than a given timestamp"
+    /// because all offsets are then assigned to the next available binding.
+    pub fn compact_timestamp_bindings(
+        &mut self,
+        source_id: GlobalId,
+        frontier: Timestamp,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.compact_timestamp_bindings(source_id, frontier)?;
+        tx.commit()?;
+
+        Ok(())
+    }
+
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {
         trace!("transact: {:?}", ops);
 

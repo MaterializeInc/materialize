@@ -172,6 +172,42 @@ impl<T: Timestamp + Copy> Frontiers<T> {
     }
 }
 
+/// Track sink state for which timestamps the sink has written out.
+pub struct SinkWrites<T: Timestamp> {
+    /// The write frontier for the sink, ie all subsequent writes will be at
+    /// timestamps that are at or in advance of this frontier.
+    pub frontier: MutableAntichain<T>,
+    /// Set of handles to sources that the sink transitively depends on. We hold
+    /// back all of these sources' since frontiers to trail the sink's write frontier
+    /// and allow the since frontier to advance as the sink's write frontier advances.
+    pub source_handles: Vec<AntichainToken<T>>,
+}
+
+impl<T: Timestamp> SinkWrites<T> {
+    pub fn new(source_handles: Vec<AntichainToken<T>>) -> Self {
+        let mut frontier = MutableAntichain::new();
+        frontier.update_iter(Some((T::minimum(), 1)));
+
+        SinkWrites {
+            frontier,
+            source_handles,
+        }
+    }
+
+    /// Allow all sources that the sink transitively depends on to advance their compaction/since
+    /// frontiers up to the sink's write frontier, if they so choose.
+    ///
+    /// This function needs to be called periodically, otherwise sink's source dependencies will
+    /// never compact their timestamp bindings in memory or in the catalog. However, this doesn't
+    /// have to happen in lockstep with write frontier updates.
+    pub fn advance_source_handles(&mut self) {
+        let frontier: Vec<_> = self.frontier.frontier().to_owned().elements().to_vec();
+        for handle in self.source_handles.iter_mut() {
+            handle.maybe_advance(frontier.iter().cloned());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;

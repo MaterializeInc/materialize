@@ -101,6 +101,7 @@
 //! if/when the errors are retracted.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::rc::Rc;
@@ -111,6 +112,7 @@ use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
@@ -154,6 +156,9 @@ pub struct RenderState {
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
     /// Sender to give data to be cached.
     pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
+    /// Frontier of sink writes (all subsequent writes will be at times at or
+    /// equal to this frontier)
+    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.
@@ -231,7 +236,7 @@ pub fn build_dataflow<A: Allocate>(
             // Export declared sinks.
             for (sink_id, sink) in &dataflow.sink_exports {
                 let imports = dataflow.get_imports(&sink.from);
-                context.export_sink(render_state, &mut tokens, imports, *sink_id, sink);
+                context.export_sink(render_state, &mut tokens, region, imports, *sink_id, sink);
             }
         });
     })
