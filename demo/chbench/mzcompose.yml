@@ -57,6 +57,7 @@ services:
       - MZ_DEV=1
   materialized-experimental:
     mzbuild: materialized
+    hostname: materialized
     ports:
      - *materialized
     command:
