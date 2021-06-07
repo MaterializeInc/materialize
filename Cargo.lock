@@ -898,9 +898,9 @@ dependencies = [
 
 [[package]]
 name = "dec"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "915134aa3f3670c6dfd8b7bfda62cfc3025fb319dd08245e9d58df33183830c2"
+checksum = "6cac3244ad728e448404fc37d7b1dedebb39014063ee6093e2af77460e5031c7"
 dependencies = [
  "decnumber-sys",
  "libc",
@@ -3605,9 +3605,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.4.6"
+version = "1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a26af418b574bd56588335b3a3659a65725d4e636eb1016c2f9e3b38c7cc759"
+checksum = "d07a8629359eb56f1e2fb1652bb04212c072a87ba68546a04065d525673ac461"
 dependencies = [
  "aho-corasick",
  "memchr",

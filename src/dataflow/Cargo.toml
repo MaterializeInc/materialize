@@ -16,7 +16,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.1"
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
-dec = { version = "0.4.0", features = ["serde"] }
+dec = { version = "0.4.2", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
@@ -39,7 +39,7 @@ prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prome
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
-regex = "1.4.6"
+regex = "1.5.4"
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
