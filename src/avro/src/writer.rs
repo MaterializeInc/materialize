@@ -1,6 +1,25 @@
-// Copyright Materialize, Inc., Flavien Raynaud and other contributors.
+// Copyright 2018 Flavien Raynaud.
+// Copyright Materialize, Inc. All rights reserved.
 //
-// Use of this software is governed by the Apache License, Version 2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// This file is derived from the avro-rs project, available at
+// https://github.com/flavray/avro-rs. It was incorporated
+// directly into Materialize on March 3, 2020.
+//
+// The original source code is subject to the terms of the MIT license, a copy
+// of which can be found in the LICENSE file at the root of this repository.
 
 //! Logic handling writing in Avro format at user level.
 
