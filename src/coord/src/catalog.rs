@@ -48,7 +48,6 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
     PG_CATALOG_SCHEMA,
 };
-use crate::catalog::error::ErrorKind;
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
@@ -64,6 +63,7 @@ pub mod storage;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::Config;
 pub use crate::catalog::error::Error;
+pub use crate::catalog::error::ErrorKind;
 
 const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
