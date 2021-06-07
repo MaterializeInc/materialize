@@ -111,7 +111,7 @@ pub struct Frontiers<T: Timestamp> {
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
-    since: Rc<RefCell<MutableAntichain<T>>>,
+    pub since: Rc<RefCell<MutableAntichain<T>>>,
     /// The function to run on since changes.
     /// Passes the new since frontier.
     since_action: Rc<RefCell<dyn FnMut(Antichain<T>)>>,

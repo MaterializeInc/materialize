@@ -632,11 +632,40 @@ impl Coordinator {
                             // The source's durability frontier changed as a result of the updates sent over
                             // by the dataflow workers. Advance the durability frontier known to the dataflow worker
                             // to indicate that these bindings have been persisted.
-
-                            // FIXME should I care about the empty frontier
                             durability_updates
                                 .push((source_id, source_state.durability.frontier().to_owned()));
                         }
+
+                        // Let's also check to see if we can compact any of the bindings we've received.
+                        let compaction_ts = if <_ as PartialOrder>::less_equal(
+                            &source_state.since.borrow().frontier(),
+                            &source_state.durability.frontier(),
+                        ) {
+                            // In this case we have persisted ahead of the compaction frontier and can safely compact
+                            // up to it
+                            *source_state
+                                .since
+                                .borrow()
+                                .frontier()
+                                .first()
+                                .expect("known to exist")
+                        } else {
+                            // Otherwise, the compaction frontier is ahead of what we've persisted so far, but we can
+                            // still potentially compact up whatever we have persisted to this point.
+                            // Note that we have to subtract from the durability frontier because it functions as the
+                            // least upper bound of whats been persisted, and we decline to compact up to the empty
+                            // frontier.
+                            source_state
+                                .durability
+                                .frontier()
+                                .first()
+                                .unwrap_or(&0)
+                                .saturating_sub(1)
+                        };
+
+                        self.catalog
+                            .compact_timestamp_bindings(source_id, compaction_ts)
+                            .expect("compacting timestamp bindings cannot fail");
                     }
                 }
 
@@ -1065,22 +1094,6 @@ impl Coordinator {
             .drain()
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
-
-        for (id, frontier) in since_updates.iter() {
-            if let Some(source_state) = self.sources.get(id) {
-                if <_ as PartialOrder>::less_equal(
-                    &frontier.borrow(),
-                    &source_state.durability.frontier(),
-                ) {
-                    self.catalog
-                        .compact_timestamp_bindings(
-                            *id,
-                            *frontier.elements().first().expect("known to exist"),
-                        )
-                        .expect("compacting source timestamp bindings cannot fail");
-                }
-            }
-        }
 
         if !since_updates.is_empty() {
             if let Some(tables) = &mut self.persisted_tables {
