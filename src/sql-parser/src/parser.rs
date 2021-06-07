@@ -27,6 +27,7 @@ use itertools::Itertools;
 use log::{debug, warn};
 
 use ore::collections::CollectionExt;
+use ore::option::OptionExt;
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::*;
@@ -1257,14 +1258,9 @@ impl<'a> Parser<'a> {
         parser_err!(
             self,
             pos,
-            "Expected {}, found {}{}",
+            "Expected {}, found {}",
             expected,
-            found.as_ref().map(|t| t.name()).unwrap_or("EOF"),
-            found
-                .as_ref()
-                .filter(|t| t.has_value())
-                .map(|t| format!(" '{}'", t.value()))
-                .unwrap_or_else(String::new)
+            found.display_or("EOF"),
         )
     }
 
@@ -1351,7 +1347,7 @@ impl<'a> Parser<'a> {
         if self.consume_token(expected) {
             Ok(())
         } else {
-            self.expected(self.peek_pos(), expected.name(), self.peek_token())
+            self.expected(self.peek_pos(), expected, self.peek_token())
         }
     }
 
@@ -2339,7 +2335,7 @@ impl<'a> Parser<'a> {
         // there's no value, anything else means we expect a valid value.
         let has_value = !matches!(self.peek_token(), Some(Token::RParen) | Some(Token::Comma));
         if has_value && !has_eq && require_equals {
-            return self.expected(self.peek_pos(), Token::Eq.name(), self.peek_token());
+            return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
         }
         let value = if has_value {
             if let Some(value) = self.maybe_parse(Parser::parse_value) {

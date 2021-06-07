@@ -34,7 +34,7 @@ CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("uk_cities"
 parse-statement
 CREATE TABLE t (a int NOT NULL GARBAGE)
 ----
-error: Expected column option, found identifier 'garbage'
+error: Expected column option, found identifier "garbage"
 CREATE TABLE t (a int NOT NULL GARBAGE)
                                ^
 
@@ -202,7 +202,7 @@ CREATE TABLE t (c time with time zone (0,1,100))
 parse-statement
 CREATE TABLE t (c t(1+1))
 ----
-error: Expected right parenthesis, found operator '+'
+error: Expected right parenthesis, found operator "+"
 CREATE TABLE t (c t(1+1))
                      ^
 
