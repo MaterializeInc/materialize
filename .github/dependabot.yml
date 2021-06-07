@@ -7,5 +7,5 @@ updates:
     day: sunday
     time: "22:00"
   open-pull-requests-limit: 10
-  reviewers:
-  - benesch
+  reviewers: [MaterializeInc/dependency-czars]
+  labels: [A-dependencies]
