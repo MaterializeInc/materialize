@@ -3262,6 +3262,7 @@ pub async fn serve(
     let worker_guards = dataflow::serve(dataflow::Config {
         command_receivers: worker_rxs,
         timely_worker,
+        experimental_mode,
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 

@@ -657,6 +657,19 @@ impl SourceConnector {
         }
     }
 
+    /// Returns true iff this connector uses BYO consistency
+    pub fn is_byo(&self) -> bool {
+        if let SourceConnector::External { consistency, .. } = self {
+            if let Consistency::BringYourOwn(_) = consistency {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     pub fn caching_enabled(&self) -> bool {
         match self {
             SourceConnector::External { connector, .. } => connector.caching_enabled(),

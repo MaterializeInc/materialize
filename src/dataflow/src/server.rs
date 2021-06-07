@@ -198,10 +198,13 @@ pub struct Config {
     pub command_receivers: Vec<crossbeam_channel::Receiver<SequencedCommand>>,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
+    /// Whether the server is running in experimental mode.
+    pub experimental_mode: bool,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
+    let experimental_mode = config.experimental_mode;
     let workers = config.command_receivers.len();
     assert!(workers > 0);
 
@@ -245,6 +248,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
                 metrics: Metrics::for_worker_id(worker_idx),
+                experimental_mode,
             }
             .run()
         },
@@ -279,6 +283,8 @@ where
     last_bindings_feedback: Instant,
     /// Metrics bundle.
     metrics: Metrics,
+    /// Whether the server is running in experimental mode
+    experimental_mode: bool,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -527,19 +533,22 @@ where
                     prev_frontier.clone_from(&new_frontier);
                 }
             }
-            for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
-                new_frontier.clone_from(&frontier.borrow());
-                let prev_frontier = self
-                    .reported_frontiers
-                    .get_mut(&id)
-                    .expect("Sink frontier missing!");
-                assert!(<_ as PartialOrder>::less_equal(
-                    prev_frontier,
-                    &new_frontier
-                ));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &prev_frontier, &new_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
+
+            if self.experimental_mode {
+                for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+                    new_frontier.clone_from(&frontier.borrow());
+                    let prev_frontier = self
+                        .reported_frontiers
+                        .get_mut(&id)
+                        .expect("Sink frontier missing!");
+                    assert!(<_ as PartialOrder>::less_equal(
+                        prev_frontier,
+                        &new_frontier
+                    ));
+                    if prev_frontier != &new_frontier {
+                        add_progress(*id, &prev_frontier, &new_frontier, &mut progress);
+                        prev_frontier.clone_from(&new_frontier);
+                    }
                 }
             }
             if !progress.is_empty() {
@@ -555,10 +564,13 @@ where
 
     /// Send information about new timestamp bindings created by dataflow workers back to
     /// the coordinator.
+    ///
+    /// Only enabled when running in experimental mode for now.
     fn report_timestamp_bindings(&mut self) {
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
-        if self.feedback_tx.is_none()
+        if !self.experimental_mode
+            || self.feedback_tx.is_none()
             || self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS
         {
             return;
