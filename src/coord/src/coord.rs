@@ -60,7 +60,10 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
-use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::{
+    CacheMessage, SequencedCommand, TimestampBindingFeedback, WorkerFeedback,
+    WorkerFeedbackWithMeta,
+};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
@@ -602,6 +605,15 @@ impl Coordinator {
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
+            }
+            WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, .. }) => {
+                self.catalog
+                    .insert_timestamp_bindings(
+                        bindings
+                            .into_iter()
+                            .map(|(id, pid, ts, offset)| (id, pid.to_string(), ts, offset.offset)),
+                    )
+                    .expect("inserting timestamp bindings cannot fail");
             }
         }
     }
@@ -2793,6 +2805,7 @@ impl Coordinator {
                     tables.destroy(id);
                 }
                 self.update_timestamper(id, false).await;
+                self.catalog.delete_timestamp_bindings(id)?;
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
                         .send(CacheMessage::DropSource(id))
@@ -3035,6 +3048,10 @@ impl Coordinator {
     // Notify the timestamper thread that a source has been created or dropped.
     async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
+            let bindings = self
+                .catalog
+                .load_timestamp_bindings(source_id)
+                .expect("loading timestamps from coordinator cannot fail");
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     self.ts_tx
@@ -3043,6 +3060,7 @@ impl Coordinator {
                     self.broadcast(SequencedCommand::AddSourceTimestamping {
                         id: source_id,
                         connector: s.connector.clone(),
+                        bindings,
                     });
                 }
             }
