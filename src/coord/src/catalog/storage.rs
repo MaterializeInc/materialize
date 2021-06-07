@@ -14,8 +14,10 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use expr::GlobalId;
+use dataflow_types::MzOffset;
+use expr::{GlobalId, PartitionId};
 use ore::cast::CastFrom;
+use repr::Timestamp;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName};
 use uuid::Uuid;
@@ -105,6 +107,21 @@ const MIGRATIONS: &[&str] = &[
     // Introduced in v0.7.0.
     "INSERT INTO schemas (database_id, name) VALUES
         (NULL, 'mz_internal');",
+    // Adjusts timestamp table to support replayable source timestamp bindings.
+    //
+    // Introduced for v0.7.4
+    //
+    // ATTENTION: this migration blows away data and must not be used as a model
+    // for future migrations! It is only acceptable now because we have not yet
+    // made any consistency promises to users.
+    "DROP TABLE timestamps;
+     CREATE TABLE timestamps (
+        sid blob NOT NULL,
+        pid blob NOT NULL,
+        timestamp integer NOT NULL,
+        offset blob NOT NULL,
+        PRIMARY KEY (sid, pid, timestamp, offset)
+    );",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -417,6 +434,25 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn load_timestamp_bindings(
+        &self,
+        source_id: GlobalId,
+    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
+        self.inner
+            .prepare_cached(
+                "SELECT pid, timestamp, offset from timestamps where sid = ? order by pid, timestamp")?
+            .query_and_then(params![SqlVal(&source_id)], |row| -> Result<_, Error> {
+                let partition: PartitionId = row.get::<_, String>(0)?.parse().expect("parsing partition id from string cannot fail");
+                let timestamp: Timestamp = row.get(1)?;
+                let offset = MzOffset {
+                    offset: row.get(2)?,
+                };
+
+                Ok((partition, timestamp, offset))
+            })?
+            .collect()
+    }
+
     pub fn insert_database(&mut self, database_name: &str) -> Result<i64, Error> {
         match self
             .inner
@@ -477,6 +513,51 @@ impl Transaction<'_> {
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
                 ErrorKind::ItemAlreadyExists(item_name.to_owned()),
             )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn insert_timestamp_binding(
+        &self,
+        source_id: &GlobalId,
+        partition_id: &str,
+        timestamp: Timestamp,
+        offset: i64,
+    ) -> Result<(), Error> {
+        match self
+            .inner
+            .prepare_cached(
+                "INSERT OR IGNORE INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
+            )?
+            .execute(params![SqlVal(source_id), partition_id, timestamp, offset])
+        {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn delete_timestamp_bindings(&self, source_id: GlobalId) -> Result<(), Error> {
+        match self
+            .inner
+            .prepare_cached("DELETE FROM timestamps WHERE sid = ?")?
+            .execute(params![SqlVal(&source_id)])
+        {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn compact_timestamp_bindings(
+        &self,
+        source_id: GlobalId,
+        frontier: Timestamp,
+    ) -> Result<(), Error> {
+        match self
+            .inner
+            .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND timestamp < ?")?
+            .execute(params![SqlVal(&source_id), frontier])
+        {
+            Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }

@@ -29,6 +29,7 @@ use std::rc::Rc;
 use std::time::{Instant, UNIX_EPOCH};
 
 use log::{debug, error};
+use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -138,12 +139,14 @@ impl TimestampProposer {
 /// to time1.
 #[derive(Debug)]
 pub struct PartitionTimestamps {
+    id: PartitionId,
     bindings: Vec<(Timestamp, MzOffset)>,
 }
 
 impl PartitionTimestamps {
-    fn new() -> Self {
+    fn new(id: PartitionId) -> Self {
         Self {
+            id,
             bindings: Vec::new(),
         }
     }
@@ -235,6 +238,19 @@ impl PartitionTimestamps {
     fn upper(&self) -> Option<Timestamp> {
         self.bindings.last().map(|(time, _)| *time + 1)
     }
+
+    fn get_bindings_in_range(
+        &self,
+        lower: AntichainRef<Timestamp>,
+        upper: AntichainRef<Timestamp>,
+        bindings: &mut Vec<(PartitionId, Timestamp, MzOffset)>,
+    ) {
+        for (time, offset) in self.bindings.iter() {
+            if lower.less_equal(time) && !upper.less_equal(time) {
+                bindings.push((self.id.clone(), *time, *offset));
+            }
+        }
+    }
 }
 
 /// This struct holds per-source timestamp state in a way that can be shared across
@@ -254,6 +270,9 @@ pub struct TimestampBindingBox {
     /// This frontier can be held back by other entities holding the shared
     /// `TimestampBindingRc`.
     compaction_frontier: MutableAntichain<Timestamp>,
+    /// Indicates the lowest timestamp across all partititions and across all workers that has
+    /// been durably persisted.
+    durability_frontier: Antichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: Option<TimestampProposer>,
 }
@@ -263,6 +282,7 @@ impl TimestampBindingBox {
         Self {
             partitions: HashMap::new(),
             compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
+            durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i)),
         }
     }
@@ -276,6 +296,11 @@ impl TimestampBindingBox {
             .update_iter(remove.iter().map(|t| (*t, -1)));
         self.compaction_frontier
             .update_iter(add.iter().map(|t| (*t, 1)));
+    }
+
+    fn set_durability_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
+        <_ as PartialOrder>::less_equal(&self.durability_frontier.borrow(), &new_frontier);
+        self.durability_frontier = new_frontier.to_owned();
     }
 
     fn compact(&mut self) {
@@ -300,7 +325,7 @@ impl TimestampBindingBox {
         }
 
         self.partitions
-            .insert(partition, PartitionTimestamps::new());
+            .insert(partition.clone(), PartitionTimestamps::new(partition));
     }
 
     fn add_binding(
@@ -345,6 +370,20 @@ impl TimestampBindingBox {
         } else {
             None
         }
+    }
+
+    fn get_bindings_in_range(
+        &self,
+        lower: AntichainRef<Timestamp>,
+        upper: AntichainRef<Timestamp>,
+    ) -> Vec<(PartitionId, Timestamp, MzOffset)> {
+        let mut ret = Vec::new();
+
+        for (_, partition) in self.partitions.iter() {
+            partition.get_bindings_in_range(lower, upper, &mut ret);
+        }
+
+        ret
     }
 
     fn read_upper(&self, target: &mut Antichain<Timestamp>) {
@@ -416,7 +455,6 @@ impl TimestampBindingRc {
     /// frontier. The source can be correctly replayed from any `as_of` in advance of
     /// the compaction frontier after this operation.
     pub fn set_compaction_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
-        use timely::order::PartialOrder;
         assert!(
             self.compaction_frontier.borrow().is_empty()
                 || <_ as PartialOrder>::less_equal(
@@ -429,6 +467,14 @@ impl TimestampBindingRc {
             .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier);
         self.compaction_frontier = new_frontier.to_owned();
         self.wrapper.borrow_mut().compact();
+    }
+
+    /// Sets the durability frontier, aka, the frontier before which all updates can be
+    /// replayed across restarts.
+    pub fn set_durability_frontier(&self, new_frontier: AntichainRef<Timestamp>) {
+        self.wrapper
+            .borrow_mut()
+            .set_durability_frontier(new_frontier);
     }
 
     /// Add a new mapping from `(partition, offset) -> timestamp`.
@@ -489,6 +535,20 @@ impl TimestampBindingRc {
     /// possible
     pub fn update_timestamp(&self) {
         self.wrapper.borrow_mut().update_timestamp()
+    }
+
+    /// Return all timestamp bindings at or in advance of lower and not at or in advance of upper
+    pub fn get_bindings_in_range(
+        &self,
+        lower: AntichainRef<Timestamp>,
+        upper: AntichainRef<Timestamp>,
+    ) -> Vec<(PartitionId, Timestamp, MzOffset)> {
+        self.wrapper.borrow().get_bindings_in_range(lower, upper)
+    }
+
+    /// Returns the current durability frontier
+    pub fn durability_frontier(&self) -> Antichain<Timestamp> {
+        self.wrapper.borrow().durability_frontier.clone()
     }
 }
 

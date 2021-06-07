@@ -16,13 +16,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::{ExternalSourceConnector, SinkEnvelope};
-use expr::Id;
+use dataflow_types::{ExternalSourceConnector, MzOffset, SinkEnvelope};
+use expr::{Id, PartitionId};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
+use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
@@ -1248,6 +1249,75 @@ impl Catalog {
             }
         }
         Ok(temporary_ids)
+    }
+
+    /// Insert timestamp bindings into SQLite, and ignores duplicate timestamp bindings.
+    ///
+    /// Each individual binding is listed as (source_id, partition_id, timestamp, offset)
+    /// and it indicates that all data from (source, partition) for offsets < `offset`, can
+    /// be assigned `timestamp` iff `offset` is the minimal such offset (this is a way to encode
+    /// a [start, end) offset interval without having to duplicate adjacent starts and ends in
+    /// storage).
+    /// TODO: we intentionally ignore duplicates because BYO sources can send multiple
+    /// copies of the same timestamp.
+    pub fn insert_timestamp_bindings(
+        &mut self,
+        timestamps: impl IntoIterator<Item = (GlobalId, String, Timestamp, i64)>,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        for (sid, pid, ts, offset) in timestamps.into_iter() {
+            tx.insert_timestamp_binding(&sid, &pid, ts, offset)?;
+        }
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    /// Read all available timestamp bindings for a source
+    ///
+    /// Returns its output sorted by (partition, timestamp)
+    pub fn load_timestamp_bindings(
+        &mut self,
+        source_id: GlobalId,
+    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        let ret = tx.load_timestamp_bindings(source_id)?;
+        tx.commit()?;
+
+        Ok(ret)
+    }
+
+    /// Delete all timestamp bindings for a source
+    pub fn delete_timestamp_bindings(&mut self, source_id: GlobalId) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.delete_timestamp_bindings(source_id)?;
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    /// Compact timestamp bindings for a source
+    ///
+    /// In practice this ends up being "remove all bindings less than a given timestamp"
+    /// because all offsets are then assigned to the next available binding.
+    pub fn compact_timestamp_bindings(
+        &mut self,
+        source_id: GlobalId,
+        frontier: Timestamp,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.compact_timestamp_bindings(source_id, frontier)?;
+        tx.commit()?;
+
+        Ok(())
     }
 
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {

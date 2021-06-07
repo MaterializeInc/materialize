@@ -1137,6 +1137,7 @@ pub fn plan_create_views(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
+    scx: &StatementContext,
     format: Option<Format<Raw>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
@@ -1179,15 +1180,17 @@ fn kafka_sink_builder(
         bail!("exactly-once requires a consistency topic");
     }
 
-    if exactly_once {
+    let transitive_source_dependencies: Vec<_> = if exactly_once {
         for item in root_dependencies.iter() {
-            if item.item_type() == CatalogItemType::Source
-                && !item.source_connector()?.yields_stable_input()
-            {
-                bail!(
+            if item.item_type() == CatalogItemType::Source {
+                if !item.source_connector()?.yields_stable_input() {
+                    bail!(
                     "all input sources of an exactly-once Kafka sink must be replayable, {} is not",
                     item.name()
                 );
+                } else if !item.source_connector()?.is_byo() {
+                    scx.require_experimental_mode("Exactly-once sinks")?;
+                }
             } else if item.item_type() != CatalogItemType::Source {
                 bail!(
                     "all inputs of an exactly-once Kafka sink must be sources, {} is not",
@@ -1195,7 +1198,11 @@ fn kafka_sink_builder(
                 );
             };
         }
-    }
+
+        root_dependencies.iter().map(|i| i.id()).collect()
+    } else {
+        Vec::new()
+    };
 
     let encoder = Encoder::new(
         key_desc_and_indices
@@ -1264,6 +1271,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         exactly_once,
+        transitive_source_dependencies,
     }))
 }
 
@@ -1415,6 +1423,7 @@ pub fn plan_create_sink(
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
+            scx,
             format,
             &mut with_options,
             broker,

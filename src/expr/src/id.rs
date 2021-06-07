@@ -155,6 +155,20 @@ impl From<&PartitionId> for Option<String> {
     }
 }
 
+impl FromStr for PartitionId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "none" => Ok(PartitionId::None),
+            s => {
+                let val: i32 = s.parse()?;
+                Ok(PartitionId::Kafka(val))
+            }
+        }
+    }
+}
+
 impl PartitionId {
     pub fn kafka_id(&self) -> Option<i32> {
         match self {

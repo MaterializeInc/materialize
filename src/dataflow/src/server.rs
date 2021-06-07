@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, PeekResponse,
+    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
     SourceConnector, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
@@ -49,6 +49,10 @@ use crate::source::cache::WorkerCacheData;
 use crate::source::timestamp::TimestampBindingRc;
 
 mod metrics;
+
+/// How frequently each dataflow worker sends timestamp binding updates
+/// back to the coordinator.
+static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug)]
@@ -102,12 +106,20 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    /// Update durability information for sources.
+    ///
+    /// Each entry names a source and provides a frontier before which the source can
+    /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
+    /// all the same data)
+    DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Add a new source to be aware of for timestamping.
     AddSourceTimestamping {
         /// The ID of the timestamped source
         id: GlobalId,
         /// The connector for the timestamped source.
         connector: SourceConnector,
+        /// Previously stored timestamp bindings.
+        bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
     },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
@@ -158,11 +170,23 @@ pub enum CacheMessage {
     DropSource(GlobalId),
 }
 
+/// Data about timestamp bindings that dataflow workers send to the coordinator
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TimestampBindingFeedback {
+    /// Durability frontier changes
+    pub changes: Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+    /// Timestamp bindings for all of those frontier changes
+    pub bindings: Vec<(GlobalId, PartitionId, Timestamp, MzOffset)>,
+}
+
 /// Responses the worker can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
+    /// Timestamp bindings and prior and new frontiers for those bindings for all
+    /// sources
+    TimestampBindings(TimestampBindingFeedback),
 }
 
 /// Configures a dataflow server.
@@ -174,10 +198,13 @@ pub struct Config {
     pub command_receivers: Vec<crossbeam_channel::Receiver<SequencedCommand>>,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
+    /// Whether the server is running in experimental mode.
+    pub experimental_mode: bool,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
+    let experimental_mode = config.experimental_mode;
     let workers = config.command_receivers.len();
     assert!(workers > 0);
 
@@ -211,13 +238,17 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     ts_histories: HashMap::default(),
                     dataflow_tokens: HashMap::new(),
                     caching_tx: None,
+                    sink_write_frontiers: HashMap::new(),
                 },
                 materialized_logger: None,
                 command_rx,
                 pending_peeks: Vec::new(),
                 feedback_tx: None,
                 reported_frontiers: HashMap::new(),
+                reported_bindings_frontiers: HashMap::new(),
+                last_bindings_feedback: Instant::now(),
                 metrics: Metrics::for_worker_id(worker_idx),
+                experimental_mode,
             }
             .run()
         },
@@ -246,8 +277,14 @@ where
     feedback_tx: Option<mpsc::UnboundedSender<WorkerFeedbackWithMeta>>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Tracks the timestamp binding durability information that has been sent over `feedback_tx`.
+    reported_bindings_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Tracks the last time we sent binding durability info over `feedback_tx`.
+    last_bindings_feedback: Instant,
     /// Metrics bundle.
     metrics: Metrics,
+    /// Whether the server is running in experimental mode
+    experimental_mode: bool,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -415,6 +452,7 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
             self.update_rt_timestamps();
+            self.report_timestamp_bindings();
 
             // Handle any received commands.
             let cmds: Vec<_> = self.command_rx.try_iter().collect();
@@ -463,10 +501,19 @@ where
                 let prev_frontier = self
                     .reported_frontiers
                     .get_mut(&id)
-                    .expect("Frontier missing!");
+                    .expect("Index frontier missing!");
                 if prev_frontier != &new_frontier {
                     add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
+                }
+            }
+
+            // Log index frontier changes
+            if let Some(logger) = self.materialized_logger.as_mut() {
+                for (id, changes) in &mut progress {
+                    for (time, diff) in changes.iter() {
+                        logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
+                    }
                 }
             }
 
@@ -476,7 +523,7 @@ where
                 let prev_frontier = self
                     .reported_frontiers
                     .get_mut(&id)
-                    .expect("Frontier missing!");
+                    .expect("Source frontier missing!");
                 assert!(<_ as PartialOrder>::less_equal(
                     prev_frontier,
                     &new_frontier
@@ -486,10 +533,21 @@ where
                     prev_frontier.clone_from(&new_frontier);
                 }
             }
-            if let Some(logger) = self.materialized_logger.as_mut() {
-                for (id, changes) in &mut progress {
-                    for (time, diff) in changes.iter() {
-                        logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
+
+            if self.experimental_mode {
+                for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+                    new_frontier.clone_from(&frontier.borrow());
+                    let prev_frontier = self
+                        .reported_frontiers
+                        .get_mut(&id)
+                        .expect("Sink frontier missing!");
+                    assert!(<_ as PartialOrder>::less_equal(
+                        prev_frontier,
+                        &new_frontier
+                    ));
+                    if prev_frontier != &new_frontier {
+                        add_progress(*id, &prev_frontier, &new_frontier, &mut progress);
+                        prev_frontier.clone_from(&new_frontier);
                     }
                 }
             }
@@ -504,6 +562,76 @@ where
         }
     }
 
+    /// Send information about new timestamp bindings created by dataflow workers back to
+    /// the coordinator.
+    ///
+    /// Only enabled when running in experimental mode for now.
+    fn report_timestamp_bindings(&mut self) {
+        // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
+        // the last time we reported timestamp bindings.
+        if !self.experimental_mode
+            || self.feedback_tx.is_none()
+            || self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS
+        {
+            return;
+        }
+
+        let mut changes = Vec::new();
+        let mut bindings = Vec::new();
+        let mut new_frontier = Antichain::new();
+
+        // Need to go through all sources that are generating timestamp bindings, and extract their upper frontiers.
+        // If that frontier is different than the durability frontier we've previously reported then we also need to
+        // get the new bindings we've produced and send them to the coordinator.
+        for (id, history) in self.render_state.ts_histories.iter() {
+            // Read the upper frontier and compare to what we've reported.
+            history.read_upper(&mut new_frontier);
+            let prev_frontier = self
+                .reported_bindings_frontiers
+                .get_mut(&id)
+                .expect("Frontier missing!");
+            assert!(<_ as PartialOrder>::less_equal(
+                prev_frontier,
+                &new_frontier
+            ));
+            if prev_frontier != &new_frontier {
+                let mut change_batch = ChangeBatch::new();
+                for time in prev_frontier.elements().iter() {
+                    change_batch.update(time.clone(), -1);
+                }
+                for time in new_frontier.elements().iter() {
+                    change_batch.update(time.clone(), 1);
+                }
+                change_batch.compact();
+                if !change_batch.is_empty() {
+                    changes.push((*id, change_batch));
+                }
+                // Add all timestamp bindings we know about between the old and new frontier.
+                bindings.extend(
+                    history
+                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow())
+                        .into_iter()
+                        .map(|(pid, ts, offset)| (*id, pid, ts, offset)),
+                );
+                prev_frontier.clone_from(&new_frontier);
+            }
+        }
+
+        if !changes.is_empty() || !bindings.is_empty() {
+            self.feedback_tx
+                .as_mut()
+                .expect("known to exist")
+                .send(WorkerFeedbackWithMeta {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
+                        changes,
+                        bindings,
+                    }),
+                })
+                .expect("feedback receiver should not drop first");
+        }
+        self.last_bindings_feedback = Instant::now();
+    }
     /// Instruct all real-time sources managed by the worker to close their current
     /// timestamp and move to the next wall clock time.
     ///
@@ -519,6 +647,10 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
+                    for (sink_id, _) in dataflow.sink_exports.iter() {
+                        self.reported_frontiers
+                            .insert(*sink_id, Antichain::from_elem(0));
+                    }
                     for (idx_id, idx, _) in dataflow.index_exports.iter() {
                         self.reported_frontiers
                             .insert(*idx_id, Antichain::from_elem(0));
@@ -545,6 +677,8 @@ where
             }
             SequencedCommand::DropSinks(ids) => {
                 for id in ids {
+                    self.reported_frontiers.remove(&id);
+                    self.render_state.sink_write_frontiers.remove(&id);
                     self.render_state.dataflow_tokens.remove(&id);
                 }
             }
@@ -666,6 +800,13 @@ where
                     }
                 }
             }
+            SequencedCommand::DurabilityFrontierUpdates(list) => {
+                for (id, frontier) in list {
+                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
+                        ts_history.set_durability_frontier(frontier.borrow());
+                    }
+                }
+            }
 
             SequencedCommand::EnableFeedback(tx) => {
                 self.feedback_tx = Some(tx);
@@ -681,7 +822,11 @@ where
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
             }
-            SequencedCommand::AddSourceTimestamping { id, connector } => {
+            SequencedCommand::AddSourceTimestamping {
+                id,
+                connector,
+                bindings,
+            } => {
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
                     consistency,
@@ -754,10 +899,19 @@ where
                     None
                 };
 
+                // Add any timestamp bindings that we were already aware of on restart.
                 if let Some(data) = source_timestamp_data {
+                    for (pid, timestamp, offset) in bindings {
+                        data.add_partition(pid.clone());
+                        data.add_binding(pid, timestamp, offset, false);
+                    }
                     let prev = self.render_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
                     self.reported_frontiers.insert(id, Antichain::from_elem(0));
+                    self.reported_bindings_frontiers
+                        .insert(id, Antichain::from_elem(0));
+                } else {
+                    assert!(bindings.is_empty());
                 }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
@@ -765,8 +919,16 @@ where
                     match update {
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
                             // TODO: change the interface between the dataflow server and the
-                            // timestamper.
-                            history.add_binding(pid, timestamp, offset + 1, false);
+                            // timestamper. Specifically, we probably want to inform the timestamper
+                            // of the timestamps we already know about so that it doesn't send us
+                            // duplicate copies again.
+
+                            let mut upper = Antichain::new();
+                            history.read_upper(&mut upper);
+
+                            if upper.less_equal(&timestamp) {
+                                history.add_binding(pid, timestamp, offset + 1, false);
+                            }
                         }
                         TimestampSourceUpdate::RealTime(new_partition) => {
                             history.add_partition(new_partition);
@@ -800,6 +962,7 @@ where
                 }
 
                 self.reported_frontiers.remove(&id);
+                self.reported_bindings_frontiers.remove(&id);
             }
         }
     }
