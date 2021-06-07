@@ -1627,6 +1627,16 @@ fn exp_apd<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float64();
     let b = b.unwrap_float64();
+    if a == 0.0 && b.is_sign_negative() {
+        return Err(EvalError::Undefined(
+            "zero raised to a negative power".to_owned(),
+        ));
+    }
+    if a.is_sign_negative() && b.fract() != 0.0 {
+        // Equivalent to PG error:
+        // > a negative number raised to a non-integer power yields a complex result
+        return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
+    }
     Ok(Datum::from(a.powf(b)))
 }
 
