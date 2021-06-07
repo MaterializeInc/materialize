@@ -173,7 +173,7 @@ JSON and pasted into the string for the map.
 While I have been focusing on describing how to convert Justin's syntax into a
 string that [serde_json] will correctly deserialize as an enum, it should be
 easy to see how the mechanism can support converting the syntax into a string
-that [serde_json] will correctly deserialize as a struct. 
+that [serde_json] will correctly deserialize as a struct.
 
 [serde_json]: https://docs.serde.rs/serde_json/
 
@@ -209,6 +209,43 @@ parser will recognize `stuff_in_snake_case` as one ident but will think
 
 [parser]: https://github.com/MaterializeInc/materialize/blob/9188ac95ffc03b598b1118e4e88df6867e4b718e/src/transform/tests/test_runner.rs#L22
 [proc_macro2::TokenStream]: https://docs.rs/proc-macro2/1.0.27/proc_macro2/struct.TokenStream.html
+
+### Follow-up: Round Trip Support
+
+Creating a reversal mechanism, a.k.a. converting the JSON string serialization
+back to Justin's syntax, is not a priority compared to enabling
+testing/experimentation/debugging. I have a
+hard time thinking of a use for round-trip support other than test migration
+(see below).
+
+That said, the reverse mechanism works just like the forward mechanism, with the
+exception that the parser for the reverse mechanism is the [json] crate. In
+order to translate substrings back to irregular syntax, it
+will use the same derive macro to track the type substrings correspond to.
+
+[json]: https://docs.rs/json/0.12.4/json/
+
+### Follow-up: Test Migration Support
+
+If we have round-trip support, then it becomes easy to support migrating tests
+if the structure of an class of expression changes.
+
+For example, if `MirRelationExpr::{Map, Filter, Project}` were being replaced by `MirRelationExpr::MapFilterProject`, you would
+
+1. Add the variant `MirRelationExpr::MapFilterProject`.
+2. Write a transform replacing `MirRelationExpr::{Map, Filter, Project}` with
+   `MirRelationExpr::MapFilterProject`.
+3. For each test spec,
+   1. Construct the corresponding `MirRelationExpr`.
+   2. Run the transform.
+   3. Replace the original test spec with the spec of the transformed
+   `MirRelationExpr`.
+4. Delete `MirRelationExpr::{Map, Filter, Project}`
+
+To reduce the amount of work required to migrate tests, I propose creating a
+template for step (3) when there is available bandwidth or when doing a test
+migration for the first time. The template can do all the
+test rewrites, and one just has to supply the transform.
 
 ## Alternatives
 
