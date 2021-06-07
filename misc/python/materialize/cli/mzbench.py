@@ -21,6 +21,8 @@ import typing
 import uuid
 import webbrowser
 
+from materialize import ui
+
 
 def mzbuild_tag(git_ref: str) -> str:
     if not git_ref:
@@ -79,11 +81,12 @@ def main(args: argparse.Namespace) -> None:
     else:
         git_references = [None, *args.git_references]
 
-    if args.verbose:
-        build_tags = [None, *[mzbuild_tag(ref) for ref in args.git_references]]
-        print(f"DEBUG: num_iterations={args.num_measurements}")
-        print(f"DEBUG: worker_counts={worker_counts}")
-        print(f"DEBUG: mzbuild_tags={build_tags}")
+    ui.Verbosity.init_from_env(explicit=args.quiet)
+    dbg = ui.speaker("DEBUG: ")
+    build_tags = [None, *[mzbuild_tag(ref) for ref in args.git_references]]
+    dbg("num_iterators={nm}".format(nm=args.num_measurements))
+    dbg("worker_counts={wc}".format(wc=worker_counts))
+    dbg("mzbuild_tags={bt}".format(bt=build_tags))
 
     if args.size == "benchmark-ci":
         # Explicitly override the worker counts for the CI benchmark
@@ -257,7 +260,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Enable verbose logging output"
+        "-q", "--quiet", action="store_true", help="Disable verbose logging output"
     )
 
     parser.add_argument(
