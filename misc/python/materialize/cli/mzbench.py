@@ -84,9 +84,9 @@ def main(args: argparse.Namespace) -> None:
     ui.Verbosity.init_from_env(explicit=args.quiet)
     dbg = ui.speaker("DEBUG: ")
     build_tags = [None, *[mzbuild_tag(ref) for ref in args.git_references]]
-    dbg("num_iterators={nm}".format(nm=args.num_measurements))
-    dbg("worker_counts={wc}".format(wc=worker_counts))
-    dbg("mzbuild_tags={bt}".format(bt=build_tags))
+    dbg(f"num_iterators={args.num_measurements}")
+    dbg(f"worker_counts={worker_counts}")
+    dbg(f"mzbuild_tags={build_tags}")
 
     if args.size == "benchmark-ci":
         # Explicitly override the worker counts for the CI benchmark
