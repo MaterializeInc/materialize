@@ -159,19 +159,26 @@ async fn download_objects_task(
                             break 'outer;
                         }
                         break;
-                    } else if retry {
-                        retries_available -= 1;
-                    } else {
+                    } else if !retry {
                         break;
                     }
 
-                    log::warn!(
-                        "unable to read object {} ({} retries remaining)",
-                        source_id,
-                        retries_available
-                    );
+                    retries_available -= 1;
 
-                    time::sleep(Duration::from_secs(1)).await;
+                    if retries_available > 0 {
+                        log::warn!(
+                            "unable to read object {} ({} retries remaining)",
+                            source_id,
+                            retries_available
+                        );
+
+                        time::sleep(Duration::from_secs(1)).await;
+                    } else {
+                        tx.send(Err(S3Error::RetryFailed)).unwrap_or_else(|e| {
+                            log::debug!("unable to send error on retries failed: {}", e)
+                        });
+                        break 'outer;
+                    }
                 }
             }
             Err(e) => {
@@ -540,6 +547,7 @@ enum S3Error {
     Decode(String, std::io::Error),
     GetObjectError(RusotoError<GetObjectError>),
     Read(std::io::Error),
+    RetryFailed,
 }
 
 impl std::fmt::Display for S3Error {
@@ -552,6 +560,7 @@ impl std::fmt::Display for S3Error {
             }
             S3Error::GetObjectError(err) => err.fmt(f),
             S3Error::Read(err) => err.fmt(f),
+            S3Error::RetryFailed => write!(f, "Retry failed to produce result"),
         }
     }
 }
@@ -790,6 +799,7 @@ impl SourceReader for S3SourceReader {
                     S3Error::Decode(_, _) => Ok(NextMessage::Pending),
                     S3Error::GetObjectError(_) => Ok(NextMessage::Pending),
                     S3Error::Read(_) => Ok(NextMessage::Pending),
+                    S3Error::RetryFailed => Err(anyhow!("Retry failed")),
                 }
             }
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
