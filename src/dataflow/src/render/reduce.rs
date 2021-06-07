@@ -118,7 +118,7 @@ enum ReductionType {
 /// in this plan, and then make actually rendering the graph
 /// be as simple (and compiler verifiable) as possible.
 #[derive(Clone, Debug)]
-enum ReducePlan {
+pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
     Distinct,
@@ -143,7 +143,7 @@ enum ReducePlan {
 /// to apply a distinct operator to those before we
 /// combine them with everything else.
 #[derive(Clone, Debug)]
-struct AccumulablePlan {
+pub struct AccumulablePlan {
     /// All of the aggregations we were asked to compute, stored
     /// in order.
     full_aggrs: Vec<AggregateExpr>,
@@ -164,7 +164,7 @@ struct AccumulablePlan {
 /// them with a reduction tree that splits the inputs into
 /// small, and then progressively larger, buckets
 #[derive(Clone, Debug)]
-enum HierarchicalPlan {
+pub enum HierarchicalPlan {
     /// Plan hierarchical aggregations under monotonic inputs.
     Monotonic(MonotonicPlan),
     /// Plan for hierarchical aggregations under non-monotonic inputs.
@@ -180,7 +180,7 @@ enum HierarchicalPlan {
 /// only retain the "best" value in the diff field, instead
 /// of holding onto all values.
 #[derive(Clone, Debug)]
-struct MonotonicPlan {
+pub struct MonotonicPlan {
     /// All of the aggregations we were asked to compute.
     aggr_funcs: Vec<AggregateFunc>,
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
@@ -199,7 +199,7 @@ struct MonotonicPlan {
 /// layer. Effectively, we'll construct a min / max heap out of a series
 /// of reduce operators (each one is a separate layer).
 #[derive(Clone, Debug)]
-struct BucketedPlan {
+pub struct BucketedPlan {
     /// All of the aggregations we were asked to compute.
     aggr_funcs: Vec<AggregateFunc>,
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
@@ -225,7 +225,7 @@ struct BucketedPlan {
 /// that step and return the arragement provided by computing the aggregation
 /// directly.
 #[derive(Clone, Debug)]
-enum BasicPlan {
+pub enum BasicPlan {
     /// Plan for rendering a single basic aggregation. Here, the
     /// first element denotes the index in the set of inputs
     /// that we are aggregating over.
@@ -243,7 +243,7 @@ enum BasicPlan {
 ///
 /// TODO: could we express this as a delta join
 #[derive(Clone, Debug, Default)]
-struct CollationPlan {
+pub struct CollationPlan {
     /// Accumulable aggregation results to collate, if any.
     accumulable: Option<AccumulablePlan>,
     /// Hierarchical aggregation results to collate, if any.
@@ -263,7 +263,7 @@ impl ReducePlan {
     ///
     /// The resulting plan summarizes what the dataflow to be created
     /// and how the aggregations will be executed.
-    fn create_from(
+    pub fn create_from(
         aggregates: Vec<AggregateExpr>,
         monotonic: bool,
         expected_group_size: Option<usize>,
@@ -506,6 +506,60 @@ impl ReducePlan {
     }
 }
 
+/// Plan for extracting keys and values in preparation for a reduction.
+pub struct KeyValPlan {
+    /// Extracts the columns used as the key.
+    key_plan: expr::SafeMfpPlan,
+    /// Extracts the columns used to feed the aggregations.
+    val_plan: expr::SafeMfpPlan,
+    /// Steps to take over the columns of the input row.
+    skips: Vec<usize>,
+}
+
+impl KeyValPlan {
+    pub fn new(
+        input_arity: usize,
+        group_key: &[expr::MirScalarExpr],
+        aggregates: &[AggregateExpr],
+    ) -> Self {
+        // Form an operator for evaluating key expressions.
+        let mut key_mfp = expr::MapFilterProject::new(input_arity)
+            .map(group_key.iter().cloned())
+            .project(input_arity..(input_arity + group_key.len()));
+
+        // Form an operator for evaluating value expressions.
+        let mut val_mfp = expr::MapFilterProject::new(input_arity)
+            .map(aggregates.iter().map(|a| a.expr.clone()))
+            .project(input_arity..(input_arity + aggregates.len()));
+
+        // Determine the columns we'll need from the row.
+        let mut demand = Vec::new();
+        demand.extend(key_mfp.demand());
+        demand.extend(val_mfp.demand());
+        demand.sort();
+        demand.dedup();
+        // remap column references to the subset we use.
+        let mut demand_map = std::collections::HashMap::new();
+        for column in demand.iter() {
+            demand_map.insert(*column, demand_map.len());
+        }
+        key_mfp.permute(&demand_map, demand_map.len());
+        key_mfp.optimize();
+        let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
+        val_mfp.permute(&demand_map, demand_map.len());
+        val_mfp.optimize();
+        let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
+
+        let skips = convert_indexes_to_skips(demand);
+
+        Self {
+            key_plan,
+            val_plan,
+            skips,
+        }
+    }
+}
+
 impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
     G: Scope,
@@ -539,36 +593,11 @@ where
             // strings to typed data, but it involves a bit of dancing around when we
             // pull the data out of their output (i.e. as an iterator, rather than use
             // the built-in evaluation direction to a `Row`).
-
-            // Form an operator for evaluating key expressions.
-            let mut key_mfp = expr::MapFilterProject::new(input_arity)
-                .map(group_key.iter().cloned())
-                .project(input_arity..(input_arity + group_key.len()));
-
-            // Form an operator for evaluating value expressions.
-            let mut val_mfp = expr::MapFilterProject::new(input_arity)
-                .map(aggregates.iter().map(|a| a.expr.clone()))
-                .project(input_arity..(input_arity + aggregates.len()));
-
-            // Determine the columns we'll need from the row.
-            let mut demand = Vec::new();
-            demand.extend(key_mfp.demand());
-            demand.extend(val_mfp.demand());
-            demand.sort();
-            demand.dedup();
-            // remap column references to the subset we use.
-            let mut demand_map = std::collections::HashMap::new();
-            for column in demand.iter() {
-                demand_map.insert(*column, demand_map.len());
-            }
-            key_mfp.permute(&demand_map, demand_map.len());
-            key_mfp.optimize();
-            let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
-            val_mfp.permute(&demand_map, demand_map.len());
-            val_mfp.optimize();
-            let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
-
-            let skips = convert_indexes_to_skips(demand);
+            let KeyValPlan {
+                key_plan,
+                val_plan,
+                skips,
+            } = KeyValPlan::new(input_arity, group_key, aggregates);
 
             let mut row_packer = Row::default();
             let mut datums = DatumVec::new();

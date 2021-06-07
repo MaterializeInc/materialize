@@ -297,6 +297,10 @@ where
     }
 
     fn build_object(&mut self, scope: &mut Child<'g, G, G::Timestamp>, object: &BuildDesc) {
+        // First, transform the relation expression into a render plan.
+        let _render_plan = plan::Plan::from_mir(&object.relation_expr)
+            .expect("Could not produce plan for expression");
+
         self.ensure_rendered(&object.relation_expr, scope, scope.index());
         if let Some(typ) = &object.typ {
             self.clone_from_to(
@@ -820,5 +824,336 @@ pub mod datum_vec {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.inner
         }
+    }
+}
+
+/// An explicit represenation of a rendering plan for provided dataflows.
+pub mod plan {
+
+    use crate::render::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+    use crate::render::reduce::{KeyValPlan, ReducePlan};
+    use expr::{
+        EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
+        TableFunc,
+    };
+    use repr::{Datum, Row};
+
+    /// A rendering plan with all conditional logic removed.
+    ///
+    /// This type is exposed publicly but the intent is that its details are under
+    /// the control of this crate, and they are subject to change as we find more
+    /// compelling ways to represent renderable plans. Several stages have already
+    /// encapsulated much of their logic in their own stage-specific plans, and we
+    /// expect more of the plans to do the same in the future, without consultation.
+    pub enum Plan {
+        Constant {
+            rows: Result<Vec<(Row, repr::Timestamp, isize)>, EvalError>,
+        },
+        Get {
+            id: Id,
+            mfp: MapFilterProject,
+        },
+        Let {
+            id: LocalId,
+            value: Box<Plan>,
+            body: Box<Plan>,
+        },
+        Mfp {
+            input: Box<Plan>,
+            mfp: MapFilterProject,
+        },
+        FlatMap {
+            input: Box<Plan>,
+            func: TableFunc,
+            exprs: Vec<MirScalarExpr>,
+            mfp: MapFilterProject,
+        },
+        Join {
+            inputs: Vec<Plan>,
+            plan: JoinPlan,
+        },
+        Reduce {
+            input: Box<Plan>,
+            key_val_plan: KeyValPlan,
+            plan: ReducePlan,
+        },
+        TopK {
+            input: Box<Plan>,
+            group_key: Vec<usize>,
+            order_key: Vec<expr::ColumnOrder>,
+            limit: Option<usize>,
+            offset: usize,
+            monotonic: bool,
+        },
+        Negate {
+            input: Box<Plan>,
+        },
+        Threshold {
+            input: Box<Plan>,
+        },
+        Union {
+            inputs: Vec<Plan>,
+        },
+        ArrangeBy {
+            input: Box<Plan>,
+            keys: Vec<Vec<MirScalarExpr>>,
+        },
+    }
+
+    impl Plan {
+        /// This method converts a MirRelationExpr into a plan that can be directly rendered.
+        ///
+        /// The rough structure is that we repeatedly extract map/filter/project operators
+        /// from each expression we see, bundle them up
+        pub fn from_mir(expr: &MirRelationExpr) -> Result<Self, ()> {
+            // The plan is to repeatedly attempt to convert an expression to a plan, using
+            // the rules that the render thinks are appropriate.
+            //
+            // The gist is that we'll want to extract as much map/filter/project as we can
+            // from each expression, attempt to push this down in to the remaining operator,
+            // and
+
+            // Extract a maximally large MapFilterProject from `expr`.
+            // We will then try and push this in to the resulting expression.
+            let (mut mfp, expr) = MapFilterProject::extract_from_expression(expr);
+            // We attempt to plan what we have remaining, in the context of `mfp`.
+            // We may not be able to do this, and must wrap some operators with a `Mfp` stage.
+            let (mfp, plan) = match expr {
+                // These operators should have been extracted from the expression.
+                MirRelationExpr::Map { .. } => {
+                    panic!("This operator should have been extracted");
+                }
+                MirRelationExpr::Filter { .. } => {
+                    panic!("This operator should have been extracted");
+                }
+                MirRelationExpr::Project { .. } => {
+                    panic!("This operator should have been extracted");
+                }
+                // These operators may not have been extracted, and need to result in a `Plan`.
+                MirRelationExpr::Constant { rows, typ: _ } => {
+                    use timely::progress::Timestamp;
+                    let plan = Plan::Constant {
+                        rows: rows.clone().map(|rows| {
+                            rows.into_iter()
+                                .map(|(row, diff)| (row, repr::Timestamp::minimum(), diff))
+                                .collect()
+                        }),
+                    };
+                    (Some(mfp), plan)
+                }
+                MirRelationExpr::Get { id, typ: _ } => (
+                    None,
+                    Plan::Get {
+                        id: id.clone(),
+                        mfp,
+                    },
+                ),
+                MirRelationExpr::Let { id, value, body } => {
+                    // It would be unfortunate to have a non-trivial `mfp` here, as we hope
+                    // that they would be pushed down. I am not sure if we should take the
+                    // initiative to push down the `mfp` ourselves.
+                    let value = Box::new(Plan::from_mir(value)?);
+                    let body = Box::new(Plan::from_mir(body)?);
+                    (
+                        Some(mfp),
+                        Plan::Let {
+                            id: id.clone(),
+                            value,
+                            body,
+                        },
+                    )
+                }
+                MirRelationExpr::FlatMap {
+                    input,
+                    func,
+                    exprs,
+                    demand,
+                } => {
+                    // Map the demand into the MapFilterProject.
+                    // TODO: Remove this once demand is removed.
+                    if let Some(demand) = demand {
+                        prepend_mfp_demand(&mut mfp, expr, demand);
+                    }
+                    let input = Box::new(Plan::from_mir(input)?);
+                    (
+                        None,
+                        Plan::FlatMap {
+                            input,
+                            func: func.clone(),
+                            exprs: exprs.clone(),
+                            mfp,
+                        },
+                    )
+                }
+                MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    demand,
+                    implementation,
+                } => {
+                    // Map the demand into the MapFilterProject.
+                    // TODO: Remove this once demand is removed.
+                    if let Some(demand) = demand {
+                        prepend_mfp_demand(&mut mfp, expr, demand);
+                    }
+
+                    let input_mapper = JoinInputMapper::new(inputs);
+
+                    // Plan each of the join inputs independently.
+                    let mut plans = Vec::new();
+                    for input in inputs.iter() {
+                        plans.push(Plan::from_mir(input)?);
+                    }
+
+                    let plan = match implementation {
+                        expr::JoinImplementation::Differential((start, _start_arr), order) => {
+                            JoinPlan::Linear(LinearJoinPlan::create_from(
+                                *start,
+                                equivalences,
+                                order,
+                                input_mapper,
+                                mfp,
+                            ))
+                        }
+                        expr::JoinImplementation::DeltaQuery(orders) => {
+                            JoinPlan::Delta(DeltaJoinPlan::create_from(
+                                equivalences,
+                                &orders[..],
+                                input_mapper,
+                                mfp,
+                            ))
+                        }
+                        // Other plans are errors, and should be reported as such.
+                        _ => return Err(()),
+                    };
+
+                    (
+                        None,
+                        Plan::Join {
+                            inputs: plans,
+                            plan,
+                        },
+                    )
+                }
+                MirRelationExpr::Reduce {
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic,
+                    expected_group_size,
+                } => {
+                    let input_arity = input.arity();
+                    let input = Box::new(Self::from_mir(input)?);
+                    let key_val_plan = KeyValPlan::new(input_arity, group_key, aggregates);
+                    let reduce_plan = ReducePlan::create_from(
+                        aggregates.clone(),
+                        *monotonic,
+                        *expected_group_size,
+                    );
+                    (
+                        Some(mfp),
+                        Plan::Reduce {
+                            input,
+                            key_val_plan,
+                            plan: reduce_plan,
+                        },
+                    )
+                }
+                MirRelationExpr::TopK {
+                    input,
+                    group_key,
+                    order_key,
+                    limit,
+                    offset,
+                    monotonic,
+                } => {
+                    let input = Box::new(Self::from_mir(input)?);
+                    (
+                        Some(mfp),
+                        Plan::TopK {
+                            input,
+                            group_key: group_key.clone(),
+                            order_key: order_key.clone(),
+                            limit: *limit,
+                            offset: *offset,
+                            monotonic: *monotonic,
+                        },
+                    )
+                }
+                MirRelationExpr::Negate { input } => {
+                    let input = Box::new(Self::from_mir(input)?);
+                    (Some(mfp), Plan::Negate { input })
+                }
+                MirRelationExpr::Threshold { input } => {
+                    let input = Box::new(Self::from_mir(input)?);
+                    (Some(mfp), Plan::Threshold { input })
+                }
+                MirRelationExpr::Union { base, inputs } => {
+                    let mut plans = Vec::new();
+                    plans.push(Self::from_mir(base)?);
+                    for input in inputs.iter() {
+                        plans.push(Self::from_mir(input)?)
+                    }
+                    (Some(mfp), Plan::Union { inputs: plans })
+                }
+                MirRelationExpr::ArrangeBy { input, keys } => {
+                    let input = Box::new(Self::from_mir(input)?);
+                    (
+                        Some(mfp),
+                        Plan::ArrangeBy {
+                            input,
+                            keys: keys.clone(),
+                        },
+                    )
+                }
+                MirRelationExpr::DeclareKeys { input, keys: _ } => {
+                    (Some(mfp), Self::from_mir(input)?)
+                }
+            };
+
+            if let Some(mfp) = mfp {
+                if !mfp.is_identity() {
+                    Ok(Plan::Mfp {
+                        input: Box::new(plan),
+                        mfp,
+                    })
+                } else {
+                    Ok(plan)
+                }
+            } else {
+                Ok(plan)
+            }
+        }
+    }
+
+    /// Pre-prends a MapFilterProject instance with a transform that blanks out all but the columns in `demand`.
+    fn prepend_mfp_demand(
+        mfp: &mut MapFilterProject,
+        relation_expr: &MirRelationExpr,
+        demand: &[usize],
+    ) {
+        let output_arity = relation_expr.arity();
+        // Determine dummy columns for un-demanded outputs, and a projection.
+        let mut dummies = Vec::new();
+        let mut demand_projection = Vec::new();
+        for (column, typ) in relation_expr.typ().column_types.into_iter().enumerate() {
+            if demand.contains(&column) {
+                demand_projection.push(column);
+            } else {
+                demand_projection.push(output_arity + dummies.len());
+                dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type));
+            }
+        }
+
+        let (map, filter, project) = mfp.as_map_filter_project();
+
+        let map_filter_project = MapFilterProject::new(output_arity)
+            .map(dummies)
+            .project(demand_projection)
+            .map(map)
+            .filter(filter)
+            .project(project);
+
+        *mfp = map_filter_project;
     }
 }
