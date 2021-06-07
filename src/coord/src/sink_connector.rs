@@ -27,6 +27,7 @@ use expr::GlobalId;
 use ore::collections::CollectionExt;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use repr::Timestamp;
+use sql::kafka_util;
 
 use crate::error::CoordError;
 
@@ -62,36 +63,6 @@ fn get_next_message(
     }
 }
 
-/// Return the list of partition ids associated with a specific topic
-fn get_partitions(
-    consumer: &BaseConsumer,
-    topic: &str,
-    timeout: Duration,
-) -> Result<Vec<i32>, anyhow::Error> {
-    let meta = consumer.fetch_metadata(Some(&topic), timeout)?;
-    if meta.topics().len() != 1 {
-        bail!(
-            "topic {} has {} metadata entries; expected 1",
-            topic,
-            meta.topics().len()
-        );
-    }
-    let meta_topic = meta.topics().into_element();
-    if meta_topic.name() != topic {
-        bail!(
-            "got results for wrong topic {} (expected {})",
-            meta_topic.name(),
-            topic
-        );
-    }
-
-    if meta_topic.partitions().len() == 0 {
-        bail!("topic {} does not exist", topic);
-    }
-
-    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
-}
-
 // Retrieves the latest committed timestamp from the consistency topic
 async fn get_latest_ts(
     consistency_topic: &str,
@@ -99,12 +70,13 @@ async fn get_latest_ts(
     timeout: Duration,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
     // ensure the consistency topic has exactly one partition
-    let partitions = get_partitions(&consumer, consistency_topic, timeout).with_context(|| {
-        format!(
-            "Unable to fetch metadata about consistency topic {}",
-            consistency_topic
-        )
-    })?;
+    let partitions = kafka_util::get_partitions(&consumer, consistency_topic, timeout)
+        .with_context(|| {
+            format!(
+                "Unable to fetch metadata about consistency topic {}",
+                consistency_topic
+            )
+        })?;
 
     if partitions.len() != 1 {
         bail!(

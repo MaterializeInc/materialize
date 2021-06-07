@@ -18,6 +18,7 @@ use std::time::SystemTime;
 
 use anyhow::bail;
 use log::{debug, error, info, warn};
+use ore::collections::CollectionExt;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -305,13 +306,8 @@ pub async fn lookup_start_offsets(
         let topic = topic.to_string();
         move || {
             // There cannot be more than i32 partitions
-            let num_partitions = consumer
-                .fetch_metadata(Some(&topic), Duration::from_secs(10))?
-                .topics()
-                .first()
-                .expect("topic known to be available if request succeeds")
-                .partitions()
-                .len();
+            let num_partitions =
+                get_partitions(consumer.as_ref(), &topic, Duration::from_secs(10))?.len();
 
             let mut tpl = TopicPartitionList::with_capacity(1);
             tpl.add_partition_range(&topic, 0, num_partitions as i32 - 1);
@@ -359,6 +355,36 @@ fn fetch_end_offset(
 ) -> Result<i64, anyhow::Error> {
     let (_low, high) = consumer.fetch_watermarks(topic, pid, Duration::from_secs(10))?;
     Ok(high)
+}
+
+// Return the list of partition ids associated with a specific topic
+pub fn get_partitions<C: ConsumerContext>(
+    consumer: &BaseConsumer<C>,
+    topic: &str,
+    timeout: Duration,
+) -> Result<Vec<i32>, anyhow::Error> {
+    let meta = consumer.fetch_metadata(Some(&topic), timeout)?;
+    if meta.topics().len() != 1 {
+        bail!(
+            "topic {} has {} metadata entries; expected 1",
+            topic,
+            meta.topics().len()
+        );
+    }
+    let meta_topic = meta.topics().into_element();
+    if meta_topic.name() != topic {
+        bail!(
+            "got results for wrong topic {} (expected {})",
+            meta_topic.name(),
+            topic
+        );
+    }
+
+    if meta_topic.partitions().len() == 0 {
+        bail!("topic {} does not exist", topic);
+    }
+
+    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
 }
 
 /// Gets error strings from `rdkafka` when creating test consumers.

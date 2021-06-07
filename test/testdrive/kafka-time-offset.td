@@ -20,7 +20,7 @@ $ kafka-create-topic topic=t0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'missing_topic'
   WITH (kafka_time_offset=1)
   FORMAT TEXT
-Meta data fetch error
+topic missing_topic does not exist
 
 ! CREATE MATERIALIZED SOURCE pick_one
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t0-${testdrive.seed}'
