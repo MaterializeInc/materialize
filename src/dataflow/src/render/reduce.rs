@@ -1657,7 +1657,8 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::Any
         | AggregateFunc::All
         | AggregateFunc::Dummy => ReductionType::Accumulable,
-        AggregateFunc::MaxInt32
+        AggregateFunc::MaxApd
+        | AggregateFunc::MaxInt32
         | AggregateFunc::MaxInt64
         | AggregateFunc::MaxFloat32
         | AggregateFunc::MaxFloat64
@@ -1757,7 +1758,8 @@ pub mod monoids {
     // all hierarchical aggregation functions need to supply a monoid implementation.
     pub fn get_monoid(row: Row, func: &AggregateFunc) -> Option<ReductionMonoid> {
         match func {
-            AggregateFunc::MaxInt32
+            AggregateFunc::MaxApd
+            | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64

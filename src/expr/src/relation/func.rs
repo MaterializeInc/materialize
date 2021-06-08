@@ -34,6 +34,18 @@ use crate::scalar::func::jsonb_stringify;
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
+fn max_apd<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<OrderedDecimal<apd::Apd>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_apd())
+        .max();
+    x.map(Datum::APD).unwrap_or(Datum::Null)
+}
+
 fn max_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -435,6 +447,7 @@ where
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
+    MaxApd,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
@@ -489,6 +502,7 @@ impl AggregateFunc {
         I: IntoIterator<Item = Datum<'a>>,
     {
         match self {
+            AggregateFunc::MaxApd => max_apd(datums),
             AggregateFunc::MaxInt32 => max_int32(datums),
             AggregateFunc::MaxInt64 => max_int64(datums),
             AggregateFunc::MaxFloat32 => max_float32(datums),
@@ -662,6 +676,7 @@ fn unnest_list(a: Datum) -> Vec<(Row, Diff)> {
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            AggregateFunc::MaxApd => f.write_str("max"),
             AggregateFunc::MaxInt32 => f.write_str("max"),
             AggregateFunc::MaxInt64 => f.write_str("max"),
             AggregateFunc::MaxFloat32 => f.write_str("max"),
