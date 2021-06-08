@@ -390,170 +390,8 @@ pub fn plan_create_source(
         materialized,
         format,
     } = &stmt;
-    let get_encoding_inner = |format: &Format<Raw>| {
-        // Avro/CSR can return a `SourceDataEncoding::KeyValue`
-        Ok(SourceDataEncoding::Single(match format {
-            Format::Bytes => DataEncoding::Bytes,
-            Format::Avro(schema) => {
-                let Schema {
-                    key_schema,
-                    value_schema,
-                    schema_registry_config,
-                    confluent_wire_format,
-                } = match schema {
-                    // TODO(jldlaughlin): we need a way to pass in primary key information
-                    // when building a source from a string or file.
-                    AvroSchema::Schema {
-                        schema: sql_parser::ast::Schema::Inline(schema),
-                        with_options,
-                    } => {
-                        with_options! {
-                            struct ConfluentMagic {
-                                confluent_wire_format: bool,
-                            }
-                        }
 
-                        Schema {
-                            key_schema: None,
-                            value_schema: schema.clone(),
-                            schema_registry_config: None,
-                            confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
-                                .confluent_wire_format
-                                .unwrap_or(true),
-                        }
-                    }
-                    AvroSchema::Schema {
-                        schema: sql_parser::ast::Schema::File(_),
-                        ..
-                    } => {
-                        unreachable!("File schema should already have been inlined")
-                    }
-                    AvroSchema::CsrUrl {
-                        url,
-                        seed,
-                        with_options: ccsr_options,
-                    } => {
-                        let url: Url = url.parse()?;
-                        let kafka_options =
-                            kafka_util::extract_config(&mut normalize::options(with_options))?;
-                        let ccsr_config = kafka_util::generate_ccsr_client_config(
-                            url,
-                            &kafka_options,
-                            normalize::options(&ccsr_options),
-                        )?;
-
-                        if let Some(seed) = seed {
-                            Schema {
-                                key_schema: seed.key_schema.clone(),
-                                value_schema: seed.value_schema.clone(),
-                                schema_registry_config: Some(ccsr_config),
-                                confluent_wire_format: true,
-                            }
-                        } else {
-                            unreachable!("CSR seed resolution should already have been called")
-                        }
-                    }
-                };
-
-                if let Some(key_schema) = key_schema {
-                    return Ok(SourceDataEncoding::KeyValue {
-                        key: DataEncoding::Avro(AvroEncoding {
-                            schema: key_schema,
-                            schema_registry_config: schema_registry_config.clone(),
-                            confluent_wire_format,
-                        }),
-                        value: DataEncoding::Avro(AvroEncoding {
-                            schema: value_schema,
-                            schema_registry_config,
-                            confluent_wire_format,
-                        }),
-                    });
-                } else {
-                    DataEncoding::Avro(AvroEncoding {
-                        schema: value_schema,
-                        schema_registry_config,
-                        confluent_wire_format,
-                    })
-                }
-            }
-            Format::Protobuf {
-                message_name,
-                schema,
-            } => {
-                let descriptors = match schema {
-                    sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-                    sql_parser::ast::Schema::File(_) => {
-                        unreachable!("File schema should already have been inlined")
-                    }
-                };
-
-                DataEncoding::Protobuf(ProtobufEncoding {
-                    descriptors,
-                    message_name: message_name.to_owned(),
-                })
-            }
-            Format::Regex(regex) => {
-                let regex = Regex::new(&regex)?;
-                DataEncoding::Regex(RegexEncoding { regex })
-            }
-            Format::Csv {
-                header_row,
-                n_cols,
-                delimiter,
-            } => {
-                let n_cols = if col_names.is_empty() {
-                    match n_cols {
-                        Some(n) => *n,
-                        None => bail!(
-                            "Cannot determine number of columns in CSV source; specify using \
-                             CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
-                        ),
-                    }
-                } else {
-                    col_names.len()
-                };
-                DataEncoding::Csv(CsvEncoding {
-                    header_row: *header_row,
-                    n_cols,
-                    delimiter: match *delimiter as u32 {
-                        0..=127 => *delimiter as u8,
-                        _ => bail!("CSV delimiter must be an ASCII character"),
-                    },
-                })
-            }
-            Format::Json => unsupported!("JSON sources"),
-            Format::Text => DataEncoding::Text,
-        }))
-    };
-    let get_encoding = |format: &CreateSourceFormat<Raw>| {
-        let encoding = match format {
-            CreateSourceFormat::None => bail!("Source format must be specified"),
-            CreateSourceFormat::Bare(format) => get_encoding_inner(format)?,
-            CreateSourceFormat::KeyValue { key, value } => {
-                let key = match get_encoding_inner(key)? {
-                    SourceDataEncoding::Single(key) => key,
-                    SourceDataEncoding::KeyValue { key, .. } => key,
-                };
-                let value = match get_encoding_inner(value)? {
-                    SourceDataEncoding::Single(value) => value,
-                    SourceDataEncoding::KeyValue { value, .. } => value,
-                };
-                SourceDataEncoding::KeyValue { key, value }
-            }
-        };
-
-        let requires_keyvalue = matches!(
-            envelope,
-            Envelope::Debezium(DbzMode::Upsert) | Envelope::Upsert
-        );
-        let is_keyvalue = matches!(encoding, SourceDataEncoding::KeyValue { .. });
-        if requires_keyvalue && !is_keyvalue {
-            bail!("ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified");
-        };
-
-        Ok(encoding)
-    };
-
+    let with_options_original = with_options;
     let mut with_options = normalize::options(with_options);
 
     let mut consistency = Consistency::RealTime;
@@ -629,7 +467,7 @@ pub fn plan_create_source(
                 enable_caching,
                 cached_files: None,
             });
-            let encoding = get_encoding(format)?;
+            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
 
             if consistency != Consistency::RealTime
                 && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
@@ -662,7 +500,7 @@ pub fn plan_create_source(
                 stream_name,
                 aws_info,
             });
-            let encoding = get_encoding(format)?;
+            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
             (connector, encoding)
         }
         Connector::File { path, compression } => {
@@ -688,7 +526,7 @@ pub fn plan_create_source(
                 },
                 tail,
             });
-            let encoding = get_encoding(format)?;
+            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
             (connector, encoding)
         }
         Connector::S3 {
@@ -730,7 +568,7 @@ pub fn plan_create_source(
                     Compression::None => dataflow_types::Compression::None,
                 },
             });
-            let encoding = get_encoding(format)?;
+            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
             (connector, encoding)
         }
         Connector::Postgres {
@@ -1020,6 +858,180 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         materialized,
+    }))
+}
+
+fn get_encoding<T: sql_parser::ast::AstInfo>(
+    format: &CreateSourceFormat<Raw>,
+    envelope: &Envelope,
+    with_options: &Vec<SqlOption<T>>,
+    col_names: &[Ident],
+) -> Result<SourceDataEncoding, anyhow::Error> {
+    let encoding = match format {
+        CreateSourceFormat::None => bail!("Source format must be specified"),
+        CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options, col_names)?,
+        CreateSourceFormat::KeyValue { key, value } => {
+            let key = match get_encoding_inner(key, with_options, col_names)? {
+                SourceDataEncoding::Single(key) => key,
+                SourceDataEncoding::KeyValue { key, .. } => key,
+            };
+            let value = match get_encoding_inner(value, with_options, col_names)? {
+                SourceDataEncoding::Single(value) => value,
+                SourceDataEncoding::KeyValue { value, .. } => value,
+            };
+            SourceDataEncoding::KeyValue { key, value }
+        }
+    };
+
+    let requires_keyvalue = matches!(
+        envelope,
+        Envelope::Debezium(DbzMode::Upsert) | Envelope::Upsert
+    );
+    let is_keyvalue = matches!(encoding, SourceDataEncoding::KeyValue { .. });
+    if requires_keyvalue && !is_keyvalue {
+        bail!("ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified");
+    };
+
+    Ok(encoding)
+}
+
+fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
+    format: &Format<Raw>,
+    with_options: &Vec<SqlOption<T>>,
+    col_names: &[Ident],
+) -> Result<SourceDataEncoding, anyhow::Error> {
+    // Avro/CSR can return a `SourceDataEncoding::KeyValue`
+    Ok(SourceDataEncoding::Single(match format {
+        Format::Bytes => DataEncoding::Bytes,
+        Format::Avro(schema) => {
+            let Schema {
+                key_schema,
+                value_schema,
+                schema_registry_config,
+                confluent_wire_format,
+            } = match schema {
+                // TODO(jldlaughlin): we need a way to pass in primary key information
+                // when building a source from a string or file.
+                AvroSchema::Schema {
+                    schema: sql_parser::ast::Schema::Inline(schema),
+                    with_options,
+                } => {
+                    with_options! {
+                        struct ConfluentMagic {
+                            confluent_wire_format: bool,
+                        }
+                    }
+
+                    Schema {
+                        key_schema: None,
+                        value_schema: schema.clone(),
+                        schema_registry_config: None,
+                        confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
+                            .confluent_wire_format
+                            .unwrap_or(true),
+                    }
+                }
+                AvroSchema::Schema {
+                    schema: sql_parser::ast::Schema::File(_),
+                    ..
+                } => {
+                    unreachable!("File schema should already have been inlined")
+                }
+                AvroSchema::CsrUrl {
+                    url,
+                    seed,
+                    with_options: ccsr_options,
+                } => {
+                    let url: Url = url.parse()?;
+                    let kafka_options =
+                        kafka_util::extract_config(&mut normalize::options(with_options))?;
+                    let ccsr_config = kafka_util::generate_ccsr_client_config(
+                        url,
+                        &kafka_options,
+                        normalize::options(&ccsr_options),
+                    )?;
+
+                    if let Some(seed) = seed {
+                        Schema {
+                            key_schema: seed.key_schema.clone(),
+                            value_schema: seed.value_schema.clone(),
+                            schema_registry_config: Some(ccsr_config),
+                            confluent_wire_format: true,
+                        }
+                    } else {
+                        unreachable!("CSR seed resolution should already have been called")
+                    }
+                }
+            };
+
+            if let Some(key_schema) = key_schema {
+                return Ok(SourceDataEncoding::KeyValue {
+                    key: DataEncoding::Avro(AvroEncoding {
+                        schema: key_schema,
+                        schema_registry_config: schema_registry_config.clone(),
+                        confluent_wire_format,
+                    }),
+                    value: DataEncoding::Avro(AvroEncoding {
+                        schema: value_schema,
+                        schema_registry_config,
+                        confluent_wire_format,
+                    }),
+                });
+            } else {
+                DataEncoding::Avro(AvroEncoding {
+                    schema: value_schema,
+                    schema_registry_config,
+                    confluent_wire_format,
+                })
+            }
+        }
+        Format::Protobuf {
+            message_name,
+            schema,
+        } => {
+            let descriptors = match schema {
+                sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
+                sql_parser::ast::Schema::File(_) => {
+                    unreachable!("File schema should already have been inlined")
+                }
+            };
+
+            DataEncoding::Protobuf(ProtobufEncoding {
+                descriptors,
+                message_name: message_name.to_owned(),
+            })
+        }
+        Format::Regex(regex) => {
+            let regex = Regex::new(&regex)?;
+            DataEncoding::Regex(RegexEncoding { regex })
+        }
+        Format::Csv {
+            header_row,
+            n_cols,
+            delimiter,
+        } => {
+            let n_cols = if col_names.is_empty() {
+                match n_cols {
+                    Some(n) => *n,
+                    None => bail!(
+                        "Cannot determine number of columns in CSV source; specify using \
+                             CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
+                    ),
+                }
+            } else {
+                col_names.len()
+            };
+            DataEncoding::Csv(CsvEncoding {
+                header_row: *header_row,
+                n_cols,
+                delimiter: match *delimiter as u32 {
+                    0..=127 => *delimiter as u8,
+                    _ => bail!("CSV delimiter must be an ASCII character"),
+                },
+            })
+        }
+        Format::Json => unsupported!("JSON sources"),
+        Format::Text => DataEncoding::Text,
     }))
 }
 
