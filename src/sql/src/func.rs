@@ -1523,6 +1523,18 @@ lazy_static! {
                     Ok(HirScalarExpr::literal_null(ScalarType::String))
                 }), 1215;
             },
+            "pg_column_size" => Scalar {
+                params!(Any) => UnaryFunc::PgColumnSize, 1269;
+            },
+            "mz_row_size" => Scalar {
+                params!(Any) => Operation::unary(|ecx, e| {
+                    let s = ecx.scalar_type(&e);
+                    if !matches!(s, ScalarType::Record{..}) {
+                        bail!("mz_row_size requires a record type");
+                    }
+                    Ok(e.call_unary(UnaryFunc::MzRowSize))
+                }), oid::FUNC_MZ_ROW_SIZE;
+            },
             "pg_encoding_to_char" => Scalar {
                 // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
                 // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.

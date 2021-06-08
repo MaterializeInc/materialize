@@ -83,7 +83,11 @@ use fmt::Debug;
 /// avoids the allocations involved in `Row::new()`.
 #[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; 24]>,
+    data: SmallVec<[u8; Self::SIZE]>,
+}
+
+impl Row {
+    const SIZE: usize = 24;
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -537,6 +541,27 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
             data.push(Tag::APD as u8);
             push_copy!(data, n, OrderedDecimal<Apd>);
         }
+    }
+}
+
+/// Return the number of bytes these Datums would use if packed as a Row.
+pub fn row_size<'a, I>(a: I) -> usize
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Using datums_size instead of a.data().len() here is safer because it will
+    // return the size of the datams if they were packed into a Row. Although
+    // a.data().len() happens to give the correct answer (and is faster), data()
+    // is documented as for debugging only.
+    let sz = datums_size(a);
+    let size_of_row = std::mem::size_of::<Row>();
+    // The Row struct attempts to inline data until it can't fit in the
+    // preallocated size. Otherwise it spills to heap, and uses the Row to point
+    // to that.
+    if sz > Row::SIZE {
+        sz + size_of_row
+    } else {
+        size_of_row
     }
 }
 

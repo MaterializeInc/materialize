@@ -1483,6 +1483,26 @@ fn rescale_apd<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::APD(d))
 }
 
+fn pg_column_size<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let sz = repr::datum_size(&a);
+    let sz = match i32::try_from(sz) {
+        Ok(sz) => sz,
+        Err(_) => return Err(EvalError::Int32OutOfRange),
+    };
+    Ok(Datum::Int32(sz))
+}
+
+/// Return the number of bytes this Record (List) datum would use if packed as
+/// a Row.
+fn mz_row_size<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let sz = repr::row_size(a.unwrap_list().iter());
+    let sz = match i32::try_from(sz) {
+        Ok(sz) => sz,
+        Err(_) => return Err(EvalError::Int32OutOfRange),
+    };
+    Ok(Datum::Int32(sz))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -3359,6 +3379,8 @@ pub enum UnaryFunc {
     ExpDecimal(u8),
     Sleep,
     RescaleAPD(u8),
+    PgColumnSize,
+    MzRowSize,
 }
 
 impl UnaryFunc {
@@ -3547,6 +3569,8 @@ impl UnaryFunc {
             UnaryFunc::ExpDecimal(scale) => exp_dec(a, *scale),
             UnaryFunc::Sleep => sleep(a),
             UnaryFunc::RescaleAPD(scale) => rescale_apd(a, *scale),
+            UnaryFunc::PgColumnSize => pg_column_size(a),
+            UnaryFunc::MzRowSize => mz_row_size(a),
         }
     }
 
@@ -3725,6 +3749,8 @@ impl UnaryFunc {
                 scale: Some(*scale),
             }
             .nullable(true),
+            PgColumnSize => ScalarType::Int32.nullable(in_nullable),
+            MzRowSize => ScalarType::Int32.nullable(in_nullable),
         }
     }
 
@@ -3917,6 +3943,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Exp => f.write_str("expf64"),
             UnaryFunc::Sleep => f.write_str("mz_sleep"),
             UnaryFunc::RescaleAPD(..) => f.write_str("rescale_apd"),
+            UnaryFunc::PgColumnSize => f.write_str("pg_column_size"),
+            UnaryFunc::MzRowSize => f.write_str("mz_row_size"),
         }
     }
 }
