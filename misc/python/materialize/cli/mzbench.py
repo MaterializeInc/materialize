@@ -141,6 +141,7 @@ class SuccessOutputBench(Bench):
     def teardown(self) -> None:
         pass
 
+
 from materialize import ui
 
 dbg = ui.speaker("DEBUG: ")
