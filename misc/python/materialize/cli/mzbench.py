@@ -12,6 +12,7 @@
 import argparse
 import csv
 import itertools
+from materialize import ui
 import multiprocessing
 import os
 import pathlib
@@ -141,7 +142,6 @@ class SuccessOutputBench(Bench):
     def teardown(self) -> None:
         pass
 
-from materialize import ui
 
 dbg = ui.speaker("DEBUG: ")
 
