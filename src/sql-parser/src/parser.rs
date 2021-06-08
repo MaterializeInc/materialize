@@ -1628,6 +1628,7 @@ impl<'a> Parser<'a> {
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => CreateSourceFormat::None,
         };
+        let include_key = self.parse_include_key()?;
         let envelope = if self.parse_keyword(ENVELOPE) {
             let envelope = self.parse_envelope()?;
             if matches!(envelope, Envelope::Upsert) {
@@ -1656,6 +1657,7 @@ impl<'a> Parser<'a> {
             connector,
             with_options,
             format,
+            include_key,
             envelope,
             if_not_exists,
             materialized,
@@ -2081,6 +2083,18 @@ impl<'a> Parser<'a> {
         } else {
             Ok(false)
         }
+    }
+
+    fn parse_include_key(&mut self) -> Result<Option<Option<Ident>>, ParserError> {
+        Ok(if self.parse_keywords(&[INCLUDE, KEY]) {
+            if self.parse_keyword(AS) {
+                Some(Some(self.parse_identifier()?))
+            } else {
+                Some(None)
+            }
+        } else {
+            None
+        })
     }
 
     fn parse_discard(&mut self) -> Result<Statement<Raw>, ParserError> {

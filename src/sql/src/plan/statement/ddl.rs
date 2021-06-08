@@ -389,6 +389,7 @@ pub fn plan_create_source(
         materialized,
         format,
         key_constraint,
+        include_key,
     } = &stmt;
 
     let with_options_original = with_options;
@@ -406,6 +407,9 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
+    if !matches!(connector, Connector::Kafka { .. }) && include_key.is_some() {
+        unsupported!("INCLUDE KEY with non-Kafka sources");
+    }
 
     let (external_connector, encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
@@ -453,6 +457,10 @@ pub fn plan_create_source(
                     }
                 }
                 Some(v) => bail!("invalid start_offset value: {}", v),
+            }
+
+            if include_key.is_some() {
+                unsupported!("INCLUDE KEY is not yet implemented");
             }
 
             let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {

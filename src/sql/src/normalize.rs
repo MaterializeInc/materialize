@@ -260,6 +260,7 @@ pub fn create_statement(
             connector: _,
             with_options: _,
             format: _,
+            include_key: _,
             envelope: _,
             if_not_exists,
             materialized,

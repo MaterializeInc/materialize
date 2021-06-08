@@ -357,6 +357,8 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub connector: Connector,
     pub with_options: Vec<SqlOption<T>>,
     pub format: CreateSourceFormat<T>,
+    /// `INCLUDE KEY` is `Some(None)` and `INCLUDE KEY AS i` is `Some(Some(i))`
+    pub include_key: Option<Option<Ident>>,
     pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,

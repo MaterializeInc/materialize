@@ -77,8 +77,8 @@ pub fn purify(
             col_names,
             connector,
             format,
-            with_options,
             envelope,
+            with_options,
             ..
         }) = &mut stmt
         {
