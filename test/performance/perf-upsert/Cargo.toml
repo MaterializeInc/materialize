@@ -19,5 +19,5 @@ rand = "0.8.3"
 rand_distr = "0.4.0"
 structopt = "0.3.21"
 test-util = { path = "../../test-util" }
-tokio = "1.6.0"
+tokio = "1.6.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

@@ -13,7 +13,7 @@ lazy_static = "1.4.0"
 pprof = "0.4.3"
 serde = { version = "1.0.126", features = ["derive"] }
 tempfile = "3.2.0"
-tokio = { version = "1.6.0", features = ["time"] }
+tokio = { version = "1.6.1", features = ["time"] }
 
 [features]
 # Whether to automatically enable the jemalloc feature if compiling for a target
