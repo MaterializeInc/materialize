@@ -20,7 +20,7 @@ use repr::{Row, RowArena};
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
 
-impl<G, T> Context<G, MirRelationExpr, Row, T>
+impl<G, T> Context<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,

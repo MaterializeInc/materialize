@@ -79,14 +79,16 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use dec::OrderedDecimal;
-use expr::{AggregateExpr, AggregateFunc, MirRelationExpr};
+use expr::{AggregateExpr, AggregateFunc};
 use ore::cast::CastFrom;
 use repr::adt::apd::{self, Apd, ApdAgg};
 use repr::{Datum, DatumList, Row, RowArena};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
+use crate::render::context::CollectionRepresentation;
 use crate::render::datum_vec::DatumVec;
+use crate::render::ArrangementFlavor;
 
 /// This enum represents the three potential types of aggregations.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -560,7 +562,7 @@ impl KeyValPlan {
     }
 }
 
-impl<G, T> Context<G, MirRelationExpr, Row, T>
+impl<G, T> Context<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -568,110 +570,77 @@ where
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
-    pub fn render_reduce(&mut self, relation_expr: &MirRelationExpr) {
-        if let MirRelationExpr::Reduce {
-            input,
-            group_key,
-            aggregates,
-            monotonic,
-            expected_group_size,
-        } = relation_expr
-        {
-            // The reduce operator may have multiple aggregation functions, some of
-            // which should only be applied to distinct values for each key. We need
-            // to build a non-trivial dataflow fragment to robustly implement these
-            // aggregations.
+    pub fn render_reduce(
+        &mut self,
+        input: CollectionRepresentation<G, Row, T>,
+        key_val_plan: KeyValPlan,
+        reduce_plan: ReducePlan,
+    ) -> CollectionRepresentation<G, Row, T> {
+        let KeyValPlan {
+            key_plan,
+            val_plan,
+            skips,
+        } = key_val_plan;
+        let key_arity = key_plan.projection.len();
+        let mut row_packer = Row::default();
+        let mut datums = DatumVec::new();
+        let (key_val_input, mut err_input): (
+            timely::dataflow::Stream<_, Result<((Row, Row), _, _), (DataflowError, _, _)>>,
+            _,
+        ) = input.flat_map(None, move |row, time, diff| {
+            let temp_storage = RowArena::new();
 
-            // Our first step is to extract `(key, vals)` from `input`.
-            // We do this carefully, attempting to avoid unneccesary allocations
-            // that would result from cloning rows in input arrangements.
+            // Unpack only the demanded columns.
+            let mut datums_local = datums.borrow();
+            let mut row_iter = row.iter();
+            for skip in skips.iter() {
+                datums_local.push((&mut row_iter).nth(*skip).unwrap());
+            }
 
-            let input_arity = input.arity();
+            // Evaluate the key expressions.
+            row_packer.clear();
+            let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
+                Err(e) => return Some(Err((DataflowError::from(e), time.clone(), diff.clone()))),
+                Ok(key) => key.expect("Row expected as no predicate was used"),
+            };
+            // Evaluate the value expressions.
+            // The prior evaluation may have left additional columns we should delete.
+            datums_local.truncate(skips.len());
+            let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
+                Err(e) => return Some(Err((DataflowError::from(e), time.clone(), diff.clone()))),
+                Ok(val) => val.expect("Row expected as no predicate was used"),
+            };
+            row_packer.extend(val);
+            drop(datums_local);
 
-            // TODO(mcsherry): These two MFPs could be unified into one, which would
-            // allow optimization across their computation, e.g. if both parsed input
-            // strings to typed data, but it involves a bit of dancing around when we
-            // pull the data out of their output (i.e. as an iterator, rather than use
-            // the built-in evaluation direction to a `Row`).
-            let KeyValPlan {
-                key_plan,
-                val_plan,
-                skips,
-            } = KeyValPlan::new(input_arity, group_key, aggregates);
+            // Mint the final row, ideally re-using resources.
+            // TODO(mcsherry): This can perhaps be extracted for
+            // re-use if it seems to be a common pattern.
+            use timely::communication::message::RefOrMut;
+            let row = match row {
+                RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
+                RefOrMut::Mut(row) => {
+                    row.clone_from(&row_packer);
+                    row_packer.clear();
+                    std::mem::take(row)
+                }
+            };
+            return Some(Ok(((key, row), time.clone(), diff.clone())));
+        });
 
-            let mut row_packer = Row::default();
-            let mut datums = DatumVec::new();
-            let (key_val_input, mut err_input): (
-                Collection<_, Result<(Row, Row), DataflowError>, _>,
-                _,
-            ) = self
-                .flat_map_ref(
-                    input,
-                    |_expr| None,
-                    move |row| {
-                        let temp_storage = RowArena::new();
+        // Demux out the potential errors from key and value selector evaluation.
+        use timely::dataflow::operators::ok_err::OkErr;
+        let (ok, err) = key_val_input.ok_err(|x| x);
 
-                        // Unpack only the demanded columns.
-                        let mut datums_local = datums.borrow();
-                        let mut row_iter = row.iter();
-                        for skip in skips.iter() {
-                            datums_local.push((&mut row_iter).nth(*skip).unwrap());
-                        }
+        let ok_input = ok.as_collection();
+        err_input = err.as_collection().concat(&err_input);
 
-                        // Evaluate the key expressions.
-                        row_packer.clear();
-                        let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
-                            Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(key) => key.expect("Row expected as no predicate was used"),
-                        };
-                        // Evaluate the value expressions.
-                        // The prior evaluation may have left additional columns we should delete.
-                        datums_local.truncate(skips.len());
-                        let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                            Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(val) => val.expect("Row expected as no predicate was used"),
-                        };
-                        row_packer.extend(val);
-                        drop(datums_local);
-
-                        // Mint the final row, ideally re-using resources.
-                        // TODO(mcsherry): This can perhaps be extracted for
-                        // re-use if it seems to be a common pattern.
-                        use timely::communication::message::RefOrMut;
-                        let row = match row {
-                            RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
-                            RefOrMut::Mut(row) => {
-                                row.clone_from(&row_packer);
-                                row_packer.clear();
-                                std::mem::take(row)
-                            }
-                        };
-                        return Some(Ok((key, row)));
-                    },
-                )
-                .unwrap();
-
-            // Demux out the potential errors from key and value selector evaluation.
-            use timely::dataflow::operators::ok_err::OkErr;
-            let (ok, err) = key_val_input.inner.ok_err(|(x, t, d)| match x {
-                Ok(x) => Ok((x, t, d)),
-                Err(x) => Err((x, t, d)),
-            });
-
-            let ok_input = ok.as_collection();
-            err_input = err.as_collection().concat(&err_input);
-
-            // First, let's plan out what we are going to do with this reduce
-            let plan =
-                ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-            let arrangement = plan.render(ok_input);
-            let index = (0..group_key.len()).collect::<Vec<_>>();
-            self.set_local_columns(
-                relation_expr,
-                &index[..],
-                (arrangement, err_input.arrange()),
-            );
-        }
+        // First, let's plan out what we are going to do with this reduce
+        let arrangement = reduce_plan.render(ok_input);
+        CollectionRepresentation::from_columns(
+            0..key_arity,
+            ArrangementFlavor::Local(arrangement, err_input.arrange()),
+        )
     }
 }
 

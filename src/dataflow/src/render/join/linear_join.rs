@@ -20,10 +20,11 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
-use expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row, RowArena};
+use expr::{MapFilterProject, MirScalarExpr};
+use repr::{Row, RowArena};
 
 use crate::operator::CollectionExt;
+use crate::render::context::CollectionRepresentation;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context, Diff};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
@@ -164,7 +165,7 @@ where
     Trace(ArrangementImport<G, Row, T>),
 }
 
-impl<G, T> Context<G, MirRelationExpr, Row, T>
+impl<G, T> Context<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -172,130 +173,43 @@ where
 {
     pub fn render_join(
         &mut self,
-        relation_expr: &MirRelationExpr,
-        map_filter_project: MapFilterProject,
-        // TODO(frank): use this argument to create a region surrounding the join.
+        inputs: Vec<CollectionRepresentation<G, Row, T>>,
+        linear_plan: LinearJoinPlan,
         scope: &mut G,
-    ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
-        if let MirRelationExpr::Join {
-            inputs,
-            equivalences,
-            demand,
-            implementation: expr::JoinImplementation::Differential((start, _start_arr), order),
-        } = relation_expr
-        {
-            let input_mapper = expr::JoinInputMapper::new(inputs);
-            let output_arity = input_mapper.total_columns();
+    ) -> CollectionRepresentation<G, Row, T> {
+        // Collect all error streams, and concatenate them at the end.
+        let mut errors = Vec::new();
 
-            // Determine dummy columns for un-demanded outputs, and a projection.
-            let (dummies, demand_projection) = if let Some(demand) = demand {
-                let mut dummies = Vec::new();
-                let mut demand_projection = Vec::new();
-                for (column, typ) in relation_expr.typ().column_types.into_iter().enumerate() {
-                    if demand.contains(&column) {
-                        demand_projection.push(column);
-                    } else {
-                        demand_projection.push(output_arity + dummies.len());
-                        dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type));
-                    }
-                }
-                (dummies, demand_projection)
-            } else {
-                (Vec::new(), (0..output_arity).collect::<Vec<_>>())
-            };
-
-            let (map, filter, project) = map_filter_project.as_map_filter_project();
-
-            let map_filter_project = MapFilterProject::new(output_arity)
-                .map(dummies)
-                .project(demand_projection)
-                .map(map)
-                .filter(filter)
-                .project(project);
-
-            // Create a join plan based on the linear join.
-            let linear_plan = LinearJoinPlan::create_from(
-                *start,
-                equivalences,
-                order,
-                input_mapper,
-                map_filter_project,
-            );
-
-            // Collect all error streams, and concatenate them at the end.
-            let mut errors = Vec::new();
-
-            // Determine which form our maintained spine of updates will initially take.
-            // First, just check out the availability of an appropriate arrangement.
-            // This will be `None` in the degenerate single-input join case, which ensures
-            // that we do not panic if we never go around the `stage_plans` loop.
-            let arrangement = linear_plan.stage_plans.get(0).and_then(|stage| {
-                self.arrangement(&inputs[linear_plan.source_relation], &stage.stream_key)
-            });
-            // We can use an arrangement if it exists and an initial closure does not.
-            let mut joined = match (arrangement, linear_plan.initial_closure) {
-                (Some(ArrangementFlavor::Local(oks, errs)), None) => {
-                    errors.push(errs.as_collection(|k, _v| k.clone()));
-                    JoinedFlavor::Local(oks)
-                }
-                (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
-                    errors.push(errs.as_collection(|k, _v| k.clone()));
-                    JoinedFlavor::Trace(oks)
-                }
-                (_, initial_closure) => {
-                    // TODO: extract closure from the first stage in the join plan, should it exist.
-                    // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
-                    let (mut joined, errs) = self.collection(&inputs[*start]).unwrap();
-                    errors.push(errs);
-                    // In the current code this should always be `None`, but we have this here should
-                    // we change that and want to know what we should be doing.
-                    if let Some(closure) = initial_closure {
-                        // If there is no starting arrangement, then we can run filters
-                        // directly on the starting collection.
-                        // If there is only one input, we are done joining, so run filters
-                        let (j, errs) = joined.flat_map_fallible({
-                            // Reuseable allocation for unpacking.
-                            let mut datums = DatumVec::new();
-                            move |row| {
-                                let temp_storage = RowArena::new();
-                                let mut datums_local = datums.borrow_with(&row);
-                                // TODO(mcsherry): re-use `row` allocation.
-                                closure
-                                    .apply(&mut datums_local, &temp_storage)
-                                    .map_err(DataflowError::from)
-                                    .transpose()
-                            }
-                        });
-                        joined = j;
-                        errors.push(errs);
-                    }
-
-                    JoinedFlavor::Collection(joined)
-                }
-            };
-
-            // Progress through stages, updating partial results and errors.
-            for stage_plan in linear_plan.stage_plans.into_iter() {
-                // Different variants of `joined` implement this differently,
-                // and the logic is centralized there.
-                let stream = self.differential_join(
-                    joined,
-                    stage_plan.stream_key,
-                    &inputs[stage_plan.lookup_relation],
-                    stage_plan.lookup_key,
-                    stage_plan.closure,
-                    &mut errors,
-                );
-                // Update joined results and capture any errors.
-                joined = JoinedFlavor::Collection(stream);
+        // Determine which form our maintained spine of updates will initially take.
+        // First, just check out the availability of an appropriate arrangement.
+        // This will be `None` in the degenerate single-input join case, which ensures
+        // that we do not panic if we never go around the `stage_plans` loop.
+        let arrangement = linear_plan
+            .stage_plans
+            .get(0)
+            .and_then(|stage| inputs[linear_plan.source_relation].arrangement(&stage.stream_key));
+        // We can use an arrangement if it exists and an initial closure does not.
+        let mut joined = match (arrangement, linear_plan.initial_closure) {
+            (Some(ArrangementFlavor::Local(oks, errs)), None) => {
+                errors.push(errs.as_collection(|k, _v| k.clone()));
+                JoinedFlavor::Local(oks)
             }
-
-            // We have completed the join building, but may have work remaining.
-            // For example, we may have expressions not pushed down (e.g. literals)
-            // and projections that could not be applied (e.g. column repetition).
-            if let JoinedFlavor::Collection(mut joined) = joined {
-                if let Some(closure) = linear_plan.final_closure {
-                    let (updates, errs) = joined.flat_map_fallible({
+            (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
+                errors.push(errs.as_collection(|k, _v| k.clone()));
+                JoinedFlavor::Trace(oks)
+            }
+            (_, initial_closure) => {
+                // TODO: extract closure from the first stage in the join plan, should it exist.
+                // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
+                let (mut joined, errs) = inputs[linear_plan.source_relation].as_collection();
+                errors.push(errs);
+                // In the current code this should always be `None`, but we have this here should
+                // we change that and want to know what we should be doing.
+                if let Some(closure) = initial_closure {
+                    // If there is no starting arrangement, then we can run filters
+                    // directly on the starting collection.
+                    // If there is only one input, we are done joining, so run filters
+                    let (j, errs) = joined.flat_map_fallible({
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
                         move |row| {
@@ -308,21 +222,60 @@ where
                                 .transpose()
                         }
                     });
-
-                    joined = updates;
+                    joined = j;
                     errors.push(errs);
                 }
 
-                // Return joined results and all produced errors collected together.
-                (
-                    joined,
-                    differential_dataflow::collection::concatenate(scope, errors),
-                )
-            } else {
-                panic!("Unexpectedly arranged join output");
+                JoinedFlavor::Collection(joined)
             }
+        };
+
+        // Progress through stages, updating partial results and errors.
+        for stage_plan in linear_plan.stage_plans.into_iter() {
+            // Different variants of `joined` implement this differently,
+            // and the logic is centralized there.
+            let stream = self.differential_join(
+                joined,
+                stage_plan.stream_key,
+                inputs[stage_plan.lookup_relation].clone(),
+                stage_plan.lookup_key,
+                stage_plan.closure,
+                &mut errors,
+            );
+            // Update joined results and capture any errors.
+            joined = JoinedFlavor::Collection(stream);
+        }
+
+        // We have completed the join building, but may have work remaining.
+        // For example, we may have expressions not pushed down (e.g. literals)
+        // and projections that could not be applied (e.g. column repetition).
+        if let JoinedFlavor::Collection(mut joined) = joined {
+            if let Some(closure) = linear_plan.final_closure {
+                let (updates, errs) = joined.flat_map_fallible({
+                    // Reuseable allocation for unpacking.
+                    let mut datums = DatumVec::new();
+                    move |row| {
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums.borrow_with(&row);
+                        // TODO(mcsherry): re-use `row` allocation.
+                        closure
+                            .apply(&mut datums_local, &temp_storage)
+                            .map_err(DataflowError::from)
+                            .transpose()
+                    }
+                });
+
+                joined = updates;
+                errors.push(errs);
+            }
+
+            // Return joined results and all produced errors collected together.
+            CollectionRepresentation::from_collections(
+                joined,
+                differential_dataflow::collection::concatenate(scope, errors),
+            )
         } else {
-            panic!("render_join called on invalid expression.")
+            panic!("Unexpectedly arranged join output");
         }
     }
 
@@ -333,7 +286,7 @@ where
         &mut self,
         mut joined: JoinedFlavor<G, T>,
         stream_key: Vec<MirScalarExpr>,
-        lookup_relation: &MirRelationExpr,
+        lookup_relation: CollectionRepresentation<G, Row, T>,
         lookup_key: Vec<MirScalarExpr>,
         closure: JoinClosure,
         errors: &mut Vec<Collection<G, DataflowError>>,
@@ -364,68 +317,48 @@ where
             joined = JoinedFlavor::Local(arranged);
         }
 
-        // Pre-test for the arrangement existence, so that we can populate it if the
-        // collection is present but the arrangement is not.
-        if self.arrangement(lookup_relation, &lookup_key[..]).is_none() {
-            // The join may be faulty, and announce keys for an arrangement we have
-            // not formed. This *shouldn't* happen, but we prefer to do something
-            // sane rather than panic.
-            // TODO: If this ever trips, the `collection` call is a wasteful way to
-            // determine if we have rendered the collection.
-            if self.collection(lookup_relation).is_some() {
-                let arrange_by = MirRelationExpr::ArrangeBy {
-                    input: Box::new(lookup_relation.clone()),
-                    keys: vec![lookup_key.to_vec()],
-                };
-                self.render_arrangeby(&arrange_by, Some("MissingArrangement"));
-            } else {
-                panic!("Arrangement alarmingly absent!");
-            }
-        }
+        // Ensure that the correct arrangement exists.
+        let lookup_relation = lookup_relation.ensure_arrangements(Some(lookup_key.clone()));
 
         // Demultiplex the four different cross products of arrangement types we might have.
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
             }
-            JoinedFlavor::Local(local) => {
-                match self.arrangement(lookup_relation, &lookup_key[..]) {
-                    Some(ArrangementFlavor::Local(oks, errs1)) => {
-                        let (oks, errs2) = self.differential_join_inner(local, oks, closure);
-                        errors.push(errs1.as_collection(|k, _v| k.clone()));
-                        errors.push(errs2);
-                        oks
-                    }
-                    Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
-                        let (oks, errs2) = self.differential_join_inner(local, oks, closure);
-                        errors.push(errs1.as_collection(|k, _v| k.clone()));
-                        errors.push(errs2);
-                        oks
-                    }
-                    None => {
-                        unreachable!("Arrangement absent despite explicit construction");
-                    }
+            JoinedFlavor::Local(local) => match lookup_relation.arrangement(&lookup_key[..]) {
+                Some(ArrangementFlavor::Local(oks, errs1)) => {
+                    let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs2);
+                    oks
                 }
-            }
-            JoinedFlavor::Trace(trace) => {
-                match self.arrangement(lookup_relation, &lookup_key[..]) {
-                    Some(ArrangementFlavor::Local(oks, errs1)) => {
-                        let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
-                        errors.push(errs1.as_collection(|k, _v| k.clone()));
-                        errors.push(errs2);
-                        oks
-                    }
-                    Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
-                        let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
-                        errors.push(errs1.as_collection(|k, _v| k.clone()));
-                        errors.push(errs2);
-                        oks
-                    }
-                    None => {
-                        unreachable!("Arrangement absent despite explicit construction");
-                    }
+                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
+                    let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs2);
+                    oks
                 }
-            }
+                None => {
+                    unreachable!("Arrangement absent despite explicit construction");
+                }
+            },
+            JoinedFlavor::Trace(trace) => match lookup_relation.arrangement(&lookup_key[..]) {
+                Some(ArrangementFlavor::Local(oks, errs1)) => {
+                    let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs2);
+                    oks
+                }
+                Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
+                    let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs2);
+                    oks
+                }
+                None => {
+                    unreachable!("Arrangement absent despite explicit construction");
+                }
+            },
         }
     }
 

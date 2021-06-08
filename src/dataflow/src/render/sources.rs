@@ -23,7 +23,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MirRelationExpr, SourceInstanceId};
+use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use repr::RelationDesc;
 use repr::ScalarType;
@@ -46,7 +46,7 @@ use crate::source::{
     PubNubSourceReader, S3SourceReader,
 };
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -98,9 +98,12 @@ where
                     })
                     .as_collection();
                 let err_collection = Collection::empty(scope);
-                self.collections.insert(
-                    MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone()),
-                    (ok_collection, err_collection),
+                self.insert_id(
+                    Id::Global(src_id),
+                    crate::render::CollectionRepresentation::from_collections(
+                        ok_collection,
+                        err_collection,
+                    ),
                 );
             }
 
@@ -487,13 +490,14 @@ where
                     }
                 }
 
-                let get = MirRelationExpr::Get {
-                    id: Id::Global(src_id),
-                    typ: src.bare_desc.typ().clone(),
-                };
-
                 // Introduce the stream by name, as an unarranged collection.
-                self.collections.insert(get, (collection, err_collection));
+                self.insert_id(
+                    Id::Global(src_id),
+                    crate::render::CollectionRepresentation::from_collections(
+                        collection,
+                        err_collection,
+                    ),
+                );
 
                 let token = Rc::new(capability);
                 tokens.source_tokens.insert(src_id, token.clone());

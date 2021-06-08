@@ -103,7 +103,6 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::iter;
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -117,23 +116,21 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MapFilterProject, MirRelationExpr};
+use expr::{GlobalId, Id};
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
-use repr::{RelationType, Row, RowArena, Timestamp};
+use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::operator::CollectionExt;
+use crate::render::context::CollectionRepresentation;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{CacheMessage, LocalInput};
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
 
-mod arrange_by;
 mod context;
 mod flat_map;
 mod join;
-pub(crate) mod map_filter_project;
 mod reduce;
 mod sinks;
 mod sources;
@@ -219,7 +216,7 @@ pub fn build_dataflow<A: Allocate>(
 
             // Import declared indexes into the rendering context.
             for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(render_state, &mut tokens, scope, region, *idx_id, idx);
+                context.import_index(render_state, &mut tokens, scope, region, *idx_id, &idx.0);
             }
 
             // Build declared objects.
@@ -228,9 +225,9 @@ pub fn build_dataflow<A: Allocate>(
             }
 
             // Export declared indexes.
-            for (idx_id, idx, typ) in &dataflow.index_exports {
+            for (idx_id, idx, _typ) in &dataflow.index_exports {
                 let imports = dataflow.get_imports(&idx.on_id);
-                context.export_index(render_state, &mut tokens, imports, *idx_id, idx, typ);
+                context.export_index(render_state, &mut tokens, imports, *idx_id, idx);
             }
 
             // Export declared sinks.
@@ -250,7 +247,7 @@ pub fn build_dataflow<A: Allocate>(
     })
 }
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -261,7 +258,7 @@ where
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
-        (idx, typ): &(IndexDesc, RelationType),
+        idx: &IndexDesc,
     ) {
         if let Some(traces) = render_state.traces.get_mut(&idx_id) {
             let token = traces.to_drop().clone();
@@ -277,8 +274,13 @@ where
             );
             let ok_arranged = ok_arranged.enter(region);
             let err_arranged = err_arranged.enter(region);
-            let get_expr = MirRelationExpr::global_get(idx.on_id, typ.clone());
-            self.set_trace(idx_id, &get_expr, &idx.keys, (ok_arranged, err_arranged));
+            self.update_id(
+                Id::Global(idx.on_id),
+                CollectionRepresentation::from_expressions(
+                    idx.keys.clone(),
+                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                ),
+            );
             tokens
                 .additional_tokens
                 .entry(idx_id)
@@ -298,47 +300,27 @@ where
 
     fn build_object(&mut self, scope: &mut Child<'g, G, G::Timestamp>, object: &BuildDesc) {
         // First, transform the relation expression into a render plan.
-        let _render_plan = plan::Plan::from_mir(&object.relation_expr)
+        let render_plan = plan::Plan::from_mir(&object.relation_expr)
             .expect("Could not produce plan for expression");
 
-        self.ensure_rendered(&object.relation_expr, scope, scope.index());
-        if let Some(typ) = &object.typ {
-            self.clone_from_to(
-                &object.relation_expr,
-                &MirRelationExpr::global_get(object.id, typ.clone()),
-            );
-        } else {
-            self.render_arrangeby(&object.relation_expr, Some(&object.id.to_string()));
-            // Under the premise that this is always an arrange_by aroung a global get,
-            // this will leave behind the arrangements bound to the global get, so that
-            // we will not tidy them up in the next pass.
-        }
+        let bundle = self.render_plan(render_plan, scope, scope.index());
+        self.insert_id(Id::Global(object.id), bundle);
 
-        // After building each object, we want to tear down all other cached collections
-        // and arrangements to avoid accidentally providing hits on local identifiers.
-        // We could relax this if we better understood which expressions are dangerous
-        // (e.g. expressions containing gets of local identifiers not covered by a let).
-        //
-        // TODO: Improve collection and arrangement re-use.
-        self.collections.retain(|e, _| {
-            matches!(
-                e,
-                MirRelationExpr::Get {
-                    id: Id::Global(_),
-                    typ: _,
-                }
-            )
-        });
-        self.local.retain(|e, _| {
-            matches!(
-                e,
-                MirRelationExpr::Get {
-                    id: Id::Global(_),
-                    typ: _,
-                }
-            )
-        });
-        // We do not install in `context.trace`, and can skip deleting things from it.
+        // NOTE(mcsherry): I don't understand this code, and why a type changes the behavior.
+        // if let Some(typ) = &object.typ {
+        //     self.clone_from_to(
+        //         &object.relation_expr,
+        //         &MirRelationExpr::global_get(object.id, typ.clone()),
+        //     );
+        // } else {
+        //     self.render_arrangeby(&object.relation_expr, Some(&object.id.to_string()));
+        //     // Under the premise that this is always an arrange_by aroung a global get,
+        //     // this will leave behind the arrangements bound to the global get, so that
+        //     // we will not tidy them up in the next pass.
+        // }
+
+        // Here we previously removed all local let bindings.
+        // They should all be uninstalled by `Let` rendering.
     }
 
     fn export_index(
@@ -348,7 +330,6 @@ where
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        typ: &RelationType,
     ) {
         // put together tokens that belong to the export
         let mut needed_source_tokens = Vec::new();
@@ -362,8 +343,13 @@ where
             }
         }
         let tokens = Rc::new((needed_source_tokens, needed_additional_tokens));
-        let get_expr = MirRelationExpr::global_get(idx.on_id, typ.clone());
-        match self.arrangement(&get_expr, &idx.keys) {
+        let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
+            panic!(
+                "Arrangement alarmingly absent! id: {:?}",
+                Id::Global(idx_id)
+            )
+        });
+        match bundle.arrangement(&idx.keys) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 render_state.traces.set(
                     idx_id,
@@ -377,383 +363,167 @@ where
                 render_state.traces.set(idx_id, trace);
             }
             None => {
-                panic!("Arrangement alarmingly absent!");
+                println!("collection available: {:?}", bundle.collection.is_none());
+                println!(
+                    "keys available: {:?}",
+                    bundle.arranged.keys().collect::<Vec<_>>()
+                );
+                panic!(
+                    "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
+                    Id::Global(idx_id),
+                    &idx.keys
+                );
             }
         };
     }
 }
 
-impl<G> Context<G, MirRelationExpr, Row, Timestamp>
+impl<G> Context<G, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// Attempt to render a chain of map/filter/project operators on top of another operator.
+    /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
-    /// The rendered collection is bound to `relation_expr`, which the caller expects to find
-    /// bound if the result is `true`. If this method returns `false`, the caller should use
-    /// the traditional individual render implementations of each operator.
-    fn try_render_map_filter_project(
+    /// The return type reflects the uncertainty about the data representation, perhaps
+    /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
+    pub fn render_plan(
         &mut self,
-        relation_expr: &MirRelationExpr,
+        plan: plan::Plan,
         scope: &mut G,
         worker_index: usize,
-    ) -> bool {
-        // Extract a MapFilterProject and residual from `relation_expr`.
-        let (mut mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
-        mfp.optimize();
-        match input {
-            MirRelationExpr::Get { .. } => {
-                // TODO: determine if `mfp` is no-op to simplify implementation.
-                let mfp2 = mfp.clone();
-                // Extract any temporal predicates, as these operators cannot natively handle them.
-                let mut temporal_mfp = mfp.extract_temporal();
-                mfp.optimize();
-                temporal_mfp.optimize();
-                let temporal_plan = temporal_mfp.into_plan().unwrap();
-                let mfp_plan = mfp.into_plan().unwrap().into_nontemporal().unwrap();
-                self.ensure_rendered(&input, scope, worker_index);
-                let (ok_collection, mut err_collection) = self
-                    .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
-                        let mut row_packer = repr::Row::default();
-                        let mut datums = vec![];
-                        move |row| {
-                            let pack_result = {
-                                let temp_storage = RowArena::new();
-                                let mut datums_local = std::mem::take(&mut datums);
-                                datums_local.extend(row.iter());
-                                // Temporary assignment looks weird, but seems needed to convince
-                                // Rust that the lifetime of `evaluate_iter` does not escape.
-                                let result = match mfp_plan
-                                    .evaluate_iter(&mut datums_local, &temp_storage)
-                                {
-                                    Ok(Some(iter)) => {
-                                        row_packer.clear();
-                                        row_packer.extend(iter);
-                                        Some(Ok(()))
-                                    }
-                                    Ok(None) => None,
-                                    Err(e) => Some(Err(e.into())),
-                                };
-                                datums = ore::vec::repurpose_allocation(datums_local);
-                                result
-                            };
-
-                            // Re-use the input `row` if at all possible.
-                            pack_result.map(|res| {
-                                res.map(|()| match row {
-                                    timely::communication::message::RefOrMut::Ref(_) => {
-                                        row_packer.finish_and_reuse()
-                                    }
-                                    timely::communication::message::RefOrMut::Mut(r) => {
-                                        // Copy the contents into `r` and clear `row_packer`.
-                                        r.clone_from(&row_packer);
-                                        row_packer.clear();
-                                        std::mem::take(r)
-                                    }
-                                })
-                            })
-                        }
-                    })
-                    .unwrap();
-
-                use timely::dataflow::operators::ok_err::OkErr;
-                let (oks, errors) = ok_collection.inner.ok_err(|(x, t, d)| match x {
-                    Ok(x) => Ok((x, t, d)),
-                    Err(x) => Err((x, t, d)),
-                });
-
-                let mut oks = oks.as_collection();
-                let errors = errors.as_collection();
-
-                err_collection = err_collection.concat(&errors);
-
-                // If the temporal operator is non-trivial we need to install an operator.
-                if !temporal_plan.is_identity() {
-                    let (temp, errs) =
-                        crate::render::map_filter_project::build_mfp_operator(oks, temporal_plan);
-                    oks = temp;
-                    err_collection = err_collection.concat(&errs);
-                }
-
-                self.collections
-                    .insert(relation_expr.clone(), (oks, err_collection));
-                true
-            }
-            MirRelationExpr::FlatMap { input: input2, .. } => {
-                self.ensure_rendered(&input2, scope, worker_index);
-                let mfp_plan = mfp.into_plan().unwrap();
-                let (oks, err) = self.render_flat_map(input, Some(mfp_plan));
-                self.collections.insert(relation_expr.clone(), (oks, err));
-                true
-            }
-
-            MirRelationExpr::Join {
-                inputs,
-                implementation,
-                ..
-            } => {
-                // Extract any temporal predicates, as these operators cannot natively handle them.
-                let mut temporal_mfp = mfp.extract_temporal();
-                mfp.optimize();
-                temporal_mfp.optimize();
-                let temporal_plan = temporal_mfp.into_plan().unwrap();
-
-                for input in inputs {
-                    self.ensure_rendered(input, scope, worker_index);
-                }
-                let (mut oks, mut err) = match implementation {
-                    expr::JoinImplementation::Differential(_start, _order) => {
-                        self.render_join(input, mfp, scope)
-                    }
-                    expr::JoinImplementation::DeltaQuery(_orders) => {
-                        self.render_delta_join(input, mfp, scope)
-                    }
-                    expr::JoinImplementation::Unimplemented => {
-                        panic!("Attempt to render unimplemented join");
-                    }
+    ) -> CollectionRepresentation<G, Row, G::Timestamp> {
+        use plan::Plan;
+        match plan {
+            Plan::Constant { rows } => {
+                // Determine what this worker will contribute.
+                let locally = if worker_index == 0 {
+                    rows.clone()
+                } else {
+                    Ok(vec![])
+                };
+                // Produce both rows and errs to avoid conditional dataflow construction.
+                let (rows, errs) = match locally {
+                    Ok(rows) => (rows, Vec::new()),
+                    Err(e) => (Vec::new(), vec![e]),
                 };
 
-                // If the temporal operator is non-trivial we need to install an operator.
-                if !temporal_plan.is_identity() {
-                    let (temp_oks, temp_errs) =
-                        crate::render::map_filter_project::build_mfp_operator(oks, temporal_plan);
-                    oks = temp_oks;
-                    err = err.concat(&temp_errs);
-                }
+                let ok_collection = rows.into_iter().to_stream(scope).as_collection();
 
-                self.collections.insert(relation_expr.clone(), (oks, err));
+                let err_collection = errs
+                    .into_iter()
+                    .map(|e| {
+                        (
+                            DataflowError::from(e),
+                            timely::progress::Timestamp::minimum(),
+                            1,
+                        )
+                    })
+                    .to_stream(scope)
+                    .as_collection();
 
-                true
+                CollectionRepresentation::from_collections(ok_collection, err_collection)
             }
-            _ => false,
-        }
-    }
-
-    /// Ensures the context contains an entry for `relation_expr`.
-    ///
-    /// This method may construct new dataflow elements and register then in the context,
-    /// and is only obliged to ensure that a call to `self.collection(relation_expr)` will
-    /// result in a non-`None` result. This may be a raw collection or an arrangement by
-    /// any set of keys.
-    ///
-    /// The rough structure of the logic for each expression is to ensure that any input
-    /// collections are rendered,
-    pub fn ensure_rendered(
-        &mut self,
-        relation_expr: &MirRelationExpr,
-        scope: &mut G,
-        worker_index: usize,
-    ) {
-        if !self.has_collection(relation_expr) {
-            // Each of the `MirRelationExpr` variants have logic to render themselves to either
-            // a collection or an arrangement. In either case, we associate the result with
-            // the `relation_expr` argument in the context.
-            match relation_expr {
-                // The constant collection is instantiated only on worker zero.
-                MirRelationExpr::Constant { rows, .. } => {
-                    // Determine what this worker will contribute.
-                    let locally = if worker_index == 0 {
-                        rows.clone()
-                    } else {
-                        Ok(vec![])
-                    };
-                    // Produce both rows and errs to avoid conditional dataflow construction.
-                    let (rows, errs) = match locally {
-                        Ok(rows) => (rows, Vec::new()),
-                        Err(e) => (Vec::new(), vec![e]),
-                    };
-
-                    let ok_collection = rows
-                        .into_iter()
-                        .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
-                        .to_stream(scope)
-                        .as_collection();
-
-                    let err_collection = errs
-                        .into_iter()
-                        .map(|e| {
-                            (
-                                DataflowError::from(e),
-                                timely::progress::Timestamp::minimum(),
-                                1,
-                            )
-                        })
-                        .to_stream(scope)
-                        .as_collection();
-
-                    self.collections
-                        .insert(relation_expr.clone(), (ok_collection, err_collection));
+            Plan::Get { id, mfp } => {
+                // Recover the collection from `self` and then apply `mfp` to it.
+                // If `mfp` happens to be trivial, we can just return the collection.
+                let collection = self
+                    .lookup_id(id)
+                    .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
+                if mfp.is_identity() {
+                    collection
+                } else {
+                    let (oks, errs) = collection.as_collection_core(mfp);
+                    CollectionRepresentation::from_collections(oks, errs)
                 }
+            }
+            Plan::Let { id, value, body } => {
+                // Render `value` and bind it to `id`. Complain if this shadows an id.
+                let value = self.render_plan(*value, scope, worker_index);
+                let prebound = self.insert_id(Id::Local(id), value);
+                assert!(prebound.is_none());
 
-                // A get should have been loaded into the context, and it is surprising to
-                // reach this point given the `has_collection()` guard at the top of the method.
-                MirRelationExpr::Get { id, typ } => {
-                    // TODO: something more tasteful.
-                    // perhaps load an empty collection, warn?
-                    panic!("Collection {} (typ: {:?}) not pre-loaded", id, typ);
+                let body = self.render_plan(*body, scope, worker_index);
+                self.remove_id(Id::Local(id));
+                body
+            }
+            Plan::Mfp { input, mfp } => {
+                // If `mfp` is non-trivial, we should apply it and produce a collection.
+                let input = self.render_plan(*input, scope, worker_index);
+                if mfp.is_identity() {
+                    input
+                } else {
+                    let (oks, errs) = input.as_collection_core(mfp);
+                    CollectionRepresentation::from_collections(oks, errs)
                 }
-
-                MirRelationExpr::Let { id, value, body } => {
-                    let typ = value.typ();
-                    let bind = MirRelationExpr::Get {
-                        id: Id::Local(*id),
-                        typ,
-                    };
-                    if self.has_collection(&bind) {
-                        panic!("Inappropriate to re-bind name: {:?}", bind);
-                    } else {
-                        self.ensure_rendered(value, scope, worker_index);
-                        self.clone_from_to(value, &bind);
-                        self.ensure_rendered(body, scope, worker_index);
-                        self.clone_from_to(body, relation_expr);
+            }
+            Plan::FlatMap {
+                input,
+                func,
+                exprs,
+                mfp,
+            } => {
+                let input = self.render_plan(*input, scope, worker_index);
+                self.render_flat_map(input, func, exprs, mfp)
+            }
+            Plan::Join { inputs, plan } => {
+                let inputs = inputs
+                    .into_iter()
+                    .map(|input| self.render_plan(input, scope, worker_index))
+                    .collect();
+                match plan {
+                    crate::render::join::JoinPlan::Linear(linear_plan) => {
+                        self.render_join(inputs, linear_plan, scope)
+                    }
+                    crate::render::join::JoinPlan::Delta(delta_plan) => {
+                        self.render_delta_join(inputs, delta_plan, scope)
                     }
                 }
-
-                MirRelationExpr::Project { input, outputs } => {
-                    if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
-                        self.ensure_rendered(input, scope, worker_index);
-                        let outputs = outputs.clone();
-                        let (ok_collection, err_collection) = self.collection(input).unwrap();
-                        let ok_collection = ok_collection.map({
-                            move |row| {
-                                let datums = row.unpack();
-                                let iterator = outputs.iter().map(|i| datums[*i]);
-                                let total_size = repr::datums_size(iterator.clone());
-                                let mut row = Row::with_capacity(total_size);
-                                row.extend(iterator);
-                                row
-                            }
-                        });
-
-                        self.collections
-                            .insert(relation_expr.clone(), (ok_collection, err_collection));
-                    }
+            }
+            Plan::Reduce {
+                input,
+                key_val_plan,
+                plan,
+            } => {
+                let input = self.render_plan(*input, scope, worker_index);
+                self.render_reduce(input, key_val_plan, plan)
+            }
+            Plan::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic,
+                arity,
+            } => {
+                let input = self.render_plan(*input, scope, worker_index);
+                self.render_topk(input, group_key, order_key, limit, offset, monotonic, arity)
+            }
+            Plan::Negate { input } => {
+                let input = self.render_plan(*input, scope, worker_index);
+                let (oks, errs) = input.as_collection();
+                CollectionRepresentation::from_collections(oks.negate(), errs)
+            }
+            Plan::Threshold { input, arity } => {
+                let input = self.render_plan(*input, scope, worker_index);
+                self.render_threshold(input, arity)
+            }
+            Plan::Union { inputs } => {
+                let mut oks = Vec::new();
+                let mut errs = Vec::new();
+                for input in inputs.into_iter() {
+                    let (os, es) = self.render_plan(input, scope, worker_index).as_collection();
+                    oks.push(os);
+                    errs.push(es);
                 }
-
-                MirRelationExpr::Map { input, scalars } => {
-                    if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
-                        self.ensure_rendered(input, scope, worker_index);
-                        let scalars = scalars.clone();
-                        let (ok_collection, err_collection) = self.collection(input).unwrap();
-                        let (ok_collection, new_err_collection) = ok_collection.map_fallible({
-                            move |input_row| {
-                                let mut datums = input_row.unpack();
-                                let temp_storage = RowArena::new();
-                                for scalar in &scalars {
-                                    let datum = scalar.eval(&datums, &temp_storage)?;
-                                    // Scalar is allowed to see the outputs of previous scalars.
-                                    // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
-                                    // Note that this doesn't mutate input_row.
-                                    datums.push(datum);
-                                }
-                                Ok::<_, DataflowError>(Row::pack_slice(&datums))
-                            }
-                        });
-                        let err_collection = err_collection.concat(&new_err_collection);
-                        self.collections
-                            .insert(relation_expr.clone(), (ok_collection, err_collection));
-                    }
-                }
-
-                MirRelationExpr::FlatMap { input, .. } => {
-                    self.ensure_rendered(input, scope, worker_index);
-                    let (oks, err) = self.render_flat_map(relation_expr, None);
-                    self.collections.insert(relation_expr.clone(), (oks, err));
-                }
-
-                MirRelationExpr::Filter { input, predicates } => {
-                    if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
-                        self.ensure_rendered(input, scope, worker_index);
-                        let mfp = expr::MapFilterProject::new(input.arity())
-                            .filter(predicates.iter().cloned());
-                        let collections = self.render_mfp_after(mfp, input);
-                        self.collections.insert(relation_expr.clone(), collections);
-                    }
-                }
-
-                MirRelationExpr::Join {
-                    inputs,
-                    implementation,
-                    ..
-                } => {
-                    for input in inputs {
-                        self.ensure_rendered(input, scope, worker_index);
-                    }
-                    let input_mapper = expr::JoinInputMapper::new(inputs);
-                    let mfp = MapFilterProject::new(input_mapper.total_columns());
-                    match implementation {
-                        expr::JoinImplementation::Differential(_start, _order) => {
-                            let collection = self.render_join(relation_expr, mfp, scope);
-                            self.collections.insert(relation_expr.clone(), collection);
-                        }
-                        expr::JoinImplementation::DeltaQuery(_orders) => {
-                            let collection = self.render_delta_join(relation_expr, mfp, scope);
-                            self.collections.insert(relation_expr.clone(), collection);
-                        }
-                        expr::JoinImplementation::Unimplemented => {
-                            panic!("Attempt to render unimplemented join");
-                        }
-                    }
-                }
-
-                MirRelationExpr::Reduce { input, .. } => {
-                    self.ensure_rendered(input, scope, worker_index);
-                    self.render_reduce(relation_expr);
-                }
-
-                MirRelationExpr::TopK { input, .. } => {
-                    self.ensure_rendered(input, scope, worker_index);
-                    self.render_topk(relation_expr);
-                }
-
-                MirRelationExpr::Negate { input } => {
-                    self.ensure_rendered(input, scope, worker_index);
-                    let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let ok_collection = ok_collection.negate();
-                    self.collections
-                        .insert(relation_expr.clone(), (ok_collection, err_collection));
-                }
-
-                MirRelationExpr::Threshold { input } => {
-                    self.ensure_rendered(input, scope, worker_index);
-                    self.render_threshold(relation_expr);
-                }
-
-                MirRelationExpr::Union { base, inputs } => {
-                    let (oks, errs): (Vec<_>, Vec<_>) = iter::once(&**base)
-                        .chain(inputs)
-                        .map(|input| {
-                            self.ensure_rendered(input, scope, worker_index);
-                            self.collection(input).unwrap()
-                        })
-                        .unzip();
-
-                    let ok = differential_dataflow::collection::concatenate(scope, oks);
-                    let err = differential_dataflow::collection::concatenate(scope, errs);
-
-                    self.collections.insert(relation_expr.clone(), (ok, err));
-                }
-
-                MirRelationExpr::ArrangeBy { input, keys } => {
-                    // We can avoid rendering if we have all arrangements present,
-                    // and there is at least one of them (to ensure the collection
-                    // is available independent of arrangements).
-                    if keys.is_empty()
-                        || keys
-                            .iter()
-                            .any(|key| self.arrangement(&input, key).is_none())
-                    {
-                        self.ensure_rendered(input, scope, worker_index);
-                    }
-                    self.render_arrangeby(relation_expr, None);
-                }
-
-                MirRelationExpr::DeclareKeys { input, keys: _ } => {
-                    // TODO - some kind of debug mode where we assert that the keys are truly keys?
-                    self.ensure_rendered(input, scope, worker_index);
-                    self.clone_from_to(input, relation_expr);
-                }
-            };
+                let oks = differential_dataflow::collection::concatenate(scope, oks);
+                let errs = differential_dataflow::collection::concatenate(scope, errs);
+                CollectionRepresentation::from_collections(oks, errs)
+            }
+            Plan::ArrangeBy { input, keys } => {
+                let input = self.render_plan(*input, scope, worker_index);
+                input.ensure_arrangements(keys)
+            }
         }
     }
 }
@@ -884,12 +654,14 @@ pub mod plan {
             limit: Option<usize>,
             offset: usize,
             monotonic: bool,
+            arity: usize,
         },
         Negate {
             input: Box<Plan>,
         },
         Threshold {
             input: Box<Plan>,
+            arity: usize,
         },
         Union {
             inputs: Vec<Plan>,
@@ -1067,6 +839,7 @@ pub mod plan {
                     offset,
                     monotonic,
                 } => {
+                    let arity = input.arity();
                     let input = Box::new(Self::from_mir(input)?);
                     (
                         Some(mfp),
@@ -1077,6 +850,7 @@ pub mod plan {
                             limit: *limit,
                             offset: *offset,
                             monotonic: *monotonic,
+                            arity,
                         },
                     )
                 }
@@ -1085,8 +859,9 @@ pub mod plan {
                     (Some(mfp), Plan::Negate { input })
                 }
                 MirRelationExpr::Threshold { input } => {
+                    let arity = input.arity();
                     let input = Box::new(Self::from_mir(input)?);
-                    (Some(mfp), Plan::Threshold { input })
+                    (Some(mfp), Plan::Threshold { input, arity })
                 }
                 MirRelationExpr::Union { base, inputs } => {
                     let mut plans = Vec::new();

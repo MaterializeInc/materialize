@@ -32,7 +32,7 @@ use crate::operator::StreamExt;
 use crate::render::context::Context;
 use crate::render::datum_vec::DatumVec;
 
-impl<G, T> Context<G, MirRelationExpr, Row, T>
+impl<G, T> Context<G, Row, T>
 where
     G: Scope<Timestamp = repr::Timestamp>,
     G::Timestamp: Lattice + Refines<T>,
