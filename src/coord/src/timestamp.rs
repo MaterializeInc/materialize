@@ -797,8 +797,6 @@ impl Timestamper {
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            // should match the isolation level of the source; for now that's always read_committed
-            .set("isolation.level", "read_committed")
             .set("bootstrap.servers", &kc.addrs.to_string());
 
         let group_id_prefix = kc.group_id_prefix.clone().unwrap_or_else(String::new);

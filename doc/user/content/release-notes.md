@@ -53,6 +53,10 @@ Wrap your release notes at the 80 character mark.
   [CDC](/connect/materialize-cdc) and Debezium consistency topic sources
   by default.
 
+- Add the [`isolation_level`](/sql/create-source/avro-kafka/#with-options)
+  `WITH` option to Kafka sources to allow changing read behavior of
+  transactionally written messages.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a

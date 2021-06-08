@@ -838,3 +838,15 @@ a b
 ---
 1 1
 2 3
+
+> CREATE MATERIALIZED SOURCE ms_dbz_uncommitted
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}'
+  WITH (isolation_level='read_uncommitted')
+  FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM ms_dbz
+a b
+---
+1 1
+2 3
