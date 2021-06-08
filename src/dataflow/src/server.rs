@@ -840,6 +840,14 @@ where
                     match (connector, consistency) {
                         (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
                             byo_default.add_partition(PartitionId::Kafka(0));
+                            // NB: mark BYO sources as fully durable when not running in experimental
+                            // because, because we don't actually write durability updates in that context
+                            // but we still rely on BYO sources being default durable for EOS.
+                            // Need to remove this when we move RT EOS sinks to non-experimental
+                            // status.
+                            if !self.experimental_mode {
+                                byo_default.set_durability_frontier(Antichain::new().borrow());
+                            }
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
@@ -905,6 +913,7 @@ where
                         data.add_partition(pid.clone());
                         data.add_binding(pid, timestamp, offset, false);
                     }
+
                     let prev = self.render_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
                     self.reported_frontiers.insert(id, Antichain::from_elem(0));

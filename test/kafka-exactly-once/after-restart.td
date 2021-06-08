@@ -106,17 +106,3 @@ $ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 $ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 4, "b": 1}}, "transaction": {"id": "4"}}
 {"before": null, "after": {"row": {"a": 5, "b": 2}}, "transaction": {"id": "4"}}
-
-> SELECT * FROM reingest_rt_sink
-a  b
-------
-1   1
-2   1
-3   1
-1   2
-11  11
-22  11
-3   4
-5   6
-4  1
-5  2

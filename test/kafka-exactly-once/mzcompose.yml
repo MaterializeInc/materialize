@@ -77,7 +77,6 @@ services:
       -w1
       --disable-telemetry
       --logical-compaction-window=off
-      --experimental
     environment:
       - MZ_DEV=1
       - MZ_LOG=${MZ_LOG:-dataflow::sink::kafka=debug,dataflow::source::kafka=debug,coord::timestamp=debug,dataflow::source=debug,info}
