@@ -137,16 +137,15 @@ steps:
           composition: kafka-sasl-plain
           run: testdrive
 
-  - id: short-sqllogictest
-    label: ":bulb: Short SQL logic tests"
+  - id: sqllogictest-fast
+    label: ":bulb: Fast SQL logic tests"
     depends_on: build
-    command: ci/test/slt-fast.sh
     timeout_in_minutes: 10
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
-          run: sqllogictest
+          run: sqllogictest-fast
 
   - id: streaming-demo
     label: ":shower: protobuf kafka streaming-demo"
