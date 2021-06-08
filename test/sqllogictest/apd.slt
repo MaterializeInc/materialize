@@ -86,7 +86,7 @@ SELECT ('-123abc456'::apd)::text;
 query T
 SELECT ('-0.0'::apd)::text
 ----
-0.0
+0
 
 # Max precision is 39
 query T
@@ -156,7 +156,7 @@ SELECT ('1.23'::apd + -'2.34'::apd)::text
 query T
 SELECT ('1.23'::apd + '-1.23'::apd)::text
 ----
-0.00
+0
 
 query T
 SELECT ('3402823669209384634633746074317682'::apd + '3402823669209384634633746074317682'::apd)::text
@@ -225,7 +225,7 @@ SELECT (-('1.23'::apd - '2.34'::apd))::text
 query T
 SELECT ('1.23'::apd - '1.23'::apd)::text
 ----
-0.00
+0
 
 query T
 SELECT ('-3402823669209384634633746074317682'::apd - '3402823669209384634633746074317682'::apd)::text
@@ -308,7 +308,7 @@ SELECT ('3402823669209384.634633746074317682'::apd * '3402823669209384.634633746
 query T
 SELECT ('1.50000000'::apd * '1.50000000'::apd)::text
 ----
-2.2500000000000000
+2.25
 
 query T
 SELECT ('NaN'::apd * '2'::apd)::text
@@ -329,7 +329,7 @@ SELECT ('1'::apd / '2'::apd)::text;
 query T
 SELECT ('2.0'::apd / '1'::apd)::text;
 ----
-2.0
+2
 
 query T
 SELECT ('1'::apd / '0.5'::apd)::text;
@@ -413,12 +413,12 @@ SELECT ('0.2'::apd(39,1))::text;
 query T
 SELECT ('0.2'::apd(39,3))::text;
 ----
-0.200
+0.2
 
 query T
 SELECT ('0.002'::apd(39,1))::text;
 ----
-0.0
+0
 
 query T
 SELECT ('0.12'::apd(39,2) + '0.2'::apd(39,1))::text;
@@ -428,12 +428,12 @@ SELECT ('0.12'::apd(39,2) + '0.2'::apd(39,1))::text;
 query T
 SELECT ('0.12'::apd(39,1) + '0.2'::apd(39,2))::text;
 ----
-0.30
+0.3
 
 query T
 SELECT ('0.12'::apd + '0.2'::apd)::apd(39,3)::text;
 ----
-0.320
+0.32
 
 query T
 SELECT ('0.12'::apd + '0.2'::apd)::apd(39,1)::text;
@@ -448,7 +448,7 @@ SELECT ('0.12'::apd(39,2) * '0.2'::apd(39,1))::text;
 query T
 SELECT ('0.12'::apd(39,1) * '0.2'::apd(39,2))::text;
 ----
-0.020
+0.02
 
 query T
 SELECT ('0.12'::apd * '0.2'::apd)::apd(39,3)::text;
@@ -463,7 +463,7 @@ SELECT ('0.14'::apd * '0.2'::apd)::apd(39,2)::text;
 query T
 SELECT ('0.12'::apd * '0.2'::apd)::apd(39,1)::text;
 ----
-0.0
+0
 
 query T
 SELECT ('NaN'::apd(39,1))::text;
@@ -520,7 +520,7 @@ SELECT ('999999999999999999999999999999999999.123'::apd + '1'::apd)::apd(39,3)::
 query T
 SELECT ('-0.0'::apd - '1'::apd  * '-0.0 '::apd)::text;
 ----
-0.0
+0
 
 # Negate is nop on NaN and 0
 query T
@@ -536,12 +536,12 @@ SELECT (-'0'::apd)::text;
 query T
 SELECT (-'0.00'::apd)::text;
 ----
-0.00
+0
 
 query T
-SELECT (-('1.01'::apd - '1.010'::apd))::text;
+SELECT (-('0.1'::apd - '0.10'::apd))::text;
 ----
-0.000
+0
 
 # Equality
 # Tests binary combination of values from set {0, 0.00, 1, 1.00, 1.2, -1.00, NaN}
@@ -1424,3 +1424,29 @@ query T
 SELECT '1.23456789'::apd(39,5) < '1.23456789'::apd(39,4);
 ----
 true
+
+# Distinct, except
+# regression tests for #6877 #6912
+
+query T
+SELECT DISTINCT column1::text FROM (
+    VALUES
+        ('0.1'::apd),
+        ('0.10'::apd),
+        ('0.100'::apd),
+        ('0.1000'::apd),
+        ('0.10000'::apd)
+);
+----
+0.1
+
+query T
+SELECT column1::text FROM (
+    SELECT * FROM (
+        VALUES ('0.1'::apd)
+    ) EXCEPT ALL
+        SELECT * FROM (
+            VALUES ('0.1000'::apd)
+        )
+)
+----
