@@ -21,7 +21,7 @@ use anyhow::anyhow;
 use flate2::read::MultiGzDecoder;
 use globset::GlobMatcher;
 use rusoto_core::RusotoError;
-use rusoto_s3::{GetObjectError, GetObjectRequest, ListObjectsV2Request, S3Client, S3};
+use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
     DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
@@ -292,15 +292,27 @@ async fn scan_bucket_task(
                 continuation_token = response.next_continuation_token;
             }
             Err(e) => {
+                let err_string = format!("{}", e);
+                tx.send(Err(S3Error::ListObjectsFailed(e)))
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::debug!("unable to send error on listing objects: {}", e)
+                    });
+
                 allowed_errors -= 1;
                 if allowed_errors == 0 {
-                    log::error!("failed to list bucket {}: {}", bucket, e);
+                    log::error!("failed to list bucket {}: {}", bucket, err_string);
+                    tx.send(Err(S3Error::RetryFailed))
+                        .await
+                        .unwrap_or_else(|e| {
+                            log::debug!("unable to send error on retries failed: {}", e)
+                        });
                     break;
                 } else {
                     log::warn!(
                         "unable to list bucket {}: {} ({} retries remaining)",
                         bucket,
-                        e,
+                        err_string,
                         allowed_errors
                     );
                 }
@@ -545,7 +557,8 @@ enum S3Error {
     BodyMissing(String),
     ClientConstructionFailed(anyhow::Error),
     Decode(String, std::io::Error),
-    GetObjectError(RusotoError<GetObjectError>),
+    GetObjectError(RusotoError<rusoto_s3::GetObjectError>),
+    ListObjectsFailed(RusotoError<rusoto_s3::ListObjectsV2Error>),
     Read(std::io::Error),
     RetryFailed,
 }
@@ -559,6 +572,7 @@ impl std::fmt::Display for S3Error {
                 write!(f, "Failed to decode object {} using gzip: {}", key, err)
             }
             S3Error::GetObjectError(err) => err.fmt(f),
+            S3Error::ListObjectsFailed(err) => err.fmt(f),
             S3Error::Read(err) => err.fmt(f),
             S3Error::RetryFailed => write!(f, "Retry failed to produce result"),
         }
@@ -792,14 +806,15 @@ impl SourceReader for S3SourceReader {
                     e
                 );
                 match e {
-                    S3Error::BodyMissing(_) => Ok(NextMessage::Pending),
                     S3Error::ClientConstructionFailed(err) => {
                         Err(anyhow!("Client construction failed: {}", err))
                     }
-                    S3Error::Decode(_, _) => Ok(NextMessage::Pending),
-                    S3Error::GetObjectError(_) => Ok(NextMessage::Pending),
-                    S3Error::Read(_) => Ok(NextMessage::Pending),
                     S3Error::RetryFailed => Err(anyhow!("Retry failed")),
+                    S3Error::BodyMissing(_)
+                    | S3Error::Decode(_, _)
+                    | S3Error::GetObjectError(_)
+                    | S3Error::ListObjectsFailed(_)
+                    | S3Error::Read(_) => Ok(NextMessage::Pending),
                 }
             }
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
