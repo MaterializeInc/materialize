@@ -69,14 +69,14 @@ production readiness.
   > `v0.5.10-dev` -> `v0.6.0` when they upgrade than upgrading and going from `v0.6.0-dev` ->
   > `v0.5.10`.
 
-  - [ ] Open a PR with this change, and land it.
+  Open a PR with this change, and land it.
 
-    If you have [GitHub cli][gh] this is as easy as typing the following command and following
-    some prompts:
+  If you have [GitHub cli][gh] this is as easy as typing the following command
+  and following some prompts:
 
-    ```console
-    $ gh pr create --web
-    ```
+  ```console
+  $ gh pr create --web
+  ```
 
 [gh]: https://cli.github.com/
 
@@ -86,10 +86,12 @@ Release notes should be updated by engineers as they merge PRs. The release note
 team is responsible for reviewing release notes and the release announcement before
 a release is published.
 
-- [ ] Comment on this issue and ping the @MaterializeInc/release-notes team to
-  remind them to review the [release notes][] and the release announcement. All
-  members of the team should leave a comment stating that the release looks
-  good.
+- [ ] Post the following message to the `#release` channel in slack:
+
+  > @relnotes-team the release is in progress, now's a great time to verify or
+  > prepare the release notes
+  > (https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md)
+  > and any announcement posts
 
 ### Test the release candidate
 
@@ -182,14 +184,15 @@ in the infrastructure repository. All of these tests can be run in parallel.
   Create a PR with your branch: 'continue-$next'
   ```
 
-  - [ ] Open a PR with that branch, and land it. Using [gh] from the terminal: `gh pr create
-    --web`
+  Open a PR with that branch, and land it. This is possible using [gh] from the
+  terminal: `gh pr create --web`
 
 ### Verify the Release Build and Deploy
 
 - [ ] Find your build in buildkite, for example
   https://buildkite.com/materialize/tests/builds?branch=v0.4.3
-- [ ] Wait for the completion of the "Deploy", your tag will be listed as the branch at:
+
+  Wait for the completion of the "Deploy", your tag will be listed as the branch at:
   https://buildkite.com/materialize/deploy/builds
 
   **NOTE:** the deploy step will appear green in the "tests" page before it is actually run,
@@ -200,20 +203,24 @@ in the infrastructure repository. All of these tests can be run in parallel.
 - [ ] Follow the instructions in [MaterializeInc/homebrew-materialize's
   CONTRIBUTING.md][homebrew-guide].
 
-### Verify the Debian package
+### Verify the Debian package and Docker images
 
-- [ ] Run the following command on a Docker-enabled machine and verify you see
+
+- Run the following commands on a Docker-enabled machine and verify you see
   the correct version.
 
-  ```shell
-  docker run --rm -i ubuntu:bionic <<EOF
-  apt-get update && apt-get install -y gpg ca-certificates
-  apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
-  sh -c 'echo "deb http://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list'
-  apt-get update && apt-get install -y materialized
-  materialized --version
-  EOF
-  ```
+  - [ ]
+    ```shell
+    docker run --rm -i ubuntu:bionic <<EOF
+    apt-get update && apt-get install -y gpg ca-certificates
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
+    sh -c 'echo "deb http://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list'
+    apt-get update && apt-get install -y materialized
+    materialized --version
+    EOF
+    ```
+  - [ ] `docker run --rm materialize/materialized:latest --version`
+  - [ ] substitute in the correct version in this one: `docker run --rm materialize/materialized:v0.X.Y --version`
 
 [bintray]: https://bintray.com/beta/#/materialize/apt/materialized
 
@@ -237,24 +244,38 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 ### Update the main branch for the next version
 
-- [ ] On `main`, update the various files that must be up to date:
+- [ ] On `main`, verify the various files that must be up to date:
 
-  - [ ] Ensure that the [release notes] are up to date, including the current version.
+  - Ensure that the [release notes] are up to date, including the current version.
 
-  - [ ] Ensure that [`doc/user/config.toml`] has the correct version, as updated in the "Final
+  - Ensure that [`doc/user/config.toml`] has the correct version, as updated in the "Final
     Release / create git tag" step
 
-  - [ ] Ping `@relnotes-team` in `#release` to let them know the release process
-    is finished, and that they should publish any appropriate blog posts and
-    release announcements
+  - Ping `#release` again:
+
+    > @relnotes-team the release is complete! we can post to the community slack
+    > channel and publish any appropriate blog posts
+
+  - Post a link to the release tag in the `#general` channel, something like the
+    following, substituting in the correct version:
+
+    > 🎉🤘 Release v0.X.Y is complete! https://github.com/MaterializeInc/materialize/releases/tag/v0.X.Y 🤘🎉
 
 ## Finish
 
-- [ ] Update the current status at the top of this issue.
-- [ ] Create a slack alert for the next person to start the release (according to [the release
-  schedule][schedule]) in the #release channel.
-- [ ] Ask the product manager to make the release announcement in our community Slack.
-- [ ] Close this issue.
+- (optional) Update the current status at the top of this issue.
+- [ ] If this release ran over a week late, update the repeating slack reminder
+  in the `release` channel.
+
+  you can view and delete existing reminders by typing `/remind list` in
+  `#release`
+
+  I used the following to create the repeating alert, just modify the start date
+  to the correct date:
+
+  > /remind #release "@release-team start the next release" on June 21st every 2 weeks
+
+- Close this issue.
 
 [`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml
 [`LICENSE`]: https://github.com/MaterializeInc/materialize/tree/main/LICENSE
