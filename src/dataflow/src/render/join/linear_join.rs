@@ -24,7 +24,7 @@ use expr::{MapFilterProject, MirScalarExpr};
 use repr::{Row, RowArena};
 
 use crate::operator::CollectionExt;
-use crate::render::context::CollectionRepresentation;
+use crate::render::context::CollectionBundle;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context, Diff};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
@@ -175,10 +175,10 @@ where
 {
     pub fn render_join(
         &mut self,
-        inputs: Vec<CollectionRepresentation<G, Row, T>>,
+        inputs: Vec<CollectionBundle<G, Row, T>>,
         linear_plan: LinearJoinPlan,
         scope: &mut G,
-    ) -> CollectionRepresentation<G, Row, T> {
+    ) -> CollectionBundle<G, Row, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
 
@@ -272,7 +272,7 @@ where
             }
 
             // Return joined results and all produced errors collected together.
-            CollectionRepresentation::from_collections(
+            CollectionBundle::from_collections(
                 joined,
                 differential_dataflow::collection::concatenate(scope, errors),
             )
@@ -288,7 +288,7 @@ where
         &mut self,
         mut joined: JoinedFlavor<G, T>,
         stream_key: Vec<MirScalarExpr>,
-        lookup_relation: CollectionRepresentation<G, Row, T>,
+        lookup_relation: CollectionBundle<G, Row, T>,
         lookup_key: Vec<MirScalarExpr>,
         closure: JoinClosure,
         errors: &mut Vec<Collection<G, DataflowError>>,

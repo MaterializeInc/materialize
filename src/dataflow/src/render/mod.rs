@@ -122,7 +122,7 @@ use ore::iter::IteratorExt;
 use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::render::context::CollectionRepresentation;
+use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{CacheMessage, LocalInput};
 use crate::source::timestamp::TimestampBindingRc;
@@ -276,7 +276,7 @@ where
             let err_arranged = err_arranged.enter(region);
             self.update_id(
                 Id::Global(idx.on_id),
-                CollectionRepresentation::from_expressions(
+                CollectionBundle::from_expressions(
                     idx.keys.clone(),
                     ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
                 ),
@@ -375,7 +375,7 @@ where
         plan: plan::Plan,
         scope: &mut G,
         worker_index: usize,
-    ) -> CollectionRepresentation<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, G::Timestamp> {
         use plan::Plan;
         match plan {
             Plan::Constant { rows } => {
@@ -401,7 +401,7 @@ where
                     .to_stream(scope)
                     .as_collection();
 
-                CollectionRepresentation::from_collections(ok_collection, err_collection)
+                CollectionBundle::from_collections(ok_collection, err_collection)
             }
             Plan::Get { id, mfp } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
@@ -413,7 +413,7 @@ where
                     collection
                 } else {
                     let (oks, errs) = collection.as_collection_core(mfp);
-                    CollectionRepresentation::from_collections(oks, errs)
+                    CollectionBundle::from_collections(oks, errs)
                 }
             }
             Plan::Let { id, value, body } => {
@@ -433,7 +433,7 @@ where
                     input
                 } else {
                     let (oks, errs) = input.as_collection_core(mfp);
-                    CollectionRepresentation::from_collections(oks, errs)
+                    CollectionBundle::from_collections(oks, errs)
                 }
             }
             Plan::FlatMap {
@@ -482,7 +482,7 @@ where
             Plan::Negate { input } => {
                 let input = self.render_plan(*input, scope, worker_index);
                 let (oks, errs) = input.as_collection();
-                CollectionRepresentation::from_collections(oks.negate(), errs)
+                CollectionBundle::from_collections(oks.negate(), errs)
             }
             Plan::Threshold { input, arity } => {
                 let input = self.render_plan(*input, scope, worker_index);
@@ -498,7 +498,7 @@ where
                 }
                 let oks = differential_dataflow::collection::concatenate(scope, oks);
                 let errs = differential_dataflow::collection::concatenate(scope, errs);
-                CollectionRepresentation::from_collections(oks, errs)
+                CollectionBundle::from_collections(oks, errs)
             }
             Plan::ArrangeBy { input, keys } => {
                 let input = self.render_plan(*input, scope, worker_index);
@@ -597,58 +597,160 @@ pub mod plan {
     /// expect more of the plans to do the same in the future, without consultation.
     #[derive(Debug)]
     pub enum Plan {
+        /// A collection containing a pre-determined collection.
         Constant {
+            /// Explicit update triples for the collection.
             rows: Result<Vec<(Row, repr::Timestamp, isize)>, EvalError>,
         },
+        /// A reference to a bound collection.
+        ///
+        /// This is commonly either an external reference to an existing source or
+        /// maintained arrangement, or an internal reference to a `Let` identifier.
         Get {
+            /// A global or local identifier nameing the collection.
             id: Id,
+            /// Any linear operator work to apply as part of producing the data.
+            ///
+            /// This logic allows us to efficiently extract collections from data
+            /// that have been pre-arranged, avoiding copying rows that are not
+            /// used and columns that are projected away.
             mfp: MapFilterProject,
         },
+        /// Binds `value` to `id`, and then results in `body` with that binding.
+        ///
+        /// This stage has the effect of sharing `value` across multiple possible
+        /// uses in `body`, and is the only mechanism we have for sharing collection
+        /// information across parts of a dataflow.
+        ///
+        /// The binding is not available outside of `body`.
         Let {
+            /// The local identifier to be used, available to `body` as `Id::Local(id)`.
             id: LocalId,
+            /// The collection that should be bound to `id`.
             value: Box<Plan>,
+            /// The collection that results, which is allowed to contain `Get` stages
+            /// that reference `Id::Local(id)`.
             body: Box<Plan>,
         },
+        /// Map, Filter, and Project operators.
+        ///
+        /// This stage contains work that we would ideally like to fuse to other plan
+        /// stages, but for practical reasons cannot. For example: reduce, threshold,
+        /// and topk stages are not able to absorb this operator.
         Mfp {
+            /// The input collection.
             input: Box<Plan>,
+            /// Linear operator to apply to each record.
             mfp: MapFilterProject,
         },
+        /// A variable number of output records for each input record.
+        ///
+        /// This stage is a bit of a catch-all for logic that does not easily fit in
+        /// map stages. This includes table valued functions, but also functions of
+        /// multiple arguments, and functions that modify the sign of updates.
+        ///
+        /// This stage allows a `MapFilterProject` operator to be fused to its output,
+        /// and this can be very important as otherwise the output of `func` is just
+        /// appended to the input record, for as many outputs as it has. This has the
+        /// unpleasant default behavior of repeating potentially large records that
+        /// are being unpacked, producing quadratic output in those cases. Instead,
+        /// in these cases use a `mfp` member that projects away these large fields.
         FlatMap {
+            /// The input collection.
             input: Box<Plan>,
+            /// The variable-record emitting function.
             func: TableFunc,
+            /// Expressions that for each row prepare the arguments to `func`.
             exprs: Vec<MirScalarExpr>,
+            /// Linear operator to apply to each record produced by `func`.
             mfp: MapFilterProject,
         },
+        /// A multiway relational equijoin, with fused map, filter, and projection.
+        ///
+        /// This stage performs a multiway join among `inputs`, using the equality
+        /// constraints expressed in `plan`. The plan also describes the implementataion
+        /// strategy we will use, and any pushed down per-record work.
         Join {
+            /// An ordered list of inputs that will be joined.
             inputs: Vec<Plan>,
+            /// Detailed information about the implementation of the join.
+            ///
+            /// This includes information about the implementation strategy, but also
+            /// any map, filter, project work that we might follow the join with, but
+            /// potentially pushed down into the implementation of the join.
             plan: JoinPlan,
         },
+        /// Aggregation by key.
         Reduce {
+            /// The input collection.
             input: Box<Plan>,
+            /// A plan for changing input records into key, value pairs.
             key_val_plan: KeyValPlan,
+            /// A plan for performing the reduce.
+            ///
+            /// The implementation of reduction has several different strategies based
+            /// on the properties of the reduction, and the input itself. Please check
+            /// out the documentation for this type for more detail.
             plan: ReducePlan,
         },
+        /// Key-based "Top K" operator, retaining the first K records in each group.
         TopK {
+            /// The input collection.
             input: Box<Plan>,
+            /// The columns that form the key for each group.
             group_key: Vec<usize>,
+            /// Ordering that is used within each group.
             order_key: Vec<expr::ColumnOrder>,
+            /// Optionally, an upper bound on the per-group ordinal position of the
+            /// records to produce from each group.
             limit: Option<usize>,
+            /// A lower bound on the per-group ordinal position of the records to
+            /// produce from each group.
+            ///
+            /// This can be set to zero to have no effect.
             offset: usize,
+            /// True if the input collection contains no retractions.
             monotonic: bool,
+            /// The number of columns in the input and output.
             arity: usize,
         },
+        /// Inverts the sign of each update..
         Negate {
+            /// The input collection.
             input: Box<Plan>,
         },
+        /// Filters records that accumulate negatively.
+        ///
+        /// Although the operator suppresses updates, it is a stateful operator taking
+        /// resources proportional to the number of records with non-zero accumulation.
         Threshold {
+            /// The input collection.
             input: Box<Plan>,
+            /// The number of columns in the input and output.
             arity: usize,
         },
+        /// Adds the contents of the input collections.
+        ///
+        /// Importantly, this is *multiset* union, so the multiplicities of records will
+        /// add. This is in contrast to *set* union, where the multiplicities would be
+        /// capped at one. A set union can be formed with `Union` followed by `Reduce`
+        /// implementing the "distinct" operator.
         Union {
+            /// The input collections.
             inputs: Vec<Plan>,
         },
+        /// The `input` plan, but with additional arrangements.
+        ///
+        /// This operator does not change the logical contents of `input`, but ensures
+        /// that certain arrangements are available in the results. This operator can
+        /// be important for e.g. the `Join` stage which benefits from multiple arrangements
+        /// or to cap a `Plan` so that indexes can be exported.
         ArrangeBy {
+            /// The input collection.
             input: Box<Plan>,
+            /// A list of arrangement keys that will be added to those of the input.
+            ///
+            /// If any of these keys are already present in the input, they have no effect.
             keys: Vec<Vec<MirScalarExpr>>,
         },
     }

@@ -20,7 +20,7 @@ use timely::dataflow::Scope;
 use expr::ColumnOrder;
 use repr::{Diff, Row};
 
-use crate::render::context::CollectionRepresentation;
+use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -30,14 +30,14 @@ where
 {
     pub fn render_topk(
         &mut self,
-        input: CollectionRepresentation<G, Row, G::Timestamp>,
+        input: CollectionBundle<G, Row, G::Timestamp>,
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
         limit: Option<usize>,
         offset: usize,
         monotonic: bool,
         arity: usize,
-    ) -> CollectionRepresentation<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, G::Timestamp> {
         let (ok_input, err_input) = input.as_collection();
 
         // We create a new region to compartmentalize the topk logic.
@@ -95,7 +95,7 @@ where
             ok_result.leave_region()
         });
 
-        return CollectionRepresentation::from_collections(ok_result, err_input);
+        return CollectionBundle::from_collections(ok_result, err_input);
 
         /// Constructs a TopK dataflow subgraph.
         fn build_topk<G>(

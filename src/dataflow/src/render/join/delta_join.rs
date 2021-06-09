@@ -28,7 +28,7 @@ use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
-use crate::render::context::CollectionRepresentation;
+use crate::render::context::CollectionBundle;
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 
@@ -194,10 +194,10 @@ where
     /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join(
         &mut self,
-        inputs: Vec<CollectionRepresentation<G, Row, G::Timestamp>>,
+        inputs: Vec<CollectionBundle<G, Row, G::Timestamp>>,
         join_plan: DeltaJoinPlan,
         scope: &mut G,
-    ) -> CollectionRepresentation<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, G::Timestamp> {
         // Collects error streams for the ambient scope.
         let mut scope_errs = Vec::new();
 
@@ -466,7 +466,7 @@ where
                 differential_dataflow::collection::concatenate(scope, scope_errs),
             )
         });
-        CollectionRepresentation::from_collections(oks, errs)
+        CollectionBundle::from_collections(oks, errs)
     }
 }
 

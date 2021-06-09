@@ -86,7 +86,7 @@ use repr::{Datum, DatumList, Row, RowArena};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
-use crate::render::context::CollectionRepresentation;
+use crate::render::context::CollectionBundle;
 use crate::render::datum_vec::DatumVec;
 use crate::render::ArrangementFlavor;
 
@@ -573,10 +573,10 @@ where
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &mut self,
-        input: CollectionRepresentation<G, Row, T>,
+        input: CollectionBundle<G, Row, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
-    ) -> CollectionRepresentation<G, Row, T> {
+    ) -> CollectionBundle<G, Row, T> {
         let KeyValPlan {
             key_plan,
             val_plan,
@@ -638,7 +638,7 @@ where
 
         // First, let's plan out what we are going to do with this reduce
         let arrangement = reduce_plan.render(ok_input);
-        CollectionRepresentation::from_columns(
+        CollectionBundle::from_columns(
             0..key_arity,
             ArrangementFlavor::Local(arrangement, err_input.arrange()),
         )

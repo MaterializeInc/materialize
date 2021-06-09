@@ -14,7 +14,7 @@ use expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use repr::{Row, RowArena};
 
 use crate::operator::StreamExt;
-use crate::render::context::CollectionRepresentation;
+use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 use crate::render::datum_vec::DatumVec;
 
@@ -25,11 +25,11 @@ where
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(
         &mut self,
-        input: CollectionRepresentation<G, Row, G::Timestamp>,
+        input: CollectionBundle<G, Row, G::Timestamp>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
-    ) -> CollectionRepresentation<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, G::Timestamp> {
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_collection();
         let (oks, errs) = ok_collection.inner.flat_map_fallible({
@@ -72,6 +72,6 @@ where
         let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
         let err_collection = err_collection.concat(&new_err_collection);
-        CollectionRepresentation::from_collections(ok_collection, err_collection)
+        CollectionBundle::from_collections(ok_collection, err_collection)
     }
 }

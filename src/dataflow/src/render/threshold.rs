@@ -15,7 +15,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use repr::Row;
 
-use crate::render::context::CollectionRepresentation;
+use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 
 impl<G, T> Context<G, Row, T>
@@ -26,9 +26,9 @@ where
 {
     pub fn render_threshold(
         &mut self,
-        mut input: CollectionRepresentation<G, Row, T>,
+        mut input: CollectionBundle<G, Row, T>,
         arity: usize,
-    ) -> CollectionRepresentation<G, Row, T> {
+    ) -> CollectionBundle<G, Row, T> {
         // Arrange the input by all columns in order.
         // Different trace variants require different implementations because their
         // types are different, but the logic is identical.
@@ -52,7 +52,7 @@ where
                         }
                     },
                 );
-                CollectionRepresentation::from_columns(
+                CollectionBundle::from_columns(
                     0..arity,
                     ArrangementFlavor::Local(oks, errs),
                 )
@@ -70,7 +70,7 @@ where
                 );
                 use differential_dataflow::operators::arrange::ArrangeBySelf;
                 let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
-                CollectionRepresentation::from_columns(
+                CollectionBundle::from_columns(
                     0..arity,
                     ArrangementFlavor::Local(oks, errs),
                 )

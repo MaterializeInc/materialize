@@ -100,7 +100,7 @@ where
                 let err_collection = Collection::empty(scope);
                 self.insert_id(
                     Id::Global(src_id),
-                    crate::render::CollectionRepresentation::from_collections(
+                    crate::render::CollectionBundle::from_collections(
                         ok_collection,
                         err_collection,
                     ),
@@ -493,7 +493,7 @@ where
                 // Introduce the stream by name, as an unarranged collection.
                 self.insert_id(
                     Id::Global(src_id),
-                    crate::render::CollectionRepresentation::from_collections(
+                    crate::render::CollectionBundle::from_collections(
                         collection,
                         err_collection,
                     ),

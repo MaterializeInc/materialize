@@ -80,7 +80,7 @@ where
     /// potentially incorrect results are visible in sinks.
     pub as_of_frontier: Antichain<repr::Timestamp>,
     /// Bindings of identifiers to collections.
-    pub bindings: BTreeMap<Id, CollectionRepresentation<S, V, T>>,
+    pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
 
 impl<S: Scope, V: Data, T> Context<S, V, T>
@@ -110,18 +110,18 @@ where
     pub fn insert_id(
         &mut self,
         id: Id,
-        collection: CollectionRepresentation<S, V, T>,
-    ) -> Option<CollectionRepresentation<S, V, T>> {
+        collection: CollectionBundle<S, V, T>,
+    ) -> Option<CollectionBundle<S, V, T>> {
         self.bindings.insert(id, collection)
     }
-    /// Remove a collection representation by an identifier.
+    /// Remove a collection bundle by an identifier.
     ///
     /// The primary use of this method is uninstalling `Let` bindings.
-    pub fn remove_id(&mut self, id: Id) -> Option<CollectionRepresentation<S, V, T>> {
+    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, V, T>> {
         self.bindings.remove(&id)
     }
-    /// Melds a collection to whatever exists.
-    pub fn update_id(&mut self, id: Id, collection: CollectionRepresentation<S, V, T>) {
+    /// Melds a collection bundle to whatever exists.
+    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, V, T>) {
         if !self.bindings.contains_key(&id) {
             self.bindings.insert(id, collection);
         } else {
@@ -137,8 +137,8 @@ where
             }
         }
     }
-    /// Look up a collection representation by an identifier.
-    pub fn lookup_id(&self, id: Id) -> Option<CollectionRepresentation<S, V, T>> {
+    /// Look up a collection bundle by an identifier.
+    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, V, T>> {
         self.bindings.get(&id).cloned()
     }
 }
@@ -153,6 +153,9 @@ where
     /// A dataflow-local arrangement.
     Local(Arrangement<S, V>, ErrArrangement<S>),
     /// An imported trace from outside the dataflow.
+    ///
+    /// The `GlobalId` identifier exists so that exports of this same trace
+    /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
         ArrangementImport<S, V, T>,
@@ -165,7 +168,7 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionRepresentation<S: Scope, V: Data, T: Lattice>
+pub struct CollectionBundle<S: Scope, V: Data, T: Lattice>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -174,12 +177,12 @@ where
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
 }
 
-impl<S: Scope, V: Data, T: Lattice> CollectionRepresentation<S, V, T>
+impl<S: Scope, V: Data, T: Lattice> CollectionBundle<S, V, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
-    /// Construct a new collection representation from update streams.
+    /// Construct a new collection bundle from update streams.
     pub fn from_collections(
         oks: Collection<S, V, Diff>,
         errs: Collection<S, DataflowError, Diff>,
@@ -219,7 +222,7 @@ where
     ///
     /// This method presents the contents as they are, without further computation.
     /// If you have logic that could be applied to each record, consider using the
-    /// `as_collection_mfp` methods which allows this and can reduce the work done.
+    /// `as_collection_core` methods which allows this and can reduce the work done.
     pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
         if let Some(collection) = &self.collection {
             collection.clone()
@@ -228,7 +231,7 @@ where
                 .arranged
                 .values()
                 .next()
-                .expect("Invariant violated: CollectionRepresentation contains no collection.");
+                .expect("Invariant violated: CollectionBundle contains no collection.");
             match arranged {
                 ArrangementFlavor::Local(oks, errs) => (
                     oks.as_collection(|_k, v| v.clone()),
@@ -387,12 +390,12 @@ where
     }
 }
 
-impl<S: Scope, T: Lattice> CollectionRepresentation<S, repr::Row, T>
+impl<S: Scope, T: Lattice> CollectionBundle<S, repr::Row, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
-    /// Ensures that arrangement in `keys` are present, creating them if they do not exist.
+    /// Ensures that arrangements in `keys` are present, creating them if they do not exist.
     pub fn ensure_arrangements<K: IntoIterator<Item = Vec<MirScalarExpr>>>(
         mut self,
         keys: K,
@@ -431,7 +434,7 @@ where
     }
 }
 
-impl<S> CollectionRepresentation<S, repr::Row, repr::Timestamp>
+impl<S> CollectionBundle<S, repr::Row, repr::Timestamp>
 where
     S: Scope<Timestamp = repr::Timestamp>,
 {
@@ -452,7 +455,7 @@ where
             mfp.optimize();
             let mfp2 = mfp.clone();
             let mfp_plan = mfp.into_plan().unwrap();
-            // TODO(): Improve key selection heuristic.
+            // TODO: Improve key selection heuristic.
             let key_val = self
                 .constrained_keys(move |exprs| mfp2.literal_constraints(exprs))
                 .pop();
