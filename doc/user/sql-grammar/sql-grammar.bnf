@@ -103,7 +103,7 @@ create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
   'HOST' ( host '=' val ) (port '=' val) (user '=' val) (password '=' val) (dbname '=' val) (sslmode '=' val)?
-  'PUBLICATION' publication_name 'TABLE' ( (table_name)?  ('(' colname datatype ')')? )
+  'PUBLICATION' publication_name
 create_source_protobuf_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -219,6 +219,10 @@ create_type ::=
 create_user ::=
     'CREATE' 'USER' user_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_view ::=
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
+  'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
+create_views ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt

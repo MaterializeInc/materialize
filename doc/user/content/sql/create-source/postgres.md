@@ -19,24 +19,24 @@ This document details how to connect Materialize to a Postgres database.
 Field | Use
 ------|-----
 **MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. **Currently required for all Postgres sources.** For more information, see [Materialized source details](#materialized-source-details).
-_src_name_  | The name for the source, which is used as its table name within SQL.
+_src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **HOST** | Postgres host. See [Host options](#host-options) for details.
 **PUBLICATION** _publication_name_ | Postgres publication.
-**TABLE** _table_name_ |
-_src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
-_col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
 
 ### Host options
 
 Field | Type | Value
 ------|------|------
-_host_  |
-_port_  |
-_user_  |
-_password_  |
-_dbname_ |
-_sslmode_ | Supported options: `disable`, `prefer`, `require`, `verify-ca`, `verify-full`
+_host_  | Host for Postgres connection.
+_port_  | Port for Postgres connection.
+_user_  | User for Postgres connection.
+_password_  | Password for Postgres connection.
+_dbname_ | Postgres database name.
+_sslmode_ | Optionally specify TLS mode. Valid options are `disable`, `prefer`, `require`, `verify-ca`, and `verify-full`.
+_sslcert_ | SSL certificate.
+_sslkey_  |  SSL key.
+_sslrootcert_  | SSL root certificate.
 
 ## Details
 
@@ -76,8 +76,8 @@ Note that if you stop or delete Materialize without first dropping the Postgres 
 #### Restrictions
 
 - Materialize does not support changes to schemas for existing publications. You will need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
-- Sources can only be created from publications that use [data types](/sql/data-types/) supported by Materialize.
-- Materialize only supports TOASTED values for append-only tables. Practically speaking, you can include rows with TOASTED values as long as they are never updated or deleted, or you can disable TOAST on the original Postgres table.
+- Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize.
+- Materialize only supports [TOASTED](https://www.postgresql.org/docs/9.5/storage-toast.html) values for append-only tables. Practically speaking, you can include rows with TOASTED values as long as they are never updated or deleted, or you can disable TOAST on the original Postgres table.
 
 
 ## Example
@@ -100,7 +100,10 @@ ALTER ROLE "user" WITH REPLICATION;
 
 Set replica identity full:
 
-(see Debezium instructions)
+```sql
+ALTER TABLE foo
+REPLICA IDENTITY FULL;
+```
 
 Create a publication:
 
