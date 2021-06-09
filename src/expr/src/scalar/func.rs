@@ -816,6 +816,17 @@ fn cast_jsonb_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalE
     }
 }
 
+fn cast_jsonb_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+    match a {
+        Datum::Int64(_) => cast_int64_to_apd(a, scale),
+        Datum::Float64(_) => cast_float64_to_apd(a, scale),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "apd".into(),
+        }),
+    }
+}
+
 fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
         Datum::True | Datum::False => Ok(a),
@@ -3636,6 +3647,7 @@ pub enum UnaryFunc {
     CastJsonbToFloat32,
     CastJsonbToFloat64,
     CastJsonbToDecimal(u8),
+    CastJsonbToAPD(Option<u8>),
     CastJsonbToBool,
     CastUuidToString,
     CastRecordToString {
@@ -3839,6 +3851,7 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToFloat32 => cast_jsonb_to_float32(a),
             UnaryFunc::CastJsonbToFloat64 => cast_jsonb_to_float64(a),
             UnaryFunc::CastJsonbToDecimal(scale) => cast_jsonb_to_decimal(a, *scale),
+            UnaryFunc::CastJsonbToAPD(scale) => cast_jsonb_to_apd(a, *scale),
             UnaryFunc::CastJsonbToBool => cast_jsonb_to_bool(a),
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             UnaryFunc::CastRecordToString { ty }
@@ -4015,7 +4028,8 @@ impl UnaryFunc {
             CastInt32ToAPD(scale)
             | CastInt64ToAPD(scale)
             | CastFloat32ToAPD(scale)
-            | CastFloat64ToAPD(scale) => ScalarType::APD { scale: *scale }.nullable(in_nullable),
+            | CastFloat64ToAPD(scale)
+            | CastJsonbToAPD(scale) => ScalarType::APD { scale: *scale }.nullable(in_nullable),
 
             CastInt32ToOid => ScalarType::Oid.nullable(in_nullable),
             CastOidToInt32 => ScalarType::Oid.nullable(in_nullable),
@@ -4255,6 +4269,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
             UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
             UnaryFunc::CastJsonbToDecimal(_) => f.write_str("jsonbtodec"),
+            UnaryFunc::CastJsonbToAPD(_) => f.write_str("jsonbtoapd"),
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
