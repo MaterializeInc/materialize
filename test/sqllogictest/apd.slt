@@ -2000,6 +2000,16 @@ SELECT '1.23456789'::apd(39,5) < '1.23456789'::apd(39,4);
 ----
 true
 
+# Aggregate functions
+
+query T
+SELECT
+    (avg(a))::text FROM (
+        SELECT a FROM unnest(ARRAY['1.4'::apd(39,5), '1.8'::apd(39,4)]) a
+    );
+----
+1.6
+
 query T
 select (max(a))::text from (select a from unnest(ARRAY['1.4'::apd(39,5), '1.8'::apd(39,4)]) a);
 ----
