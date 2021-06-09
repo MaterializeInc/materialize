@@ -33,6 +33,7 @@ Kinesis (Alpha) | -                            | [Text/bytes + Kinesis](./text-k
 S3              | -                            | [Text/bytes + S3](./text-s3)           | -                                        | [CSV + S3](./csv-s3)           | [JSON + S3](./json-s3)
 PubNub          | -                            | [Text + PubNub](./text-pubnub)         | -                                        | -                              | [JSON + PubNub](./json-pubnub)
 Local files     | [Avro + file](./avro-file)   | [Text/bytes + file](./text-file)       | -                                        | [CSV + files](./csv-file)      | [JSON + file](./json-file)
+[Postgres](./postgres)  | -  | - | -  | -  | -
 
 
 Don't see what you're looking for? [Let us know on GitHub](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md).

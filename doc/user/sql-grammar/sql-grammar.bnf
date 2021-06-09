@@ -99,6 +99,11 @@ create_source_json_kafka ::=
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'BYTES'
+create_source_postgres ::=
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  'FROM' 'POSTGRES'
+  'HOST' ( host '=' val ) (port '=' val) (user '=' val) (password '=' val) (dbname '=' val) (sslmode '=' val)?
+  'PUBLICATION' publication_name 'TABLE' ( (table_name)?  ('(' colname datatype ')')? )
 create_source_protobuf_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
