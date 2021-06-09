@@ -1668,6 +1668,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MaxDate
         | AggregateFunc::MaxTimestamp
         | AggregateFunc::MaxTimestampTz
+        | AggregateFunc::MinApd
         | AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
         | AggregateFunc::MinFloat32
@@ -1769,7 +1770,8 @@ pub mod monoids {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz => Some(ReductionMonoid::Max(row)),
-            AggregateFunc::MinInt32
+            AggregateFunc::MinApd
+            | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64

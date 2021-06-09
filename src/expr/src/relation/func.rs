@@ -168,6 +168,18 @@ where
     Datum::from(x)
 }
 
+fn min_apd<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<OrderedDecimal<apd::Apd>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_apd())
+        .min();
+    x.map(Datum::APD).unwrap_or(Datum::Null)
+}
+
 fn min_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -458,6 +470,7 @@ pub enum AggregateFunc {
     MaxDate,
     MaxTimestamp,
     MaxTimestampTz,
+    MinApd,
     MinInt32,
     MinInt64,
     MinFloat32,
@@ -513,6 +526,7 @@ impl AggregateFunc {
             AggregateFunc::MaxDate => max_date(datums),
             AggregateFunc::MaxTimestamp => max_timestamp(datums),
             AggregateFunc::MaxTimestampTz => max_timestamptz(datums),
+            AggregateFunc::MinApd => min_apd(datums),
             AggregateFunc::MinInt32 => min_int32(datums),
             AggregateFunc::MinInt64 => min_int64(datums),
             AggregateFunc::MinFloat32 => min_float32(datums),
@@ -687,6 +701,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MaxDate => f.write_str("max"),
             AggregateFunc::MaxTimestamp => f.write_str("max"),
             AggregateFunc::MaxTimestampTz => f.write_str("max"),
+            AggregateFunc::MinApd => f.write_str("min"),
             AggregateFunc::MinInt32 => f.write_str("min"),
             AggregateFunc::MinInt64 => f.write_str("min"),
             AggregateFunc::MinFloat32 => f.write_str("min"),

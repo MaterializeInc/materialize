@@ -67,4 +67,6 @@ pub const TYPE_APD_OID: u32 = 16_438;
 pub const FUNC_LIST_EQ_OID: u32 = 16_439;
 pub const FUNC_MZ_ROW_SIZE: u32 = 16_440;
 pub const FUNC_MAX_APD_OID: u32 = 16_441;
-// next ID: 16_442
+pub const FUNC_MAX_APD_OID: u32 = 16_442;
+pub const FUNC_MIN_APD_OID: u32 = 16_443;
+// next ID: 16_444

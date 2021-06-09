@@ -1430,6 +1430,11 @@ select (max(a))::text from (select a from unnest(ARRAY['1.4'::apd(39,5), '1.8'::
 ----
 1.8
 
+query T
+select (min(a))::text from (select a from unnest(ARRAY['1.4'::apd(39,5), '1.8'::apd(39,4)]) a);
+----
+1.4
+
 # Distinct, except
 # regression tests for #6877 #6912
 
