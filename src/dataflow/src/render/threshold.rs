@@ -52,10 +52,7 @@ where
                         }
                     },
                 );
-                CollectionBundle::from_columns(
-                    0..arity,
-                    ArrangementFlavor::Local(oks, errs),
-                )
+                CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
                 let oks = oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
@@ -70,10 +67,7 @@ where
                 );
                 use differential_dataflow::operators::arrange::ArrangeBySelf;
                 let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
-                CollectionBundle::from_columns(
-                    0..arity,
-                    ArrangementFlavor::Local(oks, errs),
-                )
+                CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
             }
         }
     }

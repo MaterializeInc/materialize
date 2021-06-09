@@ -770,6 +770,10 @@ pub mod plan {
 
             // Extract a maximally large MapFilterProject from `expr`.
             // We will then try and push this in to the resulting expression.
+            //
+            // Importantly, `mfp` may contain temporal operators and not be a "safe" MFP.
+            // While we would eventually like all plan stages to be able to absorb such
+            // general operators, not all of them can.
             let (mut mfp, expr) = MapFilterProject::extract_from_expression(expr);
             // We attempt to plan what we have remaining, in the context of `mfp`.
             // We may not be able to do this, and must wrap some operators with a `Mfp` stage.
@@ -797,6 +801,7 @@ pub mod plan {
                     (Some(mfp), plan)
                 }
                 MirRelationExpr::Get { id, typ: _ } => (
+                    // This stage can absorb arbitrary MFP operators.
                     None,
                     Plan::Get {
                         id: id.clone(),
@@ -831,6 +836,7 @@ pub mod plan {
                     }
                     let input = Box::new(Plan::from_mir(input)?);
                     (
+                        // This stage can absorb arbitrary MFP instances.
                         None,
                         Plan::FlatMap {
                             input,
@@ -859,7 +865,8 @@ pub mod plan {
                     for input in inputs.iter() {
                         plans.push(Plan::from_mir(input)?);
                     }
-
+                    // Extract temporal predicates as joins cannot currently absorb them.
+                    let temporal_mfp = mfp.extract_temporal();
                     let plan = match implementation {
                         expr::JoinImplementation::Differential((start, _start_arr), order) => {
                             JoinPlan::Linear(LinearJoinPlan::create_from(
@@ -883,7 +890,8 @@ pub mod plan {
                     };
 
                     (
-                        None,
+                        // This stage can absorb only non-temporal MFP instances.
+                        Some(temporal_mfp),
                         Plan::Join {
                             inputs: plans,
                             plan,
