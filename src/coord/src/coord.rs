@@ -2366,7 +2366,11 @@ impl Coordinator {
                 // peek completes.
                 let typ = source.typ();
                 map_filter_project = expr::MapFilterProject::new(typ.arity());
-                let key: Vec<_> = (0..typ.arity()).map(MirScalarExpr::Column).collect();
+                let key: Vec<MirScalarExpr> = typ
+                    .default_key()
+                    .iter()
+                    .map(|k| MirScalarExpr::Column(*k))
+                    .collect();
                 let view_id = self.allocate_transient_id()?;
                 let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
