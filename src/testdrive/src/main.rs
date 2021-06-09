@@ -163,7 +163,7 @@ async fn main() {
         aws_credentials,
         materialized_pgconfig: args.materialized_url,
         materialized_catalog_path: args.validate_catalog,
-        reset_materialized: !args.no_reset,
+        reset: !args.no_reset,
         ci_output: args.ci_output,
         default_timeout,
         seed: args.seed,
