@@ -404,6 +404,61 @@ SELECT ('0'::apd / '-1'::apd)::text
 ----
 0
 
+# mod
+
+query T
+SELECT ('3'::apd % '2'::apd)::text
+----
+1
+
+query T
+SELECT ('23'::apd % '4'::apd)::text
+----
+3
+
+query T
+SELECT ('4'::apd % '2'::apd)::text
+----
+0
+
+query T
+SELECT ('17.8'::apd % '4'::apd)::text
+----
+1.8
+
+query T
+SELECT ('20.1'::apd % '4.1'::apd)::text
+----
+3.7
+
+query T
+SELECT ('-16.3'::apd % '4.1'::apd)::text
+----
+-4
+
+query T
+SELECT ('20.1'::apd % '-4.1'::apd)::text
+----
+3.7
+
+query T
+SELECT ('-20.1'::apd % '-4.1'::apd)::text
+----
+-3.7
+
+query T
+SELECT ('NaN'::apd % '-4.1'::apd)::text
+----
+NaN
+
+query T
+SELECT ('-20.1'::apd % 'NaN'::apd)::text
+----
+NaN
+
+query error division by zero
+SELECT ('2'::apd % '0'::apd)::text
+
 # Specify scale
 query T
 SELECT ('0.2'::apd(39,1))::text;
