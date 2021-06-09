@@ -305,22 +305,6 @@ where
 
         let bundle = self.render_plan(render_plan, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
-
-        // NOTE(mcsherry): I don't understand this code, and why a type changes the behavior.
-        // if let Some(typ) = &object.typ {
-        //     self.clone_from_to(
-        //         &object.relation_expr,
-        //         &MirRelationExpr::global_get(object.id, typ.clone()),
-        //     );
-        // } else {
-        //     self.render_arrangeby(&object.relation_expr, Some(&object.id.to_string()));
-        //     // Under the premise that this is always an arrange_by aroung a global get,
-        //     // this will leave behind the arrangements bound to the global get, so that
-        //     // we will not tidy them up in the next pass.
-        // }
-
-        // Here we previously removed all local let bindings.
-        // They should all be uninstalled by `Let` rendering.
     }
 
     fn export_index(
@@ -396,11 +380,7 @@ where
         match plan {
             Plan::Constant { rows } => {
                 // Determine what this worker will contribute.
-                let locally = if worker_index == 0 {
-                    rows.clone()
-                } else {
-                    Ok(vec![])
-                };
+                let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match locally {
                     Ok(rows) => (rows, Vec::new()),
@@ -615,6 +595,7 @@ pub mod plan {
     /// compelling ways to represent renderable plans. Several stages have already
     /// encapsulated much of their logic in their own stage-specific plans, and we
     /// expect more of the plans to do the same in the future, without consultation.
+    #[derive(Debug)]
     pub enum Plan {
         Constant {
             rows: Result<Vec<(Row, repr::Timestamp, isize)>, EvalError>,
@@ -864,7 +845,7 @@ pub mod plan {
                     (Some(mfp), Plan::Threshold { input, arity })
                 }
                 MirRelationExpr::Union { base, inputs } => {
-                    let mut plans = Vec::new();
+                    let mut plans = Vec::with_capacity(1 + inputs.len());
                     plans.push(Self::from_mir(base)?);
                     for input in inputs.iter() {
                         plans.push(Self::from_mir(input)?)

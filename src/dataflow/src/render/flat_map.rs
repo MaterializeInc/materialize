@@ -30,8 +30,6 @@ where
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
     ) -> CollectionRepresentation<G, Row, G::Timestamp> {
-        let func = func.clone();
-        let exprs = exprs.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_collection();
         let (oks, errs) = ok_collection.inner.flat_map_fallible({

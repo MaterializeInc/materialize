@@ -39,6 +39,7 @@ pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
 /// A complete enumeration of possible join plans to render.
+#[derive(Debug)]
 pub enum JoinPlan {
     Linear(LinearJoinPlan),
     Delta(DeltaJoinPlan),

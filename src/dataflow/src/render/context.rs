@@ -338,15 +338,27 @@ where
                         let mut cursor = batch.cursor();
                         if let Some(key) = &key {
                             cursor.seek_key(batch, key);
-                        }
-                        if key.is_none() || cursor.get_key(batch) == key.as_ref() {
-                            while let Some(val) = cursor.get_val(batch) {
-                                cursor.map_times(batch, |time, diff| {
-                                    for datum in logic(RefOrMut::Ref(val), time, diff) {
-                                        session.give(datum);
-                                    }
-                                });
-                                cursor.step_val(batch);
+                            if cursor.get_key(batch) == Some(key) {
+                                while let Some(val) = cursor.get_val(batch) {
+                                    cursor.map_times(batch, |time, diff| {
+                                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                                            session.give(datum);
+                                        }
+                                    });
+                                    cursor.step_val(batch);
+                                }
+                            }
+                        } else {
+                            while let Some(_key) = cursor.get_key(batch) {
+                                while let Some(val) = cursor.get_val(batch) {
+                                    cursor.map_times(batch, |time, diff| {
+                                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                                            session.give(datum);
+                                        }
+                                    });
+                                    cursor.step_val(batch);
+                                }
+                                cursor.step_key(batch);
                             }
                         }
                     }

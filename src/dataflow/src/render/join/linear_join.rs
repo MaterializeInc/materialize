@@ -30,6 +30,7 @@ use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 
 // TODO(mcsherry): Identical to `DeltaPathPlan`; consider unifying.
+#[derive(Debug)]
 pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     source_relation: usize,
@@ -46,6 +47,7 @@ pub struct LinearJoinPlan {
 }
 
 // TODO(mcsherry): Identical to `DeltaStagePlan`; consider unifying.
+#[derive(Debug)]
 pub struct LinearStagePlan {
     /// The relation index into which we will look up.
     lookup_relation: usize,
