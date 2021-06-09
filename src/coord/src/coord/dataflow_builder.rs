@@ -74,7 +74,7 @@ impl<'a> DataflowBuilder<'a> {
                     dataflow.add_source_import(
                         entry.name().to_string(),
                         *id,
-                        SourceConnector::Local,
+                        SourceConnector::Local(table.timeline()),
                         table.desc.clone(),
                         *id,
                     );

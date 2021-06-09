@@ -70,7 +70,7 @@ use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
     SinkConnector, SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
-use dataflow_types::{SinkAsOf, SinkEnvelope};
+use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
@@ -1860,6 +1860,8 @@ impl Coordinator {
             depends_on,
         } = plan;
 
+        self.validate_timeline(view.expr.global_uses())?;
+
         let mut ops = vec![];
 
         if let Some(id) = replace {
@@ -2365,6 +2367,7 @@ impl Coordinator {
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
                 let typ = source.typ();
+                self.validate_timeline(inner.global_uses())?;
                 map_filter_project = expr::MapFilterProject::new(typ.arity());
                 let key: Vec<MirScalarExpr> = typ
                     .default_key()
@@ -2730,6 +2733,7 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
+                self.validate_timeline(decorrelated_plan.global_uses())?;
                 let optimized_plan =
                     self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
@@ -3217,6 +3221,67 @@ impl Coordinator {
         }
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
+    }
+
+    /// Return an error if the ids are from incompatible timelines. This should
+    /// be used to prevent users from doing things that are either meaningless
+    /// (joining data from timelines that have similar numbers with different
+    /// meanings like two separate debezium topics) or will never complete (joining
+    /// byo and realtime data).
+    fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<(), CoordError> {
+        let mut timelines = HashMap::new();
+
+        // Recurse through IDs to find all sources and tables, adding new ones to
+        // the set until we reach the bottom. Static views will end up with an empty
+        // timelines.
+        while let Some(id) = ids.pop() {
+            // Protect against possible infinite recursion. Not sure if it's possible, but
+            // a cheap prevention for the future.
+            if timelines.contains_key(&id) {
+                continue;
+            }
+            let entry = self.catalog.get_by_id(&id);
+            match entry.item() {
+                CatalogItem::Source(source) => {
+                    timelines.insert(id, source.connector.timeline());
+                }
+                CatalogItem::Index(index) => {
+                    ids.push(index.on);
+                }
+                CatalogItem::View(view) => {
+                    ids.extend(view.optimized_expr.global_uses());
+                }
+                CatalogItem::Table(table) => {
+                    timelines.insert(id, table.timeline());
+                }
+                _ => {}
+            }
+        }
+
+        let timelines: HashSet<Timeline> = timelines
+            .into_iter()
+            .map(|(_, timeline)| timeline)
+            .collect();
+
+        // If there's more than one timeline, we will not produce meaningful
+        // data to a user. Take, for example, some realtime source and a debezium
+        // consistency topic source. The realtime source uses something close to now
+        // for its timestamps. The debezium source starts at 1 and increments per
+        // transaction. We don't want to choose some timestamp that is valid for both
+        // of these because the debezium source will never get to the same value as the
+        // realtime source's "milliseconds since Unix epoch" value. And even if it did,
+        // it's not meaningful to join just because those two numbers happen to be the
+        // same now.
+        //
+        // Another example: assume two separate debezium consistency topics. Both
+        // start counting at 1 and thus have similarish numbers that probably overlap
+        // a lot. However it's still not meaningful to join those two at a specific
+        // transaction counter number because those counters are unrelated to the
+        // other.
+        if timelines.len() > 1 {
+            coord_bail!("Dataflow cannot use multiple timelines");
+        }
+        Ok(())
     }
 }
 

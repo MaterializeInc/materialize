@@ -622,6 +622,42 @@ pub enum Compression {
     None,
 }
 
+/// The meaning of the timestamp number produced by data sources. This type
+/// is not concerned with the source of the timestamp (like if the data came
+/// from a Debezium consistency topic or a CDCv2 stream), instead only what the
+/// timestamp number means.
+///
+/// Some variants here have attached data used to differentiate incomparable
+/// instantiations. These attached data types should be expanded in the future
+/// if we need to tell apart more kinds of sources.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum Timeline {
+    /// EpochMilliseconds means the timestamp is the number of milliseconds since
+    /// the Unix epoch.
+    EpochMilliseconds,
+    /// Counter means the timestamp starts at 1 and is incremented for each
+    /// transaction. It holds the BYO source so different instantiations can be
+    /// differentiated.
+    Counter(BringYourOwn),
+    /// External means the timestamp comes from an external data source and we
+    /// don't know what the number means. The attached String is the source's name,
+    /// which will result in different sources being incomparable.
+    External(String),
+    /// User means the user has manually specified a timeline. The attached
+    /// String is specified by the user, allowing them to decide sources that are
+    /// joinable.
+    User(String),
+}
+
+/// A struct to hold more specific information about where a BYO source
+/// came from so we can differentiate between topics of the same name across
+/// different brokers.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct BringYourOwn {
+    pub broker: String,
+    pub topic: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
     External {
@@ -630,8 +666,9 @@ pub enum SourceConnector {
         envelope: SourceEnvelope,
         consistency: Consistency,
         ts_frequency: Duration,
+        timeline: Timeline,
     },
-    Local,
+    Local(Timeline),
 }
 
 impl SourceConnector {
@@ -673,7 +710,14 @@ impl SourceConnector {
     pub fn caching_enabled(&self) -> bool {
         match self {
             SourceConnector::External { connector, .. } => connector.caching_enabled(),
-            SourceConnector::Local => false,
+            SourceConnector::Local(_) => false,
+        }
+    }
+
+    pub fn timeline(&self) -> Timeline {
+        match self {
+            SourceConnector::External { timeline, .. } => timeline.clone(),
+            SourceConnector::Local(timeline) => timeline.clone(),
         }
     }
 }
@@ -776,7 +820,7 @@ impl ExternalSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Consistency {
-    BringYourOwn(String),
+    BringYourOwn(BringYourOwn),
     RealTime,
 }
 

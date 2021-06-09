@@ -354,7 +354,7 @@ pub fn augment_connector(
                 Ok(Some(source_connector))
             }
         }
-        SourceConnector::Local => Ok(None),
+        SourceConnector::Local(_) => Ok(None),
     }
 }
 

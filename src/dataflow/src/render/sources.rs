@@ -86,7 +86,7 @@ where
         match src.connector.clone() {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
             // via SequencedCommand::Insert commands.
-            SourceConnector::Local => {
+            SourceConnector::Local(_) => {
                 let ((handle, capability), stream) = scope.new_unordered_input();
                 render_state
                     .local_inputs
@@ -110,6 +110,7 @@ where
                 envelope,
                 consistency,
                 ts_frequency,
+                timeline: _,
             } => {
                 // TODO(benesch): this match arm is hard to follow. Refactor.
 

@@ -513,6 +513,7 @@ impl Timestamper {
                         envelope,
                         consistency,
                         ts_frequency: _,
+                        timeline: _,
                     } = sc
                     {
                         (connector, encoding, envelope, consistency)
@@ -537,14 +538,14 @@ impl Timestamper {
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.",
+                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {:?}.",
                                       source_id, consistency_topic);
                                 let consumer = self.create_byo_connector(
                                     source_id,
                                     sc,
                                     enc.value(),
                                     env,
-                                    consistency_topic,
+                                    consistency_topic.topic,
                                 );
                                 if let Some(consumer) = consumer {
                                     self.byo_sources.insert(source_id, consumer);

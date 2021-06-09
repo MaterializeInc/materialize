@@ -65,7 +65,7 @@ pub(super) fn item_created(id: GlobalId, item: &CatalogItem) {
                 ExternalSourceConnector::PubNub(_) => SOURCE_COUNT_PUBNUB.inc(),
                 ExternalSourceConnector::S3(_) => SOURCE_COUNT_S3.inc(),
             },
-            SourceConnector::Local => {} // nothing interesting to users here
+            SourceConnector::Local(_) => {} // nothing interesting to users here
         },
         CatalogItem::Sink(Sink { connector, .. }) => match connector {
             SinkConnectorState::Pending(_) => {}
@@ -96,7 +96,7 @@ pub(super) fn item_dropped(id: GlobalId, item: &CatalogItem) {
                 ExternalSourceConnector::PubNub(_) => SOURCE_COUNT_PUBNUB.dec(),
                 ExternalSourceConnector::S3(_) => SOURCE_COUNT_S3.dec(),
             },
-            SourceConnector::Local => {} // nothing interesting to users here
+            SourceConnector::Local(_) => {} // nothing interesting to users here
         },
         CatalogItem::Sink(Sink { connector, .. }) => match connector {
             SinkConnectorState::Pending(_) => {}
