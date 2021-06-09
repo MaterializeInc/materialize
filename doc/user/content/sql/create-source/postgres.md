@@ -67,68 +67,67 @@ footprint](/sql/create-index/#memory-footprint).
 
 ### PostgreSQL source details
 
-Materialize makes use of PostgreSQL's native replication capabilities to create a continuously-updated replica of the desired Postgres tables.
+Materialize makes use of PostgreSQL's native replication capabilities to create a continuously updated replica of the desired Postgres tables.
 
-Before creating the source in Materialize, you must set up your Postgres database to allow logical replication, ensure that the user for your Materialize connection has `REPLICATION` privileges, and create a Postgres publication containing the data to be streamed to Materialize. The materialized source created from the publication contains the raw data stream of replication updates, which you can then split into the familiar Postgres table view with [`CREATE VIEWS`](/sql/create-views/).
+Before creating the source in Materialize, you must:
+
+- Set up your Postgres database to allow logical replication.
+- Ensure that the user for your Materialize connection has `REPLICATION` privileges.
+- Create a Postgres publication containing the data to be streamed to Materialize. Since Postgres sources are materialized (kept in memory) in their entirety, we strongly recommend that you limit publications only to the data you need to query.
+
+The materialized source created from the publication contains the raw data stream of replication updates, which you can then split into the familiar Postgres table view with [`CREATE VIEWS`](/sql/create-views/).
 
 Note that if you stop or delete Materialize without first dropping the Postgres source, the Postgres replication slot isn't deleted and will continue to accumulate data. In such cases, you may want to manually delete the Materialize replication slot in order to recover memory. Materialize replication slot names always begin with `materialize_` for easy identification.
 
-#### Restrictions
+#### Restrictions on Postgres sources
 
 - Materialize does not support changes to schemas for existing publications. You will need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
 - Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize.
 - Materialize only supports [TOASTED](https://www.postgresql.org/docs/9.5/storage-toast.html) values for append-only tables. Practically speaking, you can include rows with TOASTED values as long as they are never updated or deleted, or you can disable TOAST on the original Postgres table.
 
-
 ## Example
 
 ### Setting up PostgreSQL
 
-Allow logical replication:
+Before you create a Postgres source in Materialize, you must complete some prerequisite steps in ostgres.
 
-Update `postgresql.conf` with the line:
-
-```sql
-wal_level = logical
-```
-
-Assign the user `REPLICATION` privileges:
-
-```sql
-ALTER ROLE "user" WITH REPLICATION;
-```
-
-Set replica identity full:
-
-```sql
-ALTER TABLE foo
-REPLICA IDENTITY FULL;
-```
-
-Create a publication:
-
-```sql
-CREATE PUBLICATION mz_source FOR ALL TABLES;
-```
+1. Allow logical replication by updating `postgresql.conf` with the line:
+    ```sql
+    wal_level = logical
+    ```
+2. Assign the user `REPLICATION` privileges:
+    ```sql
+    ALTER ROLE "user" WITH REPLICATION;
+    ```
+3. Set replica identity to full:
+    ```sql
+    ALTER TABLE foo
+    REPLICA IDENTITY FULL;
+    ```
+4. Create a publication containing all the tables you wish to query in Materialize:
+    ```sql
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
+    ```
 
 ### Creating a source
 
 ```sql
-CREATE MATERIALIZED SOURCE "mz_source"
-FROM POSTGRES HOST 'host=postgres port=5432 user=host sslmode=disable dbname=postgres'
+CREATE MATERIALIZED SOURCE "mz_source" FROM POSTGRES
+HOST 'host=postgres port=5432 user=host sslmode=disable dbname=postgres'
 PUBLICATION 'mz_source';
 ```
 
 This creates a source that...
 
+- Connects to a Postgres server
 - Is raw data composed of all of the tables that went into the publication
 - Needs to broken out into more usable views
 
 ### Creating views
 
 ```sql
-CREATE VIEWS FROM SOURCE "repl_stream";
-SHOW VIEWS;
+CREATE VIEWS FROM SOURCE "mz_source";
+SHOW FULL VIEWS;
 ```
 
 This creates views that represent the replication stream broken out into the publication's composite tables. You can treat these tables as you would any other source and create materialized views from them.
