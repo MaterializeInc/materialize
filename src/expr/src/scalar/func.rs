@@ -21,7 +21,7 @@ use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
 };
-use dec::OrderedDecimal;
+use dec::{OrderedDecimal, Rounding};
 use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
@@ -856,6 +856,16 @@ fn ceil_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
     Datum::from(decimal.with_scale(scale).ceil().significand())
 }
 
+fn ceil_apd<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_apd();
+    let mut cx = apd::cx_datum();
+    cx.set_rounding(Rounding::Ceiling);
+    cx.round(&mut a.0);
+    // Avoids negative 0.
+    apd::munge_apd(&mut a.0).unwrap();
+    Datum::APD(a)
+}
+
 fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().floor())
 }
@@ -867,6 +877,15 @@ fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 fn floor_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
     let decimal = a.unwrap_decimal();
     Datum::from(decimal.with_scale(scale).floor().significand())
+}
+
+fn floor_apd<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_apd();
+    let mut cx = apd::cx_datum();
+    cx.set_rounding(Rounding::Floor);
+    cx.round(&mut a.0);
+    apd::munge_apd(&mut a.0).unwrap();
+    Datum::APD(a)
 }
 
 fn round_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -895,10 +914,63 @@ fn round_decimal_unary<'a>(a: Datum<'a>, a_scale: u8) -> Datum<'a> {
     round_decimal_binary(a, Datum::Int64(0), a_scale)
 }
 
+fn round_apd_unary<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_apd();
+    apd::cx_datum().round(&mut a.0);
+    Datum::APD(a)
+}
+
 fn round_decimal_binary<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
     let round_to = b.unwrap_int64();
     let decimal = a.unwrap_decimal().with_scale(a_scale);
     Datum::from(decimal.round(round_to).significand())
+}
+
+fn round_apd_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd().0;
+    let mut b = b.unwrap_int32();
+    let mut cx = apd::cx_datum();
+    let a_exp = a.exponent();
+    if a_exp > 0 && b > 0 || a_exp < 0 && -a_exp < b {
+        // This condition indicates:
+        // - a is a value without a decimal point, b is a positive number
+        // - a has a decimal point, but b is larger than its scale
+        // In both of these situations, right-pad the number with zeroes, which // is most easily done with rescale.
+
+        // Ensure rescale doesn't exceed max precision by putting a ceiling on
+        // b equal to the maximum remaining scale the value can support.
+        b = std::cmp::min(
+            b,
+            (apd::APD_DATUM_MAX_PRECISION as u32
+                - (apd::get_precision(&a) - u32::from(apd::get_scale(&a)))) as i32,
+        );
+        cx.rescale(&mut a, &apd::Apd::from(-b));
+    } else {
+        // To avoid invalid operations, clamp b to be within 1 more than the
+        // precision limit.
+        const MAX_P_LIMIT: i32 = 1 + apd::APD_DATUM_MAX_PRECISION as i32;
+        b = std::cmp::min(MAX_P_LIMIT, b);
+        b = std::cmp::max(-MAX_P_LIMIT, b);
+        let mut b = apd::Apd::from(b);
+        // Shift by 10^b; this put digit to round to in the one's place.
+        cx.scaleb(&mut a, &b);
+        cx.round(&mut a);
+        // Negate exponent for shift back
+        cx.neg(&mut b);
+        cx.scaleb(&mut a, &b);
+    }
+
+    if cx.status().overflow() {
+        Err(EvalError::FloatOverflow)
+    } else if a.is_zero() {
+        // simpler than handling cases where exponent has gotten set to some
+        // value greater than the max precision, but all significant digits
+        // were rounded away.
+        Ok(Datum::APD(OrderedDecimal(apd::Apd::zero())))
+    } else {
+        apd::munge_apd(&mut a).unwrap();
+        Ok(Datum::APD(OrderedDecimal(a)))
+    }
 }
 
 fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2475,6 +2547,7 @@ pub enum BinaryFunc {
     ModDecimal,
     ModAPD,
     RoundDecimal(u8),
+    RoundAPD,
     Eq,
     NotEq,
     Lt,
@@ -2672,6 +2745,7 @@ impl BinaryFunc {
             BinaryFunc::MapContainsAnyKeys => Ok(eager!(map_contains_any_keys)),
             BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
+            BinaryFunc::RoundAPD => eager!(round_apd_binary),
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
@@ -2755,7 +2829,7 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
-            AddAPD | SubAPD | ModAPD | MulAPD | DivAPD => {
+            AddAPD | SubAPD | ModAPD | MulAPD | DivAPD | RoundAPD => {
                 ScalarType::APD { scale: None }.nullable(in_nullable)
             }
 
@@ -3054,6 +3128,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
             | RoundDecimal(_)
+            | RoundAPD
             | ConvertFrom
             | Position
             | Right
@@ -3187,6 +3262,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
+            BinaryFunc::RoundAPD => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
             BinaryFunc::Position => f.write_str("position"),
             BinaryFunc::Right => f.write_str("right"),
@@ -3356,9 +3432,11 @@ pub enum UnaryFunc {
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
+    CeilAPD,
     FloorFloat32,
     FloorFloat64,
     FloorDecimal(u8),
+    FloorAPD,
     Ascii,
     BitLengthBytes,
     BitLengthString,
@@ -3383,6 +3461,7 @@ pub enum UnaryFunc {
     RoundFloat32,
     RoundFloat64,
     RoundDecimal(u8),
+    RoundAPD,
     TrimWhitespace,
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
@@ -3534,9 +3613,11 @@ impl UnaryFunc {
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
             UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
+            UnaryFunc::CeilAPD => Ok(ceil_apd(a)),
             UnaryFunc::FloorFloat32 => Ok(floor_float32(a)),
             UnaryFunc::FloorFloat64 => Ok(floor_float64(a)),
             UnaryFunc::FloorDecimal(scale) => Ok(floor_decimal(a, *scale)),
+            UnaryFunc::FloorAPD => Ok(floor_apd(a)),
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
             UnaryFunc::CbrtFloat64 => Ok(cbrt_float64(a)),
@@ -3574,6 +3655,7 @@ impl UnaryFunc {
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
             UnaryFunc::RoundDecimal(scale) => Ok(round_decimal_unary(a, *scale)),
+            UnaryFunc::RoundAPD => Ok(round_apd_unary(a)),
             UnaryFunc::TrimWhitespace => Ok(trim_whitespace(a)),
             UnaryFunc::TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
             UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
@@ -3730,12 +3812,14 @@ impl UnaryFunc {
                 input_type.scalar_type.nullable(in_nullable)
             }
 
+            CeilAPD | FloorAPD | RoundAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
+
             SqrtFloat64 => ScalarType::Float64.nullable(true),
 
             CbrtFloat64 => ScalarType::Float64.nullable(true),
 
-            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegAPD
-            | NegInterval | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal | AbsAPD => {
+            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegAPD | AbsAPD
+            | NegInterval | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => {
                 input_type
             }
 
@@ -3919,9 +4003,11 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
+            UnaryFunc::CeilAPD => f.write_str("ceilapd"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
             UnaryFunc::FloorFloat64 => f.write_str("floorf64"),
             UnaryFunc::FloorDecimal(_) => f.write_str("floordec"),
+            UnaryFunc::FloorAPD => f.write_str("floorapd"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::SqrtDec(_) => f.write_str("sqrtdec"),
             UnaryFunc::CbrtFloat64 => f.write_str("cbrtf64"),
@@ -3949,6 +4035,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
             UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
             UnaryFunc::RoundDecimal(_) => f.write_str("roundunary"),
+            UnaryFunc::RoundAPD => f.write_str("roundapd"),
             UnaryFunc::TrimWhitespace => f.write_str("btrim"),
             UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),

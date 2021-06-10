@@ -91,7 +91,7 @@ pub fn twos_complement_be_to_i128(input: &[u8]) -> Result<i128, anyhow::Error> {
 
 /// Returns `n`'s precision, i.e. the total number of digits represented by `n`
 /// in standard notation not including a zero in the "one's place" in (-1,1).
-fn get_precision(n: &Apd) -> u32 {
+pub fn get_precision(n: &Apd) -> u32 {
     let e = n.exponent();
     if e >= 0 {
         // Positive exponent
@@ -109,7 +109,12 @@ fn get_precision(n: &Apd) -> u32 {
 
 /// Returns `n`'s scale, i.e. the number of digits used after the decimal point.
 pub fn get_scale(n: &Apd) -> u8 {
-    u8::try_from(-n.exponent()).unwrap()
+    let exp = n.exponent();
+    if exp >= 0 {
+        0
+    } else {
+        u8::try_from(-exp).unwrap()
+    }
 }
 
 /// Ensures [`Apd`] values are:
