@@ -1316,6 +1316,19 @@ fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+fn mod_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd();
+    let b = b.unwrap_apd();
+    if b.0.is_zero() {
+        return Err(EvalError::DivisionByZero);
+    }
+    let mut cx = apd::cx_datum();
+    // Postgres does _not_ use IEEE 754-style remainder
+    cx.rem(&mut a.0, &b.0);
+    apd::munge_apd(&mut a.0).unwrap();
+    Ok(Datum::APD(a))
+}
+
 fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_int32())
 }
@@ -2460,6 +2473,7 @@ pub enum BinaryFunc {
     ModFloat32,
     ModFloat64,
     ModDecimal,
+    ModAPD,
     RoundDecimal(u8),
     Eq,
     NotEq,
@@ -2593,6 +2607,7 @@ impl BinaryFunc {
             BinaryFunc::ModFloat32 => eager!(mod_float32),
             BinaryFunc::ModFloat64 => eager!(mod_float64),
             BinaryFunc::ModDecimal => eager!(mod_decimal),
+            BinaryFunc::ModAPD => eager!(mod_apd),
             BinaryFunc::Eq => Ok(eager!(eq)),
             BinaryFunc::NotEq => Ok(eager!(not_eq)),
             BinaryFunc::Lt => Ok(eager!(lt)),
@@ -2702,6 +2717,7 @@ impl BinaryFunc {
                 | DivDecimal
                 | DivAPD
                 | ModDecimal
+                | ModAPD
         );
         match self {
             And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
@@ -2739,7 +2755,7 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
-            AddAPD | SubAPD | MulAPD | DivAPD => {
+            AddAPD | SubAPD | ModAPD | MulAPD | DivAPD => {
                 ScalarType::APD { scale: None }.nullable(in_nullable)
             }
 
@@ -2936,6 +2952,7 @@ impl BinaryFunc {
                 | ModFloat32
                 | ModFloat64
                 | ModDecimal
+                | ModAPD
         )
     }
 
@@ -2990,6 +3007,7 @@ impl BinaryFunc {
             | ModFloat32
             | ModFloat64
             | ModDecimal
+            | ModAPD
             | Eq
             | NotEq
             | Lt
@@ -3121,6 +3139,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ModFloat32 => f.write_str("%"),
             BinaryFunc::ModFloat64 => f.write_str("%"),
             BinaryFunc::ModDecimal => f.write_str("%"),
+            BinaryFunc::ModAPD => f.write_str("%"),
             BinaryFunc::Eq => f.write_str("="),
             BinaryFunc::NotEq => f.write_str("!="),
             BinaryFunc::Lt => f.write_str("<"),

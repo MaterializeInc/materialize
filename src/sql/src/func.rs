@@ -1506,6 +1506,7 @@ lazy_static! {
             },
             "mod" => Scalar {
                 params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
+                params!(APD{scale:None}, APD{scale:None}) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
                 params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 941;
                 params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947;
             },
@@ -2312,6 +2313,7 @@ lazy_static! {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, ModDecimal))
                 }), 1762;
+                params!(APD{scale:None}, APD{scale:None}) => ModAPD, 17620;
             },
 
             // ILIKE
