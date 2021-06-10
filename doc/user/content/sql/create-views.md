@@ -1,6 +1,6 @@
 ---
 title: "CREATE VIEWS"
-description: "`CREATE VIEWS` creates a view for each table included in the replication stream of a Postgres source."
+description: "`CREATE VIEWS` creates views for the distinct components of a multiplex stream."
 menu:
   main:
     parent: 'sql'
