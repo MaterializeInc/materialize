@@ -494,10 +494,11 @@ impl LiteralLifting {
 
                 let eval_constant_aggr = |aggr: &expr::AggregateExpr| {
                     let temp = repr::RowArena::new();
-                    let eval = aggr
-                        .func
-                        .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
-                    MirScalarExpr::literal_ok(
+                    let mut eval = aggr.expr.eval(&[], &temp);
+                    if let Ok(param) = eval {
+                        eval = Ok(aggr.func.eval(Some(param), &temp));
+                    }
+                    MirScalarExpr::literal(
                         eval,
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.
