@@ -157,9 +157,8 @@ COPY requirements.txt requirements-dev.txt /workdir/
 RUN pip3 install \
     -r /workdir/requirements.txt \
     -r /workdir/requirements-dev.txt \
-    && rm /workdir/requirements*.txt
-
-RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-0.11.3.gem > deb-s3-0.11.3.gem \
+    && rm /workdir/requirements*.txt \
+    && curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-0.11.3.gem > deb-s3-0.11.3.gem \
     && gem install ./deb-s3-0.11.3.gem
 
 
