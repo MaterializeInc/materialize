@@ -36,7 +36,7 @@ use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use ore::str::StrExt;
 use pgrepr::Type;
-use repr::adt::apd;
+use repr::adt::apd::{self, Apd};
 use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
@@ -1451,6 +1451,17 @@ fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
     cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), scale)
 }
 
+fn sqrt_apd<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
+    let mut a = a.unwrap_apd();
+    if a.0.is_negative() {
+        return Err(EvalError::NegSqrt);
+    }
+    let mut cx = apd::cx_datum();
+    cx.sqrt(&mut a.0);
+    apd::munge_apd(&mut a.0).unwrap();
+    Ok(Datum::APD(a))
+}
+
 fn cbrt_float64<'a>(a: Datum<'a>) -> Datum {
     Datum::from(a.unwrap_float64().cbrt())
 }
@@ -1538,6 +1549,56 @@ fn log<'a, 'b, F: Fn(f64) -> f64>(
     Ok(Datum::from(logic(f)))
 }
 
+fn log_guard_apd(val: &Apd, function_name: &str) -> Result<(), EvalError> {
+    if val.is_negative() {
+        return Err(EvalError::NegativeOutOfDomain(function_name.to_owned()));
+    }
+    if val.is_zero() {
+        return Err(EvalError::ZeroOutOfDomain(function_name.to_owned()));
+    }
+    Ok(())
+}
+
+// From the `decNumber` library's documentation:
+// > Inexact results will almost always be correctly rounded, but may be up to 1
+// > ulp (unit in last place) in error in rare cases.
+//
+// See decNumberLn documentation at http://speleotrove.com/decimal/dnnumb.html
+fn log_base_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd().0;
+    log_guard_apd(&a, "log")?;
+    let mut b = b.unwrap_apd().0;
+    log_guard_apd(&b, "log")?;
+    let mut cx = apd::cx_datum();
+    cx.ln(&mut a);
+    cx.ln(&mut b);
+    cx.div(&mut b, &a);
+    if a.is_zero() {
+        Err(EvalError::DivisionByZero)
+    } else {
+        apd::munge_apd(&mut b).unwrap();
+        Ok(Datum::APD(OrderedDecimal(b)))
+    }
+}
+
+// From the `decNumber` library's documentation:
+// > Inexact results will almost always be correctly rounded, but may be up to 1
+// > ulp (unit in last place) in error in rare cases.
+//
+// See decNumberLog10 documentation at http://speleotrove.com/decimal/dnnumb.html
+fn log_apd<'a, 'b, F: Fn(&mut dec::Context<Apd>, &mut Apd)>(
+    a: Datum<'a>,
+    logic: F,
+    name: &'b str,
+) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd();
+    log_guard_apd(&a.0, name)?;
+    let mut cx = apd::cx_datum();
+    logic(&mut cx, &mut a.0);
+    apd::munge_apd(&mut a.0).unwrap();
+    Ok(Datum::APD(a))
+}
+
 fn exp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(a.unwrap_float64().exp()))
 }
@@ -1548,9 +1609,34 @@ fn exp_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     Ok(cast_float64_to_decimal(Datum::from(a.exp()), scale)?)
 }
 
+fn exp_apd<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd();
+    let mut cx = apd::cx_datum();
+    cx.exp(&mut a.0);
+    let cx_status = cx.status();
+    if cx_status.overflow() {
+        Err(EvalError::FloatOverflow)
+    } else if cx_status.subnormal() {
+        Err(EvalError::FloatUnderflow)
+    } else {
+        apd::munge_apd(&mut a.0).unwrap();
+        Ok(Datum::APD(a))
+    }
+}
+
 fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float64();
     let b = b.unwrap_float64();
+    if a == 0.0 && b.is_sign_negative() {
+        return Err(EvalError::Undefined(
+            "zero raised to a negative power".to_owned(),
+        ));
+    }
+    if a.is_sign_negative() && b.fract() != 0.0 {
+        // Equivalent to PG error:
+        // > a negative number raised to a non-integer power yields a complex result
+        return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
+    }
     Ok(Datum::from(a.powf(b)))
 }
 
@@ -1558,6 +1644,37 @@ fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eva
     let a = cast_significand_to_float64(a).unwrap_float64() / 10_f64.powi(i32::from(scale));
     let b = cast_significand_to_float64(b).unwrap_float64() / 10_f64.powi(i32::from(scale));
     cast_float64_to_decimal(Datum::from(a.powf(b)), scale)
+}
+
+fn power_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_apd().0;
+    let b = b.unwrap_apd().0;
+    if a.is_zero() {
+        if b.is_zero() {
+            return Ok(Datum::APD(OrderedDecimal(Apd::from(1))));
+        }
+        if b.is_negative() {
+            return Err(EvalError::Undefined(
+                "zero raised to a negative power".to_owned(),
+            ));
+        }
+    }
+    if a.is_negative() && b.exponent() < 0 {
+        // Equivalent to PG error:
+        // > a negative number raised to a non-integer power yields a complex result
+        return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
+    }
+    let mut cx = apd::cx_datum();
+    cx.pow(&mut a, &b);
+    let cx_status = cx.status();
+    if cx_status.overflow() {
+        Err(EvalError::FloatOverflow)
+    } else if cx_status.subnormal() {
+        Err(EvalError::FloatUnderflow)
+    } else {
+        apd::munge_apd(&mut a).unwrap();
+        Ok(Datum::APD(OrderedDecimal(a)))
+    }
 }
 
 fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2608,8 +2725,10 @@ pub enum BinaryFunc {
     Encode,
     Decode,
     LogDecimal(u8),
+    LogAPD,
     Power,
     PowerDecimal(u8),
+    PowerAPD,
 }
 
 impl BinaryFunc {
@@ -2769,8 +2888,10 @@ impl BinaryFunc {
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
             BinaryFunc::LogDecimal(scale) => eager!(log_base, *scale),
+            BinaryFunc::LogAPD => eager!(log_base_apd),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
+            BinaryFunc::PowerAPD => eager!(power_apd),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2828,10 +2949,6 @@ impl BinaryFunc {
 
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
-
-            AddAPD | SubAPD | ModAPD | MulAPD | DivAPD | RoundAPD => {
-                ScalarType::APD { scale: None }.nullable(in_nullable)
-            }
 
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
@@ -2950,6 +3067,10 @@ impl BinaryFunc {
             Power => ScalarType::Float64.nullable(in_nullable),
             PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
             RepeatString => input1_type.scalar_type.nullable(in_nullable),
+
+            AddAPD | DivAPD | LogAPD | ModAPD | MulAPD | PowerAPD | RoundAPD | SubAPD => {
+                ScalarType::APD { scale: None }.nullable(in_nullable)
+            }
         }
     }
 
@@ -3143,8 +3264,10 @@ impl BinaryFunc {
             | Encode
             | Decode
             | LogDecimal(_)
+            | LogAPD
             | Power
             | PowerDecimal(_)
+            | PowerAPD
             | RepeatString => false,
         }
     }
@@ -3285,8 +3408,10 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
             BinaryFunc::LogDecimal(_) => f.write_str("log"),
+            BinaryFunc::LogAPD => f.write_str("log"),
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
+            BinaryFunc::PowerAPD => f.write_str("power_apd"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
         }
     }
@@ -3309,6 +3434,7 @@ pub enum UnaryFunc {
     NegInterval,
     SqrtFloat64,
     SqrtDec(u8),
+    SqrtAPD,
     CbrtFloat64,
     AbsInt32,
     AbsInt64,
@@ -3478,10 +3604,13 @@ pub enum UnaryFunc {
     Cot,
     Log10,
     Log10Decimal(u8),
+    Log10APD,
     Ln,
     LnDecimal(u8),
+    LnAPD,
     Exp,
     ExpDecimal(u8),
+    ExpAPD,
     Sleep,
     RescaleAPD(u8),
     PgColumnSize,
@@ -3620,6 +3749,7 @@ impl UnaryFunc {
             UnaryFunc::FloorAPD => Ok(floor_apd(a)),
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
+            UnaryFunc::SqrtAPD => sqrt_apd(a),
             UnaryFunc::CbrtFloat64 => Ok(cbrt_float64(a)),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::BitLengthString => bit_length(a.unwrap_str()),
@@ -3672,10 +3802,13 @@ impl UnaryFunc {
             UnaryFunc::Cot => cot(a),
             UnaryFunc::Log10 => log(a, f64::log10, "log10"),
             UnaryFunc::Log10Decimal(scale) => log_dec(a, f64::log10, "log10", *scale),
+            UnaryFunc::Log10APD => log_apd(a, dec::Context::log10, "log10"),
             UnaryFunc::Ln => log(a, f64::ln, "ln"),
             UnaryFunc::LnDecimal(scale) => log_dec(a, f64::ln, "ln", *scale),
+            UnaryFunc::LnAPD => log_apd(a, dec::Context::ln, "ln"),
             UnaryFunc::Exp => exp(a),
             UnaryFunc::ExpDecimal(scale) => exp_dec(a, *scale),
+            UnaryFunc::ExpAPD => exp_apd(a),
             UnaryFunc::Sleep => sleep(a),
             UnaryFunc::RescaleAPD(scale) => rescale_apd(a, *scale),
             UnaryFunc::PgColumnSize => pg_column_size(a),
@@ -3812,16 +3945,12 @@ impl UnaryFunc {
                 input_type.scalar_type.nullable(in_nullable)
             }
 
-            CeilAPD | FloorAPD | RoundAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
-
             SqrtFloat64 => ScalarType::Float64.nullable(true),
 
             CbrtFloat64 => ScalarType::Float64.nullable(true),
 
-            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegAPD | AbsAPD
-            | NegInterval | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => {
-                input_type
-            }
+            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
+            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(in_nullable)
@@ -3862,6 +3991,9 @@ impl UnaryFunc {
             .nullable(true),
             PgColumnSize => ScalarType::Int32.nullable(in_nullable),
             MzRowSize => ScalarType::Int32.nullable(in_nullable),
+
+            AbsAPD | CeilAPD | ExpAPD | FloorAPD | LnAPD | Log10APD | NegAPD | RoundAPD
+            | SqrtAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
         }
     }
 
@@ -4010,6 +4142,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::FloorAPD => f.write_str("floorapd"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::SqrtDec(_) => f.write_str("sqrtdec"),
+            UnaryFunc::SqrtAPD => f.write_str("sqrtapd"),
             UnaryFunc::CbrtFloat64 => f.write_str("cbrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::CharLength => f.write_str("char_length"),
@@ -4052,9 +4185,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Cot => f.write_str("cot"),
             UnaryFunc::Log10 => f.write_str("log10f64"),
             UnaryFunc::Log10Decimal(_) => f.write_str("log10dec"),
+            UnaryFunc::Log10APD => f.write_str("log10apd"),
             UnaryFunc::Ln => f.write_str("lnf64"),
             UnaryFunc::LnDecimal(_) => f.write_str("lndec"),
+            UnaryFunc::LnAPD => f.write_str("lnapd"),
             UnaryFunc::ExpDecimal(_) => f.write_str("expdec"),
+            UnaryFunc::ExpAPD => f.write_str("expapd"),
             UnaryFunc::Exp => f.write_str("expf64"),
             UnaryFunc::Sleep => f.write_str("mz_sleep"),
             UnaryFunc::RescaleAPD(..) => f.write_str("rescale_apd"),

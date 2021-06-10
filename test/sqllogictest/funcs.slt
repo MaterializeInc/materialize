@@ -1042,6 +1042,12 @@ SELECT power(9::decimal(15, 5), 0.5::decimal(15, 5));
 ----
 3
 
+query error zero raised to a negative power is undefined
+SELECT power(0::float, -1);
+
+query error function pow cannot return complex numbers
+SELECT power(-2.0::float, 1.5)
+
 query R
 SELECT pow(382, 5);
 ----
