@@ -6,6 +6,8 @@ menu:
     parent: 'sql'
 ---
 
+{{< version-added v0.8.0 />}}
+
 `CREATE VIEWS` creates views for the distinct components of a multiplex stream. For example, it separates the replication stream of a [Postgres source](/sql/create-source/postgres/) out into views that reproduce the upstream tables that populate the stream.
 
 `CREATE VIEWS` is distinct from both the more general [`CREATE VIEW`](/sql/create-view/) command, which provides an alias for `SELECT` statements, and from [materialized views](/sql/create-materialized-view).
