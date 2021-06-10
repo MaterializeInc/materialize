@@ -1760,6 +1760,7 @@ lazy_static! {
                 params!(Date) => AggregateFunc::MaxDate, 2122;
                 params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126;
                 params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127;
+                params!(APD{scale: None}) => AggregateFunc::MaxApd, oid::FUNC_MAX_APD_OID;
             },
             "min" => Aggregate {
                 params!(Bool) => AggregateFunc::MinBool, oid::FUNC_MIN_BOOL_OID;
@@ -1772,6 +1773,7 @@ lazy_static! {
                 params!(Date) => AggregateFunc::MinDate, 2138;
                 params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
+                params!(APD{scale: None}) => AggregateFunc::MinApd, oid::FUNC_MIN_APD_OID;
             },
             "json_agg" => Aggregate {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175;

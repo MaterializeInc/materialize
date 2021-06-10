@@ -1425,6 +1425,36 @@ SELECT '1.23456789'::apd(39,5) < '1.23456789'::apd(39,4);
 ----
 true
 
+query T
+select (max(a))::text from (select a from unnest(ARRAY['1.4'::apd(39,5), '1.8'::apd(39,4)]) a);
+----
+1.8
+
+query T
+select (min(a))::text from (select a from unnest(ARRAY['1.4'::apd(39,5), '1.8'::apd(39,4)]) a);
+----
+1.4
+
+query T
+select (max(a))::text from (select a from unnest(ARRAY['NaN'::apd(39,5), '1.4'::apd(39,5), '1.8'::apd(39,4)]) a);
+----
+NaN
+
+query T
+select (min(a))::text from (select a from unnest(ARRAY['NaN'::apd(39,5), '1.4'::apd(39,5), '1.8'::apd(39,4)]) a);
+----
+1.4
+
+query T
+select (max(a))::text from (select a from unnest(ARRAY[]::apd[]) a);
+----
+NULL
+
+query T
+select (min(a))::text from (select a from unnest(ARRAY[]::apd[]) a);
+----
+NULL
+
 # Distinct, except
 # regression tests for #6877 #6912
 

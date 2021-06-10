@@ -1657,7 +1657,8 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::Any
         | AggregateFunc::All
         | AggregateFunc::Dummy => ReductionType::Accumulable,
-        AggregateFunc::MaxInt32
+        AggregateFunc::MaxApd
+        | AggregateFunc::MaxInt32
         | AggregateFunc::MaxInt64
         | AggregateFunc::MaxFloat32
         | AggregateFunc::MaxFloat64
@@ -1667,6 +1668,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MaxDate
         | AggregateFunc::MaxTimestamp
         | AggregateFunc::MaxTimestampTz
+        | AggregateFunc::MinApd
         | AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
         | AggregateFunc::MinFloat32
@@ -1757,7 +1759,8 @@ pub mod monoids {
     // all hierarchical aggregation functions need to supply a monoid implementation.
     pub fn get_monoid(row: Row, func: &AggregateFunc) -> Option<ReductionMonoid> {
         match func {
-            AggregateFunc::MaxInt32
+            AggregateFunc::MaxApd
+            | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
@@ -1767,7 +1770,8 @@ pub mod monoids {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz => Some(ReductionMonoid::Max(row)),
-            AggregateFunc::MinInt32
+            AggregateFunc::MinApd
+            | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64

@@ -34,6 +34,18 @@ use crate::scalar::func::jsonb_stringify;
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
+fn max_apd<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<OrderedDecimal<apd::Apd>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_apd())
+        .max();
+    x.map(Datum::APD).unwrap_or(Datum::Null)
+}
+
 fn max_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -154,6 +166,18 @@ where
         .map(|d| d.unwrap_timestamptz())
         .max();
     Datum::from(x)
+}
+
+fn min_apd<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<OrderedDecimal<apd::Apd>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_apd())
+        .min();
+    x.map(Datum::APD).unwrap_or(Datum::Null)
 }
 
 fn min_int32<'a, I>(datums: I) -> Datum<'a>
@@ -435,6 +459,7 @@ where
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
+    MaxApd,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
@@ -445,6 +470,7 @@ pub enum AggregateFunc {
     MaxDate,
     MaxTimestamp,
     MaxTimestampTz,
+    MinApd,
     MinInt32,
     MinInt64,
     MinFloat32,
@@ -489,6 +515,7 @@ impl AggregateFunc {
         I: IntoIterator<Item = Datum<'a>>,
     {
         match self {
+            AggregateFunc::MaxApd => max_apd(datums),
             AggregateFunc::MaxInt32 => max_int32(datums),
             AggregateFunc::MaxInt64 => max_int64(datums),
             AggregateFunc::MaxFloat32 => max_float32(datums),
@@ -499,6 +526,7 @@ impl AggregateFunc {
             AggregateFunc::MaxDate => max_date(datums),
             AggregateFunc::MaxTimestamp => max_timestamp(datums),
             AggregateFunc::MaxTimestampTz => max_timestamptz(datums),
+            AggregateFunc::MinApd => min_apd(datums),
             AggregateFunc::MinInt32 => min_int32(datums),
             AggregateFunc::MinInt64 => min_int64(datums),
             AggregateFunc::MinFloat32 => min_float32(datums),
@@ -662,6 +690,7 @@ fn unnest_list(a: Datum) -> Vec<(Row, Diff)> {
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            AggregateFunc::MaxApd => f.write_str("max"),
             AggregateFunc::MaxInt32 => f.write_str("max"),
             AggregateFunc::MaxInt64 => f.write_str("max"),
             AggregateFunc::MaxFloat32 => f.write_str("max"),
@@ -672,6 +701,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MaxDate => f.write_str("max"),
             AggregateFunc::MaxTimestamp => f.write_str("max"),
             AggregateFunc::MaxTimestampTz => f.write_str("max"),
+            AggregateFunc::MinApd => f.write_str("min"),
             AggregateFunc::MinInt32 => f.write_str("min"),
             AggregateFunc::MinInt64 => f.write_str("min"),
             AggregateFunc::MinFloat32 => f.write_str("min"),
