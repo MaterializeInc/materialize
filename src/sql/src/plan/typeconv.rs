@@ -335,6 +335,10 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToDecimal(s)))
             }),
+            (Jsonb, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToAPD(s)))
+            }),
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID

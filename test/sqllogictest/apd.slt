@@ -311,6 +311,36 @@ SELECT 'infinity'::float8::apd::text
 query error numeric field overflow
 SELECT '12.34'::float8::apd(39,38)::text;
 
+# jsonb to apd
+# - note that these just defer to other casts, so don't need as-extensive of testing
+
+query T
+SELECT ('1'::jsonb)::apd::text;
+----
+1
+
+query T
+SELECT ('1.2'::jsonb)::apd::text;
+----
+1.2
+
+query error cannot cast jsonb string to type apd
+SELECT ('"Infinity"'::jsonb)::apd::text;
+
+query error cannot cast jsonb string to type apd
+SELECT ('"-Infinity"'::jsonb)::apd::text;
+
+query error cannot cast jsonb string to type apd
+SELECT ('"NaN"'::jsonb)::apd::text;
+
+# not a number
+query error cannot cast jsonb array to type apd
+SELECT ('[1]'::jsonb)::apd::text;
+
+# not a number
+query error cannot cast jsonb string to type apd
+SELECT ('"1"'::jsonb)::apd::text;
+
 # Addition
 query T
 SELECT ('1'::apd + '2'::apd)::text
