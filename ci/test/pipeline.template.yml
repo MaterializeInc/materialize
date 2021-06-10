@@ -345,7 +345,7 @@ steps:
       - testdrive
       - kafka-ssl
       - kafka-krb5
-      - short-sqllogictest
+      - sqllogictest-fast
       - streaming-demo
       - chbench-demo
       - catalog-compat
