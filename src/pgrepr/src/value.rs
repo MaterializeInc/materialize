@@ -15,21 +15,21 @@ use std::str;
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use dec::OrderedDecimal;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use repr::ColumnType;
 use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
-use repr::adt::apd::{self, Apd};
+use repr::adt::apd::{self as adt_apd};
 use repr::adt::array::ArrayDimension;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{self, Nestable};
 use repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::{Format, Interval, Jsonb, Numeric, Type};
+use crate::{Apd, Format, Interval, Jsonb, Numeric, Type};
 
+pub mod apd;
 pub mod interval;
 pub mod jsonb;
 pub mod numeric;
@@ -82,7 +82,7 @@ pub enum Value {
     /// A universally unique identifier.
     Uuid(Uuid),
     /// Refactored numeric using `rust-dec`.
-    APD(OrderedDecimal<Apd>),
+    Apd(Apd),
 }
 
 impl Value {
@@ -105,9 +105,9 @@ impl Value {
             }
             (Datum::APD(mut d), ScalarType::APD { scale }) => {
                 if let Some(scale) = scale {
-                    apd::rescale(&mut d.0, *scale).unwrap();
+                    adt_apd::rescale(&mut d.0, *scale).unwrap();
                 }
-                Some(Value::APD(d))
+                Some(Value::Apd(Apd(d)))
             }
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
@@ -240,10 +240,10 @@ impl Value {
             Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
             Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
-            Value::APD(n) => (
-                Datum::APD(n),
+            Value::Apd(n) => (
+                Datum::APD(n.0),
                 ScalarType::APD {
-                    scale: Some(apd::get_scale(&n.0)),
+                    scale: Some(adt_apd::get_scale(&n.0 .0)),
                 },
             ),
         }
@@ -300,7 +300,7 @@ impl Value {
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
-            Value::APD(d) => strconv::format_apd(buf, d),
+            Value::Apd(d) => strconv::format_apd(buf, &d.0),
         }
     }
 
@@ -365,11 +365,7 @@ impl Value {
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
-            Value::APD(_) => {
-                // for now just use text encoding
-                self.encode_text(buf);
-                Ok(postgres_types::IsNull::No)
-            }
+            Value::Apd(a) => a.to_sql(&PgType::NUMERIC, buf),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -426,7 +422,7 @@ impl Value {
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
-            Type::APD => Value::APD(strconv::parse_apd(raw)?),
+            Type::APD => Value::Apd(Apd(strconv::parse_apd(raw)?)),
         })
     }
 
@@ -453,7 +449,7 @@ impl Value {
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
-            Type::APD => unreachable!(),
+            Type::APD => Apd::from_sql(ty.inner(), raw).map(Value::Apd),
         }
     }
 }

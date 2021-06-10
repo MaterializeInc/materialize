@@ -135,7 +135,7 @@ pub enum Value {
     /// <em>unscaled</em> × 10<sup>-<em>scale</em></sup>.
     Decimal(DecimalValue),
     /// A parallel numeric type powered by `rust-dec`.
-    APD(DecimalValue),
+    Apd(DecimalValue),
     /// A `bytes` Avro value.
     Bytes(Vec<u8>),
     /// A `string` Avro value.

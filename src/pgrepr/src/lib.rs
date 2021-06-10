@@ -26,7 +26,8 @@ mod value;
 pub mod oid;
 
 pub use format::Format;
-pub use types::{Type, APD as APDType, LIST, MAP};
+pub use types::{Type, APD, LIST, MAP};
+pub use value::apd::Apd;
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;

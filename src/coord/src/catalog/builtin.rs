@@ -426,7 +426,7 @@ lazy_static! {
     pub static ref TYPE_APD: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
         id: GlobalId::System(1997),
-        pgtype: &pgrepr::APDType,
+        pgtype: &pgrepr::APD,
     };
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
