@@ -142,6 +142,10 @@ pub fn dbz_format(rp: &mut Row, dp: DiffPair<Row>) -> Row {
 }
 
 pub fn upsert_format(dps: Vec<DiffPair<Row>>) -> Option<Row> {
-    let dp = dps.expect_element("primary key error: expected at most one DiffPair per timestamp");
+    let dp = dps.expect_element(
+        "primary key error: expected at most one update \
+          per key and timestamp. This can happen when the configured sink key is \
+          not a primary key of the sinked relation.",
+    );
     dp.after
 }
