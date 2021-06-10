@@ -138,7 +138,8 @@ pub struct MemStream {
 }
 
 impl MemStream {
-    fn new() -> Self {
+    /// Create a new MemStream.
+    pub fn new() -> Self {
         MemStream {
             dataz: Arc::new(Mutex::new(Vec::new())),
         }
