@@ -398,7 +398,17 @@ impl LiteralLifting {
                 // lift literals from each input
                 let mut input_literals = Vec::new();
                 for input in inputs.iter_mut() {
-                    input_literals.push(self.action(input, gets));
+                    let literals = self.action(input, gets);
+
+                    // Do not propagate error literals beyond join inputs, since that may result
+                    // in them being propagated to other inputs of the join and evaluated when
+                    // they should not.
+                    if literals.iter().any(|l| l.is_literal_err()) {
+                        *input = input.take_dangerous().map(literals);
+                        input_literals.push(Vec::new());
+                    } else {
+                        input_literals.push(literals);
+                    }
                 }
 
                 if input_literals.iter().any(|l| !l.is_empty()) {
