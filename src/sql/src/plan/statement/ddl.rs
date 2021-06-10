@@ -22,7 +22,7 @@ use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use log::{error, warn};
+use log::error;
 use regex::Regex;
 use reqwest::Url;
 
@@ -796,12 +796,11 @@ pub fn plan_create_source(
                         let row_desc = RelationDesc::from_names_and_types(
                             fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
                         );
-                        let key_schema_indices = avro::validate_key_schema(&schema, &row_desc)
-                            .map(Some)
-                            .unwrap_or_else(|e| {
-                                warn!("Not using key due to error: {}", e);
-                                None
-                            });
+                        let key_schema_indices = match avro::validate_key_schema(&schema, &row_desc)
+                        {
+                            Err(e) => bail!("Cannot use key due to error: {}", e),
+                            Ok(indices) => Some(indices),
+                        };
                         key_schema_indices
                     }
                     _ => {

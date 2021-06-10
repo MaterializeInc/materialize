@@ -15,7 +15,6 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use log::warn;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::operators::OkErr;
@@ -387,12 +386,14 @@ where
                                 let row_desc = RelationDesc::from_names_and_types(
                                     fields.into_iter().map(|(n, t)| (Some(n), t)),
                                 );
-                                interchange::avro::validate_key_schema(key_schema, &row_desc)
-                                    .map(Some)
-                                    .unwrap_or_else(|e| {
-                                        warn!("Not using key due to error: {}", e);
-                                        None
-                                    })
+                                // these must be available because the DDL parsing logic already
+                                // checks this and bails in case the key is not correct
+                                let key_indices =
+                                    interchange::avro::validate_key_schema(key_schema, &row_desc)
+                                        .expect(
+                                        "Invalid key schema, this indicates a bug in Materialize",
+                                    );
+                                Some(key_indices)
                             }
                             _ => None,
                         };

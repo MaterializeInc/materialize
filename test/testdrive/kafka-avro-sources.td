@@ -521,6 +521,39 @@ a b
 -1 7
 3 4
 5 3
+#
+# Test that deduplication=full bails on invalid keys
+
+$ kafka-create-topic topic=invalid-keyed-dbz-data
+
+$ set wrong-dbz-key-schema={"type": "record", "name": "row", "fields": [{"name": "c", "type": "long"}]}
+
+$ kafka-ingest format=avro key-format=avro topic=invalid-keyed-dbz-data schema=${new-dbz-schema} key-schema=${wrong-dbz-key-schema} timestamp=1 publish=true
+{"c": 5} {"before": null, "after": {"row":{"a": 5, "b": 3}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"string": "true"}}}
+
+! CREATE MATERIALIZED SOURCE invalid_keyed_dbz
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-invalid-keyed-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+Cannot use key due to error: Value schema missing primary key column: c
+
+! CREATE MATERIALIZED SOURCE invalid_keyed_dbz_with_dedup
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-invalid-keyed-dbz-data-${testdrive.seed}'
+  WITH (deduplication = 'full')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+Cannot use key due to error: Value schema missing primary key column: c
+
+! CREATE MATERIALIZED SOURCE invalid_keyed_dbz_with_range_dedup
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-invalid-keyed-dbz-data-${testdrive.seed}'
+  WITH (
+      deduplication = 'full_in_range',
+      deduplication_start = '2020-09-13 12:26:00',
+      deduplication_end = '2020-09-13 13:00:00'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+Cannot use key due to error: Value schema missing primary key column: c
 
 # Test that deduplication=full_in_range accepts mis-ordered debezium data in the range
 
