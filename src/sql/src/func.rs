@@ -372,6 +372,16 @@ impl ParamList {
 
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
+
+            // Require explicitly cast APD values to prevent confusion
+            // w/ current decimal impls
+            // todo(apd): remove this when merging with decimal
+            if param == &ParamType::Plain(ScalarType::APD { scale: None })
+                && !matches!(typ, Some(ScalarType::APD { .. }))
+            {
+                return false;
+            }
+
             if let Some(typ) = typ {
                 // Ensures either `typ` can at least be implicitly cast to a
                 // type `param` accepts. Implicit in this check is that unknown
