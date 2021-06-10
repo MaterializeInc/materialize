@@ -5,7 +5,8 @@ version = "0.0.0"
 edition = "2018"
 publish = false
 
-# NB: This is meant to be a strong, independant abstraction boundary, please
+# NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.
 [dependencies]
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tempfile = "3.2.0"

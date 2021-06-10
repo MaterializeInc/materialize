@@ -167,8 +167,16 @@ impl Meta for MemStream {
 }
 
 /// An in-memory implementation of [Snapshot].
+#[derive(Debug)]
 pub struct MemSnapshot {
     dataz: Vec<((String, String), u64, isize)>,
+}
+
+impl MemSnapshot {
+    /// Create a new MemSnapshot.
+    pub fn new(dataz: Vec<((String, String), u64, isize)>) -> Self {
+        MemSnapshot { dataz }
+    }
 }
 
 impl Snapshot for MemSnapshot {
