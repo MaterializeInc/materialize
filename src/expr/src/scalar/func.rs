@@ -122,6 +122,12 @@ fn abs_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().abs())
 }
 
+fn abs_apd<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_apd();
+    apd::cx_datum().abs(&mut a.0);
+    Datum::APD(a)
+}
+
 fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().abs())
 }
@@ -3214,6 +3220,7 @@ pub enum UnaryFunc {
     AbsFloat32,
     AbsFloat64,
     AbsDecimal,
+    AbsAPD,
     CastBoolToString,
     CastBoolToStringNonstandard,
     CastBoolToInt32,
@@ -3410,6 +3417,7 @@ impl UnaryFunc {
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
             UnaryFunc::AbsDecimal => Ok(abs_decimal(a)),
+            UnaryFunc::AbsAPD => Ok(abs_apd(a)),
             UnaryFunc::CastBoolToString => Ok(cast_bool_to_string(a)),
             UnaryFunc::CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
@@ -3708,7 +3716,7 @@ impl UnaryFunc {
             CbrtFloat64 => ScalarType::Float64.nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegAPD
-            | NegInterval | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => {
+            | NegInterval | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal | AbsAPD => {
                 input_type
             }
 
@@ -3806,6 +3814,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
             UnaryFunc::AbsDecimal => f.write_str("abs"),
+            UnaryFunc::AbsAPD => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToString => f.write_str("booltostr"),

@@ -1280,6 +1280,7 @@ lazy_static! {
                 params!(Int32) => UnaryFunc::AbsInt32, 1397;
                 params!(Int64) => UnaryFunc::AbsInt64, 1396;
                 params!(DecimalAny) => UnaryFunc::AbsDecimal, 1398;
+                params!(APD{scale:None}) => UnaryFunc::AbsAPD, 13980;
                 params!(Float32) => UnaryFunc::AbsFloat32, 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64, 1395;
             },
