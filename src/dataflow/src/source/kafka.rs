@@ -647,10 +647,6 @@ fn create_kafka_config(
         ),
     );
 
-    // Ensures that, when processing transactional topics, the consumer does not read data that
-    // is not yet committed (and could later abort)
-    kafka_config.set("isolation.level", "read_committed");
-
     // Patch the librdkafka debug log system into the Rust `log` ecosystem.
     // This is a very simple integration at the moment; enabling `debug`-level
     // logs for the `librdkafka` target enables the full firehouse of librdkafka

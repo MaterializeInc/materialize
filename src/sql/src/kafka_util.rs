@@ -162,6 +162,7 @@ pub fn extract_config(
                 ValType::Number(0, 3_600_000),
             ),
             Config::new("enable_auto_commit", ValType::Boolean),
+            Config::string("isolation_level").set_default(Some(String::from("read_committed"))),
             Config::string("security_protocol"),
             Config::path("sasl_kerberos_keytab"),
             Config::string("sasl_username"),
