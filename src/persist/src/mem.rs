@@ -36,13 +36,14 @@ impl MemBuffer {
 
 impl Buffer for MemBuffer {
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
+        let write_seqno = self.seqno.end;
         self.seqno = self.seqno.start..SeqNo(self.seqno.end.0 + 1);
         self.dataz.push(buf);
         debug_assert_eq!(
             (self.seqno.end.0 - self.seqno.start.0) as usize,
             self.dataz.len()
         );
-        Ok(self.seqno.end)
+        Ok(write_seqno)
     }
 
     fn snapshot<F>(&self, mut logic: F) -> Result<Range<SeqNo>, Error>
@@ -92,8 +93,8 @@ impl MemBlob {
 }
 
 impl Blob for MemBlob {
-    fn get(&self, key: &str) -> Result<Option<&Vec<u8>>, Error> {
-        Ok(self.dataz.get(key))
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.dataz.get(key).cloned())
     }
 
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
@@ -223,5 +224,38 @@ impl Snapshot for MemSnapshot {
     fn read<E: Extend<((String, String), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         buf.extend(self.dataz.drain(..));
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::storage::tests::{blob_impl_test, buffer_impl_test};
+
+    use super::*;
+
+    #[test]
+    fn mem_buffer() -> Result<(), Error> {
+        let mut registered = HashSet::new();
+        buffer_impl_test(move |idx| {
+            if registered.contains(&idx) {
+                return Err(Error::from(format!("LOCKED: memory buffer {}", idx)));
+            }
+            registered.insert(idx);
+            Ok(MemBuffer::new())
+        })
+    }
+
+    #[test]
+    fn mem_blob() -> Result<(), Error> {
+        let mut registered = HashSet::new();
+        blob_impl_test(move |idx| {
+            if registered.contains(&idx) {
+                return Err(Error::from(format!("LOCKED: memory buffer {}", idx)));
+            }
+            registered.insert(idx);
+            Ok(MemBlob::new())
+        })
     }
 }

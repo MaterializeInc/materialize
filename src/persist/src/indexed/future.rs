@@ -17,7 +17,8 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::{BlobFutureBatch, BlobFutureMeta};
+use crate::indexed::encoding::BlobFutureMeta;
+use crate::indexed::BlobFutureBatch;
 use crate::persister::Snapshot;
 use crate::storage::{Blob, SeqNo};
 
