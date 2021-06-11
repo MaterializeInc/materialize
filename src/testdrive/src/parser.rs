@@ -48,6 +48,7 @@ pub enum SqlOutput {
         num_values: usize,
         md5: String,
     },
+    Show,
 }
 #[derive(Debug, Clone)]
 pub struct SqlCommand {
@@ -68,6 +69,7 @@ pub fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, InputError
         let command = match line.chars().next() {
             Some('$') => Command::Builtin(parse_builtin(line_reader)?),
             Some('>') => Command::Sql(parse_sql(line_reader)?),
+            Some('@') => Command::Sql(parse_sql_show(line_reader)?),
             Some('?') => Command::Sql(parse_explain_sql(line_reader)?),
             Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
             Some('#') => {
@@ -135,6 +137,15 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
         args: ArgMap(args),
         input: slurp_all(line_reader),
     })
+}
+
+fn parse_sql_show(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
+    let (_, line1) = line_reader.next().unwrap();
+    let query = line1[1..].trim().to_owned();
+    return Ok(SqlCommand {
+        query,
+        expected_output: SqlOutput::Show,
+    });
 }
 
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
@@ -292,7 +303,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') | Some('?') => return None,
+            Some('$') | Some('>') | Some('!') | Some('?') | Some('@') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -394,7 +405,7 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn is_sigil(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!') | Some('?'))
+    matches!(c, Some('$') | Some('>') | Some('!') | Some('?') | Some('@'))
 }
 
 struct BuiltinReader<'a> {

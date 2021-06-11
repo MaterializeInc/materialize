@@ -22,6 +22,7 @@ use crate::action::{Action, Context, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
 
+#[derive(Debug)]
 pub enum SinkConsistencyFormat {
     Debezium,
 }
@@ -94,6 +95,7 @@ impl Action for VerifyAction {
             state: &mut State,
         ) -> Result<String, String> {
             let query = format!("SELECT {} FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1", topic_field);
+            println!("{}", query);
             let result = state
                 .pgclient
                 .query_one(query.as_str(), &[&sink])
@@ -102,6 +104,10 @@ impl Action for VerifyAction {
                 .get(topic_field);
             Ok(result)
         }
+        println!(
+            "self.sink: {}, self.consistency: {:?}",
+            self.sink, self.consistency
+        );
         let topic: String = match self.consistency {
             None => get_topic(&self.sink, "topic", state).await?,
             Some(SinkConsistencyFormat::Debezium) => {

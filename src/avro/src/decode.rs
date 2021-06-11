@@ -1346,6 +1346,7 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
             }
             SchemaPiece::Union(inner) => {
                 let index = decode_long_nonneg(r)? as usize;
+                // println!("SchemaPiece::Union(inner: {:?}) index: {}", inner, index);
                 let variants = inner.variants();
                 match variants.get(index) {
                     Some(variant) => {

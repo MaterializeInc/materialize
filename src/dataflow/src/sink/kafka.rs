@@ -181,6 +181,7 @@ impl KafkaSink {
     }
 
     fn send(&self, record: BaseRecord<Vec<u8>, Vec<u8>>) -> Result<(), bool> {
+        println!("sink: Producing to {}", self.name);
         if let Err((e, _)) = self.producer.send(record) {
             error!("unable to produce message in {}: {}", self.name, e);
             self.metrics.message_send_errors_counter.inc();
@@ -377,7 +378,7 @@ where
             .activator_for(&builder.operator_info().address[..]);
 
         KafkaSink {
-            name,
+            name: name.clone(),
             shutdown_flag: shutdown_flag.clone(),
             metrics,
             producer,
@@ -405,6 +406,10 @@ where
         input.for_each(|_, rows| {
             rows.swap(&mut vector);
             for ((key, value), time, diff) in vector.drain(..) {
+                println!(
+                    "{} time: {}, diff: {} frontier: {:?}",
+                    name, time, diff, as_of.frontier
+                );
                 let should_emit = if as_of.strict {
                     as_of.frontier.less_than(&time)
                 } else {
@@ -430,6 +435,7 @@ where
                     continue;
                 };
                 let diff = diff as usize;
+                println!("... pushing");
 
                 let rows = pending_rows.entry(time).or_default();
                 rows.push(EncodedRow {
@@ -457,16 +463,27 @@ where
             .map(|(&ts, _)| ts)
             .collect();
         closed_ts.sort_unstable();
+        println!(
+            "{} closed_ts: {:?}, input.frontier: {:?}, durability_frontier: {:?}",
+            name, closed_ts, input.frontier, durability_frontier
+        );
         closed_ts.into_iter().for_each(|ts| {
             let rows = pending_rows.remove(&ts).unwrap();
             ready_rows.push_back((ts, rows));
         });
+        println!(
+            "{} |pending_rows|: {}, |ready_rows|: {}",
+            name,
+            pending_rows.len(),
+            ready_rows.len(),
+        );
 
         // Send a bounded number of records to Kafka from the ready queue.
         // This loop has explicitly been designed so that each iteration sends
         // at most one record to Kafka
         for _ in 0..connector.fuel {
             if let Some((ts, rows)) = ready_rows.front() {
+                println!("{} state: {:?}, ts: {}", name, state, ts);
                 state = match state {
                     SendState::Init => {
                         let result = if transactional {
@@ -532,6 +549,7 @@ where
                         if let Err(retry) = s.send(record) {
                             return retry;
                         }
+                        println!("Sending row to Kafka row_index: {}, repeat_counter: {}, total_sent: {}", row_index, repeat_counter, total_sent);
 
                         // advance to the next repetition of this row, or the next row if all
                         // reptitions are exhausted

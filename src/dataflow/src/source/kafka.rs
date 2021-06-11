@@ -418,6 +418,13 @@ impl SourceReader for KafkaSourceReader {
             }
         }
 
+        if !matches!(next_message, NextMessage::Pending) {
+            println!(
+                "got message source: {}, topic: {}",
+                self.source_name, self.topic_name
+            );
+            println!("Message: {:?}", next_message);
+        }
         Ok(next_message)
     }
 }

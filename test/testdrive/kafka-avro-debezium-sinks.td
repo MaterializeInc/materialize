@@ -100,6 +100,11 @@ $ kafka-create-topic topic=input
   WITH (consistency_topic = 'non-keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+> CREATE SINK exactly_once_non_keyed_sink FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'exactly-once-non-keyed-sink-${testdrive.seed}'
+  WITH (exactly_once = true, consistency_topic = 'exactly-once-non-keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
 > CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
 
 # the sinked relation has the natural primary key (a)
@@ -154,6 +159,8 @@ a  b
 # transaction appear together as one "bundle" in the output. But there is no
 # guarantee on the order within a transaction.
 
+@ SELECT sink_id, name, topic, consistency_topic FROM mz_sinks JOIN mz_kafka_sinks ON mz_sinks.id = mz_kafka_sinks.sink_id;
+
 $ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
@@ -172,6 +179,29 @@ $ kafka-verify format=avro sink=materialize.public.non_keyed_sink consistency=de
 {"id": "2", "status": "END", "event_count": {"long": 2}}
 {"id": "3", "status": "BEGIN", "event_count": null}
 {"id": "3", "status": "END", "event_count": {"long": 1}}
+
+# Again, compare split by transaction. See comment just above.
+
+@ SELECT topic FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = 'exactly_once_non_keyed_sink'
+
+#$ kafka-verify format=avro sink=materialize.public.exactly_once_non_keyed_sink sort-messages=true
+#{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+#{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+#
+#$ kafka-verify format=avro sink=materialize.public.exactly_once_non_keyed_sink sort-messages=true
+#{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+#{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+#
+#$ kafka-verify format=avro sink=materialize.public.exactly_once_non_keyed_sink sort-messages=true
+#{"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+#
+#$ kafka-verify format=avro sink=materialize.public.exactly_once_non_keyed_sink consistency=debezium
+#{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+#{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "non-keyed-sink"}]}}
+#{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+#{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "non-keyed-sink"}]}}
+#{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+#{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "non-keyed-sink"}]}}
 
 # Again, compare split by transaction. See comment just above.
 
@@ -256,3 +286,17 @@ $ kafka-verify format=avro sink=materialize.public.multi_keyed_sink consistency=
 {"id": "2", "status": "END", "event_count": {"long": 2}}
 {"id": "3", "status": "BEGIN", "event_count": null}
 {"id": "3", "status": "END", "event_count": {"long": 1}}
+
+> CREATE MATERIALIZED SOURCE reinput
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'exactly-once-non-keyed-sink-${testdrive.seed}'
+  WITH (consistency_topic = 'exactly-once-non-keyed-sink-consistency-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM;
+
+> SELECT * FROM reinput;
+a  b
+------
+1  1
+2  2
+3  1
+4  2
+1  7
