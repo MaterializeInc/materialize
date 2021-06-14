@@ -38,6 +38,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use coord::PersistConfig;
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
@@ -545,6 +546,7 @@ impl Runner {
             telemetry: None,
             introspection_frequency: Duration::from_secs(1),
             metrics_registry: MetricsRegistry::new(),
+            persist: PersistConfig::disabled(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;

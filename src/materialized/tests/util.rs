@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use coord::PersistConfig;
 use lazy_static::lazy_static;
 use ore::metrics::MetricsRegistry;
 use postgres::error::DbError;
@@ -139,6 +140,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         telemetry: None,
         introspection_frequency: Duration::from_secs(1),
         metrics_registry: metrics_registry.clone(),
+        persist: PersistConfig::disabled(),
     }))?;
     let server = Server {
         inner,

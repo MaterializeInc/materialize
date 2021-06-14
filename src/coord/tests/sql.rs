@@ -66,6 +66,7 @@ fn datadriven() {
                             defaults: vec![Expr::null(); 0],
                             conn_id: None,
                             depends_on: vec![],
+                            persist: None,
                         }),
                     );
                     id += 1;

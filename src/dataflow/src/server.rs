@@ -38,6 +38,7 @@ use dataflow_types::{
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::{now::NowFn, result::ResultExt};
+use persist::indexed::runtime::RuntimeClient;
 use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
@@ -208,6 +209,8 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
+    /// Handle to the persistence runtime. None if disabled.
+    pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -231,6 +234,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
     let now = config.now;
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
+    let persist = config.persist;
     timely::execute::execute(
         timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -256,6 +260,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     dataflow_tokens: HashMap::new(),
                     sink_write_frontiers: HashMap::new(),
                     metrics,
+                    persist: persist.clone(),
                 },
                 materialized_logger: None,
                 command_rx,

@@ -206,6 +206,9 @@ impl Scraper {
     }
 
     fn send_expiring_update(&self, table: &BuiltinTable, updates: Vec<Row>) {
+        // TODO: Make this send both records in the same message so we can
+        // persist them atomically. Otherwise, we may end up with permanent
+        // orphans if a restart/crash happens at the wrong time.
         let id = table.id;
         self.internal_tx
             .send(Message::InsertBuiltinTableUpdates(TimestampedUpdate {
