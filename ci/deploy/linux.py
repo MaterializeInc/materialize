@@ -67,7 +67,7 @@ def publish_deb(package: str, version: str) -> None:
     # Download the staged package (deb-s3 needs to get various metadata from it)
     s3.download_file(bucket, object_key, f"materialized-{version}.deb")
     # Import the private key into GPG
-    key = os.environ["GPG_KEY"].replace("\\n", "\n")
+    key = os.environ["GPG_KEY"]
     gpg = subprocess.Popen(["gpg", "--import"], stdin=subprocess.PIPE)
     gpg.communicate(key.encode("ascii"))
 
