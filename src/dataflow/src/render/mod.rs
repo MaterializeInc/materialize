@@ -607,7 +607,7 @@ pub mod plan {
         /// This is commonly either an external reference to an existing source or
         /// maintained arrangement, or an internal reference to a `Let` identifier.
         Get {
-            /// A global or local identifier nameing the collection.
+            /// A global or local identifier naming the collection.
             id: Id,
             /// Any linear operator work to apply as part of producing the data.
             ///

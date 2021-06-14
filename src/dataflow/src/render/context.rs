@@ -103,7 +103,7 @@ where
         }
     }
 
-    /// Insert a collection reperesentation by an identifier.
+    /// Insert a collection bundle by an identifier.
     ///
     /// This is expected to be used to install external collections (sources, indexes, other views),
     /// as well as for `Let` bindings of local collections.
@@ -285,7 +285,8 @@ where
             }
         }
 
-        // No key, or no matching arrangement (that would be weird).
+        // No key, or a key but no matching arrangement (the latter would likely imply
+        // an error in the contract between key-production and available arrangements).
         // We should now prefer to use an arrangement if available (avoids allocation),
         // and resort to using a collection if not available (copies all rows).
         if let Some(flavor) = self.arranged.values().next() {

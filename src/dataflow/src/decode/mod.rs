@@ -758,7 +758,7 @@ where
                     };
 
                     // Check whether we have a partial message from last time.
-                    // If so, we need to pre-pend it to the bytes we got from _this_ message.
+                    // If so, we need to prepend it to the bytes we got from _this_ message.
                     let value = if value_buf.is_empty() {
                         value
                     } else {
