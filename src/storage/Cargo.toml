@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 byteorder = "1.4.3"
 crossbeam-channel = "0.5.1"
 dataflow-types = { path = "../dataflow-types" }

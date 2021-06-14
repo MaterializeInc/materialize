@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 ccsr = { path = "../../../src/ccsr" }
 futures = "0.3.14"
 log = "0.4.13"

@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 futures = "0.3.14"
 http-util = { path = "../http-util" }
 native-tls = "0.2.7"
@@ -17,7 +17,7 @@ serde_json = "1.0.64"
 url = { version = "2.2.2", features = ["serde"] }
 
 [dev-dependencies]
-hyper = { version = "0.14.7", features = ["server"] }
+hyper = { version = "0.14.9", features = ["server"] }
 lazy_static = "1.4.0"
 tokio = { version = "1.6.0", features = ["macros"] }
 tracing = { version = "0.1.26", features = ["log"] }

@@ -69,9 +69,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.40"
+version = "1.0.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28b2cd92db5cbd74e8e5028f7e27dd7aa3090e89e4f2a197cc7c8dfb69c7063b"
+checksum = "15af2628f6890fe2609a3b91bef4c83450512802e59489f9c1cb1fa5df064a61"
 
 [[package]]
 name = "arbitrary"
@@ -1526,9 +1526,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.0"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b67e66362108efccd8ac053abafc8b7a8d86a37e6e48fc4f6f7485eb5e9e6a5"
+checksum = "825343c4eef0b63f541f8903f395dc5beb362a979b5799a84062527ef1e37726"
 dependencies = [
  "bytes",
  "fnv",
@@ -1541,7 +1541,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-futures",
 ]
 
 [[package]]
@@ -1702,9 +1701,9 @@ checksum = "3c1ad908cc71012b7bea4d0c53ba96a8cba9962f048fa68d143376143d863b7a"
 
 [[package]]
 name = "hyper"
-version = "0.14.7"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e5f105c494081baa3bf9e200b279e27ec1623895cd504c7dbef8d0b080fcf54"
+checksum = "07d6baa1b441335f3ce5098ac421fb6547c46dda735ca1bc6d0153c838f9dd83"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -1716,7 +1715,7 @@ dependencies = [
  "httparse",
  "httpdate",
  "itoa",
- "pin-project",
+ "pin-project-lite",
  "socket2",
  "tokio",
  "tower-service",
@@ -1816,11 +1815,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.4.0"
+version = "1.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c398b2b113b55809ceb9ee3e753fcbac793f1956663f3c36549c1346015c2afe"
+checksum = "824845a0bf897a9042383849b02c1bc219c2383772efcd5c6f9766fa4b81aef3"
 dependencies = [
  "autocfg",
+ "hashbrown",
 ]
 
 [[package]]
@@ -5000,16 +5000,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9ff14f98b1a4b289c6248a023c1c2fa1491062964e9fed67ab29c4e4da4a052"
 dependencies = [
  "lazy_static",
-]
-
-[[package]]
-name = "tracing-futures"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
-dependencies = [
- "pin-project",
- "tracing",
 ]
 
 [[package]]
