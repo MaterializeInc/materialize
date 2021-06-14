@@ -402,13 +402,12 @@ pub fn encode_debezium_transaction_unchecked(
         }
     };
 
-    let record_contents = vec![
+    let avro = Value::Record(vec![
         ("id".into(), transaction_id),
         ("status".into(), status),
         ("event_count".into(), event_count),
         ("data_collections".into(), data_collections),
-    ];
-    let avro = Value::Record(record_contents);
+    ]);
     debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
     mz_avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
     buf
