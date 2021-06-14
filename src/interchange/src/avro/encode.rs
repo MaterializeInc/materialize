@@ -48,7 +48,31 @@ lazy_static! {
                   "null",
                   "long"
                 ]
-            }
+            },
+            {
+                "name": "data_collections",
+                "type": [
+                    "null",
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "record",
+                            "name": "data_collection",
+                            "fields": [
+                                {
+                                    "name": "data_collection",
+                                    "type": "string"
+                                },
+                                {
+                                    "name": "event_count",
+                                    "type": "long"
+                                },
+                            ]
+                        }
+                    }
+                ],
+                "default": null,
+            },
         ]
     })).expect("valid schema constructed");
 }
@@ -371,6 +395,7 @@ pub fn get_debezium_transaction_schema() -> &'static Schema {
 
 pub fn encode_debezium_transaction_unchecked(
     schema_id: i32,
+    collection: &str,
     id: &str,
     status: &str,
     message_count: Option<i64>,
@@ -395,11 +420,33 @@ pub fn encode_debezium_transaction_unchecked(
         },
     };
 
-    let avro = Value::Record(vec![
+    let data_collections = if let Some(message_count) = message_count {
+        let collection = Value::Record(vec![
+            ("data_collection".into(), Value::String(collection.into())),
+            ("event_count".into(), Value::Long(message_count)),
+        ]);
+        Value::Union {
+            index: 1,
+            inner: Box::new(Value::Array(vec![collection])),
+            n_variants: 2,
+            null_variant: Some(0),
+        }
+    } else {
+        Value::Union {
+            index: 0,
+            inner: Box::new(Value::Null),
+            n_variants: 2,
+            null_variant: Some(0),
+        }
+    };
+
+    let record_contents = vec![
         ("id".into(), transaction_id),
         ("status".into(), status),
         ("event_count".into(), event_count),
-    ]);
+        ("data_collections".into(), data_collections),
+    ];
+    let avro = Value::Record(record_contents);
     debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
     mz_avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
     buf
