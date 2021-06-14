@@ -105,6 +105,7 @@ services:
     - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
     - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
     environment:
