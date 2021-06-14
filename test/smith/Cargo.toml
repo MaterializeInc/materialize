@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 env_logger = "0.8.3"
 futures = "0.3.14"
 futures-channel = "0.3.15"

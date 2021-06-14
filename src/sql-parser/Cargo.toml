@@ -22,7 +22,7 @@ matches = "0.1.0"
 unicode-width = "0.1.8"
 
 [build-dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 ore = { path = "../ore" }
 phf_codegen = "0.8.0"
 unicase = "2.4.0"
