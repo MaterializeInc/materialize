@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use coord::PersistConfig;
 use lazy_static::lazy_static;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -136,6 +137,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         safe_mode: config.safe_mode,
         telemetry: None,
         introspection_frequency: Duration::from_secs(1),
+        persist: PersistConfig::disabled(),
     }))?;
     let server = Server {
         inner,

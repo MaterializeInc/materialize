@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use compile_time_run::run_command_str;
+use coord::PersistConfig;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -120,6 +121,8 @@ pub struct Config {
     pub safe_mode: bool,
     /// Telemetry configuration.
     pub telemetry: Option<TelemetryConfig>,
+    /// Configuration of the persistence runtime and features.
+    pub persist: PersistConfig,
 }
 
 /// Configures TLS encryption for connections.
@@ -214,6 +217,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
+    // Initialize persistence runtime.
+    let persist = config.persist.init()?;
+
     // Initialize coordinator.
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         workers,
@@ -226,6 +232,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
+        persist,
     })
     .await?;
 

@@ -526,6 +526,7 @@ dependencies = [
  "log",
  "mz-avro",
  "ore",
+ "persist",
  "pgrepr",
  "postgres-types",
  "postgres-util",
@@ -805,6 +806,7 @@ dependencies = [
  "mz-avro",
  "ore",
  "pdqselect",
+ "persist",
  "postgres-protocol",
  "postgres-util",
  "prometheus",
@@ -4019,6 +4021,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
+ "coord",
  "expr",
  "fallible-iterator",
  "futures",

@@ -153,6 +153,11 @@ pub enum ExecuteResponse {
     TransactionExited {
         was_implicit: bool,
         tag: &'static str,
+        /// If Some, a channel containing the results of durably storing all of
+        /// the transaction's writes to permanent storage. This channel should
+        /// be read before returning success to the user and an error returned
+        /// if any of the received response is an Err.
+        rx: Option<oneshot::Receiver<Result<(), String>>>,
     },
     // The requested object was altered.
     AlteredObject(ObjectType),

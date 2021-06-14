@@ -37,6 +37,7 @@ use dataflow_types::{
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::{now::NowFn, result::ResultExt};
+use persist::indexed::runtime::RuntimeClient;
 use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -201,6 +202,8 @@ pub struct Config {
     pub experimental_mode: bool,
     /// Function to get wall time now.
     pub now: NowFn,
+    /// Handle to the persistence runtime. None if disabled.
+    pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -220,6 +223,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
+    let persist = config.persist;
     timely::execute::execute(
         timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -240,6 +244,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     ts_histories: HashMap::default(),
                     dataflow_tokens: HashMap::new(),
                     sink_write_frontiers: HashMap::new(),
+                    persist: persist.clone(),
                 },
                 materialized_logger: None,
                 command_rx,

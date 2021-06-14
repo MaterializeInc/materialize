@@ -339,7 +339,9 @@ pub fn purify(
                     SourceConnector::External { connector, .. } => {
                         bail!("cannot generate views from {} sources", connector.name())
                     }
-                    SourceConnector::Local(_) => bail!("cannot generate views from local sources"),
+                    SourceConnector::Local { .. } => {
+                        bail!("cannot generate views from local sources")
+                    }
                 }
             }
         }

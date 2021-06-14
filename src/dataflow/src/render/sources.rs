@@ -15,9 +15,10 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use timely::dataflow::operators::unordered_input::UnorderedInput;
-use timely::dataflow::operators::Map;
-use timely::dataflow::operators::OkErr;
+use persist::operators::source::PersistedSource;
+use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{Concat, OkErr, ToStream};
+use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
 
@@ -88,18 +89,62 @@ where
         match src.connector.clone() {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
             // via SequencedCommand::Insert commands.
-            SourceConnector::Local(_) => {
-                let ((handle, capability), stream) = scope.new_unordered_input();
-                render_state
-                    .local_inputs
-                    .insert(src_id, LocalInput { handle, capability });
+            SourceConnector::Local { persisted_name, .. } => {
+                let ((handle, capability), ok_stream, err_collection) = {
+                    let ((handle, capability), ok_stream) = scope.new_unordered_input();
+                    let err_collection = Collection::empty(scope);
+                    ((handle, capability), ok_stream, err_collection)
+                };
+
+                let (ok_stream, err_collection) = match (&mut render_state.persist, persisted_name)
+                {
+                    (Some(persist), Some(stream_name)) => {
+                        let persisted_stream = persist.create_or_load(&stream_name);
+                        let (persist_ok_stream, persist_err_stream) = match persisted_stream {
+                            Ok((_, read)) => scope.persisted_source(&read),
+                            Err(err) => {
+                                let ok_stream = empty(scope);
+                                let (ts, diff) = (0, 1);
+                                let err_stream = vec![(err.to_string(), ts, diff)].to_stream(scope);
+                                (ok_stream, err_stream)
+                            }
+                        };
+                        let (persist_ok_stream, decode_err_stream) =
+                            persist_ok_stream.ok_err(|((row, ()), ts, diff)| {
+                                let row = Row::decode(&row).map_err(|err| (err, ts, diff))?;
+                                Ok((row, ts, diff))
+                            });
+                        let persist_err_collection = persist_err_stream
+                            .concat(&decode_err_stream)
+                            .map(move |(err, ts, diff)| {
+                                let err = SourceError::new(
+                                    stream_name.clone(),
+                                    SourceErrorDetails::Persistence(err),
+                                );
+                                (err.into(), ts, diff)
+                            })
+                            .as_collection();
+                        (
+                            ok_stream.concat(&persist_ok_stream),
+                            err_collection.concat(&persist_err_collection),
+                        )
+                    }
+                    _ => (ok_stream, err_collection),
+                };
+
+                render_state.local_inputs.insert(
+                    src_id,
+                    LocalInput {
+                        handle: handle,
+                        capability,
+                    },
+                );
                 let as_of_frontier = self.as_of_frontier.clone();
-                let ok_collection = stream
+                let ok_collection = ok_stream
                     .map_in_place(move |(_, mut time, _)| {
                         time.advance_by(as_of_frontier.borrow());
                     })
                     .as_collection();
-                let err_collection = Collection::empty(scope);
                 self.insert_id(
                     Id::Global(src_id),
                     crate::render::CollectionBundle::from_collections(

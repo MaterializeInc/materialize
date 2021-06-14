@@ -718,7 +718,10 @@ pub enum SourceConnector {
         ts_frequency: Duration,
         timeline: Timeline,
     },
-    Local(Timeline),
+    Local {
+        timeline: Timeline,
+        persisted_name: Option<String>,
+    },
 }
 
 impl SourceConnector {
@@ -747,7 +750,7 @@ impl SourceConnector {
     pub fn name(&self) -> &'static str {
         match self {
             SourceConnector::External { connector, .. } => connector.name(),
-            SourceConnector::Local(_) => "local",
+            SourceConnector::Local { .. } => "local",
         }
     }
 
@@ -767,7 +770,7 @@ impl SourceConnector {
     pub fn timeline(&self) -> Timeline {
         match self {
             SourceConnector::External { timeline, .. } => timeline.clone(),
-            SourceConnector::Local(timeline) => timeline.clone(),
+            SourceConnector::Local { timeline, .. } => timeline.clone(),
         }
     }
 }

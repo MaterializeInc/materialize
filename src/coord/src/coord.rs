@@ -54,6 +54,9 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use persist::error::Error as PersistError;
+use persist::indexed::runtime::{AtomicWriteHandle, CmdResponse};
+use persist::storage::SeqNo;
 use rand::Rng;
 use repr::adt::numeric;
 use timely::communication::WorkerGuards;
@@ -61,7 +64,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
@@ -103,13 +106,14 @@ use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
-use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
+use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState, Table};
 use crate::client::{Client, Handle};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::antichain::AntichainToken;
 use crate::error::CoordError;
+use crate::persistcfg::{PersistConfig, PersisterWithConfig};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -186,6 +190,8 @@ pub struct Config<'a> {
     pub experimental_mode: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
+    /// Handle to persistence runtime and feature configuration.
+    pub persist: PersisterWithConfig,
 }
 
 /// Glues the external world to the Timely workers.
@@ -544,6 +550,28 @@ impl Coordinator {
         }
         // These can occasionally be equal, so ignore the update in that case.
         if next_ts > self.closed_up_to {
+            // Close out the timestamp for persisted tables.
+            //
+            // TODO: Allow sealing multiple streams at once to reduce the
+            // overhead.
+            let (tx, rx) = std::sync::mpsc::channel();
+            for entry in self.catalog.entries() {
+                if let CatalogItem::Table(Table {
+                    persist: Some(persist),
+                    ..
+                }) = entry.item()
+                {
+                    persist.write_handle.seal(next_ts, tx.clone().into());
+                }
+            }
+            drop(tx);
+            for res in rx {
+                if let Err(err) = res {
+                    // TODO: Linearizibility relies on this, bubble up the error instead.
+                    log::error!("failed to seal persisted stream to ts {}: {}", next_ts, err);
+                }
+            }
+
             self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
                 advance_to: next_ts,
             });
@@ -1596,12 +1624,17 @@ impl Coordinator {
         let table_id = self.catalog.allocate_id()?;
         let mut index_depends_on = depends_on.clone();
         index_depends_on.push(table_id);
+        let persist = self
+            .catalog
+            .persist_details(table_id)
+            .map_err(|err| anyhow!("{}", err))?;
         let table = catalog::Table {
             create_sql: table.create_sql,
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
             depends_on,
+            persist,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
@@ -2155,7 +2188,7 @@ impl Coordinator {
         // call `maintenance` here because it will soon be called after the next
         // `update_upper`.
 
-        if let EndTransactionAction::Commit = action {
+        let rx = if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 match ops {
                     TransactionOps::Writes(inserts) => {
@@ -2163,34 +2196,91 @@ impl Coordinator {
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
                         let timestamp = self.get_write_ts();
+
+                        // Separate out which updates were to tables we are
+                        // persisting. In practice, we don't enable/disable this
+                        // with table-level granularity so it will be all of
+                        // them or none of them, which is checked below.
+                        let mut persist_streams = Vec::new();
+                        let mut persist_updates = Vec::new();
+                        let mut volatile_updates = Vec::new();
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
-                            if self.catalog.try_get_by_id(id).is_none() {
-                                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                )));
+                            let catalog_entry =
+                                self.catalog.try_get_by_id(id).ok_or_else(|| {
+                                    CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                        id.to_string(),
+                                    ))
+                                })?;
+                            match catalog_entry.item() {
+                                CatalogItem::Table(Table {
+                                    persist: Some(persist),
+                                    ..
+                                }) => {
+                                    let updates = rows
+                                        .into_iter()
+                                        .map(|(row, diff)| {
+                                            let mut encoded_row = Vec::new();
+                                            row.encode(&mut encoded_row);
+                                            ((encoded_row, ()), timestamp, diff)
+                                        })
+                                        .collect();
+                                    persist_streams.push(&persist.write_handle);
+                                    persist_updates
+                                        .push((persist.write_handle.stream_id(), updates));
+                                }
+                                _ => {
+                                    let updates = rows
+                                        .into_iter()
+                                        .map(|(row, diff)| Update {
+                                            row,
+                                            diff,
+                                            timestamp,
+                                        })
+                                        .collect();
+                                    volatile_updates.push((id, updates));
+                                }
                             }
+                        }
 
-                            let updates: Vec<_> = rows
-                                .into_iter()
-                                .map(|(row, diff)| Update {
-                                    row,
-                                    diff,
-                                    timestamp,
-                                })
-                                .collect();
-
-                            self.broadcast(SequencedCommand::Insert { id, updates });
+                        // Write all updates, both persistent and volatile.
+                        // Persistence takes care of introducing anything it
+                        // writes to the dataflow, so we only need a
+                        // SequencedCommand::Insert for the volatile updates.
+                        if !persist_updates.is_empty() {
+                            if !volatile_updates.is_empty() {
+                                coord_bail!("transaction had mixed persistent and volatile writes");
+                            }
+                            let persist_atomic = AtomicWriteHandle::new(&persist_streams)
+                                .map_err(|err| anyhow!("{}", err))?;
+                            let (tx, rx) = oneshot::channel();
+                            let callback = Box::new(move |res: Result<SeqNo, PersistError>| {
+                                let res = res.map(|_| ()).map_err(|err| err.to_string());
+                                let _ = tx.send(res);
+                            });
+                            persist_atomic
+                                .write_atomic(persist_updates, CmdResponse::Callback(callback));
+                            Some(rx)
+                        } else {
+                            for (id, updates) in volatile_updates {
+                                self.broadcast(SequencedCommand::Insert { id, updates });
+                            }
+                            None
                         }
                     }
-                    _ => {}
+                    _ => None,
                 }
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
         Ok(ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit,
+            rx,
         })
     }
 
@@ -2977,17 +3067,38 @@ impl Coordinator {
         let timestamp = self.get_write_ts() + timestamp_offset;
         updates.sort_by_key(|u| u.id);
         for (id, updates) in &updates.into_iter().group_by(|u| u.id) {
-            self.broadcast(SequencedCommand::Insert {
-                id,
-                updates: updates
+            let persist = self.catalog.try_get_by_id(id).and_then(|catalog_entry| {
+                match catalog_entry.item() {
+                    CatalogItem::Table(t) => t.persist.as_ref(),
+                    _ => None,
+                }
+            });
+            if let Some(persist) = persist {
+                let updates: Vec<((Vec<u8>, ()), u64, isize)> = updates
+                    .into_iter()
+                    .map(|u| {
+                        let mut encoded_row = Vec::new();
+                        u.row.encode(&mut encoded_row);
+                        ((encoded_row, ()), timestamp, u.diff)
+                    })
+                    .collect();
+                // Persistence of system table inserts is best effort, so throw
+                // away the response and ignore any errors.
+                persist.write_handle.write(&updates, CmdResponse::Ignore);
+            } else {
+                // Persistence takes care of introducing anything it writes to
+                // the dataflow, so we only need a SequencedCommand::Insert for
+                // the volatile updates.
+                let updates: Vec<Update> = updates
                     .into_iter()
                     .map(|u| Update {
                         row: u.row,
                         diff: u.diff,
                         timestamp,
                     })
-                    .collect(),
-            })
+                    .collect();
+                self.broadcast(SequencedCommand::Insert { id, updates })
+            }
         }
     }
 
@@ -3307,6 +3418,7 @@ pub async fn serve(
         experimental_mode,
         safe_mode,
         build_info,
+        persist,
     }: Config<'_>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -3320,6 +3432,7 @@ pub async fn serve(
     };
 
     let path = data_directory.join("catalog");
+    let persister = persist.persister.clone();
     let (catalog, builtin_table_updates) = Catalog::open(&catalog::Config {
         path: &path,
         experimental_mode: Some(experimental_mode),
@@ -3329,6 +3442,7 @@ pub async fn serve(
         num_workers: workers,
         timestamp_frequency,
         now: system_time,
+        persist,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
@@ -3341,6 +3455,7 @@ pub async fn serve(
         timely_worker,
         experimental_mode,
         now: system_time,
+        persist: persister,
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
@@ -3486,6 +3601,13 @@ pub fn serve_debug(
         *DEBUG_TIMESTAMP.lock().unwrap()
     }
 
+    let persist = PersistConfig {
+        buffer_path: catalog_path.join("buffer"),
+        blob_path: catalog_path.join("buffer"),
+        user_table_enabled: false,
+        lock_info: "serve_debug".to_owned(),
+    };
+    let persist = persist.init().unwrap();
     let (catalog, builtin_table_updates) = catalog::Catalog::open(&catalog::Config {
         path: catalog_path,
         enable_logging: true,
@@ -3495,6 +3617,7 @@ pub fn serve_debug(
         num_workers: 0,
         timestamp_frequency: Duration::from_millis(1),
         now: get_debug_timestamp,
+        persist: persist.clone(),
     })
     .unwrap();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -3505,6 +3628,7 @@ pub fn serve_debug(
         timely_worker: timely::WorkerConfig::default(),
         experimental_mode: true,
         now: get_debug_timestamp,
+        persist: persist.persister,
     })
     .unwrap();
 
@@ -3526,7 +3650,10 @@ pub fn serve_debug(
                     // Allow local and file sources only. We don't need to do anything for these.
                     TimestampMessage::Add(
                         GlobalId::System(_),
-                        SourceConnector::Local(Timeline::EpochMilliseconds),
+                        SourceConnector::Local {
+                            timeline: Timeline::EpochMilliseconds,
+                            persisted_name: None,
+                        },
                     )
                     | TimestampMessage::Add(
                         GlobalId::User(_),
