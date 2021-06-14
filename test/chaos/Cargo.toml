@@ -15,4 +15,4 @@ ore = { path = "../../src/ore" }
 rand = "0.8.3"
 structopt = "0.3.21"
 test-util = { path = "../test-util" }
-tokio = "1.6.0"
+tokio = "1.6.1"

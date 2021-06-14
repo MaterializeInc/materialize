@@ -12,4 +12,4 @@ mysql_async = "0.27.1"
 ore = { path = "../../../src/ore" }
 rand = "0.8.3"
 structopt = "0.3.21"
-tokio = "1.6.0"
+tokio = "1.6.1"
