@@ -245,3 +245,21 @@ Dataflow cannot use multiple timelines
 > CREATE MATERIALIZED VIEW source_cdcv2_table_system AS SELECT * FROM source_cdcv2_system, input_table;
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2, input_table;
 Dataflow cannot use multiple timelines
+
+# Verify that timedomains don't cross timelines. In the case that
+# source_byo is grouped in the same timedomain as epoch ms sources,
+# the SELECT will hang forever. We expect the error here since we have
+# not written any rows so its upper is still 0, which determine_timestamp
+# complains about.
+> BEGIN;
+! SELECT * FROM source_byo;
+At least one input has no complete timestamps yet
+> ROLLBACK;
+
+# Verify that if the transaction starts on some timeline (epoch ms here),
+# things outside that are not there due to timedomain reasons.
+> BEGIN;
+> SELECT * FROM input_table;
+! SELECT * FROM source_byo;
+transactions can only reference nearby relations
+> ROLLBACK;

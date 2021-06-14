@@ -2202,6 +2202,41 @@ impl Coordinator {
         })
     }
 
+    /// Return the set of ids in a timedomain and verify timeline correctness.
+    ///
+    /// When a user starts a transaction, we need to prevent compaction of anything
+    /// they might read from. We use a heuristic of "anything in the same database
+    /// schemas with the same timeline as whatever the first query is".
+    fn timedomain_for(
+        &self,
+        source_ids: &[GlobalId],
+        source_timeline: &Option<Timeline>,
+        conn_id: u32,
+    ) -> Result<Vec<GlobalId>, CoordError> {
+        let mut timedomain_ids = self.catalog.schema_adjacent_relations(&source_ids, conn_id);
+
+        // Filter out ids from different timelines. The timeline code only verifies
+        // that the SELECT doesn't cross timelines. The schema-adjacent code looks
+        // for other ids in the same database schema.
+        timedomain_ids.retain(|&id| {
+            let id_timeline = self
+                .validate_timeline(vec![id])
+                .expect("single id should never fail");
+            match (&id_timeline, &source_timeline) {
+                // If this id doesn't have a timeline, we can keep it.
+                (None, _) => true,
+                // If there's no source timeline, we have the option to opt into a timeline,
+                // so optimistically choose epoch ms. This is useful when the first query in a
+                // transaction is on a static view.
+                (Some(id_timeline), None) => id_timeline == &Timeline::EpochMilliseconds,
+                // Otherwise check if timelines are the same.
+                (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
+            }
+        });
+
+        Ok(timedomain_ids)
+    }
+
     async fn sequence_peek(
         &mut self,
         session: &mut Session,
@@ -2214,6 +2249,8 @@ impl Coordinator {
             copy_to,
         } = plan;
 
+        let source_ids = source.global_uses();
+        let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
         let in_transaction = matches!(
             session.transaction(),
@@ -2228,9 +2265,8 @@ impl Coordinator {
         let timestamp = if in_transaction && when == PeekWhen::Immediately {
             let timestamp = session.get_transaction_timestamp(|| {
                 // Determine a timestamp that will be valid for anything in any schema
-                // referenced by the first query. This is a first pass implementation of "time
-                // domains".
-                let timedomain_ids = self.catalog.timedomain_for(&source, conn_id);
+                // referenced by the first query.
+                let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
@@ -2257,7 +2293,7 @@ impl Coordinator {
 
             // Verify that the indexes for this query are in the current read transaction.
             let txn_reads = self.txn_reads.get(&conn_id).unwrap();
-            for id in source.global_uses() {
+            for id in source_ids {
                 if !txn_reads.timedomain_ids.contains(&id) {
                     let mut names: Vec<_> = txn_reads
                         .timedomain_ids
@@ -2277,7 +2313,7 @@ impl Coordinator {
 
             timestamp
         } else {
-            self.determine_timestamp(&source.global_uses(), when)?.0
+            self.determine_timestamp(&source_ids, when)?.0
         };
 
         let source = self.prep_relation_expr(
@@ -2367,7 +2403,6 @@ impl Coordinator {
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
                 let typ = source.typ();
-                self.validate_timeline(inner.global_uses())?;
                 map_filter_project = expr::MapFilterProject::new(typ.arity());
                 let key: Vec<MirScalarExpr> = typ
                     .default_key()
@@ -3228,8 +3263,8 @@ impl Coordinator {
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
     /// byo and realtime data).
-    fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<(), CoordError> {
-        let mut timelines = HashMap::new();
+    fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<Option<Timeline>, CoordError> {
+        let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
 
         // Recurse through IDs to find all sources and tables, adding new ones to
         // the set until we reach the bottom. Static views will end up with an empty
@@ -3281,7 +3316,7 @@ impl Coordinator {
         if timelines.len() > 1 {
             coord_bail!("Dataflow cannot use multiple timelines");
         }
-        Ok(())
+        Ok(timelines.into_iter().next())
     }
 }
 

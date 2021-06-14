@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
-use expr::{ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -2022,18 +2022,13 @@ impl Catalog {
         self.by_id.values()
     }
 
-    /// Returns the items in a "time domain" for an expression.
-    ///
-    /// A "time domain" is a set of relations (tables, views, sources) that need to
-    /// share time guarantees. Currently we assume time domains to mean "everything
-    /// in a schema". For example, a read transaction on table A in some schema may
-    /// also need to query table B in the same schema, so A and B (and all other
-    /// tables and views in the schema) are in the same time domain.
-    pub fn timedomain_for(&self, source: &MirRelationExpr, conn_id: u32) -> Vec<GlobalId> {
+    /// Returns all tables, views, and sources in the same schemas as a set of
+    /// input ids.
+    pub fn schema_adjacent_relations(&self, sources: &[GlobalId], conn_id: u32) -> Vec<GlobalId> {
         // Find all relations referenced by the expression. Find their parent schemas
         // and add all tables, views, and sources in those schemas to a set.
         let mut ids = HashSet::new();
-        for id in source.global_uses() {
+        for id in sources {
             let entry = self.get_by_id(&id);
             let name = entry.name();
             if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
