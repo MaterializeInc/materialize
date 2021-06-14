@@ -63,7 +63,7 @@ def publish_deb(package: str, version: str) -> None:
 
     s3 = boto3.client("s3")
     bucket = "materialize-apt-repository"
-    object_key = f"pool/stable/m/ma/materialized-{version}.deb"
+    object_key = f"pool/generic/m/ma/materialized-{version}.deb"
     # Download the staged package (deb-s3 needs to get various metadata from it)
     s3.download_file(bucket, object_key, f"materialized-{version}.deb")
     # Import the private key into GPG
@@ -83,6 +83,8 @@ def publish_deb(package: str, version: str) -> None:
             "--sign",
             "-b",
             bucket,
+            "-c",
+            "generic",
             f"./materialized-{version}.deb",
         ]
     )
