@@ -2023,21 +2023,26 @@ impl Catalog {
     }
 
     /// Returns all tables, views, and sources in the same schemas as a set of
-    /// input ids.
+    /// input ids. Input ids are also included.
     pub fn schema_adjacent_relations(&self, sources: &[GlobalId], conn_id: u32) -> Vec<GlobalId> {
         // Find all relations referenced by the expression. Find their parent schemas
         // and add all tables, views, and sources in those schemas to a set.
         let mut ids = HashSet::new();
         for id in sources {
+            ids.insert(*id);
             let entry = self.get_by_id(&id);
             let name = entry.name();
             if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
-                for id in schema.items.values() {
+                for id_schema in schema.items.values() {
+                    if ids.contains(id_schema) {
+                        continue;
+                    }
                     if let SqlCatalogItemType::Table
-                    | SqlCatalogItemType::View
-                    | SqlCatalogItemType::Source = self.get_by_id(id).item_type()
+                 //   | SqlCatalogItemType::Index
+                    | SqlCatalogItemType::Source
+                    | SqlCatalogItemType::View = self.get_by_id(id_schema).item_type()
                     {
-                        ids.insert(*id);
+                        ids.insert(*id_schema);
                     }
                 }
             }

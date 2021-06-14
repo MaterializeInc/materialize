@@ -1110,6 +1110,7 @@ impl Coordinator {
         stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
     ) -> Result<(PlanContext, sql::plan::Plan), CoordError> {
+        println!("\nstmt: {}", stmt);
         let pcx = session.pcx();
 
         // When symbiosis mode is enabled, use symbiosis planning for:
@@ -2237,6 +2238,16 @@ impl Coordinator {
         Ok(timedomain_ids)
     }
 
+    fn prids(&self, ids: &[GlobalId]) -> Vec<String> {
+        ids.iter()
+            .map(|id| self.catalog.get_by_id(id).name().to_string())
+            .collect()
+    }
+
+    fn prid(&self, name: &str, ids: &[GlobalId]) {
+        println!("{}: {:?}", name, self.prids(ids));
+    }
+
     async fn sequence_peek(
         &mut self,
         session: &mut Session,
@@ -2252,68 +2263,79 @@ impl Coordinator {
         let source_ids = source.global_uses();
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
-        let in_transaction = matches!(
-            session.transaction(),
-            &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
-        );
-        // For explicit or implicit transactions that do not use AS OF, get the
-        // timestamp of the in-progress transaction or create one. If this is an AS OF
-        // query, we don't care about any possible transaction timestamp. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't need to
-        // worry about preventing compaction or choosing a valid timestamp for future
-        // queries.
-        let timestamp = if in_transaction && when == PeekWhen::Immediately {
-            let timestamp = session.get_transaction_timestamp(|| {
-                // Determine a timestamp that will be valid for anything in any schema
-                // referenced by the first query.
-                let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
-                // We want to prevent compaction of the indexes consulted by
-                // determine_timestamp, not the ones listed in the query.
-                let (timestamp, timestamp_ids) =
-                    self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
-                let mut handles = vec![];
-                for id in timestamp_ids {
-                    handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
-                }
-                let mut timedomain_set = HashSet::new();
-                for id in timedomain_ids {
-                    timedomain_set.insert(id);
-                }
-                self.txn_reads.insert(
-                    conn_id,
-                    TxnReads {
-                        timedomain_ids: timedomain_set,
-                        _handles: handles,
-                    },
+        // Get the timestamp for this query. Non-AS OF queries use timedomains
+        // to determine the set of ids used in determine_timestamp even if a
+        // multi-statement transaction isn't in progress so that transactions don't
+        // change the behavior how timestamps are determined.
+        let timestamp = match when {
+            PeekWhen::Immediately => {
+                // Although we always use timedomains when determining timestamp, we only hold
+                // back compaction of those ids  in multi-statement transactions.
+                let in_transaction = matches!(
+                    session.transaction(),
+                    &TransactionStatus::InTransaction(_)
+                        | &TransactionStatus::InTransactionImplicit(_)
                 );
+                let timestamp = session.get_transaction_timestamp(|| {
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the first query.
+                    let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
+                    self.prid("timedomain_ids", &timedomain_ids);
 
-                Ok(timestamp)
-            })?;
+                    // We want to prevent compaction of the indexes consulted by
+                    // determine_timestamp, not the ones listed in the query.
+                    let (timestamp, timestamp_ids) =
+                        self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
+                    self.prid("timestamp_ids", &timestamp_ids);
 
-            // Verify that the indexes for this query are in the current read transaction.
-            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
-            for id in source_ids {
-                if !txn_reads.timedomain_ids.contains(&id) {
-                    let mut names: Vec<_> = txn_reads
-                        .timedomain_ids
-                        .iter()
-                        // This could filter out a view that has been replaced in another transaction.
-                        .filter_map(|id| self.catalog.try_get_by_id(*id))
-                        .map(|item| item.name().to_string())
-                        .collect();
-                    // Sort so error messages are deterministic.
-                    names.sort();
-                    return Err(CoordError::RelationOutsideTimeDomain {
-                        relation: self.catalog.get_by_id(&id).name().to_string(),
-                        names,
-                    });
+                    if in_transaction {
+                        let mut handles = vec![];
+                        for id in timestamp_ids {
+                            handles
+                                .push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
+                        }
+                        let mut timedomain_set = HashSet::new();
+                        for id in timedomain_ids {
+                            timedomain_set.insert(id);
+                        }
+                        self.txn_reads.insert(
+                            conn_id,
+                            TxnReads {
+                                timedomain_ids: timedomain_set,
+                                _handles: handles,
+                            },
+                        );
+                    }
+
+                    Ok(timestamp)
+                })?;
+
+                if in_transaction {
+                    // Verify that the indexes for this query are in the current read transaction.
+                    let txn_reads = self.txn_reads.get(&conn_id).unwrap();
+                    for id in source_ids {
+                        if !txn_reads.timedomain_ids.contains(&id) {
+                            let mut names: Vec<_> = txn_reads
+                                .timedomain_ids
+                                .iter()
+                                // This could filter out a view that has been replaced in another transaction.
+                                .filter_map(|id| self.catalog.try_get_by_id(*id))
+                                .map(|item| item.name().to_string())
+                                .collect();
+                            // Sort so error messages are deterministic.
+                            names.sort();
+                            return Err(CoordError::RelationOutsideTimeDomain {
+                                relation: self.catalog.get_by_id(&id).name().to_string(),
+                                names,
+                            });
+                        }
+                    }
                 }
-            }
 
-            timestamp
-        } else {
-            self.determine_timestamp(&source_ids, when)?.0
+                timestamp
+            }
+            PeekWhen::AtTimestamp(_) => self.determine_timestamp(&source_ids, when)?.0,
         };
 
         let source = self.prep_relation_expr(
@@ -2574,6 +2596,8 @@ impl Coordinator {
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
         let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
+        self.prid("index_ids", &index_ids);
+        self.prid("unmaterialized_source_ids", &unmaterialized_source_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
