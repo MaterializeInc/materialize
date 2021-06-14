@@ -136,11 +136,16 @@ mod tests {
             p.into_inner()
         });
 
+        // Execute a second dataflow and reuse the previous in-memory state.
+        // This exists to simulate what would happen after a restart in a Persister
+        // that was actually backed by persistent storage
         let mut p = MemPersister::from_inner(dataz);
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
                 let persister = p.create_or_load(Id(1)).unwrap();
                 let (input, stream) = scope.new_persistent_unordered_input(persister);
+                // Send the data to be captured by a channel so that we can replay
+                // its contents outside of the dataflow and verify they are correct
                 let recv = stream.capture();
                 (input, recv)
             });

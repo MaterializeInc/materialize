@@ -12,6 +12,7 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod file;
 pub mod mem;
 pub mod operators;
 pub mod persister;

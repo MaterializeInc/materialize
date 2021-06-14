@@ -2883,6 +2883,8 @@ dependencies = [
 name = "persist"
 version = "0.0.0"
 dependencies = [
+ "criterion",
+ "tempfile",
  "timely",
 ]
 

@@ -138,7 +138,8 @@ pub struct MemStream {
 }
 
 impl MemStream {
-    fn new() -> Self {
+    /// Create a new MemStream.
+    pub fn new() -> Self {
         MemStream {
             dataz: Arc::new(Mutex::new(Vec::new())),
         }
@@ -167,8 +168,16 @@ impl Meta for MemStream {
 }
 
 /// An in-memory implementation of [Snapshot].
+#[derive(Debug)]
 pub struct MemSnapshot {
     dataz: Vec<((String, String), u64, isize)>,
+}
+
+impl MemSnapshot {
+    /// Create a new MemSnapshot.
+    pub fn new(dataz: Vec<((String, String), u64, isize)>) -> Self {
+        MemSnapshot { dataz }
+    }
 }
 
 impl Snapshot for MemSnapshot {
