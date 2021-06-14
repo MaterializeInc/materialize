@@ -426,6 +426,7 @@ async fn build_kafka(
         key_schema_id,
         value_schema_id,
         topic,
+        topic_prefix: builder.topic_prefix,
         addrs: builder.broker_addrs,
         relation_key_indices: builder.relation_key_indices,
         key_desc_and_indices: builder.key_desc_and_indices,

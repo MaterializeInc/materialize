@@ -513,6 +513,7 @@ where
                         if let Some(consistency) = &connector.consistency {
                             let encoded = avro::encode_debezium_transaction_unchecked(
                                 consistency.schema_id,
+                                &connector.topic_prefix,
                                 &ts.to_string(),
                                 "BEGIN",
                                 None,
@@ -576,6 +577,7 @@ where
                         if let Some(consistency) = &connector.consistency {
                             let encoded = avro::encode_debezium_transaction_unchecked(
                                 consistency.schema_id,
+                                &connector.topic_prefix,
                                 &ts.to_string(),
                                 "END",
                                 Some(total_count),
