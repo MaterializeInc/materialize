@@ -86,6 +86,11 @@ public class TB {
         config.setProperty("database.password", ns.getString("password"));
         config.setProperty("database.server.name", "tb");
         config.setProperty("database.history", "io.debezium.relational.history.FileDatabaseHistory");
+
+        config.setProperty("database.allowPublicKeyRetrieval", "true");
+        config.setProperty("log_bin", "mysql-bin");
+        config.setProperty("binlog_format", "row");
+
         config.setProperty("database.history.file.filename", ns.getString("save_file") + ".history");
         config.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
         config.setProperty("offset.storage.file.filename", ns.getString("save_file") + ".offsets");
