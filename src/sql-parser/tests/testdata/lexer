@@ -101,9 +101,9 @@ e'\x1fg'
 # Dollar string literals.
 
 parse-statement roundtrip
-SELECT $$Postgre's SQL$$, $eOf$Postgre's SQL$eOf$, end
+SELECT $$Postgre's SQL$$, $eOf$Postgre's SQL$eOf$, "end"
 ----
-SELECT '$Postgre''s SQL', '$Postgre''s SQL', end
+SELECT '$Postgre''s SQL', '$Postgre''s SQL', "end"
 
 parse-statement roundtrip
 SELECT $$POST

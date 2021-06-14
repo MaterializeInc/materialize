@@ -1089,7 +1089,7 @@ SELECT DISTINCT
     mcn_source.name AS source,
     CASE WHEN source_info.time < frontier_df.time THEN 0 ELSE source_info.time - frontier_df.time END AS lag_ms
 FROM mz_catalog.mz_materialization_dependencies index_deps
-JOIN (SELECT source_id, pg_catalog.MAX(timestamp) time FROM mz_catalog.mz_source_info GROUP BY source_id) source_info ON index_deps.source = source_info.source_id
+JOIN (SELECT source_id, pg_catalog.MAX(timestamp) \"time\" FROM mz_catalog.mz_source_info GROUP BY source_id) source_info ON index_deps.source = source_info.source_id
 JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
 JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = source_info.source_id",

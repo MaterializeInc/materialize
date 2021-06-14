@@ -21,12 +21,12 @@
 parse-statement roundtrip
 DELETE FROM table
 ----
-DELETE FROM table
+DELETE FROM "table"
 
 parse-statement
 DELETE FROM table
 ----
-DELETE FROM table
+DELETE FROM "table"
 =>
 Delete(DeleteStatement { table_name: UnresolvedObjectName([Ident("table")]), selection: None })
 
