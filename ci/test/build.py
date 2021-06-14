@@ -9,6 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import boto3
 import os
 from pathlib import Path
 
@@ -69,7 +70,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     )
 
     # Build the Debian package.
-    deb_path = repo.rd.xcargo_target_dir() / "debian" / "materialized.deb"
+    deb_path = repo.rd.xcargo_target_dir() / "debian" / f"materialized-{version}.deb"
     spawn.runv(
         [
             repo.rd.xcargo(),
@@ -88,6 +89,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     )
     deb_size = deb_path.stat().st_size
 
+    # Stage the package on Bintray
     bt = bintray.Client(
         "materialize", user="ci@materialize", api_key=os.environ["BINTRAY_API_KEY"]
     )
@@ -117,6 +119,14 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
         # it doesn't, so instead we just assume the .deb that's already uploaded
         # is functionally equivalent to the one we just built.
         print("Debian package already exists; assuming it is valid and skipping upload")
+
+    # Stage the package on S3
+    s3 = boto3.client("s3")
+    s3.put_object(
+        Body=open(deb_path, "rb"),
+        Bucket="materialize-apt-repository",
+        Key=f"pool/stable/m/ma/materialized-{version}.deb",
+    )
 
 
 if __name__ == "__main__":

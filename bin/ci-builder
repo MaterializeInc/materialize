@@ -102,6 +102,7 @@ case "$cmd" in
             --env BUILDKITE_JOB_ID
             --env BUILDKITE_TAG
             --env CI
+            --env GPG_KEY
         )
         if [[ -t 1 ]]; then
             args+=(--tty)
