@@ -24,7 +24,7 @@ Field | Use
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **HOST** _connection_info_ | Postgres host. See the Postgres documentation on [supported correction parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
-**PUBLICATION** _publication_name_ | Postgres publication.
+**PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
 ## Details
 
@@ -61,7 +61,7 @@ Before creating the source in Materialize, you must:
 
 1. Set up your Postgres database to allow logical replication.
 2. Ensure that the user for your Materialize connection has `REPLICATION` privileges.
-3. Create a Postgres [publication](https://www.postgresql.org/docs/10/logical-replication-publication.html), or replication data set, containing the tables to be streamed to Materialize. Since Postgres sources are materialized (kept in memory) in their entirety, we strongly recommend that you limit publications only to the data you need to query.
+3. Create a Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html), or replication data set, containing the tables to be streamed to Materialize. Since Postgres sources are materialized (kept in memory) in their entirety, we strongly recommend that you limit publications only to the data you need to query.
 
 Once you create a materialized source from the publication, the source will contain the raw data stream of replication updates. You can then break the stream out into views that represent the publication's original tables with [`CREATE VIEWS`](/sql/create-views/). You can treat these tables as you would any other source and create other views or materialized views from them.
 
@@ -88,7 +88,7 @@ If you stop or delete Materialize without first dropping the Postgres source, th
 
 - Materialize does not support changes to schemas for existing publications. You will need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
 - Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types will fail with an error.
-- Materialize only supports [TOASTED](https://www.postgresql.org/docs/current/storage-toast.html) values for append-only tables. Practically speaking, you can include rows with TOASTED values as long as they are never updated or deleted, or you can disable TOAST on the original Postgres table. If a TOASTED column is updated, the source will enter an errored state that renders all per-table views inaccessible.
+- Materialize does not support [TOASTED](https://www.postgresql.org/docs/current/storage-toast.html) values except in append-only tables. Practically speaking, you can include rows with TOASTED values as long as they are never updated or deleted, or you can disable TOAST on the original Postgres table. If a TOASTED column is updated, the source will enter an errored state that renders all per-table views inaccessible.
 
   To disable TOAST on a column, use the following command in Postgres:
   ```
@@ -103,13 +103,13 @@ If you stop or delete Materialize without first dropping the Postgres source, th
 
 Before you create a Postgres source in Materialize, you must complete the following prerequisite steps in Postgres.
 
-1. Ensure the database allows logical replicationz ( in the configuration). For most configurations, it should suffice to set `wal_level = logical` in `postgresql.conf`, but additional steps may be required for Amazon RDS. See the [Amazon Relational Database Service Documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) for details.
+1. Ensure the database configuration allows logical replication. For most configurations, it should suffice to set `wal_level = logical` in `postgresql.conf`, but additional steps may be required for Amazon RDS. See the [Amazon Relational Database Service Documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) for details.
 
 2. Assign the user `REPLICATION` privileges:
     ```sql
     ALTER ROLE "user" WITH REPLICATION;
     ```
-3. Set replica identity to full:
+3. Set replica identity to full for all the tables that you wish to replicate:
     ```sql
     ALTER TABLE foo
     REPLICA IDENTITY FULL;
@@ -132,7 +132,7 @@ Once you have set up Postgres, you can create the source in Materialize.
 
 ```sql
 CREATE MATERIALIZED SOURCE "mz_source" FROM POSTGRES
-HOST 'host=postgres port=5432 user=host sslmode=disable dbname=postgres'
+HOST 'host=postgres port=5432 user=host sslmode=require dbname=postgres'
 PUBLICATION 'mz_source';
 ```
 

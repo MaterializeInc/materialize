@@ -1,6 +1,6 @@
 ---
 title: "CREATE VIEWS"
-description: "`CREATE VIEWS` creates views for the distinct components of a multiplex stream."
+description: "`CREATE VIEWS` creates views for the distinct components of a multiplexed stream."
 menu:
   main:
     parent: 'sql'
@@ -8,7 +8,7 @@ menu:
 
 {{< version-added v0.8.0 />}}
 
-`CREATE VIEWS` creates views for the distinct components of a multiplex stream. For example, it separates the replication stream of a [Postgres source](/sql/create-source/postgres/) out into views that reproduce the upstream tables that populate the stream.
+`CREATE VIEWS` creates views for the distinct components of a multiplexed stream. For example, it separates the replication stream of a [Postgres source](/sql/create-source/postgres/) out into views that reproduce the upstream tables that populate the stream.
 
 `CREATE VIEWS` is distinct from both the more general [`CREATE VIEW`](/sql/create-view/) command, which provides an alias for `SELECT` statements, and from [materialized views](/sql/create-materialized-view).
 
@@ -18,7 +18,8 @@ menu:
 
 Field | Use
 ------|-----
-**TEMP** / **TEMPORARY** | Mark the view as [temporary](#temporary-views).
+**MATERIALIZED**  |  Create the view as materialized. To minimize memory usage, we recommend that you first create nonmaterialized views to see tables instead of the multiplexed data stream and only materialize the views for the queries on those initial table-like views.
+**TEMP** / **TEMPORARY** | Mark the view as [temporary](#temporary-views).  |
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
 _src_name_ | The name of the [Postgres source](/sql/create-source/postgres) for which you are creating table views.
 _upstream_table_  | Optional. The names of the upstream table for which to create a view. You can include multiple tables as a comma-separated list. If unspecified, views will be created for all tables in the publication.
