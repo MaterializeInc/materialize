@@ -22,7 +22,7 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use dataflow_types::*;
-use expr::{GlobalId, MirRelationExpr};
+use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
@@ -32,7 +32,7 @@ use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
 use crate::sink;
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -61,11 +61,9 @@ where
         }
 
         let (collection, _err_collection) = self
-            .collection(&MirRelationExpr::global_get(
-                sink.from,
-                sink.from_desc.typ().clone(),
-            ))
-            .expect("Sink source collection not loaded");
+            .lookup_id(expr::Id::Global(sink.from))
+            .expect("Sink source collection not loaded")
+            .as_collection();
 
         // Some connectors support keys - extract them.
         let keyed = match sink.connector.clone() {

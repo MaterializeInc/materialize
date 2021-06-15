@@ -3554,7 +3554,6 @@ fn auto_generate_primary_idx(
     depends_on: Vec<GlobalId>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
-
     catalog::Index {
         create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
         plan_cx: PlanContext::default(),

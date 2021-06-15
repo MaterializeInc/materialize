@@ -35,6 +35,16 @@ use std::collections::HashMap;
 use expr::{MapFilterProject, MirScalarExpr};
 use repr::{Datum, Row, RowArena};
 
+pub use delta_join::DeltaJoinPlan;
+pub use linear_join::LinearJoinPlan;
+
+/// A complete enumeration of possible join plans to render.
+#[derive(Debug)]
+pub enum JoinPlan {
+    Linear(LinearJoinPlan),
+    Delta(DeltaJoinPlan),
+}
+
 /// A manual closure implementation of filtering and logic application.
 ///
 /// This manual implementation exists to express lifetime constraints clearly,
