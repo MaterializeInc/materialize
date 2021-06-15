@@ -30,6 +30,8 @@ def main() -> None:
     os.chdir("btv-test")
     spawn.runv(["touch", "foo"])
     spawn.runv(["git", "add", "foo"])
+    spawn.runv(["git", "config", "user.email", "ci@materialize.com"])
+    spawn.runv(["git", "config", "user.name", "Materialize CI"])
     spawn.runv(["git", "commit", "-m", "test"])
     spawn.runv(["git", "push"])
     return
