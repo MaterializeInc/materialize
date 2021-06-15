@@ -248,8 +248,12 @@ impl ColumnKnowledge {
                             // These methods propagate constant values exactly.
                             knowledge
                         }
+                        AggregateFunc::Count => DatumKnowledge {
+                            value: None,
+                            nullable: false,
+                        },
                         _ => {
-                            // All aggregates are non-null if their inputs are non-null.
+                            // The remaining aggregates are non-null if their inputs are non-null.
                             DatumKnowledge {
                                 value: None,
                                 nullable: knowledge.nullable,

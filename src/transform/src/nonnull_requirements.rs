@@ -200,9 +200,17 @@ impl NonNullRequirements {
                     // A "non-empty" requirement, I guess?
                     if column < group_key.len() {
                         group_key[column].non_null_requirements(&mut new_columns);
-                    }
-                    if column == group_key.len() && aggregates.len() == 1 {
-                        aggregates[0].expr.non_null_requirements(&mut new_columns);
+                    } else {
+                        let agg_pos = column - group_key.len();
+                        match aggregates[agg_pos].func {
+                            // Count is non-null even for all null inputs
+                            expr::AggregateFunc::Count => {}
+                            _ => {
+                                aggregates[agg_pos]
+                                    .expr
+                                    .non_null_requirements(&mut new_columns);
+                            }
+                        }
                     }
                 }
                 self.action(input, new_columns, gets);
