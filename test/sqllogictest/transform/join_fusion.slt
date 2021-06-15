@@ -201,6 +201,7 @@ EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col
 ----
 %0 =
 | Get materialize.public.lineitem (u15)
+| Filter (#4 = (#4 % 500dec))
 | ArrangeBy ()
 
 %1 =
@@ -230,21 +231,21 @@ EXPLAIN SELECT *
 ----
 %0 =
 | Get materialize.public.lineitem (u15)
-| Filter !(isnull(datetots(#7)))
+| Filter !(isnull(datetots(#7))), (datetots(#7) = (#5 + 6 days))
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.orders (u11)
 | Filter (#1 = 229)
-| ArrangeBy (#2, #3, (#3 + 6 days))
+| ArrangeBy (#2, #3)
 
 %2 =
 | Get materialize.public.customer (u7)
 | Filter !(isnull(#0)), (#0 = 229)
 
 %3 =
-| Join %0 %1 %2 (= #4 #10) (= #5 #11) (= datetots(#7) (#11 + 6 days))
-| | implementation = Differential %2 %0.() %1.(#2, #3, (#3 + 6 days))
+| Join %0 %1 %2 (= #4 #10) (= #5 #11)
+| | implementation = Differential %2 %0.() %1.(#2, #3)
 | | demand = (#0..#9, #12..#14)
 | Project (#0..#9, #4, #5, #12..#14)
 

@@ -78,6 +78,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
 use expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+use itertools::Itertools;
 use repr::{Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
@@ -530,43 +531,28 @@ impl PredicatePushdown {
                 // Predicates to push at each input, and to lift out the join.
                 let mut push_downs = vec![Vec::new(); inputs.len()];
 
-                for equivalence in equivalences.iter_mut() {
+                for equivalence_pos in 0..equivalences.len() {
                     // Case 1: there are more than one literal in the
                     // equivalence class. Because of equivalences have been
                     // dedupped, this means that everything in the equivalence
                     // class must be equal to two different literals, so the
                     // entire relation zeroes out
-                    if equivalence.iter().filter(|expr| expr.is_literal()).count() > 1 {
+                    if equivalences[equivalence_pos]
+                        .iter()
+                        .filter(|expr| expr.is_literal())
+                        .count()
+                        > 1
+                    {
                         relation.take_safely();
                         return;
                     }
 
-                    // Find all single input expressions in the equivalence
-                    // class and collect (position within the equivalence class,
-                    // input the expression belongs to, localized version of the
-                    // expression).
-                    let mut single_input_exprs = equivalence
+                    if let Some(literal_pos) = equivalences[equivalence_pos]
                         .iter()
-                        .enumerate()
-                        .filter_map(|(pos, e)| {
-                            let mut inputs = input_mapper.lookup_inputs(e);
-                            if let Some(input) = inputs.next() {
-                                if inputs.next().is_none() {
-                                    return Some((
-                                        pos,
-                                        input,
-                                        input_mapper.map_expr_to_local(e.clone()),
-                                    ));
-                                }
-                            }
-                            None
-                        })
-                        .collect::<Vec<_>>();
-
-                    if let Some(literal_pos) = equivalence.iter().position(|expr| expr.is_literal())
+                        .position(|expr| expr.is_literal())
                     {
                         // Case 2: There is one literal in the equivalence class
-                        let literal = equivalence[literal_pos].clone();
+                        let literal = equivalences[equivalence_pos][literal_pos].clone();
                         let gen_literal_equality_pred = |expr| {
                             if literal.is_literal_null() {
                                 MirScalarExpr::CallUnary {
@@ -581,51 +567,141 @@ impl PredicatePushdown {
                                 }
                             }
                         };
+
+                        // Find all single input expressions in the equivalence
+                        // class and collect (position within the equivalence class,
+                        // input the expression belongs to, localized version of the
+                        // expression).
+                        let mut single_input_exprs = equivalences[equivalence_pos]
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(pos, e)| {
+                                let mut inputs = input_mapper.lookup_inputs(e);
+                                if let Some(input) = inputs.next() {
+                                    if inputs.next().is_none() {
+                                        return Some((
+                                            pos,
+                                            input,
+                                            input_mapper.map_expr_to_local(e.clone()),
+                                        ));
+                                    }
+                                }
+                                None
+                            })
+                            .collect::<Vec<_>>();
+
                         // For every single-input expression `expr`, we can push
                         // down `expr = literal` and remove `expr` from the
                         // equivalence class.
                         for (expr_pos, input, expr) in single_input_exprs.drain(..).rev() {
                             push_downs[input].push(gen_literal_equality_pred(expr));
-                            equivalence.remove(expr_pos);
+                            equivalences[equivalence_pos].remove(expr_pos);
                         }
                     } else {
                         // Case 3: There are no literals in the equivalence
-                        // class. For each single-input expression `expr1`,
-                        // scan the remaining single-input expressions
-                        // to see if there is another expression `expr2` from
-                        // the same input. If there is, push down
-                        // `(expr1 = expr2) || (isnull(expr1) &&
-                        // isnull(expr2))`.
-                        // `expr1` can then be removed from the equivalence
-                        // class. Note that we keep `expr2` around so that the
-                        // join doesn't inadvertently become a cross join.
-                        while let Some((pos1, input1, expr1)) = single_input_exprs.pop() {
-                            if let Some((_, _, expr2)) =
-                                single_input_exprs.iter().find(|(_, i, _)| *i == input1)
-                            {
-                                use expr::BinaryFunc;
-                                use expr::UnaryFunc;
-                                push_downs[input1].push(MirScalarExpr::CallBinary {
-                                    func: BinaryFunc::Or,
-                                    expr1: Box::new(MirScalarExpr::CallBinary {
-                                        func: BinaryFunc::Eq,
-                                        expr1: Box::new(expr2.clone()),
-                                        expr2: Box::new(expr1.clone()),
-                                    }),
-                                    expr2: Box::new(MirScalarExpr::CallBinary {
-                                        func: BinaryFunc::And,
-                                        expr1: Box::new(MirScalarExpr::CallUnary {
-                                            func: UnaryFunc::IsNull,
-                                            expr: Box::new(expr2.clone()),
+                        // class. Push a predicate for every pair of expressions
+                        // in the equivalence that etiher belong to a single
+                        // input or can be localized to a given input through
+                        // the rest of equivalences.
+                        let mut to_remove = Vec::new();
+                        for input in 0..inputs.len() {
+                            // Vector of pairs (position within the equivalence, localized
+                            // expression). The position is None for expressions derived through
+                            // other equivalences.
+                            let localized = equivalences[equivalence_pos]
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(pos, expr)| {
+                                    if let MirScalarExpr::Column(col_pos) = &expr {
+                                        let local_col = input_mapper.map_column_to_local(*col_pos);
+                                        if input == local_col.1 {
+                                            return Some((
+                                                Some(pos),
+                                                MirScalarExpr::Column(local_col.0),
+                                            ));
+                                        } else {
+                                            return None;
+                                        }
+                                    }
+                                    let mut inputs = input_mapper.lookup_inputs(expr);
+                                    if let Some(single_input) = inputs.next() {
+                                        if input == single_input && inputs.next().is_none() {
+                                            return Some((
+                                                Some(pos),
+                                                input_mapper.map_expr_to_local(expr.clone()),
+                                            ));
+                                        }
+                                    }
+                                    // Equivalences not including the current expression
+                                    let mut other_equivalences = equivalences.clone();
+                                    other_equivalences[equivalence_pos].remove(pos);
+                                    if let Some(localized) = input_mapper
+                                        .try_map_to_input_with_bound_expr(
+                                            expr.clone(),
+                                            input,
+                                            &other_equivalences[..],
+                                        )
+                                    {
+                                        Some((None, localized))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            // If there are at least 2 expression in the equivalence that
+                            // can be localized to the same input, push all combinations
+                            // of them to the input.
+                            if localized.len() > 1 {
+                                for mut pair in
+                                    localized.iter().map(|(_, expr)| expr).combinations(2)
+                                {
+                                    let expr1 = pair.pop().unwrap();
+                                    let expr2 = pair.pop().unwrap();
+
+                                    use expr::BinaryFunc;
+                                    use expr::UnaryFunc;
+                                    push_downs[input].push(MirScalarExpr::CallBinary {
+                                        func: BinaryFunc::Or,
+                                        expr1: Box::new(MirScalarExpr::CallBinary {
+                                            func: BinaryFunc::Eq,
+                                            expr1: Box::new(expr2.clone()),
+                                            expr2: Box::new(expr1.clone()),
                                         }),
-                                        expr2: Box::new(MirScalarExpr::CallUnary {
-                                            func: UnaryFunc::IsNull,
-                                            expr: Box::new(expr1),
+                                        expr2: Box::new(MirScalarExpr::CallBinary {
+                                            func: BinaryFunc::And,
+                                            expr1: Box::new(MirScalarExpr::CallUnary {
+                                                func: UnaryFunc::IsNull,
+                                                expr: Box::new(expr2.clone()),
+                                            }),
+                                            expr2: Box::new(MirScalarExpr::CallUnary {
+                                                func: UnaryFunc::IsNull,
+                                                expr: Box::new(expr1.clone()),
+                                            }),
                                         }),
-                                    }),
-                                });
-                                equivalence.remove(pos1);
+                                    });
+                                }
+
+                                if localized.len() == equivalences[equivalence_pos].len() {
+                                    // The equivalence is either a single input one or fully localizable
+                                    // to a single input through other equivalences, so it can be removed
+                                    // completely without introducing any new cross join.
+                                    to_remove.extend(localized.iter().filter_map(|(pos, _)| *pos));
+                                } else {
+                                    // Leave an expression from this input in the equivalence to avoid
+                                    // cross joins
+                                    to_remove.extend(
+                                        localized.iter().filter_map(|(pos, _)| *pos).skip(1),
+                                    );
+                                }
                             }
+                        }
+
+                        // Remove expressions that were pushed down to at least one input
+                        to_remove.sort();
+                        to_remove.dedup();
+                        for pos in to_remove.iter().rev() {
+                            equivalences[equivalence_pos].remove(*pos);
                         }
                     };
                 }
