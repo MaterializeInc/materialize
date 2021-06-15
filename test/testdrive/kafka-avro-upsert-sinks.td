@@ -180,12 +180,12 @@ $ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
 {"a": 1} {"a": 1, "b": 7, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
-{"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": {"long": 2}}
-{"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "END", "event_count": {"long": 2}}
-{"id": "3", "status": "BEGIN", "event_count": null}
-{"id": "3", "status": "END", "event_count": {"long": 1}}
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "input-sink"}]}}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "input-sink"}]}}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "input-sink"}]}}}
 
 # Again, compare split by transaction. See comment just above.
 
