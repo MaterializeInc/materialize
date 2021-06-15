@@ -54,6 +54,9 @@ curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-apple-da
 
 Run the following commands as root.
 
+**Note!** These instructions changed between versions 0.8.0 and 0.8.1. If you ran them
+previously, you may need to do so again to continue receiving updates.
+
 ```shell
 # Add the signing key for the Materialize apt repository
 apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
