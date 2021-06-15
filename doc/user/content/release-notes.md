@@ -57,6 +57,10 @@ Wrap your release notes at the 80 character mark.
   `WITH` option to Kafka sources to allow changing read behavior of
   transactionally written messages.
 
+- Add the [`kafka_time_offset`](/sql/create-source/avro-kafka/#with-options)
+  `WITH` option for Kafka sources, which allows to set `start_offset` based on
+  Kafka timestamps.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
@@ -75,10 +79,6 @@ Wrap your release notes at the 80 character mark.
   for both Kafka sources and sinks. Additionally, change `consistency_topic` on
   sinks to be a string that specifies a topic name instead of a boolean. This
   harmonizes the parameter behavior between sources and sinks.
-
-- Add the [`kafka_time_offset`](/sql/create-source/avro-kafka/#with-options)
-  `WITH` option for Kafka sources, which allows to set `start_offset` based on
-  Kafka timestamps.
 
 {{% version-header v0.7.3 %}}
 
