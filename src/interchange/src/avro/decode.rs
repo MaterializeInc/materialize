@@ -487,24 +487,13 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
                 &self.buf
             }
         };
-        let coefficient =
-            apd::twos_complement_be_to_i128(buf).map_err(|e| DecodeError::Custom(e.to_string()))?;
-        let mut cx = apd::cx_datum();
-        let mut n = cx.from_i128(coefficient);
+        let mut n = apd::twos_complement_be_to_apd(buf).map_err(|e| DecodeError::Custom(e.to_string()))?;
         n.set_exponent(-i32::try_from(scale).unwrap());
 
         if apd::get_precision(&n) > apd::APD_DATUM_MAX_PRECISION as u32 {
             return Err(AvroError::Decode(DecodeError::Custom(format!(
                 "Error encoding apd: exceeds maximum precision {}",
                 apd::APD_DATUM_MAX_PRECISION
-            ))));
-        }
-
-        // Catchall for unexpected statuses.
-        if cx.status().any() {
-            return Err(AvroError::Decode(DecodeError::Custom(format!(
-                "Unexpected error encoding numeric: {:?}",
-                cx.status()
             ))));
         }
 
