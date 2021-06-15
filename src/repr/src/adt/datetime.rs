@@ -1165,6 +1165,9 @@ fn fill_pdt_from_tokens(
                         unit_buf.as_mut().map(|b| b.div(1_000));
                         DateTimeField::Second
                     }
+                    DateTimeUnits::Hour => DateTimeField::Hour,
+                    DateTimeUnits::Minute => DateTimeField::Minute,
+                    DateTimeUnits::Second => DateTimeField::Second,
                     _ => return Err(format!("unsupported unit {}", u)),
                 };
                 if unit_buf.is_some() && f != current_field {
@@ -1336,6 +1339,9 @@ fn determine_format_w_datetimefield(
         }
         // Implies {Num}?{TimeUnit}
         Some(TimeUnit(f)) => Ok(Some(PostgreSql(f))),
+        Some(DateTimeUnit(DateTimeUnits::Hour)) => Ok(Some(PostgreSql(Hour))),
+        Some(DateTimeUnit(DateTimeUnits::Minute)) => Ok(Some(PostgreSql(Minute))),
+        Some(DateTimeUnit(DateTimeUnits::Second)) => Ok(Some(PostgreSql(Second))),
         Some(DateTimeUnit(_)) => Ok(None),
         _ => Err("Cannot determine format of all parts".into()),
     }

@@ -13,10 +13,10 @@ lazy_static = "1.4.0"
 log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 ore = { path = "../ore" }
-parse_duration = "2.1.1"
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.5.4"
+repr = { path = "../repr" }
 serde = { version = "1.0.126", features = ["derive"] }
 structopt = "0.3.21"
 tokio = { version = "1.6.1", features = ["rt-multi-thread"] }

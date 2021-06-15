@@ -156,7 +156,7 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
     let sqs_validation_timeout = cmd
         .args
         .opt_string("sqs-validation-timeout")
-        .map(|t| parse_duration::parse(&t).map_err(|e| e.to_string()))
+        .map(|t| repr::util::parse_duration(&t).map_err(|e| e.to_string()))
         .transpose()?;
     cmd.args.done()?;
     Ok(AddBucketNotifications {

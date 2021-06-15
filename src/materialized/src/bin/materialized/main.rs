@@ -55,7 +55,7 @@ type OptionalDuration = Option<Duration>;
 fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
     match s {
         "off" => Ok(None),
-        _ => Ok(Some(parse_duration::parse(s)?)),
+        _ => Ok(Some(repr::util::parse_duration(s)?)),
     }
 }
 
@@ -101,7 +101,7 @@ struct Args {
     #[structopt(long, hidden = true)]
     debug_introspection: bool,
     /// Retain prometheus metrics for this amount of time.
-    #[structopt(short, long, hidden = true, parse(try_from_str = parse_duration::parse), default_value = "5min")]
+    #[structopt(short, long, hidden = true, parse(try_from_str =repr::util::parse_duration), default_value = "5min")]
     retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
@@ -120,7 +120,7 @@ struct Args {
     #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
     /// Default frequency with which to advance timestamps
-    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str = parse_duration::parse), value_name = "DURATION", default_value = "1s")]
+    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
 
     /// Maximum number of source records to buffer in memory before flushing to

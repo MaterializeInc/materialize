@@ -2057,7 +2057,7 @@ fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, an
         None => (),
         Some("off") => out.push(IndexOption::LogicalCompactionWindow(None)),
         Some(s) => {
-            let window = Some(parse_duration::parse(s)?);
+            let window = Some(repr::util::parse_duration(s)?);
             out.push(IndexOption::LogicalCompactionWindow(window))
         }
     };

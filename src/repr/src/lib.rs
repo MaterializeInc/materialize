@@ -29,6 +29,7 @@ mod scalar;
 
 pub mod adt;
 pub mod strconv;
+pub mod util;
 
 pub use cache::{CachedRecord, CachedRecordIter};
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};

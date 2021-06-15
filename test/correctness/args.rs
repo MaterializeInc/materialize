@@ -41,7 +41,7 @@ pub struct Args {
     #[structopt(long)]
     pub help_config: bool,
     /// Duration for which to run checker.
-    #[structopt(long, parse(try_from_str = parse_duration::parse), default_value = "10m")]
+    #[structopt(long, parse(try_from_str = repr::util::parse_duration), default_value = "10m")]
     pub duration: Duration,
 }
 
