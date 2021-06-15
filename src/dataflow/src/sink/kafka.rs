@@ -338,7 +338,9 @@ where
         // We explicitly reject `statistics.interval.ms` here so that we don't
         // flood the INFO log with statistics messages.
         // TODO: properly support statistics on Kafka sinks
-        if k != "statistics.interval.ms" {
+        // We explicitly reject 'isolation.level' as it's a consumer property
+        // and, while benign, will fill the log with WARN messages
+        if k != "statistics.interval.ms" && k != "isolation.level" {
             config.set(k, v);
         }
     }
