@@ -72,6 +72,11 @@ impl Write for FileStream {
         guard.sync_all()?;
         Ok(())
     }
+
+    fn seal(&mut self, _upper: u64) -> Result<(), Error> {
+        // No-op for now.
+        Ok(())
+    }
 }
 
 impl Meta for FileStream {

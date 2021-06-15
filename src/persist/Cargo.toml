@@ -12,6 +12,9 @@ harness = false
 # NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.
 [dependencies]
+abomonation = "0.7"
+abomonation_derive = "0.5"
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tempfile = "3.2.0"
 
