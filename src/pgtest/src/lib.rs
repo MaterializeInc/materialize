@@ -254,6 +254,7 @@ impl PgTest {
                     ),
                     Message::ParameterStatus(_) => continue,
                     Message::NoData => ("NoData", "".to_string()),
+                    Message::EmptyQueryResponse => ("EmptyQueryResponse", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
                 };
                 if self.verbose {
