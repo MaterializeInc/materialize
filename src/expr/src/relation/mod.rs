@@ -1400,7 +1400,7 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::Any
             | AggregateFunc::All => self.expr.is_literal(),
-            _ => false,
+            _ => self.expr.is_literal_err(),
         }
     }
 }
