@@ -82,6 +82,10 @@ CREATE VIEWS FROM "mz_source"
 ```
 #### Postgres replication slots
 
+{{< warning >}}
+Make sure to delete any replication slots if you stop using Materialize or if either your Materialize or Postgres instances crash.
+{{< /warning >}}
+
 If you stop or delete Materialize without first dropping the Postgres source, the Postgres replication slot isn't deleted and will continue to accumulate data. In such cases, you should manually delete the Materialize replication slot to recover memory and avoid degraded performance in the upstream database. Materialize replication slot names always begin with `materialize_` for easy identification.
 
 #### Restrictions on Postgres sources
