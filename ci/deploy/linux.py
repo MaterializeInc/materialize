@@ -62,7 +62,7 @@ def publish_deb(package: str, version: str) -> None:
     bt.repo("apt").package(package).publish_uploads(version)
 
     s3 = boto3.client("s3")
-    bucket = "materialize-apt-repository"
+    bucket = "apt.materialize.com"
     object_key = f"pool/generic/m/ma/materialized-{version}.deb"
     # Download the staged package (deb-s3 needs to get various metadata from it)
     s3.download_file(bucket, object_key, f"materialized-{version}.deb")
