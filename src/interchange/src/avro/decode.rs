@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -10,31 +10,25 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
 use std::rc::Rc;
 
-use anyhow::bail;
-use dec::OrderedDecimal;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
-use mz_avro::schema::{SchemaNode, SchemaPiece};
-use mz_avro::types::{DecimalValue, Value};
 use mz_avro::{
     define_unexpected, give_value, AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess,
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
-use repr::adt::apd;
 use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
 use repr::{Datum, Row};
 
 use super::envelope_debezium::DebeziumSourceCoordinates;
-use super::{is_null, AvroDebeziumDecoder, ConfluentAvroResolver, EnvelopeType, RowCoordinates};
+use super::{AvroDebeziumDecoder, ConfluentAvroResolver, EnvelopeType, RowCoordinates};
 
 /// Manages decoding of Avro-encoded bytes.
 pub struct Decoder {
@@ -602,89 +596,6 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             })?;
 
         Ok(())
-    }
-}
-fn pack_value(v: Value, mut row: Row, n: SchemaNode) -> anyhow::Result<Row> {
-    match v {
-        Value::Null => row.push(Datum::Null),
-        Value::Boolean(true) => row.push(Datum::True),
-        Value::Boolean(false) => row.push(Datum::False),
-        Value::Int(i) => row.push(Datum::Int32(i)),
-        Value::Long(i) => row.push(Datum::Int64(i)),
-        Value::Float(f) => row.push(Datum::Float32((f).into())),
-        Value::Double(f) => row.push(Datum::Float64((f).into())),
-        Value::Date(d) => row.push(Datum::Date(d)),
-        Value::Timestamp(d) => row.push(Datum::Timestamp(d)),
-        Value::Decimal(DecimalValue { unscaled, .. }) => row.push(Datum::Decimal(
-            Significand::from_twos_complement_be(&unscaled)?,
-        )),
-        Value::APD(DecimalValue {
-            unscaled, scale, ..
-        }) => {
-            let coefficient = apd::twos_complement_be_to_i128(&unscaled)?;
-            let mut cx = apd::cx_datum();
-            let mut n = cx.from_i128(coefficient);
-            n.set_exponent(-i32::try_from(scale).unwrap());
-            apd::rescale_within_max_precision(&mut n)?;
-            row.push(Datum::APD(OrderedDecimal(n)))
-        }
-        Value::Bytes(b) => row.push(Datum::Bytes(&b)),
-        Value::String(s) | Value::Enum(_ /* idx */, s) => row.push(Datum::String(&s)),
-        Value::Union { index, inner, .. } => {
-            let mut v = Some(*inner);
-            if let SchemaPiece::Union(us) = n.inner {
-                for (var_idx, var_s) in us
-                    .variants()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| !is_null(s))
-                {
-                    if var_idx == index {
-                        let next = n.step(var_s);
-                        row = pack_value(v.take().unwrap(), row, next)?;
-                    } else {
-                        row.push(Datum::Null);
-                    }
-                }
-            } else {
-                unreachable!("Avro value out of sync with schema");
-            }
-        }
-        Value::Json(j) => row = JsonbPacker::new(row).pack_serde_json(j)?,
-        Value::Uuid(u) => row.push(Datum::Uuid(u)),
-        other @ Value::Fixed(..)
-        | other @ Value::Array(_)
-        | other @ Value::Map(_)
-        | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
-    };
-    Ok(row)
-}
-
-pub fn extract_row<'a, I>(v: Value, extra: I, n: SchemaNode) -> anyhow::Result<Option<Row>>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    match v {
-        Value::Record(fields) => match n.inner {
-            SchemaPiece::Record {
-                fields: schema_fields,
-                ..
-            } => {
-                let mut row = Row::default();
-                for (i, (_, col)) in fields.into_iter().enumerate() {
-                    let f_schema = &schema_fields[i].schema;
-                    let f_node = n.step(f_schema);
-                    row = pack_value(col, row, f_node)?;
-                }
-                for d in extra {
-                    row.push(d);
-                }
-                Ok(Some(row))
-            }
-            _ => unreachable!("Avro value out of sync with schema"),
-        },
-        Value::Null => Ok(None),
-        _ => bail!("unsupported avro value: {:?}", v),
     }
 }
 

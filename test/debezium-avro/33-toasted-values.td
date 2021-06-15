@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -19,6 +19,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE toasted_full (f1 text);
 ALTER TABLE toasted_full REPLICA IDENTITY FULL;
 INSERT INTO toasted_full VALUES (NULL), (REPEAT('a', 32 * 1024) || 'b');
+
+$ schema-registry-wait-schema schema=postgres.public.toasted_full-value
 
 > CREATE MATERIALIZED SOURCE toasted_full
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.toasted_full'

@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -21,8 +21,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use expr::explain::{bracketed, separated, Indices};
+use expr::explain::Indices;
 use expr::{ExprHumanizer, Id, IdGen, RowSetFinishing};
+use ore::str::{bracketed, separated};
 use repr::{RelationType, ScalarType};
 
 use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr};

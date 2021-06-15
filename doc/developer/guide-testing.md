@@ -157,6 +157,14 @@ $ brew services start postgresql
 $ createdb $(whoami)  # Yes, this is a shell command, not a SQL command.
 ```
 
+On Debian, the current user might not exist or have sufficient permissions to
+create a database. If the `createdb` command fails, try to create a local
+postgres user matching the current user, with the `createdb` permission:
+
+```shell
+$ sudo -u postgres createuser "$(whoami)" --createdb
+```
+
 You might reasonably wonder why PostgreSQL is necessary for running
 sqllogictests against Materialize. The answer is that we offload the hard work
 of mutating queries, like `INSERT INTO ...` and `UPDATE`, to PostgreSQL. We

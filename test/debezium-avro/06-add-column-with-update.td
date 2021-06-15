@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -17,6 +17,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column (f1 INTEGER);
 ALTER TABLE alter_add_column REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column VALUES (123);
+
+$ schema-registry-wait-schema schema=postgres.public.alter_add_column-value
 
 > CREATE MATERIALIZED SOURCE alter_add_column
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_add_column'

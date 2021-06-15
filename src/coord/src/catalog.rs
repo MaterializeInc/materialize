@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -16,18 +16,19 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::{ExternalSourceConnector, SinkEnvelope};
-use expr::Id;
+use dataflow_types::{ExternalSourceConnector, MzOffset, SinkEnvelope};
+use expr::{Id, PartitionId};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
+use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
-use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
+use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -48,7 +49,6 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
     PG_CATALOG_SCHEMA,
 };
-use crate::catalog::error::ErrorKind;
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
@@ -64,6 +64,7 @@ pub mod storage;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::Config;
 pub use crate::catalog::error::Error;
+pub use crate::catalog::error::ErrorKind;
 
 const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
@@ -179,6 +180,14 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+}
+
+impl Table {
+    // The Coordinator controls insertions for tables (including system tables),
+    // so they are realtime.
+    pub fn timeline(&self) -> Timeline {
+        Timeline::EpochMilliseconds
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -594,7 +603,9 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             plan_cx: PlanContext::default(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local,
+                            connector: dataflow_types::SourceConnector::Local(
+                                Timeline::EpochMilliseconds,
+                            ),
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
@@ -1250,6 +1261,75 @@ impl Catalog {
         Ok(temporary_ids)
     }
 
+    /// Insert timestamp bindings into SQLite, and ignores duplicate timestamp bindings.
+    ///
+    /// Each individual binding is listed as (source_id, partition_id, timestamp, offset)
+    /// and it indicates that all data from (source, partition) for offsets < `offset`, can
+    /// be assigned `timestamp` iff `offset` is the minimal such offset (this is a way to encode
+    /// a [start, end) offset interval without having to duplicate adjacent starts and ends in
+    /// storage).
+    /// TODO: we intentionally ignore duplicates because BYO sources can send multiple
+    /// copies of the same timestamp.
+    pub fn insert_timestamp_bindings(
+        &mut self,
+        timestamps: impl IntoIterator<Item = (GlobalId, String, Timestamp, i64)>,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        for (sid, pid, ts, offset) in timestamps.into_iter() {
+            tx.insert_timestamp_binding(&sid, &pid, ts, offset)?;
+        }
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    /// Read all available timestamp bindings for a source
+    ///
+    /// Returns its output sorted by (partition, timestamp)
+    pub fn load_timestamp_bindings(
+        &mut self,
+        source_id: GlobalId,
+    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        let ret = tx.load_timestamp_bindings(source_id)?;
+        tx.commit()?;
+
+        Ok(ret)
+    }
+
+    /// Delete all timestamp bindings for a source
+    pub fn delete_timestamp_bindings(&mut self, source_id: GlobalId) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.delete_timestamp_bindings(source_id)?;
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    /// Compact timestamp bindings for a source
+    ///
+    /// In practice this ends up being "remove all bindings less than a given timestamp"
+    /// because all offsets are then assigned to the next available binding.
+    pub fn compact_timestamp_bindings(
+        &mut self,
+        source_id: GlobalId,
+        frontier: Timestamp,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.compact_timestamp_bindings(source_id, frontier)?;
+        tx.commit()?;
+
+        Ok(())
+    }
+
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {
         trace!("transact: {:?}", ops);
 
@@ -1740,8 +1820,7 @@ impl Catalog {
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
-                let transformed_desc =
-                    RelationDesc::new(optimized_expr.as_ref().typ(), source.column_names);
+                let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
                     plan_cx: pcx,
@@ -1756,7 +1835,7 @@ impl Catalog {
             }) => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
-                let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
+                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     plan_cx: pcx,
@@ -1821,11 +1900,10 @@ impl Catalog {
     /// Finds the nearest indexes that can satisfy the views or sources whose
     /// identifiers are listed in `ids`.
     ///
-    /// Returns the identifiers of all discovered indexes, along with a boolean
-    /// indicating whether the set of indexes is complete. If incomplete, then
-    /// one of the provided identifiers transitively depends on an
-    /// unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, bool) {
+    /// Returns the identifiers of all discovered indexes, and the identifiers of
+    /// the discovered unmaterialized sources required to satisfy ids. The returned list
+    /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
+    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
         fn has_indexes(catalog: &Catalog, id: GlobalId) -> bool {
             matches!(
                 catalog.get_by_id(&id).item(),
@@ -1837,7 +1915,7 @@ impl Catalog {
             catalog: &Catalog,
             id: GlobalId,
             indexes: &mut Vec<GlobalId>,
-            complete: &mut bool,
+            unmaterialized: &mut Vec<GlobalId>,
         ) {
             if !has_indexes(catalog, id) {
                 return;
@@ -1852,13 +1930,13 @@ impl Catalog {
                 view @ CatalogItem::View(_) => {
                     // Unmaterialized view. Recursively search its dependencies.
                     for id in view.uses() {
-                        inner(catalog, *id, indexes, complete)
+                        inner(catalog, *id, indexes, unmaterialized)
                     }
                 }
                 CatalogItem::Source(_) => {
                     // Unmaterialized source. Record that we are missing at
                     // least one index.
-                    *complete = false;
+                    unmaterialized.push(id);
                 }
                 CatalogItem::Table(_) => (),
                 _ => unreachable!(),
@@ -1866,13 +1944,16 @@ impl Catalog {
         }
 
         let mut indexes = vec![];
-        let mut complete = true;
+        let mut unmaterialized = vec![];
         for id in ids {
-            inner(self, *id, &mut indexes, &mut complete)
+            inner(self, *id, &mut indexes, &mut unmaterialized)
         }
         indexes.sort();
         indexes.dedup();
-        (indexes, complete)
+
+        unmaterialized.sort();
+        unmaterialized.dedup();
+        (indexes, unmaterialized)
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {
@@ -1901,7 +1982,7 @@ impl Catalog {
                     ExternalSourceConnector::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local => Volatile,
+                SourceConnector::Local(_) => Volatile,
             },
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one
@@ -1941,18 +2022,13 @@ impl Catalog {
         self.by_id.values()
     }
 
-    /// Returns the items in a "time domain" for an expression.
-    ///
-    /// A "time domain" is a set of relations (tables, views, sources) that need to
-    /// share time guarantees. Currently we assume time domains to mean "everything
-    /// in a schema". For example, a read transaction on table A in some schema may
-    /// also need to query table B in the same schema, so A and B (and all other
-    /// tables and views in the schema) are in the same time domain.
-    pub fn timedomain_for(&self, source: &MirRelationExpr, conn_id: u32) -> Vec<GlobalId> {
+    /// Returns all tables, views, and sources in the same schemas as a set of
+    /// input ids.
+    pub fn schema_adjacent_relations(&self, sources: &[GlobalId], conn_id: u32) -> Vec<GlobalId> {
         // Find all relations referenced by the expression. Find their parent schemas
         // and add all tables, views, and sources in those schemas to a set.
         let mut ids = HashSet::new();
-        for id in source.global_uses() {
+        for id in sources {
             let entry = self.get_by_id(&id);
             let name = entry.name();
             if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {

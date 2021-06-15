@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -47,6 +47,10 @@ disabled_lints=(
     # Unstable sort is not strictly better than sort, notably on partially
     # sorted inputs.
     clippy::stable-sort-primitive
+
+    # This lint has false positives where the pattern cannot be avoided without cloning
+    # the key used in the map.
+    clippy::map_entry
 )
 
 extra_lints=(

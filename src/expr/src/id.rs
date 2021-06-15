@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -130,24 +130,41 @@ impl fmt::Display for SourceInstanceId {
 
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
-///     Kinesis -> currently treated as single partition, should be shard.
-///     File -> only one
-///     S3 -> https://github.com/MaterializeInc/materialize/issues/5715
+///     None -> sources that have no notion of partitioning (e.g file sources)
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
-    Kinesis,
-    File,
-    S3,
+    None,
 }
 
 impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
-            PartitionId::S3 => write!(f, "s3"),
-            PartitionId::Kinesis => write!(f, "kinesis"),
-            PartitionId::File => write!(f, "0"),
+            PartitionId::None => write!(f, "none"),
+        }
+    }
+}
+
+impl From<&PartitionId> for Option<String> {
+    fn from(pid: &PartitionId) -> Option<String> {
+        match pid {
+            PartitionId::None => None,
+            _ => Some(pid.to_string()),
+        }
+    }
+}
+
+impl FromStr for PartitionId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "none" => Ok(PartitionId::None),
+            s => {
+                let val: i32 = s.parse()?;
+                Ok(PartitionId::Kafka(val))
+            }
         }
     }
 }

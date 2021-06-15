@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -15,6 +15,8 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_drop_column_not_null (f1 INTEGER, col_not_null INTEGER NOT NULL);
 INSERT INTO alter_drop_column_not_null VALUES (123, 234);
+
+$ schema-registry-wait-schema schema=postgres.public.alter_drop_column_not_null-value
 
 > CREATE MATERIALIZED SOURCE alter_drop_column_not_null
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_drop_column_not_null'

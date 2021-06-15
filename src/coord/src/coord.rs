@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -54,19 +54,23 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
+use timely::order::PartialOrder;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
-use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::{
+    CacheMessage, SequencedCommand, TimestampBindingFeedback, WorkerFeedback,
+    WorkerFeedbackWithMeta,
+};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
     SinkConnector, SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
-use dataflow_types::{SinkAsOf, SinkEnvelope};
+use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
@@ -95,7 +99,7 @@ use sql::plan::{
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
 
-use self::arrangement_state::{ArrangementFrontiers, Frontiers};
+use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
@@ -203,13 +207,13 @@ pub struct Coordinator {
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     logging_granularity: Option<u64>,
-    // Channel to manange internal commands from the coordinator to itself.
+    /// Channel to manange internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
-    // Channel to communicate source status updates to the timestamper thread.
+    /// Channel to communicate source status updates to the timestamper thread.
     ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
     metric_scraper_tx: Option<std::sync::mpsc::Sender<ScraperMessage>>,
-    // Channel to communicate source status updates and shutdown notifications to the cacher
-    // thread.
+    /// Channel to communicate source status updates and shutdown notifications to the cacher
+    /// thread.
     cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
@@ -218,11 +222,11 @@ pub struct Coordinator {
     /// Whether or not the most recent operation was a read.
     last_op_was_read: bool,
     /// Whether we need to advance local inputs (i.e., did someone observe a timestamp).
-    /// TODO(justin): this is a hack, and does not work right with TAIL.
+    // TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
-    // active connections.
+    /// active connections.
     active_conns: HashMap<u32, ConnMeta>,
     /// Map of all persisted tables.
     persisted_tables: Option<PersistentTables>,
@@ -236,6 +240,8 @@ pub struct Coordinator {
     /// an in-progress transaction.
     // TODO(mjibson): Should this live on a Session?
     txn_reads: HashMap<u32, TxnReads>,
+    /// Tracks write frontiers for active exactly-once sinks.
+    sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 }
 
 /// Metadata about an active connection.
@@ -602,6 +608,73 @@ impl Coordinator {
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
+            }
+            WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, changes }) => {
+                self.catalog
+                    .insert_timestamp_bindings(
+                        bindings
+                            .into_iter()
+                            .map(|(id, pid, ts, offset)| (id, pid.to_string(), ts, offset.offset)),
+                    )
+                    .expect("inserting timestamp bindings cannot fail");
+
+                let mut durability_updates = Vec::new();
+                for (source_id, mut changes) in changes {
+                    if let Some(source_state) = self.sources.get_mut(&source_id) {
+                        // Apply the updates the dataflow worker sent over, and check if there
+                        // were any changes to the source's upper frontier.
+                        let changes: Vec<_> = source_state
+                            .durability
+                            .update_iter(changes.drain())
+                            .collect();
+
+                        if !changes.is_empty() {
+                            // The source's durability frontier changed as a result of the updates sent over
+                            // by the dataflow workers. Advance the durability frontier known to the dataflow worker
+                            // to indicate that these bindings have been persisted.
+                            durability_updates
+                                .push((source_id, source_state.durability.frontier().to_owned()));
+                        }
+
+                        // Let's also check to see if we can compact any of the bindings we've received.
+                        let compaction_ts = if <_ as PartialOrder>::less_equal(
+                            &source_state.since.borrow().frontier(),
+                            &source_state.durability.frontier(),
+                        ) {
+                            // In this case we have persisted ahead of the compaction frontier and can safely compact
+                            // up to it
+                            *source_state
+                                .since
+                                .borrow()
+                                .frontier()
+                                .first()
+                                .expect("known to exist")
+                        } else {
+                            // Otherwise, the compaction frontier is ahead of what we've persisted so far, but we can
+                            // still potentially compact up whatever we have persisted to this point.
+                            // Note that we have to subtract from the durability frontier because it functions as the
+                            // least upper bound of whats been persisted, and we decline to compact up to the empty
+                            // frontier.
+                            source_state
+                                .durability
+                                .frontier()
+                                .first()
+                                .unwrap_or(&0)
+                                .saturating_sub(1)
+                        };
+
+                        self.catalog
+                            .compact_timestamp_bindings(source_id, compaction_ts)
+                            .expect("compacting timestamp bindings cannot fail");
+                    }
+                }
+
+                // Announce the new frontiers that have been durably persisted.
+                if !durability_updates.is_empty() {
+                    self.broadcast(SequencedCommand::DurabilityFrontierUpdates(
+                        durability_updates,
+                    ));
+                }
             }
         }
     }
@@ -998,6 +1071,12 @@ impl Coordinator {
                     }
                 }
             }
+        } else if let Some(sink_state) = self.sink_writes.get_mut(name) {
+            let changes: Vec<_> = sink_state.frontier.update_iter(changes.drain()).collect();
+
+            if !changes.is_empty() {
+                sink_state.advance_source_handles();
+            }
         }
     }
 
@@ -1016,6 +1095,7 @@ impl Coordinator {
             .drain()
             .filter(|(_, frontier)| frontier != &Antichain::new())
             .collect();
+
         if !since_updates.is_empty() {
             if let Some(tables) = &mut self.persisted_tables {
                 tables.allow_compaction(&since_updates);
@@ -1148,7 +1228,7 @@ impl Coordinator {
 
     /// Handle termination of a client session.
     ///
-    // This cleans up any state in the coordinator associated with the session.
+    /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
         let (drop_sinks, _) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
@@ -1160,8 +1240,8 @@ impl Coordinator {
         self.active_conns.remove(&session.conn_id());
     }
 
-    // Removes all temporary items created by the specified connection, though
-    // not the temporary schema itself.
+    /// Removes all temporary items created by the specified connection, though
+    /// not the temporary schema itself.
     async fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
@@ -1201,10 +1281,31 @@ impl Coordinator {
             name.to_string(),
             id,
             sink.from,
-            connector,
+            connector.clone(),
             sink.envelope,
             as_of,
         );
+
+        if let SinkConnector::Kafka(kafka_sink) = connector {
+            // For exactly-once Kafka sinks, we need to block compaction of each timestamp binding
+            // until all sinks that depend on a given source have finished writing out that timestamp.
+            // To achieve that, each sink will hold a AntichainToken for all of the sources it depends
+            // on, and will advance all of its source dependencies' compaction frontiers as it completes
+            // writes.
+            if kafka_sink.exactly_once {
+                let mut tokens = Vec::new();
+
+                // Collect AntichainTokens from all of the sources that have them.
+                for id in &kafka_sink.transitive_source_dependencies {
+                    if let Some(token) = self.since_handles.get(&id) {
+                        tokens.push(token.clone());
+                    }
+                }
+
+                let sink_writes = SinkWrites::new(tokens);
+                self.sink_writes.insert(id, sink_writes);
+            }
+        }
         Ok(self.ship_dataflow(df).await)
     }
 
@@ -1417,7 +1518,10 @@ impl Coordinator {
         ];
         match self.catalog_transact(ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1434,7 +1538,10 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::SchemaAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1524,7 +1631,10 @@ impl Coordinator {
                 self.ship_dataflow(df).await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1560,19 +1670,28 @@ impl Coordinator {
                 self.ship_sources(metadata).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
         }
     }
 
     async fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>, bool)>) {
         for (source_id, idx_id, caching_enabled) in metadata {
+            // Do everything to instantiate the source at the coordinator and
+            // inform the timestamper and dataflow workers of its existence before
+            // shipping any dataflows that depend on its existence.
             self.update_timestamper(source_id, true).await;
+            self.maybe_begin_caching(source_id, caching_enabled).await;
+            let frontiers =
+                self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
+            self.sources.insert(source_id, frontiers);
             if let Some(index_id) = idx_id {
                 let df = self.dataflow_builder().build_index_dataflow(index_id);
                 self.ship_dataflow(df).await;
             }
-            self.maybe_begin_caching(source_id, caching_enabled).await;
         }
     }
 
@@ -1696,7 +1815,10 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]).await {
             Ok(()) => (),
-            Err(_) if if_not_exists => {
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => {
                 tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
                 return;
             }
@@ -1738,6 +1860,8 @@ impl Coordinator {
             depends_on,
         } = plan;
 
+        self.validate_timeline(view.expr.global_uses())?;
+
         let mut ops = vec![];
 
         if let Some(id) = replace {
@@ -1747,7 +1871,7 @@ impl Coordinator {
         let view_oid = self.catalog.allocate_oid()?;
         // Optimize the expression so that we can form an accurately typed description.
         let optimized_expr = self.prep_relation_expr(view.expr, ExprPrepStyle::Static)?;
-        let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
+        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
             plan_cx: pcx,
@@ -1814,7 +1938,10 @@ impl Coordinator {
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1891,7 +2018,10 @@ impl Coordinator {
                 self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -2072,6 +2202,41 @@ impl Coordinator {
         })
     }
 
+    /// Return the set of ids in a timedomain and verify timeline correctness.
+    ///
+    /// When a user starts a transaction, we need to prevent compaction of anything
+    /// they might read from. We use a heuristic of "anything in the same database
+    /// schemas with the same timeline as whatever the first query is".
+    fn timedomain_for(
+        &self,
+        source_ids: &[GlobalId],
+        source_timeline: &Option<Timeline>,
+        conn_id: u32,
+    ) -> Result<Vec<GlobalId>, CoordError> {
+        let mut timedomain_ids = self.catalog.schema_adjacent_relations(&source_ids, conn_id);
+
+        // Filter out ids from different timelines. The timeline code only verifies
+        // that the SELECT doesn't cross timelines. The schema-adjacent code looks
+        // for other ids in the same database schema.
+        timedomain_ids.retain(|&id| {
+            let id_timeline = self
+                .validate_timeline(vec![id])
+                .expect("single id should never fail");
+            match (&id_timeline, &source_timeline) {
+                // If this id doesn't have a timeline, we can keep it.
+                (None, _) => true,
+                // If there's no source timeline, we have the option to opt into a timeline,
+                // so optimistically choose epoch ms. This is useful when the first query in a
+                // transaction is on a static view.
+                (Some(id_timeline), None) => id_timeline == &Timeline::EpochMilliseconds,
+                // Otherwise check if timelines are the same.
+                (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
+            }
+        });
+
+        Ok(timedomain_ids)
+    }
+
     async fn sequence_peek(
         &mut self,
         session: &mut Session,
@@ -2084,6 +2249,8 @@ impl Coordinator {
             copy_to,
         } = plan;
 
+        let source_ids = source.global_uses();
+        let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
         let in_transaction = matches!(
             session.transaction(),
@@ -2098,9 +2265,8 @@ impl Coordinator {
         let timestamp = if in_transaction && when == PeekWhen::Immediately {
             let timestamp = session.get_transaction_timestamp(|| {
                 // Determine a timestamp that will be valid for anything in any schema
-                // referenced by the first query. This is a first pass implementation of "time
-                // domains".
-                let timedomain_ids = self.catalog.timedomain_for(&source, conn_id);
+                // referenced by the first query.
+                let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
@@ -2127,7 +2293,7 @@ impl Coordinator {
 
             // Verify that the indexes for this query are in the current read transaction.
             let txn_reads = self.txn_reads.get(&conn_id).unwrap();
-            for id in source.global_uses() {
+            for id in source_ids {
                 if !txn_reads.timedomain_ids.contains(&id) {
                     let mut names: Vec<_> = txn_reads
                         .timedomain_ids
@@ -2147,7 +2313,7 @@ impl Coordinator {
 
             timestamp
         } else {
-            self.determine_timestamp(&source.global_uses(), when)?.0
+            self.determine_timestamp(&source_ids, when)?.0
         };
 
         let source = self.prep_relation_expr(
@@ -2158,7 +2324,7 @@ impl Coordinator {
         )?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
-        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = &*source {
             let rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.clone().into()),
@@ -2191,7 +2357,7 @@ impl Coordinator {
             // Extract any surrounding linear operators to determine if we can simply read
             // out the contents from an existing arrangement.
             let (mut map_filter_project, inner) =
-                expr::MapFilterProject::extract_from_expression(source.as_ref());
+                expr::MapFilterProject::extract_from_expression(&source);
             map_filter_project.optimize();
 
             // We can use a fast path approach if our query corresponds to a read out of
@@ -2236,9 +2402,13 @@ impl Coordinator {
                 // Slow path. We need to perform some computation, so build
                 // a new transient dataflow that will be dropped after the
                 // peek completes.
-                let typ = source.as_ref().typ();
+                let typ = source.typ();
                 map_filter_project = expr::MapFilterProject::new(typ.arity());
-                let key: Vec<_> = (0..typ.arity()).map(MirScalarExpr::Column).collect();
+                let key: Vec<MirScalarExpr> = typ
+                    .default_key()
+                    .iter()
+                    .map(|k| MirScalarExpr::Column(*k))
+                    .collect();
                 let view_id = self.allocate_transient_id()?;
                 let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
@@ -2403,7 +2573,7 @@ impl Coordinator {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(uses_ids);
+        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
@@ -2420,7 +2590,7 @@ impl Coordinator {
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                if !indexes_complete {
+                if !unmaterialized_source_ids.is_empty() {
                     coord_bail!(
                         "Unable to automatically determine a timestamp for your query; \
                         this can happen if your query depends on non-materialized sources.\n\
@@ -2519,14 +2689,19 @@ impl Coordinator {
         // nearest_indexes. We don't care about the indexes being incomplete because
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
-        let since = self.indexes.least_valid_since(index_ids.iter().copied());
+        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(&[source_id]);
+        let mut since = self.indexes.least_valid_since(index_ids.iter().copied());
+        since.join_assign(
+            &self
+                .sources
+                .least_valid_since(unmaterialized_source_ids.iter().copied()),
+        );
 
         let mut candidate = if index_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
             // If the sink depends on any tables, we enforce linearizability by choosing
             // the latest input time.
             self.get_read_ts()
-        } else if indexes_complete && !index_ids.is_empty() {
+        } else if unmaterialized_source_ids.is_empty() && !index_ids.is_empty() {
             // If the sink does not need to create any indexes and requires at least 1
             // index, use the upper. For something like a static view, the indexes are
             // complete but the index count is 0, and we want 0 instead of max for the
@@ -2593,6 +2768,7 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
+                self.validate_timeline(decorrelated_plan.global_uses())?;
                 let optimized_plan =
                     self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
@@ -2782,6 +2958,7 @@ impl Coordinator {
                     tables.destroy(id);
                 }
                 self.update_timestamper(id, false).await;
+                self.catalog.delete_timestamp_bindings(id)?;
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
                         .send(CacheMessage::DropSource(id))
@@ -2792,6 +2969,9 @@ impl Coordinator {
             self.broadcast(SequencedCommand::DropSources(sources_to_drop));
         }
         if !sinks_to_drop.is_empty() {
+            for id in sinks_to_drop.iter() {
+                self.sink_writes.remove(id);
+            }
             self.broadcast(SequencedCommand::DropSinks(sinks_to_drop));
         }
         if !indexes_to_drop.is_empty() {
@@ -2950,8 +3130,7 @@ impl Coordinator {
             // The identity for `join` is the minimum element.
             let mut since = Antichain::from_elem(Timestamp::minimum());
 
-            // Populate "valid from" information for each source BYO Debezium source.
-            // TODO: extend this to all sources.
+            // Populate "valid from" information for each source.
             for (source_id, _description) in dataflow.source_imports.iter() {
                 // Extract `since` information about each source and apply here.
                 if let Some(source_since) = self.sources.since_of(source_id) {
@@ -2991,7 +3170,6 @@ impl Coordinator {
             if let Some(as_of) = &mut dataflow.as_of {
                 // It should not be possible to request an invalid time. SINK doesn't support
                 // AS OF. TAIL and Peek check that their AS OF is >= since.
-                use timely::order::PartialOrder;
                 assert!(
                     <_ as PartialOrder>::less_equal(&since, as_of),
                     "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
@@ -3025,6 +3203,10 @@ impl Coordinator {
     // Notify the timestamper thread that a source has been created or dropped.
     async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
+            let bindings = self
+                .catalog
+                .load_timestamp_bindings(source_id)
+                .expect("loading timestamps from coordinator cannot fail");
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     self.ts_tx
@@ -3033,6 +3215,7 @@ impl Coordinator {
                     self.broadcast(SequencedCommand::AddSourceTimestamping {
                         id: source_id,
                         connector: s.connector.clone(),
+                        bindings,
                     });
                 }
             }
@@ -3073,6 +3256,67 @@ impl Coordinator {
         }
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
+    }
+
+    /// Return an error if the ids are from incompatible timelines. This should
+    /// be used to prevent users from doing things that are either meaningless
+    /// (joining data from timelines that have similar numbers with different
+    /// meanings like two separate debezium topics) or will never complete (joining
+    /// byo and realtime data).
+    fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<Option<Timeline>, CoordError> {
+        let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
+
+        // Recurse through IDs to find all sources and tables, adding new ones to
+        // the set until we reach the bottom. Static views will end up with an empty
+        // timelines.
+        while let Some(id) = ids.pop() {
+            // Protect against possible infinite recursion. Not sure if it's possible, but
+            // a cheap prevention for the future.
+            if timelines.contains_key(&id) {
+                continue;
+            }
+            let entry = self.catalog.get_by_id(&id);
+            match entry.item() {
+                CatalogItem::Source(source) => {
+                    timelines.insert(id, source.connector.timeline());
+                }
+                CatalogItem::Index(index) => {
+                    ids.push(index.on);
+                }
+                CatalogItem::View(view) => {
+                    ids.extend(view.optimized_expr.global_uses());
+                }
+                CatalogItem::Table(table) => {
+                    timelines.insert(id, table.timeline());
+                }
+                _ => {}
+            }
+        }
+
+        let timelines: HashSet<Timeline> = timelines
+            .into_iter()
+            .map(|(_, timeline)| timeline)
+            .collect();
+
+        // If there's more than one timeline, we will not produce meaningful
+        // data to a user. Take, for example, some realtime source and a debezium
+        // consistency topic source. The realtime source uses something close to now
+        // for its timestamps. The debezium source starts at 1 and increments per
+        // transaction. We don't want to choose some timestamp that is valid for both
+        // of these because the debezium source will never get to the same value as the
+        // realtime source's "milliseconds since Unix epoch" value. And even if it did,
+        // it's not meaningful to join just because those two numbers happen to be the
+        // same now.
+        //
+        // Another example: assume two separate debezium consistency topics. Both
+        // start counting at 1 and thus have similarish numbers that probably overlap
+        // a lot. However it's still not meaningful to join those two at a specific
+        // transaction counter number because those counters are unrelated to the
+        // other.
+        if timelines.len() > 1 {
+            coord_bail!("Dataflow cannot use multiple timelines");
+        }
+        Ok(timelines.into_iter().next())
     }
 }
 
@@ -3143,6 +3387,7 @@ pub async fn serve(
     let worker_guards = dataflow::serve(dataflow::Config {
         command_receivers: worker_rxs,
         timely_worker,
+        experimental_mode,
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
@@ -3161,11 +3406,14 @@ pub async fn serve(
             internal_cmd_tx.clone(),
         );
         let executor = TokioHandle::current();
-        let scraper_thread_handle = thread::spawn(move || {
-            let _executor_guard = executor.enter();
-            scraper.run();
-        })
-        .join_on_drop();
+        let scraper_thread_handle = thread::Builder::new()
+            .name("scraper".to_string())
+            .spawn(move || {
+                let _executor_guard = executor.enter();
+                scraper.run();
+            })
+            .unwrap()
+            .join_on_drop();
         (Some(scraper_thread_handle), Some(tx))
     } else {
         (None, None)
@@ -3177,81 +3425,88 @@ pub async fn serve(
     let mut timestamper =
         Timestamper::new(Duration::from_millis(10), internal_cmd_tx.clone(), ts_rx);
     let executor = TokioHandle::current();
-    let timestamper_thread_handle = thread::spawn(move || {
-        let _executor_guard = executor.enter();
-        timestamper.run();
-    })
-    .join_on_drop();
+    let timestamper_thread_handle = thread::Builder::new()
+        .name("timestamper".to_string())
+        .spawn(move || {
+            let _executor_guard = executor.enter();
+            timestamper.run();
+        })
+        .unwrap()
+        .join_on_drop();
 
     // In order for the coordinator to support Rc and Refcell types, it cannot be
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
     let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
     let handle = TokioHandle::current();
-    let thread = thread::spawn(move || {
-        let mut coord = Coordinator {
-            worker_guards,
-            worker_txs,
-            optimizer: Default::default(),
-            catalog,
-            symbiosis,
-            indexes: ArrangementFrontiers::default(),
-            sources: ArrangementFrontiers::default(),
-            logging_granularity: logging
-                .as_ref()
-                .and_then(|c| c.granularity.as_millis().try_into().ok()),
-            logical_compaction_window_ms: logical_compaction_window
-                .map(duration_to_timestamp_millis),
-            internal_cmd_tx,
-            ts_tx: ts_tx.clone(),
-            metric_scraper_tx: metric_scraper_tx.clone(),
-            cache_tx,
-            closed_up_to: 1,
-            read_lower_bound: 1,
-            last_op_was_read: false,
-            need_advance: true,
-            transient_id_counter: 1,
-            active_conns: HashMap::new(),
-            persisted_tables,
-            txn_reads: HashMap::new(),
-            since_handles: HashMap::new(),
-            since_updates: Rc::new(RefCell::new(HashMap::new())),
-        };
-        coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
-        if let Some(config) = &logging {
-            coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
-                granularity_ns: config.granularity.as_nanos(),
-                active_logs: BUILTINS
-                    .logs()
-                    .map(|src| (src.variant.clone(), src.index_id))
-                    .collect(),
-                log_logging: config.log_logging,
-            }));
-        }
-        if let Some(cache_tx) = &coord.cache_tx {
-            coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
-        }
-        let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
-        let ok = bootstrap.is_ok();
-        bootstrap_tx.send(bootstrap).unwrap();
-        if !ok {
-            metric_scraper_tx.map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
-            // Tell the timestamper thread to shut down.
-            ts_tx.send(TimestampMessage::Shutdown).unwrap();
-            // Explicitly drop the timestamper handle here so we can wait for
-            // the thread to return.
-            drop(timestamper_thread_handle);
-            coord.broadcast(SequencedCommand::Shutdown);
-            return;
-        }
-        handle.block_on(coord.serve(
-            internal_cmd_rx,
-            cmd_rx,
-            feedback_rx,
-            timestamper_thread_handle,
-            metric_scraper_handle,
-        ))
-    });
+    let thread = thread::Builder::new()
+        .name("coordinator".to_string())
+        .spawn(move || {
+            let mut coord = Coordinator {
+                worker_guards,
+                worker_txs,
+                optimizer: Default::default(),
+                catalog,
+                symbiosis,
+                indexes: ArrangementFrontiers::default(),
+                sources: ArrangementFrontiers::default(),
+                logging_granularity: logging
+                    .as_ref()
+                    .and_then(|c| c.granularity.as_millis().try_into().ok()),
+                logical_compaction_window_ms: logical_compaction_window
+                    .map(duration_to_timestamp_millis),
+                internal_cmd_tx,
+                ts_tx: ts_tx.clone(),
+                metric_scraper_tx: metric_scraper_tx.clone(),
+                cache_tx,
+                closed_up_to: 1,
+                read_lower_bound: 1,
+                last_op_was_read: false,
+                need_advance: true,
+                transient_id_counter: 1,
+                active_conns: HashMap::new(),
+                persisted_tables,
+                txn_reads: HashMap::new(),
+                since_handles: HashMap::new(),
+                since_updates: Rc::new(RefCell::new(HashMap::new())),
+                sink_writes: HashMap::new(),
+            };
+            coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
+            if let Some(config) = &logging {
+                coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
+                    granularity_ns: config.granularity.as_nanos(),
+                    active_logs: BUILTINS
+                        .logs()
+                        .map(|src| (src.variant.clone(), src.index_id))
+                        .collect(),
+                    log_logging: config.log_logging,
+                }));
+            }
+            if let Some(cache_tx) = &coord.cache_tx {
+                coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
+            }
+            let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
+            let ok = bootstrap.is_ok();
+            bootstrap_tx.send(bootstrap).unwrap();
+            if !ok {
+                metric_scraper_tx.map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
+                // Tell the timestamper thread to shut down.
+                ts_tx.send(TimestampMessage::Shutdown).unwrap();
+                // Explicitly drop the timestamper handle here so we can wait for
+                // the thread to return.
+                drop(timestamper_thread_handle);
+                coord.broadcast(SequencedCommand::Shutdown);
+                return;
+            }
+            handle.block_on(coord.serve(
+                internal_cmd_rx,
+                cmd_rx,
+                feedback_rx,
+                timestamper_thread_handle,
+                metric_scraper_handle,
+            ))
+        })
+        .unwrap();
     match bootstrap_rx.recv().unwrap() {
         Ok(()) => {
             let handle = Handle {
@@ -3299,7 +3554,6 @@ fn auto_generate_primary_idx(
     depends_on: Vec<GlobalId>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
-
     catalog::Index {
         create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
         plan_cx: PlanContext::default(),
@@ -3340,8 +3594,8 @@ pub fn index_sql(
     .to_ast_string_stable()
 }
 
-// Convert a Duration to a Timestamp representing the number
-// of milliseconds contained in that Duration
+/// Converts a Duration to a Timestamp representing the number
+/// of milliseconds contained in that Duration
 fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
     let millis = d.as_millis();
     if millis > Timestamp::max_value() as u128 {

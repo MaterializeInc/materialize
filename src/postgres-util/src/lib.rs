@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -14,7 +14,8 @@ use std::fmt;
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
-use tokio_postgres::{config::SslMode, types::Type as PgType};
+use tokio_postgres::config::{ReplicationMode, SslMode};
+use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{Client, Config};
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
@@ -249,29 +250,44 @@ pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), 
     let (client, connection) = tokio_postgres::connect(&conn, tls).await?;
     tokio::spawn(connection);
 
+    let replication_client = connect_replication(conn).await?;
     for slot in slots {
-        let active_pid = query_pg_replication_slots(&client, slot).await?;
-        if let Some(pid) = active_pid {
-            client
-                .query("SELECT pg_terminate_backend($1)", &[&pid])
-                .await?;
-        }
-        client
-            .query("SELECT pg_drop_replication_slot($1)", &[&slot])
+        let rows = client
+            .query(
+                "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
+                &[&slot],
+            )
             .await?;
+        match rows.len() {
+            0 => {
+                // DROP_REPLICATION_SLOT will error if the slot does not exist
+                // todo@jldlaughlin: don't let invalid Postgres sources ship!
+                continue;
+            }
+            1 => {
+                replication_client
+                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
+                    .await?;
+            }
+            _ => {
+                return Err(anyhow!(
+                    "multiple pg_replication_slots entries for slot {}",
+                    &slot
+                ))
+            }
+        }
     }
     Ok(())
 }
 
-pub async fn query_pg_replication_slots(
-    client: &Client,
-    slot: &str,
-) -> Result<Option<i32>, anyhow::Error> {
-    let row = client
-        .query_one(
-            "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
-            &[&slot],
-        )
+/// Starts a replication connection to the upstream database
+pub async fn connect_replication(conn: &str) -> Result<Client, anyhow::Error> {
+    let mut config: Config = conn.parse()?;
+    let tls = make_tls(&config)?;
+    let (client, conn) = config
+        .replication_mode(ReplicationMode::Logical)
+        .connect(tls)
         .await?;
-    Ok(row.get(0))
+    tokio::spawn(conn);
+    Ok(client)
 }

@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -646,10 +646,6 @@ fn create_kafka_config(
             name
         ),
     );
-
-    // Ensures that, when processing transactional topics, the consumer does not read data that
-    // is not yet committed (and could later abort)
-    kafka_config.set("isolation.level", "read_committed");
 
     // Patch the librdkafka debug log system into the Rust `log` ecosystem.
     // This is a very simple integration at the moment; enabling `debug`-level

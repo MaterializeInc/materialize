@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -97,10 +97,10 @@ error connecting to server: Connection refused (os error 111)
   PUBLICATION 'mz_source';
 db error: FATAL: role "no_such_user" does not exist
 
-> CREATE MATERIALIZED SOURCE "no_such_password"
+! CREATE MATERIALIZED SOURCE "no_such_password"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
   PUBLICATION 'mz_source';
-# TODO: This should produce an error
+db error: FATAL: password authentication failed for user "postgres"
 
 ! CREATE MATERIALIZED SOURCE "no_such_dbname"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
@@ -112,6 +112,7 @@ db error: FATAL: database "no_such_dbname" does not exist
   PUBLICATION 'no_such_publication';
 # TODO: This should produce an error
 
+> DROP SOURCE "no_such_publication"
 
 > CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'

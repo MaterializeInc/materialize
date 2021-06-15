@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -8,6 +8,33 @@
 # by the Apache License, Version 2.0.
 
 mode cockroach
+
+# Test parsing arrays from strings.
+
+query T
+SELECT '{o, oOOo, "oOOo", "}"}'::text[]
+----
+{o,oOOo,oOOo,"}"}
+
+query T
+SELECT '{1, 2, 3, null, NULL, nULL}'::int[]
+----
+{1,2,3,NULL,NULL,NULL}
+
+query T
+SELECT '{  1,   2  , 3 }'::int[]
+----
+{1,2,3}
+
+query error invalid input syntax for type array: malformed array literal: missing opening left brace
+SELECT ''::int[]
+
+query error invalid input syntax for type array: malformed array literal: junk after closing right brace
+SELECT '{1, 2, 3} 4'::int[]
+
+# This ought to be supported one day, but it is a lot of work.
+query error parsing multi-dimensional arrays is not supported
+SELECT '{{1}, {2}}'::int[]
 
 # Test coercion behavior of multidimensional arrays.
 

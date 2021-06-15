@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -151,7 +151,7 @@ impl DataflowDesc {
         expr: OptimizedMirRelationExpr,
         typ: RelationType,
     ) {
-        for get_id in expr.as_ref().global_uses() {
+        for get_id in expr.global_uses() {
             self.add_dependency(id, get_id);
         }
         self.objects_to_build.push(BuildDesc {
@@ -293,7 +293,7 @@ impl DataflowDesc {
         }
         for desc in self.objects_to_build.iter() {
             if &desc.id == id {
-                return desc.relation_expr.as_ref().arity();
+                return desc.relation_expr.arity();
             }
         }
         panic!("GlobalId {} not found in DataflowDesc", id);
@@ -622,6 +622,42 @@ pub enum Compression {
     None,
 }
 
+/// The meaning of the timestamp number produced by data sources. This type
+/// is not concerned with the source of the timestamp (like if the data came
+/// from a Debezium consistency topic or a CDCv2 stream), instead only what the
+/// timestamp number means.
+///
+/// Some variants here have attached data used to differentiate incomparable
+/// instantiations. These attached data types should be expanded in the future
+/// if we need to tell apart more kinds of sources.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum Timeline {
+    /// EpochMilliseconds means the timestamp is the number of milliseconds since
+    /// the Unix epoch.
+    EpochMilliseconds,
+    /// Counter means the timestamp starts at 1 and is incremented for each
+    /// transaction. It holds the BYO source so different instantiations can be
+    /// differentiated.
+    Counter(BringYourOwn),
+    /// External means the timestamp comes from an external data source and we
+    /// don't know what the number means. The attached String is the source's name,
+    /// which will result in different sources being incomparable.
+    External(String),
+    /// User means the user has manually specified a timeline. The attached
+    /// String is specified by the user, allowing them to decide sources that are
+    /// joinable.
+    User(String),
+}
+
+/// A struct to hold more specific information about where a BYO source
+/// came from so we can differentiate between topics of the same name across
+/// different brokers.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct BringYourOwn {
+    pub broker: String,
+    pub topic: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
     External {
@@ -630,8 +666,9 @@ pub enum SourceConnector {
         envelope: SourceEnvelope,
         consistency: Consistency,
         ts_frequency: Duration,
+        timeline: Timeline,
     },
-    Local,
+    Local(Timeline),
 }
 
 impl SourceConnector {
@@ -640,13 +677,31 @@ impl SourceConnector {
     /// exactly-once Sinks that need to ensure that the same data is written,
     /// even when failures/restarts happen.
     pub fn yields_stable_input(&self) -> bool {
-        if let SourceConnector::External {
-            connector: ExternalSourceConnector::Kafka(_),
-            consistency: Consistency::BringYourOwn(_),
-            ..
-        } = self
-        {
-            true
+        if let SourceConnector::External { connector, .. } = self {
+            // Conservatively, set all Kafka (BYO or RT), File, or AvroOcf sources as having stable inputs because
+            // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
+            match connector {
+                ExternalSourceConnector::Kafka(_)
+                | ExternalSourceConnector::File(_)
+                | ExternalSourceConnector::AvroOcf(_) => true,
+                // Currently, the Kinesis connector assigns "offsets" by counting the message in the order it was received
+                // and this order is not replayable across different reads of the same Kinesis stream.
+                ExternalSourceConnector::Kinesis(_) => false,
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Returns true iff this connector uses BYO consistency
+    pub fn is_byo(&self) -> bool {
+        if let SourceConnector::External { consistency, .. } = self {
+            if let Consistency::BringYourOwn(_) = consistency {
+                true
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -655,7 +710,14 @@ impl SourceConnector {
     pub fn caching_enabled(&self) -> bool {
         match self {
             SourceConnector::External { connector, .. } => connector.caching_enabled(),
-            SourceConnector::Local => false,
+            SourceConnector::Local(_) => false,
+        }
+    }
+
+    pub fn timeline(&self) -> Timeline {
+        match self {
+            SourceConnector::External { timeline, .. } => timeline.clone(),
+            SourceConnector::Local(timeline) => timeline.clone(),
         }
     }
 }
@@ -758,7 +820,7 @@ impl ExternalSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Consistency {
-    BringYourOwn(String),
+    BringYourOwn(BringYourOwn),
     RealTime,
 }
 
@@ -910,11 +972,14 @@ pub struct KafkaSinkConnector {
     pub addrs: KafkaAddrs,
     pub topic: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
     pub exactly_once: bool,
+    // Source dependencies for exactly-once sinks.
+    pub transitive_source_dependencies: Vec<GlobalId>,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
@@ -942,6 +1007,14 @@ impl SinkConnector {
                 .key_desc_and_indices
                 .as_ref()
                 .map(|(_desc, indices)| indices.as_slice()),
+            SinkConnector::Tail(_) => None,
+            SinkConnector::AvroOcf(_) => None,
+        }
+    }
+
+    pub fn get_relation_key_indices(&self) -> Option<&[usize]> {
+        match self {
+            SinkConnector::Kafka(k) => k.relation_key_indices.as_deref(),
             SinkConnector::Tail(_) => None,
             SinkConnector::AvroOcf(_) => None,
         }
@@ -984,6 +1057,9 @@ pub struct KafkaSinkConnectorBuilder {
     pub schema_registry_url: Url,
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// A natural key of the sinked relation (view or source).
+    pub relation_key_indices: Option<Vec<usize>>,
+    /// The user-specified key for the sink.
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic_prefix: String,
@@ -996,6 +1072,8 @@ pub struct KafkaSinkConnectorBuilder {
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
     pub exactly_once: bool,
+    // Source dependencies for exactly-once sinks.
+    pub transitive_source_dependencies: Vec<GlobalId>,
 }
 
 /// An index storing processed updates so they can be queried

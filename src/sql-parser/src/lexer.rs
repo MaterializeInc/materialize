@@ -1,5 +1,5 @@
 // Copyright 2018 sqlparser-rs contributors. All rights reserved.
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // This file is derived from the sqlparser-rs project, available at
 // https://github.com/andygrove/sqlparser-rs. It was incorporated
@@ -34,8 +34,10 @@
 
 use std::char;
 use std::convert::TryFrom;
+use std::fmt;
 
 use ore::lex::LexBuf;
+use ore::str::StrExt;
 
 use crate::keywords::Keyword;
 use crate::parser::ParserError;
@@ -62,75 +64,27 @@ pub enum Token {
     Semicolon,
 }
 
-impl Token {
-    pub fn name(&self) -> &str {
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Token::Keyword(kw) => kw.as_str(),
-            Token::Ident(_) => "identifier",
-            Token::String(_) => "string literal",
-            Token::HexString(_) => "hex string literal",
-            Token::Number(_) => "number",
-            Token::Parameter(_) => "parameter",
-            Token::Op(_) => "operator",
-            Token::Star => "star",
-            Token::Eq => "equals sign",
-            Token::LParen => "left parenthesis",
-            Token::RParen => "right parenthesis",
-            Token::LBracket => "left square bracket",
-            Token::RBracket => "right square bracket",
-            Token::Dot => "dot",
-            Token::Comma => "comma",
-            Token::Colon => "colon",
-            Token::DoubleColon => "double colon",
-            Token::Semicolon => "semicolon",
-        }
-    }
-
-    pub fn value(&self) -> String {
-        match self {
-            Token::Keyword(kw) => kw.as_str().to_string(),
-            Token::Ident(val) => val.to_string(),
-            Token::String(val) => val.to_string(),
-            Token::HexString(val) => val.to_string(),
-            Token::Number(val) => val.to_string(),
-            Token::Op(val) => val.to_string(),
-            Token::Parameter(val) => val.to_string(),
-            Token::Star => "*".to_string(),
-            Token::Eq => "=".to_string(),
-            Token::LParen => "(".to_string(),
-            Token::RParen => ")".to_string(),
-            Token::LBracket => "[".to_string(),
-            Token::RBracket => "]".to_string(),
-            Token::Dot => ".".to_string(),
-            Token::Comma => ",".to_string(),
-            Token::Colon => ":".to_string(),
-            Token::DoubleColon => "::".to_string(),
-            Token::Semicolon => ";".to_string(),
-        }
-    }
-
-    /// True iff the `value()` function will return more information in our error messages
-    pub fn has_value(&self) -> bool {
-        match self {
-            Token::Ident(_)
-            | Token::String(_)
-            | Token::HexString(_)
-            | Token::Number(_)
-            | Token::Op(_)
-            | Token::Parameter(_) => true,
-            // In our error messages we use literal keywords, which makes the keyword value a duplicate
-            Token::Keyword(_) => false,
-            Token::Star
-            | Token::Eq
-            | Token::LParen
-            | Token::RParen
-            | Token::LBracket
-            | Token::RBracket
-            | Token::Dot
-            | Token::Comma
-            | Token::Colon
-            | Token::DoubleColon
-            | Token::Semicolon => false,
+            Token::Keyword(kw) => f.write_str(kw.as_str()),
+            Token::Ident(id) => write!(f, "identifier {}", id.quoted()),
+            Token::String(s) => write!(f, "string literal {}", s.quoted()),
+            Token::HexString(s) => write!(f, "hex string literal {}", s.quoted()),
+            Token::Number(n) => write!(f, "number \"{}\"", n),
+            Token::Parameter(n) => write!(f, "parameter \"${}\"", n),
+            Token::Op(op) => write!(f, "operator {}", op.quoted()),
+            Token::Star => f.write_str("star"),
+            Token::Eq => f.write_str("equals sign"),
+            Token::LParen => f.write_str("left parenthesis"),
+            Token::RParen => f.write_str("right parenthesis"),
+            Token::LBracket => f.write_str("left square bracket"),
+            Token::RBracket => f.write_str("right square bracket"),
+            Token::Dot => f.write_str("dot"),
+            Token::Comma => f.write_str("comma"),
+            Token::Colon => f.write_str("colon"),
+            Token::DoubleColon => f.write_str("double colon"),
+            Token::Semicolon => f.write_str("semicolon"),
         }
     }
 }

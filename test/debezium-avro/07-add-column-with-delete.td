@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -17,6 +17,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column_with_delete (f1 INTEGER);
 ALTER TABLE alter_add_column_with_delete REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column_with_delete VALUES (123),(123),(123),(123);
+
+$ schema-registry-wait-schema schema=postgres.public.alter_add_column_with_delete-value
 
 > CREATE MATERIALIZED SOURCE alter_add_column_with_delete
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_add_column_with_delete'

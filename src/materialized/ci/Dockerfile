@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -9,14 +9,13 @@
 
 FROM ubuntu:bionic-20200403
 
-RUN apt-get update && apt-get -qy install ca-certificates gnupg wget
+# We install sqlite3 to allow debugging of the catalog file, if necessary.
+RUN apt-get update && apt-get -qy install ca-certificates curl sqlite3
 
-RUN    export version=v0.19.0 \
-    && export digest=93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c \
-    && wget "https://github.com/krallin/tini/releases/download/${version}/tini" -O /tini \
-    && echo "${digest} /tini" | sha256sum -c - \
-    && chmod +x /tini
+RUN curl -fsSL "https://github.com/krallin/tini/releases/download/v0.19.0/tini" > /usr/bin/tini \
+    && echo "93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c  /usr/bin/tini" | sha256sum --check \
+    && chmod +x /usr/bin/tini
 
 COPY kdestroy kinit materialized /usr/local/bin/
 
-ENTRYPOINT ["/tini", "--", "materialized", "--log-file=stderr" ]
+ENTRYPOINT ["tini", "--", "materialized", "--log-file=stderr"]

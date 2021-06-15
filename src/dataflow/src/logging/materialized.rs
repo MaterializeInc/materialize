@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -111,7 +111,7 @@ pub enum MaterializedEvent {
         /// Source identifier
         source_id: SourceInstanceId,
         /// Partition identifier
-        partition_id: String,
+        partition_id: Option<String>,
         /// Difference between the previous offset and current highest offset we've seen
         offset: i64,
         /// Difference between the previous timestamp and current highest timestamp we've seen
@@ -439,7 +439,7 @@ pub fn construct<A: Allocate>(
                     Datum::String(&name),
                     Datum::String(&id.source_id.to_string()),
                     Datum::Int64(id.dataflow_id as i64),
-                    Datum::String(&pid),
+                    Datum::from(pid.as_deref()),
                     Datum::Int64(offset),
                     Datum::Int64(timestamp),
                 ])

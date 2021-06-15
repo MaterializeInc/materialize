@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::cmp;
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,11 +35,14 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{FrontieredInputHandle, InputHandle, OutputHandle};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 
 use dataflow_types::{KafkaSinkConnector, SinkAsOf};
 use expr::GlobalId;
 use interchange::avro::{self, Encoder};
 use repr::{Diff, RelationDesc, Row, Timestamp};
+
+use crate::source::timestamp::TimestampBindingRc;
 
 /// Per-Kafka sink metrics.
 #[derive(Clone)]
@@ -240,6 +245,8 @@ pub fn kafka<G>(
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
     as_of: SinkAsOf,
+    source_timestamp_histories: Vec<TimestampBindingRc>,
+    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -266,7 +273,15 @@ where
         name.clone(),
     );
 
-    produce_to_kafka(encoded_stream, id, name, connector, as_of)
+    produce_to_kafka(
+        encoded_stream,
+        id,
+        name,
+        connector,
+        as_of,
+        source_timestamp_histories,
+        write_frontier,
+    )
 }
 
 /// Produces/sends a stream of encoded rows (as `Vec<u8>`) to Kafka.
@@ -286,6 +301,8 @@ pub fn produce_to_kafka<G>(
     name: String,
     connector: KafkaSinkConnector,
     as_of: SinkAsOf,
+    source_timestamp_histories: Vec<TimestampBindingRc>,
+    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -321,7 +338,9 @@ where
         // We explicitly reject `statistics.interval.ms` here so that we don't
         // flood the INFO log with statistics messages.
         // TODO: properly support statistics on Kafka sinks
-        if k != "statistics.interval.ms" {
+        // We explicitly reject 'isolation.level' as it's a consumer property
+        // and, while benign, will fill the log with WARN messages
+        if k != "statistics.interval.ms" && k != "isolation.level" {
             config.set(k, v);
         }
     }
@@ -422,10 +441,19 @@ where
             }
         });
 
+        // Figure out the durablity frontier for all sources we depent on
+        let mut durability_frontier = Antichain::new();
+
+        for history in source_timestamp_histories.iter() {
+            use differential_dataflow::lattice::Lattice;
+            durability_frontier.meet_assign(&history.durability_frontier());
+        }
         // Move any newly closed timestamps from pending to ready
         let mut closed_ts: Vec<u64> = pending_rows
             .iter()
-            .filter(|(ts, _)| !input.frontier.less_equal(*ts))
+            .filter(|(ts, _)| {
+                !input.frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts)
+            })
             .map(|(&ts, _)| ts)
             .collect();
         closed_ts.sort_unstable();
@@ -551,6 +579,9 @@ where
 
                         match result {
                             Ok(()) => {
+                                assert!(write_frontier.borrow().less_equal(ts));
+                                write_frontier.borrow_mut().clear();
+                                write_frontier.borrow_mut().insert(*ts);
                                 ready_rows.pop_front();
                                 SendState::BeginTxn
                             }

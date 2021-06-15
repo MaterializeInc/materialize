@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -359,6 +359,7 @@ pub struct AggregateExpr {
 /// only return null values when supplied nulls as input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AggregateFunc {
+    MaxApd,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
@@ -369,6 +370,7 @@ pub enum AggregateFunc {
     MaxDate,
     MaxTimestamp,
     MaxTimestampTz,
+    MinApd,
     MinInt32,
     MinInt64,
     MinFloat32,
@@ -384,6 +386,7 @@ pub enum AggregateFunc {
     SumFloat32,
     SumFloat64,
     SumDecimal,
+    SumAPD,
     Count,
     Any,
     All,
@@ -406,6 +409,7 @@ impl AggregateFunc {
     /// Converts the `sql::AggregateFunc` to a corresponding `expr::AggregateFunc`.
     pub fn into_expr(self) -> expr::AggregateFunc {
         match self {
+            AggregateFunc::MaxApd => expr::AggregateFunc::MaxApd,
             AggregateFunc::MaxInt64 => expr::AggregateFunc::MaxInt64,
             AggregateFunc::MaxInt32 => expr::AggregateFunc::MaxInt32,
             AggregateFunc::MaxFloat32 => expr::AggregateFunc::MaxFloat32,
@@ -416,6 +420,7 @@ impl AggregateFunc {
             AggregateFunc::MaxDate => expr::AggregateFunc::MaxDate,
             AggregateFunc::MaxTimestamp => expr::AggregateFunc::MaxTimestamp,
             AggregateFunc::MaxTimestampTz => expr::AggregateFunc::MaxTimestampTz,
+            AggregateFunc::MinApd => expr::AggregateFunc::MinApd,
             AggregateFunc::MinInt32 => expr::AggregateFunc::MinInt32,
             AggregateFunc::MinInt64 => expr::AggregateFunc::MinInt64,
             AggregateFunc::MinFloat32 => expr::AggregateFunc::MinFloat32,
@@ -431,6 +436,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => expr::AggregateFunc::SumFloat32,
             AggregateFunc::SumFloat64 => expr::AggregateFunc::SumFloat64,
             AggregateFunc::SumDecimal => expr::AggregateFunc::SumDecimal,
+            AggregateFunc::SumAPD => expr::AggregateFunc::SumAPD,
             AggregateFunc::Count => expr::AggregateFunc::Count,
             AggregateFunc::Any => expr::AggregateFunc::Any,
             AggregateFunc::All => expr::AggregateFunc::All,

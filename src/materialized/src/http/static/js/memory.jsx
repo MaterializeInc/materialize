@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -89,7 +89,7 @@ function Views() {
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((v) => (
+              {data.results[0].rows.map((v) => (
                 <tr key={v[1]}>
                   <td>{v[0]}</td>
                   <td>
@@ -141,30 +141,21 @@ function View(props) {
     setGraph(null);
 
     const load = async () => {
-      const stats_table = await query(`
+      const {
+        results: [stats_table, addr_table, oper_table, chan_table, elapsed_table, records_table],
+      } = await query(`
         SELECT
           name, records
         FROM
           mz_catalog.mz_records_per_dataflow_global
         WHERE
           id = ${props.dataflow_id};
-      `);
-      if (stats_table.rows.length !== 1) {
-        throw `unknown dataflow id ${props.dataflow_id}`;
-      }
-      const stats_row = stats_table.rows[0];
-      const stats = {
-        name: stats_row[0],
-        records: stats_row[1],
-      };
-      setStats(stats);
 
-      // 1) Find the address id's value for this dataflow (innermost subselect).
-      // 2) Find all address ids whose first slot value is that (second innermost subselect).
-      // 3) Find all address values in that set (top select).
-      // DISTINCT is useful (but not necessary) because it removes the duplicates
-      // caused by multiple workers.
-      const addr_table = await query(`
+        -- 1) Find the address id's value for this dataflow (innermost subselect).
+        -- 2) Find all address ids whose first slot value is that (second innermost subselect).
+        -- 3) Find all address values in that set (top select).
+        -- DISTINCT is useful (but not necessary) because it removes the duplicates
+        -- caused by multiple workers.
         SELECT DISTINCT
           id, address
         FROM
@@ -187,17 +178,7 @@ function View(props) {
                         id = ${props.dataflow_id}
                     )
             );
-      `);
-      // Map from id to address (array). {320: [11], 321: [11, 1]}.
-      const addrs = {};
-      addr_table.rows.forEach(([id, address]) => {
-        if (!addrs[id]) {
-          addrs[id] = address;
-        }
-      });
-      setAddrs(addrs);
 
-      const oper_table = await query(`
         SELECT DISTINCT
           id, name
         FROM
@@ -220,12 +201,7 @@ function View(props) {
                         id = ${props.dataflow_id}
                     )
             );
-      `);
-      // Map from id to operator name. {320: 'name'}.
-      const opers = Object.fromEntries(oper_table.rows);
-      setOpers(opers);
 
-      const chan_table = await query(`
         SELECT
           id, source_node, target_node, sum(sent) as sent
         FROM
@@ -252,26 +228,7 @@ function View(props) {
             )
         GROUP BY id, source_node, target_node
         ;
-      `);
-      // {id: [source, target]}.
-      const chans = Object.fromEntries(
-        chan_table.rows.map(([id, source, target, sent]) => [id, [source, target, sent]])
-      );
-      setChans(chans);
 
-      const records_table = await query(`
-        SELECT
-          id, sum(records)
-        FROM
-          mz_catalog.mz_records_per_dataflow_operator
-        WHERE
-          dataflow_id = ${props.dataflow_id}
-        GROUP BY
-          id
-      `);
-      setRecords(Object.fromEntries(records_table.rows));
-
-      const elapsed_table = await query(`
         SELECT
           id, sum(elapsed_ns)
         FROM
@@ -296,7 +253,47 @@ function View(props) {
             )
         GROUP BY
           id;
+
+        SELECT
+          id, sum(records)
+        FROM
+          mz_catalog.mz_records_per_dataflow_operator
+        WHERE
+          dataflow_id = ${props.dataflow_id}
+        GROUP BY
+          id;
       `);
+      if (stats_table.rows.length !== 1) {
+        throw `unknown dataflow id ${props.dataflow_id}`;
+      }
+      const stats_row = stats_table.rows[0];
+      const stats = {
+        name: stats_row[0],
+        records: stats_row[1],
+      };
+      setStats(stats);
+
+      // Map from id to address (array). {320: [11], 321: [11, 1]}.
+      const addrs = {};
+      addr_table.rows.forEach(([id, address]) => {
+        if (!addrs[id]) {
+          addrs[id] = address;
+        }
+      });
+      setAddrs(addrs);
+
+      // Map from id to operator name. {320: 'name'}.
+      const opers = Object.fromEntries(oper_table.rows);
+      setOpers(opers);
+
+      // {id: [source, target]}.
+      const chans = Object.fromEntries(
+        chan_table.rows.map(([id, source, target, sent]) => [id, [source, target, sent]])
+      );
+      setChans(chans);
+
+      setRecords(Object.fromEntries(records_table.rows));
+
       setElapsed(Object.fromEntries(elapsed_table.rows));
 
       try {

@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -155,7 +155,7 @@ impl LogVariant {
                 .with_named_column("source_name", ScalarType::String.nullable(false))
                 .with_named_column("source_id", ScalarType::String.nullable(false))
                 .with_named_column("dataflow_id", ScalarType::Int64.nullable(false))
-                .with_named_column("partition_id", ScalarType::String.nullable(false))
+                .with_named_column("partition_id", ScalarType::String.nullable(true))
                 .with_named_column("offset", ScalarType::Int64.nullable(false))
                 .with_named_column("timestamp", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2, 3]),

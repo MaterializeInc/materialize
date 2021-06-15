@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -372,6 +372,16 @@ impl ParamList {
 
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
+
+            // Require explicitly cast APD values to prevent confusion
+            // w/ current decimal impls
+            // todo(apd): remove this when merging with decimal
+            if param == &ParamType::Plain(ScalarType::APD { scale: None })
+                && !matches!(typ, Some(ScalarType::APD { .. }))
+            {
+                return false;
+            }
+
             if let Some(typ) = typ {
                 // Ensures either `typ` can at least be implicitly cast to a
                 // type `param` accepts. Implicit in this check is that unknown
@@ -1280,6 +1290,7 @@ lazy_static! {
                 params!(Int32) => UnaryFunc::AbsInt32, 1397;
                 params!(Int64) => UnaryFunc::AbsInt64, 1396;
                 params!(DecimalAny) => UnaryFunc::AbsDecimal, 1398;
+                params!(APD{scale:None}) => UnaryFunc::AbsAPD, 13980;
                 params!(Float32) => UnaryFunc::AbsFloat32, 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64, 1395;
             },
@@ -1325,6 +1336,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::CeilDecimal(s)))
                 }), 1711;
+                params!(APD{scale:None}) => UnaryFunc::CeilAPD, 17110;
             },
             "char_length" => Scalar {
                 params!(String) => UnaryFunc::CharLength, 1381;
@@ -1403,6 +1415,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::ExpDecimal(s)))
                 }), 1732;
+                params!(APD{scale:None}) => UnaryFunc::ExpAPD, 17320;
             },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
@@ -1411,6 +1424,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
                 }), 1712;
+                params!(APD{scale:None}) => UnaryFunc::FloorAPD, 17120;
             },
             "format_type" => Scalar {
                 params!(Oid, Int32) => sql_op!(
@@ -1470,6 +1484,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::LnDecimal(s)))
                 }), 1734;
+                params!(APD{scale:None}) => UnaryFunc::LnAPD, 17340;
             },
             "log10" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1194;
@@ -1484,10 +1499,12 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
                 }), 1741;
+                params!(APD{scale:None}) => UnaryFunc::Log10APD, 17410;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::LogDecimal(s)))
                 }), 1736;
+                params!(APD{scale:None},APD{scale:None}) => BinaryFunc::LogAPD, 17360;
             },
             "lower" => Scalar {
                 params!(String) => UnaryFunc::Lower, 870;
@@ -1505,6 +1522,7 @@ lazy_static! {
             },
             "mod" => Scalar {
                 params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
+                params!(APD{scale:None}, APD{scale:None}) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
                 params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 941;
                 params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947;
             },
@@ -1522,6 +1540,18 @@ lazy_static! {
                     // so stubbed out out to always return NULL.
                     Ok(HirScalarExpr::literal_null(ScalarType::String))
                 }), 1215;
+            },
+            "pg_column_size" => Scalar {
+                params!(Any) => UnaryFunc::PgColumnSize, 1269;
+            },
+            "mz_row_size" => Scalar {
+                params!(Any) => Operation::unary(|ecx, e| {
+                    let s = ecx.scalar_type(&e);
+                    if !matches!(s, ScalarType::Record{..}) {
+                        bail!("mz_row_size requires a record type");
+                    }
+                    Ok(e.call_unary(UnaryFunc::MzRowSize))
+                }), oid::FUNC_MZ_ROW_SIZE;
             },
             "pg_encoding_to_char" => Scalar {
                 // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
@@ -1574,6 +1604,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
                 }), 2169;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::PowerAPD, 21690;
             },
             "repeat" => Scalar {
                 params!(String, Int32) => BinaryFunc::RepeatString, 1622;
@@ -1595,10 +1626,12 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::RoundDecimal(s)))
                 }), 1708;
+                params!(APD{scale:None}) => UnaryFunc::RoundAPD, 17080;
                 params!(DecimalAny, Int64) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s)))
                 }), 1707;
+                params!(APD{scale:None}, Int32) => BinaryFunc::RoundAPD, 17070;
             },
             "rtrim" => Scalar {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
@@ -1648,6 +1681,7 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 }), 1730;
+                params!(APD{scale:None}) => UnaryFunc::SqrtAPD, 17300;
             },
             "tan" => Scalar {
                 params!(Float64) => UnaryFunc::Tan, 1606;
@@ -1748,6 +1782,7 @@ lazy_static! {
                 params!(Date) => AggregateFunc::MaxDate, 2122;
                 params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126;
                 params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127;
+                params!(APD{scale: None}) => AggregateFunc::MaxApd, oid::FUNC_MAX_APD_OID;
             },
             "min" => Aggregate {
                 params!(Bool) => AggregateFunc::MinBool, oid::FUNC_MIN_BOOL_OID;
@@ -1760,6 +1795,7 @@ lazy_static! {
                 params!(Date) => AggregateFunc::MinDate, 2138;
                 params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
+                params!(APD{scale: None}) => AggregateFunc::MinApd, oid::FUNC_MIN_APD_OID;
             },
             "json_agg" => Aggregate {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175;
@@ -1801,6 +1837,7 @@ lazy_static! {
                 params!(Float32) => AggregateFunc::SumFloat32, 2110;
                 params!(Float64) => AggregateFunc::SumFloat64, 2111;
                 params!(DecimalAny) => AggregateFunc::SumDecimal, 2114;
+                params!(APD{scale:None}) => AggregateFunc::SumAPD, 21140;
                 params!(Interval) => Operation::unary(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
@@ -2221,6 +2258,7 @@ lazy_static! {
                 params!(Float32) => UnaryFunc::NegFloat32, 584;
                 params!(Float64) => UnaryFunc::NegFloat64, 585;
                 params!(DecimalAny) => UnaryFunc::NegDecimal, 1751;
+                params!(APD{scale: None}) => UnaryFunc::NegAPD, 17510;
                 params!(Interval) => UnaryFunc::NegInterval, 1336;
                 params!(Int32, Int32) => SubInt32, 555;
                 params!(Int64, Int64) => SubInt64, 685;
@@ -2295,6 +2333,7 @@ lazy_static! {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, ModDecimal))
                 }), 1762;
+                params!(APD{scale:None}, APD{scale:None}) => ModAPD, 17620;
             },
 
             // ILIKE
@@ -2385,6 +2424,12 @@ lazy_static! {
             "->>" => Scalar {
                 params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true }, 3481;
                 params!(Jsonb, String) => JsonbGetString { stringify: true }, 3477;
+            },
+            "#>" => Scalar {
+                params!(Jsonb, Plain(Array(Box::new(String)))) => JsonbGetPath { stringify: false }, 3213;
+            },
+            "#>>" => Scalar {
+                params!(Jsonb, Plain(Array(Box::new(String)))) => JsonbGetPath { stringify: true }, 3206;
             },
             "@>" => Scalar {
                 params!(Jsonb, Jsonb) => JsonbContainsJsonb, 3246;

@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -156,7 +156,7 @@ impl SourceReader for FileSourceReader {
                 receiver_stream: receiver,
                 current_file_offset: FileOffset { offset: 0 },
             },
-            Some(PartitionId::File),
+            Some(PartitionId::None),
         ))
     }
 
@@ -165,7 +165,7 @@ impl SourceReader for FileSourceReader {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;
                 let message = SourceMessage {
-                    partition: PartitionId::File,
+                    partition: PartitionId::None,
                     offset: self.current_file_offset.into(),
                     upstream_time_millis: None,
                     key: None,

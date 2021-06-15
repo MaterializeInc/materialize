@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -10,7 +10,7 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::mem::{size_of, transmute};
 
@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
+use crate::adt::apd;
 use crate::adt::apd::Apd;
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
@@ -83,7 +84,11 @@ use fmt::Debug;
 /// avoids the allocations involved in `Row::new()`.
 #[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; 24]>,
+    data: SmallVec<[u8; Self::SIZE]>,
+}
+
+impl Row {
+    const SIZE: usize = 24;
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -375,8 +380,14 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
         Tag::APD => {
-            let n = read_copy::<OrderedDecimal<Apd>>(data, offset);
-            Datum::APD(n)
+            let digits = u32::from(read_copy::<u8>(data, offset));
+            let exponent = i32::from(read_copy::<i8>(data, offset));
+            let bits = read_copy::<u8>(data, offset);
+            let lsu_u8_len = Apd::digits_to_lsu_elements_len(digits) * 2;
+            let lsu_u8 = &data[*offset..(*offset + lsu_u8_len)];
+            *offset += lsu_u8_len;
+            let d = Apd::from_raw_parts(digits, exponent, bits, lsu_u8);
+            Datum::APD(OrderedDecimal(d))
         }
     }
 }
@@ -533,10 +544,49 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
         }
         Datum::JsonNull => data.push(Tag::JsonNull as u8),
         Datum::Dummy => data.push(Tag::Dummy as u8),
-        Datum::APD(n) => {
+        Datum::APD(mut n) => {
+            // Pseudo-canonical representation of decimal values with
+            // insignificant zeroes trimmed. This compresses the number further
+            // than `Apd::trim` by removing all zeroes, and not only those in
+            // the fractional component.
+            apd::cx_datum().reduce(&mut n.0);
+            let (digits, exponent, bits, lsu) = n.0.to_raw_parts();
             data.push(Tag::APD as u8);
-            push_copy!(data, n, OrderedDecimal<Apd>);
+            push_copy!(
+                data,
+                u8::try_from(digits).expect("digits to fit within u8; should not exceed 39"),
+                u8
+            );
+            push_copy!(
+                data,
+                i8::try_from(exponent)
+                    .expect("exponent to fit within i8; should not exceed +/- 39"),
+                i8
+            );
+            data.push(bits);
+            data.extend_from_slice(lsu);
         }
+    }
+}
+
+/// Return the number of bytes these Datums would use if packed as a Row.
+pub fn row_size<'a, I>(a: I) -> usize
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    // Using datums_size instead of a.data().len() here is safer because it will
+    // return the size of the datams if they were packed into a Row. Although
+    // a.data().len() happens to give the correct answer (and is faster), data()
+    // is documented as for debugging only.
+    let sz = datums_size(a);
+    let size_of_row = std::mem::size_of::<Row>();
+    // The Row struct attempts to inline data until it can't fit in the
+    // preallocated size. Otherwise it spills to heap, and uses the Row to point
+    // to that.
+    if sz > Row::SIZE {
+        sz + size_of_row
+    } else {
+        size_of_row
     }
 }
 

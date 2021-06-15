@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -26,19 +26,19 @@ use ore::retry::Retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, FetchStatement, Raw, Statement, ViewDefinition,
+    CreateViewStatement, Raw, Statement, ViewDefinition,
 };
 
-use crate::action::{Action, SqlContext, State};
+use crate::action::{Action, Context, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
-    sql_context: SqlContext,
+    context: Context,
 }
 
-pub fn build_sql(mut cmd: SqlCommand, sql_context: SqlContext) -> Result<SqlAction, String> {
+pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, String> {
     let stmts = sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
@@ -51,7 +51,7 @@ pub fn build_sql(mut cmd: SqlCommand, sql_context: SqlContext) -> Result<SqlActi
     Ok(SqlAction {
         cmd,
         stmt: stmts.into_element(),
-        sql_context,
+        context,
     })
 }
 
@@ -102,13 +102,23 @@ impl Action for SqlAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
+        use Statement::*;
+
         let query = &self.cmd.query;
         print_query(&query);
 
-        // Do not retry FETCH statements as subsequent executions are likely
-        // to return an empty result. The original result would thus be lost.
         let should_retry = match &self.stmt {
-            Statement::Fetch(FetchStatement { .. }) => false,
+            // Do not retry FETCH statements as subsequent executions are likely
+            // to return an empty result. The original result would thus be lost.
+            Fetch(_) => false,
+            // DDL statements should always provide the expected result on the first try
+            CreateDatabase(_) | CreateSchema(_) | CreateSource(_) | CreateSink(_)
+            | CreateView(_) | CreateViews(_) | CreateTable(_) | CreateIndex(_) | CreateType(_)
+            | CreateRole(_) | AlterObjectRename(_) | AlterIndexOptions(_) | Discard(_)
+            | DropDatabase(_) | DropObjects(_) | SetVariable(_) | ShowDatabases(_)
+            | ShowObjects(_) | ShowIndexes(_) | ShowColumns(_) | ShowCreateView(_)
+            | ShowCreateSource(_) | ShowCreateTable(_) | ShowCreateSink(_) | ShowCreateIndex(_)
+            | ShowVariable(_) => false,
             _ => true,
         };
 
@@ -118,7 +128,7 @@ impl Action for SqlAction {
             true => Retry::default()
                 .initial_backoff(Duration::from_millis(50))
                 .factor(1.5)
-                .max_duration(self.sql_context.timeout),
+                .max_duration(self.context.timeout),
             false => Retry::default().max_tries(1),
         }
         .retry(|retry_state| async move {
@@ -206,7 +216,7 @@ impl SqlAction {
             .await
             .map_err(|e| format!("executing query failed: {}", e))?
             .into_iter()
-            .map(|row| decode_row(row, self.sql_context.clone()))
+            .map(|row| decode_row(row, self.context.clone()))
             .collect::<Result<_, _>>()?;
         actual.sort();
 
@@ -290,16 +300,13 @@ impl SqlAction {
 
 pub struct FailSqlAction {
     cmd: FailSqlCommand,
-    sql_context: SqlContext,
+    context: Context,
 }
 
-pub fn build_fail_sql(
-    cmd: FailSqlCommand,
-    sql_context: SqlContext,
-) -> Result<FailSqlAction, String> {
+pub fn build_fail_sql(cmd: FailSqlCommand, context: Context) -> Result<FailSqlAction, String> {
     Ok(FailSqlAction {
         cmd,
-        sql_context: sql_context,
+        context: context,
     })
 }
 
@@ -317,7 +324,7 @@ impl Action for FailSqlAction {
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)
-            .max_duration(self.sql_context.timeout)
+            .max_duration(self.context.timeout)
             .retry(|retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
@@ -357,12 +364,9 @@ impl FailSqlAction {
                     Some(err) => {
                         err_string = err.message().to_string();
 
-                        if let Some(regex) = &self.sql_context.regex {
+                        if let Some(regex) = &self.context.regex {
                             err_string = regex
-                                .replace_all(
-                                    &err_string,
-                                    self.sql_context.regex_replacement.as_str(),
-                                )
+                                .replace_all(&err_string, self.context.regex_replacement.as_str())
                                 .to_string();
                         }
 
@@ -390,7 +394,7 @@ pub fn print_query(query: &str) {
     }
 }
 
-fn decode_row(row: Row, sql_context: SqlContext) -> Result<Vec<String>, String> {
+fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -466,9 +470,9 @@ fn decode_row(row: Row, sql_context: SqlContext) -> Result<Vec<String>, String> 
         }
         .unwrap_or_else(|| "<null>".into());
 
-        if let Some(regex) = &sql_context.regex {
+        if let Some(regex) = &context.regex {
             value = regex
-                .replace_all(&value, sql_context.regex_replacement.as_str())
+                .replace_all(&value, context.regex_replacement.as_str())
                 .to_string();
         }
 

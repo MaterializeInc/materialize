@@ -11,13 +11,13 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 avro-derive = { path = "../avro-derive" }
 base64 = "0.13.0"
 byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-dec = "0.4.0"
+dec = "0.4.2"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.14"
 hex = "0.4.3"
@@ -26,9 +26,9 @@ lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
-ordered-float = { version = "2.2.0", features = ["serde"] }
+ordered-float = { version = "2.5.1", features = ["serde"] }
 ore = { path = "../ore" }
-protobuf = "2.17.0"
+protobuf = "2.23.0"
 repr = { path = "../repr" }
 serde = { version = "1.0.126", features = ["derive"] }
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }

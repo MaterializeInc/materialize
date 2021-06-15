@@ -1,7 +1,7 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.7.4-dev"
+version = "0.8.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2018"
@@ -27,11 +27,11 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-trait = "0.1.50"
 atty = "0.2.14"
-backtrace = "0.3.59"
+backtrace = "0.3.60"
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 clap = { version = "2.33.0", features = ["wrap_help"] }
@@ -44,13 +44,13 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.14"
 hex = "0.4.3"
 http-util = { path = "../http-util" }
-hyper = { version = "0.14.7", features = ["http1", "server"] }
+hyper = { version = "0.14.9", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
 include_dir = "0.6.0"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
-libc = "0.2.94"
+libc = "0.2.95"
 log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.20.0"
@@ -74,13 +74,13 @@ shell-words = "1.0.0"
 sql = { path = "../sql" }
 structopt = "0.3.21"
 sysctl = "0.4.1"
-sysinfo = "0.17.5"
+sysinfo = "0.18.0"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.6.0", features = ["sync"] }
+tokio = { version = "1.6.1", features = ["sync"] }
 tokio-openssl = "0.6.1"
 tokio-stream = { version = "0.1.6", features = ["net"] }
-tracing = "0.1.25"
+tracing = "0.1.26"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
 tracing-subscriber = { version = "0.2.18", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
@@ -96,7 +96,7 @@ uuid = "0.8.2"
 jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "1.0.4"
+assert_cmd = "1.0.5"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 datadriven = "0.5.0"
@@ -117,14 +117,14 @@ serde_json = "1.0.64"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.40"
-cc = "1.0.0"
+anyhow = "1.0.41"
+cc = "1.0.68"
 flate2 = "1.0.20"
 hex = "0.4.3"
 hex-literal = "0.3.1"
 reqwest = { version = "0.11.3", features = ["blocking"] }
 sha2 = "0.9.5"
-tar = "0.4.33"
+tar = "0.4.35"
 walkdir = "2.3.2"
 
 [features]

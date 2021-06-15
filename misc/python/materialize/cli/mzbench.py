@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -18,8 +18,156 @@ import pathlib
 import subprocess
 import sys
 import typing
+from typing import List, Dict, Any, Optional, Tuple, Union
 import uuid
 import webbrowser
+import collections
+
+
+class Bench:
+    """Abstract base class implemented by mzbench benchmarks."""
+
+    def metrics(self) -> List[Tuple[str, bool]]:
+        """Returns the set of metric names, each with
+        a boolean determining whether the metric is required to exist.
+        """
+        raise NotImplementedError
+
+    def run(
+        self, git_revision: str, num_workers: int, mzbench_id: str
+    ) -> Dict[str, Any]:
+        """Runs the benchmark once, and returns a set of metrics.
+        The set of metrics and their types must be the same for each run,
+        and must match the list returned by `metrics`."""
+        raise NotImplementedError
+
+    def teardown(self) -> None:
+        """Performs any necessary per-benchmark cleanup.
+        Runs once per benchmark, not once per run!"""
+        raise NotImplementedError
+
+
+ArgList = List[Union[str, pathlib.Path]]
+
+
+class SuccessOutputBench(Bench):
+    """Benchmarks that run `mzcompose` and parse its output looking for various fields.
+    In order to be usable with this class, the benchmark must emit a line of the form
+    `SUCCESS! seconds_taken=<x> rows_per_second=<y>`.
+
+    Optionally, the benchmark may report Grafana URLs by also emitting a line of the form
+    `Grafana URL: <url>`."""
+
+    def __init__(
+        self,
+        composition: str,
+        mz_root: str,
+        run_workflow: str,
+        setup_workflow: str,
+        cleanup: bool,
+    ) -> None:
+        self.composition = composition
+        self.mz_root = mz_root
+        self.run_workflow = run_workflow
+        self.root = mzcompose_location(self.mz_root)
+        if cleanup:
+            self.teardown()
+        self.run_benchmark: ArgList = [
+            self.root,
+            "--mz-find",
+            self.composition,
+            "run",
+            self.run_workflow,
+        ]
+        setup_benchmark: ArgList = [
+            self.root,
+            "--mz-find",
+            self.composition,
+            "run",
+            setup_workflow,
+        ]
+        # We use check_output because check_call does not capture output
+        try:
+            subprocess.check_output(setup_benchmark, stderr=subprocess.STDOUT)
+        except (subprocess.CalledProcessError,) as e:
+            print(
+                f"Setup benchmark failed! Output from failed command:\n{e.output.decode()}"
+            )
+            raise
+
+    def metrics(self) -> List[Tuple[str, bool]]:
+        return [
+            ("seconds_taken", True),
+            ("rows_per_second", True),
+            ("grafana_url", False),
+        ]
+
+    def run(
+        self, git_revision: Optional[str], num_workers: int, mzbench_id: str
+    ) -> Dict[str, Any]:
+        # Sadly, environment variables are the only way to pass this information into containers
+        # started by mzcompose
+        child_env = os.environ.copy()
+        child_env["MZ_ROOT"] = self.mz_root
+        child_env["MZ_WORKERS"] = str(num_workers)
+        child_env["MZBENCH_ID"] = mzbench_id
+        child_env["MZBUILD_WAIT_FOR_IMAGE"] = "true"
+        if git_revision:
+            child_env["MZBENCH_GIT_REF"] = git_revision
+            child_env["MZBUILD_MATERIALIZED_TAG"] = mzbuild_tag(git_revision)
+
+        try:
+            output = subprocess.check_output(
+                self.run_benchmark, env=child_env, stderr=subprocess.STDOUT
+            )
+        except (subprocess.CalledProcessError,) as e:
+            # TODO: Don't exit with error on simple benchmark failure
+            print(
+                f"Setup benchmark failed! Output from failed command:\n{e.output.decode()}"
+            )
+            raise
+
+        seconds_taken = None
+        rows_per_second = None
+        grafana_url = None
+
+        # TODO: Replace parsing output from mzcompose with reading from a well known file or topic
+        for line in output.decode().splitlines():
+            if line.startswith("SUCCESS!"):
+                for token in line.split(" "):
+                    if token.startswith("seconds_taken="):
+                        seconds_taken = token[len("seconds_taken=") :]
+                    elif token.startswith("rows_per_sec="):
+                        rows_per_second = token[len("rows_per_sec=") :]
+            elif line.startswith("Grafana URL: "):
+                grafana_url = line[len("Grafana URL: ") :]
+
+        return {
+            "seconds_taken": seconds_taken,
+            "rows_per_second": rows_per_second,
+            "grafana_url": grafana_url,
+        }
+
+    def teardown(self) -> None:
+        cleanup: ArgList = [
+            self.root,
+            "--mz-find",
+            self.composition,
+            "down",
+            "-v",
+        ]
+        try:
+            subprocess.check_output(cleanup, stderr=subprocess.STDOUT)
+        except (subprocess.CalledProcessError,) as e:
+            print(
+                f"Failed to cleanup prior state! Output from failed command:\n{e.output.decode()}"
+            )
+            raise
+
+
+from materialize import ui
+
+dbg = ui.speaker("DEBUG: ")
 
 
 def mzbuild_tag(git_ref: str) -> str:
@@ -51,78 +199,47 @@ def mzcompose_location(mz_root: str) -> pathlib.Path:
 
 
 def main(args: argparse.Namespace) -> None:
-
     # Ensure that we are working out of the git directory so that commands, such as git, will work
     mz_root = os.environ["MZ_ROOT"]
     os.chdir(mz_root)
 
     worker_counts = enumerate_cpu_counts()
 
-    if not args.no_cleanup:
-        cleanup = [
-            mzcompose_location(mz_root),
-            "--mz-find",
-            args.composition,
-            "down",
-            "-v",
-        ]
-        try:
-            subprocess.check_output(cleanup, stderr=subprocess.STDOUT)
-        except (subprocess.CalledProcessError,) as e:
-            print(
-                f"Failed to cleanup prior state! Output from failed command:\n{e.output.decode()}"
-            )
-            raise
-
     if args.no_benchmark_this_checkout:
         git_references = args.git_references
     else:
         git_references = [None, *args.git_references]
 
-    if args.verbose:
-        build_tags = [None, *[mzbuild_tag(ref) for ref in args.git_references]]
-        print(f"DEBUG: num_iterations={args.num_measurements}")
-        print(f"DEBUG: worker_counts={worker_counts}")
-        print(f"DEBUG: mzbuild_tags={build_tags}")
+    ui.Verbosity.init_from_env(explicit=args.quiet)
+    build_tags = [None, *[mzbuild_tag(ref) for ref in args.git_references]]
+    dbg(f"num_iterators={args.num_measurements}")
+    dbg(f"worker_counts={worker_counts}")
+    dbg(f"mzbuild_tags={build_tags}")
 
     if args.size == "benchmark-ci":
         # Explicitly override the worker counts for the CI benchmark
         worker_counts = [1]
 
-    setup_benchmark = [
-        mzcompose_location(mz_root),
-        "--mz-find",
+    bench = SuccessOutputBench(
         args.composition,
-        "run",
-        f"setup-benchmark-{args.size}",
-    ]
-    run_benchmark = [
-        mzcompose_location(mz_root),
-        "--mz-find",
-        args.composition,
-        "run",
+        mz_root,
         f"run-benchmark-{args.size}",
-    ]
+        f"setup-benchmark-{args.size}",
+        not args.no_cleanup,
+    )
 
-    field_names = [
+    metadata_field_names = [
         "git_revision",
         "num_workers",
         "iteration",
-        "seconds_taken",
-        "rows_per_second",
-        "grafana_url",
     ]
-    results_writer = csv.DictWriter(sys.stdout, field_names)
-    results_writer.writeheader()
 
-    # We use check_output because check_call does not capture output
-    try:
-        subprocess.check_output(setup_benchmark, stderr=subprocess.STDOUT)
-    except (subprocess.CalledProcessError,) as e:
-        print(
-            f"Setup benchmark failed! Output from failed command:\n{e.output.decode()}"
-        )
-        raise
+    metrics = {k: v for (k, v) in bench.metrics()}
+    results_writer = csv.DictWriter(
+        sys.stdout,
+        metadata_field_names + [metric for (metric, _optional) in metrics.items()],
+    )
+    results_writer.writeheader()
 
     if args.web:
         try:
@@ -142,50 +259,26 @@ def main(args: argparse.Namespace) -> None:
     for (iteration, worker_count, git_ref) in itertools.product(
         iterations, worker_counts, git_references
     ):
+        results = bench.run(git_ref, worker_count, args.benchmark_id)
+        for (metric, optional) in metrics.items():
+            if (not optional) and (results.get(metric) is None):
+                print(f"Required metric {metric} not found", metric)
+                raise ValueError
 
-        # Sadly, environment variables are the only way to pass this information into containers
-        # started by mzcompose
-        child_env = os.environ.copy()
-        child_env["MZ_ROOT"] = mz_root
-        child_env["MZ_WORKERS"] = str(worker_count)
-        child_env["MZBENCH_ID"] = args.benchmark_id
-        child_env["MZBUILD_WAIT_FOR_IMAGE"] = "true"
-        if git_ref:
-            child_env["MZBENCH_GIT_REF"] = git_ref
-            child_env["MZBUILD_MATERIALIZED_TAG"] = mzbuild_tag(git_ref)
-
-        try:
-            output = subprocess.check_output(
-                run_benchmark, env=child_env, stderr=subprocess.STDOUT
-            )
-        except (subprocess.CalledProcessError,) as e:
-            # TODO: Don't exit with error on simple benchmark failure
-            print(
-                f"Setup benchmark failed! Output from failed command:\n{e.output.decode()}"
-            )
-            raise
-
-        # TODO: Replace parsing output from mzcompose with reading from a well known file or topic
-        for line in output.decode().splitlines():
-            if line.startswith("SUCCESS!"):
-                for token in line.split(" "):
-                    if token.startswith("seconds_taken="):
-                        seconds_taken = token[len("seconds_taken=") :]
-                    elif token.startswith("rows_per_sec="):
-                        rows_per_second = token[len("rows_per_sec=") :]
-            elif line.startswith("Grafana URL: "):
-                grafana_url = line[len("Grafana URL: ") :]
+        results["git_revision"] = git_ref if git_ref else "None"
+        results["num_workers"] = worker_count
+        results["iteration"] = iteration
 
         results_writer.writerow(
             {
-                "git_revision": git_ref if git_ref else "None",
-                "num_workers": worker_count,
-                "iteration": iteration,
-                "seconds_taken": seconds_taken,
-                "rows_per_second": rows_per_second,
-                "grafana_url": grafana_url,
+                k: v
+                for (k, v) in results.items()
+                if (k in metadata_field_names or k in metrics)
             }
         )
+
+    if not args.no_teardown:
+        bench.teardown()
 
 
 def enumerate_cpu_counts() -> typing.List[int]:
@@ -214,7 +307,6 @@ def enumerate_cpu_counts() -> typing.List[int]:
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -247,7 +339,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-cleanup",
         action="store_true",
-        help="Skip running `mzcompose down -v` and leave state from previous runs",
+        help="Skip running `mzcompose down -v` at the beginning and leave state from previous runs",
     )
 
     parser.add_argument(
@@ -257,7 +349,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Enable verbose logging output"
+        "-q", "--quiet", action="store_true", help="Disable verbose logging output"
     )
 
     parser.add_argument(
@@ -278,6 +370,12 @@ if __name__ == "__main__":
         type=str,
         nargs="*",
         help="Materialized builds to test as well, identified by git reference",
+    )
+
+    parser.add_argument(
+        "--no-teardown",
+        action="store_true",
+        help="Don't tear down benchmark state before exiting",
     )
 
     args = parser.parse_args()

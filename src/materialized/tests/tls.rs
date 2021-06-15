@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -253,14 +253,18 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 match assert {
                     Assert::Success => {
                         #[derive(Deserialize)]
-                        struct Response {
+                        struct Result {
                             rows: Vec<Vec<String>>,
+                        }
+                        #[derive(Deserialize)]
+                        struct Response {
+                            results: Vec<Result>,
                         }
                         let body = runtime
                             .block_on(body::to_bytes(res.unwrap().into_body()))
                             .unwrap();
                         let res: Response = serde_json::from_slice(&body).unwrap();
-                        assert_eq!(res.rows, vec![vec![user.to_string()]])
+                        assert_eq!(res.results[0].rows, vec![vec![user.to_string()]])
                     }
                     Assert::Err(check) => {
                         let (code, message) = match res {

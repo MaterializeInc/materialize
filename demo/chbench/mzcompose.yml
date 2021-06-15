@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -50,6 +50,27 @@ services:
       - --differential-idle-merge-effort=1000
       - --timely-progress-mode=${MZ_TIMELY_PROGRESS_MODE:-demand}
       - --disable-telemetry
+    environment:
+      # You can, for example, add `pgwire=trace` or change `info` to `debug` to
+      # get more verbose logs.
+      - MZ_LOG=pgwire=debug,info
+      - MZ_DEV=1
+  materialized-experimental:
+    mzbuild: materialized
+    hostname: materialized
+    ports:
+     - *materialized
+    command:
+      - --workers=${MZ_WORKERS:-1}
+      # We want this to eventually count up to the size of the largest batch in
+      # an arrangement. This number represents a tradeoff between proactive
+      # merging (which takes time) and low latency.
+      #
+      # 1000 was chosen by fair dice roll.
+      - --differential-idle-merge-effort=1000
+      - --timely-progress-mode=${MZ_TIMELY_PROGRESS_MODE:-demand}
+      - --disable-telemetry
+      - --experimental
     environment:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
@@ -540,6 +561,44 @@ mzworkflows:
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
+    - step: start-services
+      services: [prometheus_sql_exporter_mysql_tpcch, prometheus_sql_exporter_mz]
+    - step: workflow
+      workflow: heavy-load-mysql
+    - step: run
+      service: peeker
+      daemon: true
+      command: --queries ${PEEKER_QUERIES:-loadtest}
+    - step: ensure-stays-up
+      container: peeker
+      seconds: 10
+
+  # Run the cloud load test, but with materialized in experimental mode
+  cloud-load-test-experimental:
+    env:
+      PEEKER_PORT: "16875:16875"
+      MYSQL_EXPORTER_PORT: "9399:9399"
+      MZ_SQL_EXPORTER_PORT: "9400:9399"
+    steps:
+    - step: start-services
+      services: [materialized-experimental]
+    - step: wait-for-tcp
+      host: materialized
+      port: 6875
+    - step: workflow
+      workflow: bring-up-mysql-kafka
+    - step: wait-for-tcp
+      host: materialized
+      port: 6875
+    - step: wait-for-tcp
+      host: mysql
+      port: 3306
+    - step: run
+      service: chbench
+      command: >-
+        gen
+        --warehouses=${NUM_WAREHOUSES:-1}
+        --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
     - step: start-services
       services: [prometheus_sql_exporter_mysql_tpcch, prometheus_sql_exporter_mz]
     - step: workflow

@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -21,8 +21,11 @@ use lazy_static::lazy_static;
 /// The maximum number of digits expressable in an APD.
 pub const APD_DATUM_WIDTH: usize = 13;
 pub const APD_DATUM_MAX_PRECISION: usize = APD_DATUM_WIDTH * 3;
+pub const APD_AGG_WIDTH: usize = 27;
+pub const APD_AGG_MAX_PRECISION: usize = APD_AGG_WIDTH * 3;
 
 pub type Apd = Decimal<APD_DATUM_WIDTH>;
+pub type ApdAgg = Decimal<APD_AGG_WIDTH>;
 
 lazy_static! {
     static ref CX_DATUM: Context<Apd> = {
@@ -33,11 +36,24 @@ lazy_static! {
             .unwrap();
         cx
     };
+    static ref CX_AGG: Context<ApdAgg> = {
+        let mut cx = Context::<ApdAgg>::default();
+        cx.set_max_exponent(isize::try_from(APD_AGG_MAX_PRECISION - 1).unwrap())
+            .unwrap();
+        cx.set_min_exponent(-(isize::try_from(APD_AGG_MAX_PRECISION).unwrap()))
+            .unwrap();
+        cx
+    };
 }
 
 /// Returns a new context appropriate for operating on APD datums.
 pub fn cx_datum() -> Context<Apd> {
     CX_DATUM.clone()
+}
+
+/// Returns a new context appropriate for operating on APD aggregates.
+pub fn cx_agg() -> Context<ApdAgg> {
+    CX_AGG.clone()
 }
 
 /// Parses am `i128` from a buffer storing the two's complement representation
@@ -75,7 +91,7 @@ pub fn twos_complement_be_to_i128(input: &[u8]) -> Result<i128, anyhow::Error> {
 
 /// Returns `n`'s precision, i.e. the total number of digits represented by `n`
 /// in standard notation not including a zero in the "one's place" in (-1,1).
-fn get_precision(n: &Apd) -> u32 {
+pub fn get_precision(n: &Apd) -> u32 {
     let e = n.exponent();
     if e >= 0 {
         // Positive exponent
@@ -93,12 +109,31 @@ fn get_precision(n: &Apd) -> u32 {
 
 /// Returns `n`'s scale, i.e. the number of digits used after the decimal point.
 pub fn get_scale(n: &Apd) -> u8 {
-    u8::try_from(-n.exponent()).unwrap()
+    let exp = n.exponent();
+    if exp >= 0 {
+        0
+    } else {
+        u8::try_from(-exp).unwrap()
+    }
+}
+
+/// Ensures [`Apd`] values are:
+/// - Within `Apd`'s max precision ([`APD_DATUM_MAX_PRECISION`]), or errors if not.
+/// - Never possible but invalid representations (i.e. never -Nan or -0).
+///
+/// Should be called after any operation that can change an [`Apd`]'s scale or
+/// generate negative values (except addition and subtraction).
+pub fn munge_apd(n: &mut Apd) -> Result<(), anyhow::Error> {
+    rescale_within_max_precision(n)?;
+    if (n.is_zero() || n.is_nan()) && n.is_negative() {
+        cx_datum().neg(n);
+    }
+    Ok(())
 }
 
 /// Rescale's `n` to fit within [`Apd`]'s max precision or error if not
 /// possible.
-pub fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
+fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
     let current_precision = get_precision(n);
     if current_precision > APD_DATUM_MAX_PRECISION as u32 {
         if n.exponent() < 0 {
@@ -119,7 +154,8 @@ pub fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
 
 /// Rescale `n` as an `OrderedDecimal` with the described scale, or error if:
 /// - Rescaling exceeds max precision
-/// - `n` requires > [`APD_DATUM_MAX_PRECISION`] - `scale` digits of precision left of the decimal point
+/// - `n` requires > [`APD_DATUM_MAX_PRECISION`] - `scale` digits of precision
+///   left of the decimal point
 pub fn rescale(n: &mut Apd, scale: u8) -> Result<(), anyhow::Error> {
     let mut cx = cx_datum();
     cx.rescale(n, &Apd::from(-i32::from(scale)));

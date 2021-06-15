@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -12,14 +12,6 @@
 # slt-fast.sh — runs fast subset of sqllogictests in CI.
 
 set -euo pipefail
-
-. misc/shlib/shlib.bash
-
-if [[ ! "${BUILDKITE-}" ]]; then
-    sqllogictest() {
-        cargo run --release --bin sqllogictest -- "$@"
-    }
-fi
 
 export RUST_BACKTRACE=full
 
@@ -163,9 +155,5 @@ tests=(
     test/sqllogictest/postgres/subselect.slt
     test/sqllogictest/postgres/pgcrypto/*.slt
 )
-
-if [[ "${BUILDKITE-}" ]]; then
-    await_postgres -h postgres -p 5432
-fi
 
 sqllogictest -v "${tests[@]}"

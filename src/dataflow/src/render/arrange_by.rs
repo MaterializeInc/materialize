@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -20,7 +20,7 @@ use repr::{Row, RowArena};
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
 
-impl<G, T> Context<G, MirRelationExpr, Row, T>
+impl<G, T> Context<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,

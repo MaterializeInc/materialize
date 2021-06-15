@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -32,8 +32,9 @@ use std::fmt;
 
 use crate::{DataflowDesc, LinearOperator};
 
-use expr::explain::*;
+use expr::explain::{Indices, ViewExplanation};
 use expr::{ExprHumanizer, GlobalId, MirRelationExpr, RowSetFinishing};
+use ore::str::{bracketed, separated};
 
 /// An `Explanation` facilitates pretty-printing of the parts of a
 /// [`DataflowDesc`] that are relevant to dataflow rendering.
@@ -90,7 +91,7 @@ impl<'a> Explanation<'a> {
             .map(|build_desc| {
                 (
                     build_desc.id,
-                    ViewExplanation::new(build_desc.relation_expr.as_ref(), expr_humanizer),
+                    ViewExplanation::new(&build_desc.relation_expr, expr_humanizer),
                 )
             })
             .collect::<Vec<_>>();

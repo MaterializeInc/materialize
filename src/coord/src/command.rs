@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -258,6 +258,11 @@ pub enum ExecuteResponse {
 /// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
 #[derive(Debug, Serialize)]
 pub struct SimpleExecuteResponse {
+    pub results: Vec<SimpleResult>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SimpleResult {
     pub rows: Vec<Vec<serde_json::Value>>,
     pub col_names: Vec<Option<String>>,
 }

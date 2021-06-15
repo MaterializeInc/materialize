@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -32,7 +32,7 @@ use crate::operator::StreamExt;
 use crate::render::context::Context;
 use crate::render::datum_vec::DatumVec;
 
-impl<G, T> Context<G, MirRelationExpr, Row, T>
+impl<G, T> Context<G, Row, T>
 where
     G: Scope<Timestamp = repr::Timestamp>,
     G::Timestamp: Lattice + Refines<T>,

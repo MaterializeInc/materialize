@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -14,6 +14,7 @@ use std::mem;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
+use ore::str::separated;
 use repr::adt::array::InvalidArrayError;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::regex::Regex;
@@ -21,7 +22,6 @@ use repr::strconv::{ParseError, ParseHexError};
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::explain;
 use crate::scalar::func::parse_timezone;
 
 pub mod func;
@@ -869,7 +869,7 @@ impl fmt::Display for MirScalarExpr {
                 }
             }
             CallVariadic { func, exprs } => {
-                write!(f, "{}({})", func, explain::separated(", ", exprs.clone()))?;
+                write!(f, "{}({})", func, separated(", ", exprs.clone()))?;
             }
             If { cond, then, els } => {
                 write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;
@@ -885,6 +885,8 @@ pub enum EvalError {
     FloatOverflow,
     FloatUnderflow,
     NumericFieldOverflow,
+    Float32OutOfRange,
+    Float64OutOfRange,
     Int32OutOfRange,
     Int64OutOfRange,
     IntervalOutOfRange,
@@ -923,7 +925,9 @@ pub enum EvalError {
     InfinityOutOfDomain(String),
     NegativeOutOfDomain(String),
     ZeroOutOfDomain(String),
+    ComplexOutOfRange(String),
     MultipleRowsFromSubquery,
+    Undefined(String),
 }
 
 impl fmt::Display for EvalError {
@@ -933,6 +937,8 @@ impl fmt::Display for EvalError {
             EvalError::FloatOverflow => f.write_str("value out of range: overflow"),
             EvalError::FloatUnderflow => f.write_str("value out of range: underflow"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
+            EvalError::Float32OutOfRange => f.write_str("real out of range"),
+            EvalError::Float64OutOfRange => f.write_str("double precision out of range"),
             EvalError::Int32OutOfRange => f.write_str("integer out of range"),
             EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
@@ -993,8 +999,14 @@ impl fmt::Display for EvalError {
             EvalError::ZeroOutOfDomain(s) => {
                 write!(f, "function {} is not defined for zero", s)
             }
+            EvalError::ComplexOutOfRange(s) => {
+                write!(f, "function {} cannot return complex numbers", s)
+            }
             EvalError::MultipleRowsFromSubquery => {
                 write!(f, "more than one record produced in subquery")
+            }
+            EvalError::Undefined(s) => {
+                write!(f, "{} is undefined", s)
             }
         }
     }

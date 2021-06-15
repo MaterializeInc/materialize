@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -513,6 +513,7 @@ impl Timestamper {
                         envelope,
                         consistency,
                         ts_frequency: _,
+                        timeline: _,
                     } = sc
                     {
                         (connector, encoding, envelope, consistency)
@@ -537,14 +538,14 @@ impl Timestamper {
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.",
+                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {:?}.",
                                       source_id, consistency_topic);
                                 let consumer = self.create_byo_connector(
                                     source_id,
                                     sc,
                                     enc.value(),
                                     env,
-                                    consistency_topic,
+                                    consistency_topic.topic,
                                 );
                                 if let Some(consumer) = consumer {
                                     self.byo_sources.insert(source_id, consumer);
@@ -712,10 +713,15 @@ impl Timestamper {
                 .unwrap(),
         );
 
-        thread::spawn({
-            let connector = connector.clone();
-            move || rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
-        });
+        thread::Builder::new()
+            .name("rt_kafka_meta".to_string())
+            .spawn({
+                let connector = connector.clone();
+                move || {
+                    rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
+                }
+            })
+            .unwrap();
 
         Some(connector)
     }
@@ -791,8 +797,6 @@ impl Timestamper {
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            // should match the isolation level of the source; for now that's always read_committed
-            .set("isolation.level", "read_committed")
             .set("bootstrap.servers", &kc.addrs.to_string());
 
         let group_id_prefix = kc.group_id_prefix.clone().unwrap_or_else(String::new);

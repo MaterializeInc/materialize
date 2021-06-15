@@ -103,6 +103,8 @@ This creates a source that...
   in the [generated `FileDescriptorSet`](#filedescriptorset).
 - Starts reading with no offset on the first partition, the second partition at 10, and the third partition at 100.
 
+It is possible to set `start_offset` based on Kafka timestamps using the `kafka_time_offset` option.
+
 ## Related pages
 
 - [`CREATE SOURCE`](../)

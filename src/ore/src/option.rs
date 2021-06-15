@@ -1,7 +1,18 @@
 // Copyright 2019 The Rust Project Contributors
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Apache license, Version 2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 //
 // Portions of this file are derived from the Option implementation in the
 // libcore crate distributed as part of the Rust project. The original source
@@ -14,7 +25,10 @@
 
 //! Option utilities.
 
+use std::fmt;
 use std::ops::Deref;
+
+use either::Either;
 
 /// Extension methods for [`std::option::Option`].
 pub trait OptionExt<T> {
@@ -29,6 +43,50 @@ pub trait OptionExt<T> {
     where
         T: Deref,
         T::Target: ToOwned;
+
+    /// Returns a type that displays the option's value if it is present, or
+    /// the provided default otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ore::option::OptionExt;
+    ///
+    /// fn render(number: Option<i32>) -> String {
+    ///     format!("Your lucky number is {}.", number.display_or("unknown"))
+    /// }
+    ///
+    /// assert_eq!(render(Some(42)), "Your lucky number is 42.");
+    /// assert_eq!(render(None), "Your lucky number is unknown.");
+    /// ```
+    fn display_or<D>(self, default: D) -> Either<T, D>
+    where
+        T: fmt::Display,
+        D: fmt::Display;
+
+    /// Like [`OptionExt::display_or`], but the default value is computed
+    /// only if the option is `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ore::option::OptionExt;
+    ///
+    /// fn render(number: Option<i32>, guess: i32) -> String {
+    ///     format!(
+    ///         "Your lucky number is {}.",
+    ///         number.display_or_else(|| format!("unknown (best guess: {})", guess)),
+    ///     )
+    /// }
+    ///
+    /// assert_eq!(render(Some(42), 7), "Your lucky number is 42.");
+    /// assert_eq!(render(None, 7), "Your lucky number is unknown (best guess: 7).");
+    /// ```
+    fn display_or_else<D, R>(self, default: D) -> Either<T, R>
+    where
+        T: fmt::Display,
+        D: FnOnce() -> R,
+        R: fmt::Display;
 }
 
 impl<T> OptionExt<T> for Option<T> {
@@ -38,5 +96,28 @@ impl<T> OptionExt<T> for Option<T> {
         T::Target: ToOwned,
     {
         self.as_ref().map(|x| x.deref().to_owned())
+    }
+
+    fn display_or<D>(self, default: D) -> Either<T, D>
+    where
+        T: fmt::Display,
+        D: fmt::Display,
+    {
+        match self {
+            Some(t) => Either::Left(t),
+            None => Either::Right(default),
+        }
+    }
+
+    fn display_or_else<D, R>(self, default: D) -> Either<T, R>
+    where
+        T: fmt::Display,
+        D: FnOnce() -> R,
+        R: fmt::Display,
+    {
+        match self {
+            Some(t) => Either::Left(t),
+            None => Either::Right(default()),
+        }
     }
 }

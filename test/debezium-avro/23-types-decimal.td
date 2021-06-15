@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -15,6 +15,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_type (f1 DECIMAL(5,3));
 ALTER TABLE decimal_type REPLICA IDENTITY FULL;
 INSERT INTO decimal_type VALUES (NULL), (NULL), (12.345), ('NaN');
+
+$ schema-registry-wait-schema schema=postgres.public.decimal_type-value
 
 > CREATE MATERIALIZED SOURCE decimal_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_type'

@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 async-trait = "0.1.50"
 aws-util = { path = "../aws-util" }
 bincode = "1.3.3"
@@ -16,7 +16,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.1"
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
-dec = "0.4.0"
+dec = { version = "0.4.2", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
@@ -39,7 +39,7 @@ prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prome
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
-regex = "1.4.6"
+regex = "1.5.4"
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
@@ -48,8 +48,9 @@ rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_sqs = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.64"
+tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.6.0", features = ["fs", "rt", "sync"] }
+tokio = { version = "1.6.1", features = ["fs", "rt", "sync"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-util = { version = "0.6.7", features = ["codec"] }
 url = { version = "2.2.2", features = ["serde"] }

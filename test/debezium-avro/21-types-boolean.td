@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -16,6 +16,8 @@ CREATE TABLE boolean_type (pk_col BOOLEAN PRIMARY KEY, nopk_col BOOLEAN);
 ALTER TABLE boolean_type REPLICA IDENTITY FULL;
 INSERT INTO boolean_type VALUES (TRUE, TRUE);
 INSERT INTO boolean_type VALUES (FALSE, FALSE);
+
+$ schema-registry-wait-schema schema=postgres.public.boolean_type-value
 
 > CREATE MATERIALIZED SOURCE boolean_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.boolean_type'

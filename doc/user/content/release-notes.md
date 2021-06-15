@@ -46,10 +46,31 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.7.4 %}}
+{{% version-header v0.8.1 %}}
+
+- Add [timelines](/sql/timelines) to all sources to prevent
+  joining data whose time is not comparable. This only affects new
+  [CDC](/connect/materialize-cdc) and Debezium consistency topic sources
+  by default.
+
+- Add the [`isolation_level`](/sql/create-source/avro-kafka/#with-options)
+  `WITH` option to Kafka sources to allow changing read behavior of
+  transactionally written messages.
+
+- Add the [`kafka_time_offset`](/sql/create-source/avro-kafka/#with-options)
+  `WITH` option for Kafka sources, which allows to set `start_offset` based on
+  Kafka timestamps.
+
+{{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
   table via the PostgreSQL [`COPY` protocol][pg-copy].
+
+- Stabilize the [`ARRAY`](/sql/types/array/#construction) constructor.
+
+- Support casting single-dimensional [arrays](/sql/types/array/) from [`text`].
+
+- Support the `#>` and `#>>` [`jsonb`](/sql/types/jsonb/) operators.
 
 - **Breaking change.** Sort `NULL`s last, to match the default sort order in
   PostgreSQL.
@@ -76,6 +97,8 @@ Wrap your release notes at the 80 character mark.
 
 - Support [equality operators](/sql/functions/#boolean) on
   [array data](/sql/types/array).
+
+- Stabilized temporal filters (no longer require `--experimental`)
 
 {{% version-header v0.7.2 %}}
 

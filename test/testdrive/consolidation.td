@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -114,10 +114,21 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 # Test that by default updates that occurred at the same time are consolidated,
 # but updates that occurred at distinct times are not.
 
+# we know that transactions (timestamps) are emitted in order, but the order
+# of emitted records with the same timestamp is not deterministic. We therefore
+# verify each transaction separately and sort within each transaction to get
+# deterministic results.
+
 $ kafka-verify format=avro sink=materialize.public.nums_sink
 {"before": null, "after": {"row": {"num": 3}}}
-{"before": {"row": {"num": 3}}, "after": {"row": {"num": 4}}}
-{"before": {"row": {"num": 4}}, "after": {"row": {"num": 5}}}
+
+$ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
+{"before": null, "after": {"row": {"num": 4}}}
+{"before": {"row": {"num": 3}}, "after": null}
+
+$ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
+{"before": null, "after": {"row": {"num": 5}}}
+{"before": {"row": {"num": 4}}, "after": null}
 
 # TODO(benesch): re-enable when we support `CREATE SINK ... AS OF`.
 # # Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)

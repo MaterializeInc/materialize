@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -16,6 +16,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE replica_identity_default (f1 INTEGER, f2 INTEGER, f3 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE replica_identity_default REPLICA IDENTITY DEFAULT;
 INSERT INTO replica_identity_default VALUES (1,1,1), (2,2,2), (3,3,3), (4,4,4);
+
+$ schema-registry-wait-schema schema=postgres.public.replica_identity_default-value
 
 > CREATE MATERIALIZED SOURCE replica_identity_default
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.replica_identity_default'

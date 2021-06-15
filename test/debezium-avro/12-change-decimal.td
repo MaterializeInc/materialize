@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -16,6 +16,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_change_decimal (f1 DECIMAL(5,3));
 ALTER TABLE alter_change_decimal REPLICA IDENTITY FULL;
 INSERT INTO alter_change_decimal VALUES (0),(NULL),(12.345);
+
+$ schema-registry-wait-schema schema=postgres.public.alter_change_decimal-value
 
 > CREATE MATERIALIZED SOURCE alter_change_decimal
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_change_decimal'

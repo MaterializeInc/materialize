@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -89,14 +89,20 @@ a  b
 4  1
 5  2
 
-$ kafka-verify format=avro sink=materialize.public.output
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "2"}}
 {"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "2"}}
+
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "3"}}
 {"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "3"}}
+
+$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
 {"before": null, "after": {"row": {"a": 4, "b": 1}}, "transaction": {"id": "4"}}
 {"before": null, "after": {"row": {"a": 5, "b": 2}}, "transaction": {"id": "4"}}

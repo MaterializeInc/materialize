@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -15,6 +15,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE bytea_type (f1 BYTEA);
 ALTER TABLE bytea_type REPLICA IDENTITY FULL;
 INSERT INTO bytea_type VALUES (NULL), (''), (E'\\x00'), (E'\\xABCDEF1234');
+
+$ schema-registry-wait-schema schema=postgres.public.bytea_type-value
 
 > CREATE MATERIALIZED SOURCE bytea_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.bytea_type'

@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -56,6 +56,8 @@ services:
     mzbuild: postgres
     ports:
       - 5432
+    environment:
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - ./pg_hba.conf:/share/conf/pg_hba.conf
     command: >

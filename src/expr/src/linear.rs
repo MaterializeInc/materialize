@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -37,7 +37,7 @@ pub struct MapFilterProject {
     /// Expressions that must evaluate to `Datum::True` for the output
     /// row to be produced.
     ///
-    /// Each entry is pre-pended with a column identifier indicating
+    /// Each entry is prepended with a column identifier indicating
     /// the column *before* which the predicate should first be applied.
     /// Most commonly this would be one plus the largest column identifier
     /// in the predicate's support, but it could be larger to implement

@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -17,13 +17,15 @@
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ kafka-verify format=avro sink=materialize.public.data_sink
+$ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
 {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 {"before": null, "after": {"row": {"a": 2, "b": 1}}}
 {"before": null, "after": {"row": {"a": 3, "b": 1}}}
 
-# More complex sinks, with multiple keys and/or a consistency topic
+# More complex sinks, with multiple keys and/or a consistency topic. We test
+# all the possible combinations of user-specified sink key and
+# natural (primary) relation key.
 
 $ set schema={
     "type": "record",
@@ -85,19 +87,41 @@ $ set trxschema={
 $ kafka-create-topic topic=consistency
 $ kafka-create-topic topic=input
 
+# first create all the sinks, then ingest data, to ensure that
+# input is processed in consistency batches and not all at once
+
 > CREATE MATERIALIZED SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
     WITH (consistency_topic = 'testdrive-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
-> CREATE SINK input_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
+> CREATE SINK non_keyed_sink FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'non-keyed-sink'
+  WITH (consistency_topic = 'non-keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE SINK input_sink_multiple_keys FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink-multi-key' KEY (b, a)
-  WITH (consistency_topic = 'input-sink-multi-key-consistency') FORMAT AVRO
+> CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
+
+# the sinked relation has the natural primary key (a)
+
+> CREATE SINK non_keyed_sink_of_keyed_relation FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'non-keyed-sink-of-keyed-relation'
+  WITH (consistency_topic = 'non-keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> CREATE SINK keyed_sink FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'keyed-sink' KEY (a)
+  WITH (consistency_topic = 'keyed-sink-consistency') FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> CREATE SINK keyed_sink_of_keyed_relation FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'keyed-sink-of-keyed-relation' KEY (b)
+  WITH (consistency_topic = 'keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> CREATE SINK multi_keyed_sink FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'multi-keyed-sink' KEY (b, a)
+  WITH (consistency_topic = 'multi-keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
@@ -130,18 +154,18 @@ a  b
 # transaction appear together as one "bundle" in the output. But there is no
 # guarantee on the order within a transaction.
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null}
 {"id": "1", "status": "END", "event_count": {"long": 2}}
 {"id": "2", "status": "BEGIN", "event_count": null}
@@ -151,13 +175,84 @@ $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezi
 
 # Again, compare split by transaction. See comment just above.
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+
+$ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation consistency=debezium
+{"id": "1", "status": "BEGIN", "event_count": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}}
+{"id": "2", "status": "BEGIN", "event_count": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}}
+{"id": "3", "status": "BEGIN", "event_count": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}}
+
+# Again, compare split by transaction. See comment just above.
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink sort-messages=true
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink sort-messages=true
+{"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink sort-messages=true
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink consistency=debezium
+{"id": "1", "status": "BEGIN", "event_count": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}}
+{"id": "2", "status": "BEGIN", "event_count": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}}
+{"id": "3", "status": "BEGIN", "event_count": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}}
+
+# Again, compare split by transaction. See comment just above.
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
+{"b": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"b": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
+{"b": 1} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"b": 2} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
+{"b": 7} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+
+$ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation consistency=debezium
+{"id": "1", "status": "BEGIN", "event_count": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}}
+{"id": "2", "status": "BEGIN", "event_count": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}}
+{"id": "3", "status": "BEGIN", "event_count": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}}
+
+# Again, compare split by transaction. See comment just above.
+
+$ kafka-verify format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
 {"b": 1, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"b": 2, "a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
 {"b": 1, "a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
 {"b": 2, "a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
 {"b": 7, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+
+$ kafka-verify format=avro sink=materialize.public.multi_keyed_sink consistency=debezium
+{"id": "1", "status": "BEGIN", "event_count": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}}
+{"id": "2", "status": "BEGIN", "event_count": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}}
+{"id": "3", "status": "BEGIN", "event_count": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}}

@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -82,6 +82,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-setuptools \
     rsync \
+    ruby \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/autouseradd-1.2.0-amd64.tar.gz \
@@ -148,7 +149,7 @@ COPY libvoidstar.so /usr/local/lib/
 
 ENV LC_CTYPE=C.UTF-8
 
-# Step 2g. Install Python dependencies. These are so quick to install and change
+# Step 2g. Install Python and Ruby dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
 COPY requirements.txt requirements-dev.txt /workdir/
@@ -156,7 +157,10 @@ COPY requirements.txt requirements-dev.txt /workdir/
 RUN pip3 install \
     -r /workdir/requirements.txt \
     -r /workdir/requirements-dev.txt \
-    && rm /workdir/requirements*.txt
+    && rm /workdir/requirements*.txt \
+    && curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-0.11.3.gem > deb-s3-0.11.3.gem \
+    && gem install ./deb-s3-0.11.3.gem
+
 
 # Step 2h. Install docs site dependencies. These are towards the end for the
 # same reason as the Python dependencies.

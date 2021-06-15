@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -128,3 +128,15 @@ $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repea
 $ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort-messages=true
 {"before":null,"after":{"row":{"f1":"fish"}}}
 {"before":null,"after":{"row":{"f1":"fish"}}}
+
+# kafka-verify with regexp (the set-regexp from above is used
+
+> CREATE VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
+
+> CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'kafka-verify-regexp-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
+{"before": null, "after": {"row": {"a": "UID"}}}
+{"before": null, "after": {"row": {"a": "UID"}}}

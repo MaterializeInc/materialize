@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -33,7 +33,7 @@ pub mod strconv;
 pub use cache::{CachedRecord, CachedRecordIter};
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{
-    datum_list_size, datum_size, datums_size, DatumList, DatumMap, Row, RowArena, RowRef,
+    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena, RowRef,
 };
 pub use scalar::{Datum, ScalarBaseType, ScalarType};
 

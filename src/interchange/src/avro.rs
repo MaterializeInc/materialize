@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -17,7 +17,7 @@ mod schema;
 
 pub use envelope_cdc_v2 as cdc_v2;
 
-pub use self::decode::{extract_row, Decoder, DiffPair};
+pub use self::decode::{Decoder, DiffPair};
 pub use self::encode::{
     column_names_and_types, encode_datums_as_avro, encode_debezium_transaction_unchecked,
     get_debezium_transaction_schema, Encoder,

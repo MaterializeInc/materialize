@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 ccsr = { path = "../../../src/ccsr" }
 futures = "0.3.14"
 log = "0.4.13"
@@ -14,5 +14,5 @@ mz-avro = { path = "../../../src/avro" }
 ore = { path = "../../../src/ore" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 structopt = "0.3.21"
-tokio = "1.6.0"
+tokio = "1.6.1"
 url = "2.2.2"

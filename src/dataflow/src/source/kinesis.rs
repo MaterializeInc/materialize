@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -124,7 +124,7 @@ impl SourceReader for KinesisSourceReader {
                     stream_name,
                     processed_message_count: 0,
                 },
-                Some(PartitionId::Kinesis),
+                Some(PartitionId::None),
             )),
             Err(e) => Err(anyhow!("{}", e)),
         }
@@ -198,7 +198,7 @@ impl SourceReader for KinesisSourceReader {
                         let data = record.data.as_ref().to_vec();
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
-                            partition: PartitionId::Kinesis,
+                            partition: PartitionId::None,
                             offset: MzOffset {
                                 //TODO: should MzOffset be modified to be a string?
                                 offset: self.processed_message_count,

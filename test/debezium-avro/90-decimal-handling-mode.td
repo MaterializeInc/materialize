@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -14,6 +14,8 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_precise (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_precise VALUES (1234567.890);
+
+$ schema-registry-wait-schema schema=postgres.public.decimal_handling_mode_precise-value
 
 > CREATE MATERIALIZED SOURCE decimal_handling_mode_precise
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_handling_mode_precise'
@@ -54,6 +56,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_double (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
 
+$ schema-registry-wait-schema schema=postgres.public.decimal_handling_mode_double-value
+
 > CREATE MATERIALIZED SOURCE decimal_handling_mode_double
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_handling_mode_double'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -90,6 +94,8 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_string (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_string VALUES (3234567.890);
+
+$ schema-registry-wait-schema schema=postgres.public.decimal_handling_mode_string-value
 
 > CREATE MATERIALIZED SOURCE decimal_handling_mode_string
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_handling_mode_string'

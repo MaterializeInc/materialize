@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -15,7 +15,6 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use log::warn;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::operators::OkErr;
@@ -23,7 +22,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MirRelationExpr, SourceInstanceId};
+use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
 use repr::RelationDesc;
 use repr::ScalarType;
@@ -37,7 +36,7 @@ use crate::logging::materialized::Logger;
 use crate::metrics;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
-use crate::render::RenderState;
+use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
 use crate::source::DecodeResult;
 use crate::source::SourceConfig;
@@ -46,7 +45,7 @@ use crate::source::{
     PubNubSourceReader, S3SourceReader,
 };
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -54,6 +53,7 @@ where
     pub(crate) fn import_source(
         &mut self,
         render_state: &mut RenderState,
+        tokens: &mut RelevantTokens,
         scope: &mut Child<'g, G, G::Timestamp>,
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
@@ -85,7 +85,7 @@ where
         match src.connector.clone() {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
             // via SequencedCommand::Insert commands.
-            SourceConnector::Local => {
+            SourceConnector::Local(_) => {
                 let ((handle, capability), stream) = scope.new_unordered_input();
                 render_state
                     .local_inputs
@@ -97,9 +97,12 @@ where
                     })
                     .as_collection();
                 let err_collection = Collection::empty(scope);
-                self.collections.insert(
-                    MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone()),
-                    (ok_collection, err_collection),
+                self.insert_id(
+                    Id::Global(src_id),
+                    crate::render::CollectionBundle::from_collections(
+                        ok_collection,
+                        err_collection,
+                    ),
                 );
             }
 
@@ -109,6 +112,7 @@ where
                 envelope,
                 consistency,
                 ts_frequency,
+                timeline: _,
             } => {
                 // TODO(benesch): this match arm is hard to follow. Refactor.
 
@@ -147,6 +151,10 @@ where
                     None
                 };
 
+                let timestamp_histories = render_state
+                    .ts_histories
+                    .get(&orig_id)
+                    .map(|history| history.clone());
                 let source_config = SourceConfig {
                     name: format!("{}-{}", connector.name(), uid),
                     sql_name: src.name.clone(),
@@ -155,7 +163,7 @@ where
                     scope,
                     // Distribute read responsibility among workers.
                     active: active_read_worker,
-                    timestamp_histories: render_state.ts_histories.clone(),
+                    timestamp_histories,
                     consistency,
                     timestamp_frequency: ts_frequency,
                     worker_id: scope.index(),
@@ -256,7 +264,8 @@ where
                                     schema_registry_config,
                                     confluent_wire_format,
                                 );
-                                self.additional_tokens
+                                tokens
+                                    .additional_tokens
                                     .entry(src_id)
                                     .or_insert_with(Vec::new)
                                     .push(Rc::new(token));
@@ -284,7 +293,8 @@ where
                                     )
                                 };
                                 if let Some(tok) = extra_token {
-                                    self.additional_tokens
+                                    tokens
+                                        .additional_tokens
                                         .entry(src_id)
                                         .or_insert_with(Vec::new)
                                         .push(Rc::new(tok));
@@ -379,12 +389,14 @@ where
                                 let row_desc = RelationDesc::from_names_and_types(
                                     fields.into_iter().map(|(n, t)| (Some(n), t)),
                                 );
-                                interchange::avro::validate_key_schema(key_schema, &row_desc)
-                                    .map(Some)
-                                    .unwrap_or_else(|e| {
-                                        warn!("Not using key due to error: {}", e);
-                                        None
-                                    })
+                                // these must be available because the DDL parsing logic already
+                                // checks this and bails in case the key is not correct
+                                let key_indices =
+                                    interchange::avro::validate_key_schema(key_schema, &row_desc)
+                                        .expect(
+                                        "Invalid key schema, this indicates a bug in Materialize",
+                                    );
+                                Some(key_indices)
                             }
                             _ => None,
                         };
@@ -480,16 +492,14 @@ where
                     }
                 }
 
-                let get = MirRelationExpr::Get {
-                    id: Id::Global(src_id),
-                    typ: src.bare_desc.typ().clone(),
-                };
-
                 // Introduce the stream by name, as an unarranged collection.
-                self.collections.insert(get, (collection, err_collection));
+                self.insert_id(
+                    Id::Global(src_id),
+                    crate::render::CollectionBundle::from_collections(collection, err_collection),
+                );
 
                 let token = Rc::new(capability);
-                self.source_tokens.insert(src_id, token.clone());
+                tokens.source_tokens.insert(src_id, token.clone());
 
                 // We also need to keep track of this mapping globally to activate sources
                 // on timestamp advancement queries

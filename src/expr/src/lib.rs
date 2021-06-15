@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -12,6 +12,7 @@
 #![deny(missing_debug_implementations)]
 
 use std::fmt;
+use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
@@ -56,20 +57,24 @@ impl OptimizedMirRelationExpr {
         OptimizedMirRelationExpr(expr)
     }
 
+    /// Get mutable access to the inner [MirRelationExpr]
+    ///
+    /// Callers of this method need to ensure that the underlying expression stays optimized after
+    /// any mutations are applied
+    pub fn as_inner_mut(&mut self) -> &mut MirRelationExpr {
+        &mut self.0
+    }
+
     pub fn into_inner(self) -> MirRelationExpr {
         self.0
     }
 }
 
-impl AsRef<MirRelationExpr> for OptimizedMirRelationExpr {
-    fn as_ref(&self) -> &MirRelationExpr {
-        &self.0
-    }
-}
+impl Deref for OptimizedMirRelationExpr {
+    type Target = MirRelationExpr;
 
-impl AsMut<MirRelationExpr> for OptimizedMirRelationExpr {
-    fn as_mut(&mut self) -> &mut MirRelationExpr {
-        &mut self.0
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

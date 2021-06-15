@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -2564,7 +2564,6 @@ fn plan_array(
     exprs: &[Expr<Aug>],
     type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
-    ecx.qcx.scx.require_experimental_mode("ARRAY")?;
     let (elem_type, exprs) = if exprs.is_empty() {
         if let Some(ScalarType::Array(elem_type)) = type_hint {
             ((**elem_type).clone(), vec![])

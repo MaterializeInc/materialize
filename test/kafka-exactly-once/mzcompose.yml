@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -76,6 +76,7 @@ services:
       --data-directory=/share/mzdata
       -w1
       --disable-telemetry
+      --logical-compaction-window=off
     environment:
       - MZ_DEV=1
       - MZ_LOG=${MZ_LOG:-dataflow::sink::kafka=debug,dataflow::source::kafka=debug,coord::timestamp=debug,dataflow::source=debug,info}

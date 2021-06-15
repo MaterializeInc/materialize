@@ -69,6 +69,8 @@ This creates a source that...
   `localhost:9092` as text.
 - Starts reading with no offset on the first partition, the second partition at 10, and the third partition at 100.
 
+It is also possible to set `start_offset` based on Kafka timestamps using the `kafka_time_offset` option.
+
 ## Related pages
 
 - [`CREATE SOURCE`](../)

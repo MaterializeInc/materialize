@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -410,8 +410,9 @@ SELECT round(NULL)
 ----
 NULL
 
+# This needs an explicit cast while we develop the new decimal type in parallel.
 query R
-SELECT round(NULL, 2)
+SELECT round(NULL::decimal, 2)
 ----
 NULL
 
@@ -420,8 +421,9 @@ SELECT round(1.567, NULL)
 ----
 NULL
 
+# This needs an explicit cast while we develop the new decimal type in parallel.
 query R
-SELECT round(NULL, NULL)
+SELECT round(NULL::decimal, NULL)
 ----
 NULL
 

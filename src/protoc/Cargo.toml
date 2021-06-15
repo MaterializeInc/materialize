@@ -10,10 +10,10 @@ name = "protoc"
 path = "bin/protoc.rs"
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 ore = { path = "../ore" }
-protobuf = "2.17.0"
-protobuf-codegen = "2.17.0"
-protobuf-codegen-pure = "2.17.0"
+protobuf = "2.23.0"
+protobuf-codegen = "2.23.0"
+protobuf-codegen-pure = "2.23.0"
 structopt = "0.3.21"
 tempfile = "3.2.0"

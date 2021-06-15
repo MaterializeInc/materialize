@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -151,7 +151,7 @@ async fn create_upsert_text_source(
             query_prefix
         )
     } else {
-        format!("{} FORMAT TEXT ENVELOPE UPSERT", query_prefix)
+        format!("{} FORMAT BYTES ENVELOPE NONE", query_prefix)
     };
     log::debug!("creating source=> {}", query);
 

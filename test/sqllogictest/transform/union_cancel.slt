@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -85,6 +85,7 @@ EXPLAIN SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 %0 =
 | Get materialize.public.t1 (u1)
 | Threshold
+
 EOF
 
 query II
@@ -115,6 +116,7 @@ EXPLAIN SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 %0 =
 | Get materialize.public.t2 (u3)
 | Threshold
+
 EOF
 
 query II
@@ -129,6 +131,7 @@ EXPLAIN SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 %0 =
 | Get materialize.public.t2 (u3)
 | Threshold
+
 EOF
 
 query II
@@ -150,6 +153,7 @@ EXPLAIN SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 %2 =
 | Union %0 %1
 | Threshold
+
 %3 =
 | Get materialize.public.t1 (u1)
 

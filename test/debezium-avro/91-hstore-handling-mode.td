@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -40,6 +40,8 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 CREATE TABLE hstore_map (f1 hstore);
 ALTER TABLE hstore_map REPLICA IDENTITY FULL;
 INSERT INTO hstore_map VALUES (NULL), ('a=>1'::hstore);
+
+$ schema-registry-wait-schema schema=postgres.public.hstore_map-value
 
 ! CREATE MATERIALIZED SOURCE hstore_map
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.hstore_map'

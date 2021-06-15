@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
-use ore::str::StrExt;
+use ore::str::{bracketed, separated, StrExt};
 use repr::RelationType;
 
 use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr};
@@ -323,8 +323,8 @@ impl<'a> ViewExplanation<'a> {
                 writeln!(f, " offset={}", offset)?
             }
             Negate { .. } => writeln!(f, "| Negate")?,
-            Threshold { .. } => write!(f, "| Threshold")?,
-            DeclareKeys { input: _, keys } => write!(
+            Threshold { .. } => writeln!(f, "| Threshold")?,
+            DeclareKeys { input: _, keys } => writeln!(
                 f,
                 "| Declare primary keys {}",
                 separated(
@@ -432,69 +432,6 @@ impl<'a> ViewExplanation<'a> {
     /// the explanation.
     fn expr_chain(&self, expr: &MirRelationExpr) -> usize {
         self.expr_chains[&(expr as *const MirRelationExpr)]
-    }
-}
-
-/// Creates a type whose [`fmt::Display`] implementation outputs each item in
-/// `iter` separated by `separator`.
-pub fn separated<'a, I>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
-where
-    I: IntoIterator,
-    I::IntoIter: Clone + 'a,
-    I::Item: fmt::Display + 'a,
-{
-    struct Separated<'a, I> {
-        separator: &'a str,
-        iter: I,
-    }
-
-    impl<'a, I> fmt::Display for Separated<'a, I>
-    where
-        I: Iterator + Clone,
-        I::Item: fmt::Display,
-    {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            for (i, item) in self.iter.clone().enumerate() {
-                if i != 0 {
-                    write!(f, "{}", self.separator)?;
-                }
-                write!(f, "{}", item)?;
-            }
-            Ok(())
-        }
-    }
-
-    Separated {
-        separator,
-        iter: iter.into_iter(),
-    }
-}
-
-/// Creates a type whose [`fmt::Display`] implementation outputs item preceded
-/// by `open` and followed by `close`.
-pub fn bracketed<'a, D>(open: &'a str, close: &'a str, contents: D) -> impl fmt::Display + 'a
-where
-    D: fmt::Display + 'a,
-{
-    struct Bracketed<'a, D> {
-        open: &'a str,
-        close: &'a str,
-        contents: D,
-    }
-
-    impl<'a, D> fmt::Display for Bracketed<'a, D>
-    where
-        D: fmt::Display,
-    {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "{}{}{}", self.open, self.contents, self.close)
-        }
-    }
-
-    Bracketed {
-        open,
-        close,
-        contents,
     }
 }
 

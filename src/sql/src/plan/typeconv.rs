@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -127,6 +127,10 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
             }),
+            (Int32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToAPD(s)))
+            }),
             (Int32, String) => Assignment: CastInt32ToString,
 
             // INT64
@@ -135,6 +139,10 @@ lazy_static! {
             (Int64, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
+            }),
+            (Int64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToAPD(s)))
             }),
             (Int64, Float32) => Implicit: CastInt64ToFloat32,
             (Int64, Float64) => Implicit: CastInt64ToFloat64,
@@ -152,6 +160,10 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToDecimal(s)))
             }),
+            (Float32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToAPD(s)))
+            }),
             (Float32, String) => Assignment: CastFloat32ToString,
 
             // FLOAT64
@@ -161,6 +173,10 @@ lazy_static! {
             (Float64, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToDecimal(s)))
+            }),
+            (Float64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToAPD(s)))
             }),
             (Float64, String) => Assignment: CastFloat64ToString,
 
@@ -247,6 +263,15 @@ lazy_static! {
             (String, Bytes) => Explicit: CastStringToBytes,
             (String, Jsonb) => Explicit: CastStringToJsonb,
             (String, Uuid) => Explicit: CastStringToUuid,
+            (String, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+                let return_ty = to_type.clone();
+                let to_el_type = to_type.unwrap_array_element_type();
+                let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToArray {
+                    return_ty,
+                    cast_expr: Box::new(cast_expr),
+                }))
+            }),
             (String, List) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_list_element_type();
@@ -310,12 +335,20 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToDecimal(s)))
             }),
+            (Jsonb, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToAPD(s)))
+            }),
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
             (Uuid, String) => Assignment: CastUuidToString,
 
             // APD
+            (APD, Float32) => Assignment: CastAPDToFloat32,
+            (APD, Float64) => Assignment: CastAPDToFloat64,
+            (APD, Int32) => Assignment: CastAPDToInt32,
+            (APD, Int64) => Assignment: CastAPDToInt64,
             (APD, String) => Assignment: CastAPDToString
         }
     };

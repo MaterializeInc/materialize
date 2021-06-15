@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -23,5 +23,6 @@ pub mod logging;
 pub mod source;
 
 pub use server::{
-    serve, CacheMessage, Config, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta,
+    serve, CacheMessage, Config, SequencedCommand, TimestampBindingFeedback, WorkerFeedback,
+    WorkerFeedbackWithMeta,
 };

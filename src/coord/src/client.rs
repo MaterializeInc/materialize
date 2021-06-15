@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -16,13 +16,13 @@ use uuid::Uuid;
 
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
-use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
 use repr::{ColumnType, Datum, Row, ScalarType};
 use sql::ast::{Raw, Statement};
 
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, Response, SimpleExecuteResponse, StartupResponse,
+    Cancelled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
+    StartupResponse,
 };
 use crate::error::CoordError;
 use crate::id_alloc::IdAllocator;
@@ -364,63 +364,60 @@ impl SessionClient {
         }
 
         let stmts = sql::parse::parse(&stmt).map_err(|e| CoordError::Unstructured(e.into()))?;
-        if stmts.len() != 1 {
-            coord_bail!("expected exactly 1 statement");
-        }
-        let stmt = stmts.into_element();
-
         self.session().start_transaction();
-
         const EMPTY_PORTAL: &str = "";
-        let params = vec![];
-        self.declare(EMPTY_PORTAL.into(), stmt, params).await?;
-        let desc = self
-            .session()
-            .get_portal(EMPTY_PORTAL)
-            .map(|portal| portal.desc.clone())
-            .expect("unnamed portal should be present");
-        if !desc.param_types.is_empty() {
-            coord_bail!("parameters are not supported");
-        }
-
-        let res = self.execute(EMPTY_PORTAL.into()).await?;
-
-        let rows = match res {
-            ExecuteResponse::SendingRows(rows) => {
-                let response = rows.await;
-                response
+        let mut results = vec![];
+        for stmt in stmts {
+            self.declare(EMPTY_PORTAL.into(), stmt, vec![]).await?;
+            let desc = self
+                .session()
+                .get_portal(EMPTY_PORTAL)
+                .map(|portal| portal.desc.clone())
+                .expect("unnamed portal should be present");
+            if !desc.param_types.is_empty() {
+                coord_bail!("parameters are not supported");
             }
-            _ => coord_bail!("unsupported statement type"),
-        };
-        let rows = match rows {
-            PeekResponse::Rows(rows) => rows,
-            PeekResponse::Error(e) => coord_bail!("{}", e),
-            PeekResponse::Canceled => coord_bail!("execution canceled"),
-        };
-        let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-        let (col_names, col_types) = match desc.relation_desc {
-            Some(desc) => (
-                desc.iter_names()
-                    .map(|name| name.map(|name| name.to_string()))
-                    .collect(),
-                desc.typ().column_types.clone(),
-            ),
-            None => (vec![], vec![]),
-        };
-        for row in rows {
-            let datums = row.unpack();
-            sql_rows.push(
-                datums
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, datum)| datum_to_json(datum, idx, &col_types))
-                    .collect(),
-            );
+
+            let res = self.execute(EMPTY_PORTAL.into()).await?;
+
+            let rows = match res {
+                ExecuteResponse::SendingRows(rows) => {
+                    let response = rows.await;
+                    response
+                }
+                _ => coord_bail!("unsupported statement type"),
+            };
+            let rows = match rows {
+                PeekResponse::Rows(rows) => rows,
+                PeekResponse::Error(e) => coord_bail!("{}", e),
+                PeekResponse::Canceled => coord_bail!("execution canceled"),
+            };
+            let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
+            let (col_names, col_types) = match desc.relation_desc {
+                Some(desc) => (
+                    desc.iter_names()
+                        .map(|name| name.map(|name| name.to_string()))
+                        .collect(),
+                    desc.typ().column_types.clone(),
+                ),
+                None => (vec![], vec![]),
+            };
+            for row in rows {
+                let datums = row.unpack();
+                sql_rows.push(
+                    datums
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, datum)| datum_to_json(datum, idx, &col_types))
+                        .collect(),
+                );
+            }
+            results.push(SimpleResult {
+                rows: sql_rows,
+                col_names,
+            })
         }
-        Ok(SimpleExecuteResponse {
-            rows: sql_rows,
-            col_names,
-        })
+        Ok(SimpleExecuteResponse { results })
     }
 
     /// Terminates this client session.

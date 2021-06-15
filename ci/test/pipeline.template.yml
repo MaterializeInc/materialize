@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -18,6 +18,8 @@ steps:
   - id: build
     label: ":docker: build"
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build
+    inputs:
+      - "*"
     timeout_in_minutes: 30
     agents:
       queue: builder
@@ -135,16 +137,15 @@ steps:
           composition: kafka-sasl-plain
           run: testdrive
 
-  - id: short-sqllogictest
-    label: ":bulb: Short SQL logic tests"
+  - id: sqllogictest-fast
+    label: ":bulb: Fast SQL logic tests"
     depends_on: build
-    command: ci/test/slt-fast.sh
     timeout_in_minutes: 10
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
-          run: sqllogictest
+          run: sqllogictest-fast
 
   - id: streaming-demo
     label: ":shower: protobuf kafka streaming-demo"
@@ -263,6 +264,15 @@ steps:
           composition: pg-cdc
           run: pg-cdc
 
+  - id: pg-cdc-resumption
+    label: "Postgres CDC test (Resumption logic)"
+    depends_on: build
+    inputs: [test/pg-cdc-resumption]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: pg-cdc-resumption
+          run: pg-cdc-resumption
+
   - id: persistent-tables
     label: "Test for --persistent-tables"
     depends_on: build
@@ -335,7 +345,7 @@ steps:
       - testdrive
       - kafka-ssl
       - kafka-krb5
-      - short-sqllogictest
+      - sqllogictest-fast
       - streaming-demo
       - chbench-demo
       - catalog-compat

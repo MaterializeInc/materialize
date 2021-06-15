@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -34,6 +34,16 @@ use std::collections::HashMap;
 
 use expr::{MapFilterProject, MirScalarExpr};
 use repr::{Datum, Row, RowArena};
+
+pub use delta_join::DeltaJoinPlan;
+pub use linear_join::LinearJoinPlan;
+
+/// A complete enumeration of possible join plans to render.
+#[derive(Debug)]
+pub enum JoinPlan {
+    Linear(LinearJoinPlan),
+    Delta(DeltaJoinPlan),
+}
 
 /// A manual closure implementation of filtering and logic application.
 ///

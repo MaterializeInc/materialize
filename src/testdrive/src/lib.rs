@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -87,7 +87,7 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         println!("Run {} ...", execution_count);
         cmds_exec = cmds.clone();
         let (mut state, state_cleanup) = action::create_state(config).await?;
-        if config.reset_materialized {
+        if config.reset {
             state.reset_materialized().await?;
         }
         let actions = action::build(cmds_exec, &state)?;
@@ -99,16 +99,23 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
             let redo = a.action.redo(&mut state);
             redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
         }
+
         let mut errors = Vec::new();
-        if let Err(e) = state.reset_s3().await {
-            errors.push(e);
+
+        if config.reset {
+            if let Err(e) = state.reset_s3().await {
+                errors.push(e);
+            }
+
+            if let Err(e) = state.reset_sqs().await {
+                errors.push(e);
+            }
+
+            if let Err(e) = state.reset_kinesis().await {
+                errors.push(e);
+            }
         }
-        if let Err(e) = state.reset_sqs().await {
-            errors.push(e);
-        }
-        if let Err(e) = state.reset_kinesis().await {
-            errors.push(e);
-        }
+
         drop(state);
         if let Err(e) = state_cleanup.await {
             errors.push(e);

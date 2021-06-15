@@ -1,6 +1,17 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Apache license, Version 2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! String utilities.
 
@@ -69,5 +80,68 @@ impl<'a> Deref for QuotedStr<'a> {
 
     fn deref(&self) -> &str {
         &self.0
+    }
+}
+
+/// Creates a type whose [`fmt::Display`] implementation outputs item preceded
+/// by `open` and followed by `close`.
+pub fn bracketed<'a, D>(open: &'a str, close: &'a str, contents: D) -> impl fmt::Display + 'a
+where
+    D: fmt::Display + 'a,
+{
+    struct Bracketed<'a, D> {
+        open: &'a str,
+        close: &'a str,
+        contents: D,
+    }
+
+    impl<'a, D> fmt::Display for Bracketed<'a, D>
+    where
+        D: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}{}{}", self.open, self.contents, self.close)
+        }
+    }
+
+    Bracketed {
+        open,
+        close,
+        contents,
+    }
+}
+
+/// Creates a type whose [`fmt::Display`] implementation outputs each item in
+/// `iter` separated by `separator`.
+pub fn separated<'a, I>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
+where
+    I: IntoIterator,
+    I::IntoIter: Clone + 'a,
+    I::Item: fmt::Display + 'a,
+{
+    struct Separated<'a, I> {
+        separator: &'a str,
+        iter: I,
+    }
+
+    impl<'a, I> fmt::Display for Separated<'a, I>
+    where
+        I: Iterator + Clone,
+        I::Item: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            for (i, item) in self.iter.clone().enumerate() {
+                if i != 0 {
+                    write!(f, "{}", self.separator)?;
+                }
+                write!(f, "{}", item)?;
+            }
+            Ok(())
+        }
+    }
+
+    Separated {
+        separator,
+        iter: iter.into_iter(),
     }
 }

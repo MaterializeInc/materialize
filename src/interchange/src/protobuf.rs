@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -126,7 +126,7 @@ fn validate_proto_field_resolved<'a>(
 }
 
 pub fn decode_descriptors(descriptors: &[u8]) -> Result<Descriptors> {
-    let proto = protobuf::parse_from_bytes(descriptors)
+    let proto = protobuf::Message::parse_from_bytes(descriptors)
         .context("parsing encoded protobuf descriptors failed")?;
     Ok(Descriptors::from_proto(&proto))
 }

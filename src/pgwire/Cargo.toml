@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.41"
 async-trait = "0.1.50"
 byteorder = "1.4.3"
 bytes = "1.0.1"
@@ -19,14 +19,14 @@ itertools = "0.9.0"
 lazy_static = "1.4.0"
 log = "0.4.13"
 openssl = { version = "0.10.34", features = ["vendored"] }
-ordered-float = { version = "2.2.0", features = ["serde"] }
+ordered-float = { version = "2.5.1", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 repr = { path = "../repr" }
 sql = { path = "../sql" }
-tokio = "1.6.0"
+tokio = "1.6.1"
 tokio-openssl = "0.6.1"
 tokio-stream = "0.1.6"
 tokio-util = { version = "0.6.7", features = ["codec"] }

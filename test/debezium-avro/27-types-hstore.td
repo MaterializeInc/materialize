@@ -1,4 +1,4 @@
-# Copyright Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -16,6 +16,8 @@ CREATE EXTENSION IF NOT EXISTS hstore;
 CREATE TABLE hstore_type (f1 hstore);
 ALTER TABLE hstore_type REPLICA IDENTITY FULL;
 INSERT INTO hstore_type VALUES (NULL), ('a=>1'::hstore);
+
+$ schema-registry-wait-schema schema=postgres.public.hstore_type-value
 
 > CREATE MATERIALIZED SOURCE hstore_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.hstore_type'

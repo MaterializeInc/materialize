@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
@@ -83,6 +84,10 @@ struct Args {
     #[structopt(long, default_value = "10")]
     max_errors: usize,
 
+    /// Max number of tests to run before terminating
+    #[structopt(long, default_value = "18446744073709551615")]
+    max_tests: usize,
+
     /// Shuffle tests (using the value from --seed, if any)
     #[structopt(long)]
     shuffle_tests: bool,
@@ -158,7 +163,7 @@ async fn main() {
         aws_credentials,
         materialized_pgconfig: args.materialized_url,
         materialized_catalog_path: args.validate_catalog,
-        reset_materialized: !args.no_reset,
+        reset: !args.no_reset,
         ci_output: args.ci_output,
         default_timeout,
         seed: args.seed,
@@ -178,13 +183,13 @@ async fn main() {
         files.shuffle(&mut rng);
     }
 
-    for file in files {
+    for file in &files[..cmp::min(args.max_tests, files.len())] {
         if let Err(error) = match file.as_str() {
             "-" => testdrive::run_stdin(&config).await,
             _ => testdrive::run_file(&config, &file).await,
         } {
             let _ = error.print_stderr(args.ci_output);
-            error_files.push(file);
+            error_files.push(file.clone());
 
             errors.push(error);
             if errors.len() >= args.max_errors {
