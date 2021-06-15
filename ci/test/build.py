@@ -26,6 +26,13 @@ from materialize import spawn
 
 
 def main() -> None:
+    spawn.runv(["git", "clone", "git@github.com:MaterializeInc/btv-test.git"])
+    os.chdir("btv-test")
+    spawn.runv(["touch", "foo"])
+    spawn.runv(["git", "add", "foo"])
+    spawn.runv(["git", "commit", "-m", "test"])
+    spawn.runv(["git", "push"])
+    return
     repo = mzbuild.Repository(Path("."))
     workspace = cargo.Workspace(repo.root)
 
