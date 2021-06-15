@@ -124,7 +124,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     s3 = boto3.client("s3")
     s3.put_object(
         Body=open(deb_path, "rb"),
-        Bucket="materialize-apt-repository",
+        Bucket="apt.materialize.com",
         Key=f"pool/generic/m/ma/materialized-{version}.deb",
     )
 
