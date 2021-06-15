@@ -23,7 +23,7 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, Connector, CreateSourceFormat, DataType, Envelope, Expr, Format, Ident,
-    Query, TableConstraint, UnresolvedObjectName, Value,
+    KeyConstraint, Query, TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -360,6 +360,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,
+    pub key_constraint: Option<KeyConstraint>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -377,7 +378,15 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         if !self.col_names.is_empty() {
             f.write_str("(");
             f.write_node(&display::comma_separated(&self.col_names));
+            if self.key_constraint.is_some() {
+                f.write_str(", ");
+                f.write_node(self.key_constraint.as_ref().unwrap());
+            }
             f.write_str(") ");
+        } else if self.key_constraint.is_some() {
+            f.write_str("(");
+            f.write_node(self.key_constraint.as_ref().unwrap());
+            f.write_str(") ")
         }
         f.write_str("FROM ");
         f.write_node(&self.connector);

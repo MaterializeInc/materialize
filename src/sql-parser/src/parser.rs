@@ -1610,7 +1610,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        let col_names = self.parse_parenthesized_column_list(Optional)?;
+        let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connector = self.parse_connector()?;
         let with_options = self.parse_opt_with_sql_options()?;
@@ -1659,7 +1659,50 @@ impl<'a> Parser<'a> {
             envelope,
             if_not_exists,
             materialized,
+            key_constraint,
         }))
+    }
+
+    /// Parses the column section of a CREATE SOURCE statement which can be
+    /// empty or a comma-separated list of column identifiers and a single key
+    /// constraint, e.g.
+    ///
+    /// (col_0, col_i, ..., col_n, key_constraint)
+    fn parse_source_columns(&mut self) -> Result<(Vec<Ident>, Option<KeyConstraint>), ParserError> {
+        if self.consume_token(&Token::LParen) {
+            let mut columns = vec![];
+            let mut key_constraints = vec![];
+            loop {
+                let pos = self.peek_pos();
+                if let Some(key_constraint) = self.parse_key_constraint()? {
+                    if !key_constraints.is_empty() {
+                        return parser_err!(self, pos, "Multiple key constraints not allowed");
+                    }
+                    key_constraints.push(key_constraint);
+                } else {
+                    columns.push(self.parse_identifier()?);
+                }
+                if !self.consume_token(&Token::Comma) {
+                    break;
+                }
+            }
+            self.expect_token(&Token::RParen)?;
+            Ok((columns, key_constraints.into_iter().next()))
+        } else {
+            Ok((vec![], None))
+        }
+    }
+
+    /// Parses a key constraint.
+    fn parse_key_constraint(&mut self) -> Result<Option<KeyConstraint>, ParserError> {
+        // PRIMARY KEY (col_1, ..., col_n) NOT ENFORCED
+        if self.parse_keywords(&[PRIMARY, KEY]) {
+            let columns = self.parse_parenthesized_column_list(Mandatory)?;
+            self.expect_keywords(&[NOT, ENFORCED])?;
+            Ok(Some(KeyConstraint::PrimaryKeyNotEnforced { columns }))
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {

@@ -263,6 +263,7 @@ pub fn create_statement(
             envelope: _,
             if_not_exists,
             materialized,
+            key_constraint: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;

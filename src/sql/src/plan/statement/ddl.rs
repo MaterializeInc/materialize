@@ -389,6 +389,7 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
         format,
+        key_constraint: _,
     } = &stmt;
 
     let with_options_original = with_options;
