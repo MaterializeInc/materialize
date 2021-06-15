@@ -397,14 +397,20 @@ impl LiteralLifting {
 
                 // lift literals from each input
                 let mut input_literals = Vec::new();
-                for input in inputs.iter_mut() {
+                for mut input in inputs.iter_mut() {
                     let literals = self.action(input, gets);
 
                     // Do not propagate error literals beyond join inputs, since that may result
                     // in them being propagated to other inputs of the join and evaluated when
                     // they should not.
                     if literals.iter().any(|l| l.is_literal_err()) {
-                        *input = input.take_dangerous().map(literals);
+                        // Push the literal errors beyond any arrangement since otherwise JoinImplementation
+                        // would add another arrangement on top leading to an infinite loop/stack overflow.
+                        if let MirRelationExpr::ArrangeBy { input, .. } = &mut input {
+                            **input = input.take_dangerous().map(literals);
+                        } else {
+                            *input = input.take_dangerous().map(literals);
+                        }
                         input_literals.push(Vec::new());
                     } else {
                         input_literals.push(literals);

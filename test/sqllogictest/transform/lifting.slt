@@ -731,3 +731,35 @@ insert into t values (1308);
 
 statement error more than one record produced in subquery
 select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+
+# check that literal errors are not lifted beyond Joins, but also that that doesn't lead to
+# a stack overflow due to LiteralLifting and JoinImplementation fighting against each other
+statement ok
+create table t1 (f1 double precision, f2 double precision not null);
+
+query T multiline
+explain select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) where a2.f2 = 9;
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u5)
+| Filter (#1 = 9)
+
+%2 =
+| Get materialize.public.t1 (u5)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| ArrangeBy ()
+
+%3 =
+| Join %0 %1 %2
+| | implementation = Differential %1 %2.() %0.()
+| | demand = (#0..#3)
+| Project (#0..#3)
+
+EOF
