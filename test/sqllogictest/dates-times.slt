@@ -1031,10 +1031,10 @@ SELECT DATE '2007-02-01   T  15:04:05+00'
 ----
 2007-02-01
 
-statement error invalid input syntax for type date: invalid DateTimeField: X: "2007-02-01X15:04:05"
+statement error invalid input syntax for type date: unknown units X: "2007-02-01X15:04:05"
 SELECT DATE '2007-02-01X15:04:05'
 
-statement error invalid input syntax for type date: invalid DateTimeField: TT: "2007-02-01TT15:04:05"
+statement error invalid input syntax for type date: unknown units TT: "2007-02-01TT15:04:05"
 SELECT DATE '2007-02-01TT15:04:05'
 
 statement error invalid input syntax for type date: Cannot determine format of all parts: "2007-02-01  T  T  15:04:05"

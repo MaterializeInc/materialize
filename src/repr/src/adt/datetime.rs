@@ -280,6 +280,16 @@ impl DateTimeFieldValue {
     pub fn new(unit: i64, fraction: i64) -> Self {
         DateTimeFieldValue { unit, fraction }
     }
+
+    /// Divides `unit` and `fraction` by `x`, carrying the `unit` remainder into `fraction`.
+    /// # Panics
+    /// - If `x == 0`.
+    fn div(&mut self, x: i64) {
+        let mut n: i128 = i128::from(self.unit) * 1_000_000_000 + i128::from(self.fraction);
+        n /= i128::from(x);
+        self.fraction = (n % 1_000_000_000) as i64;
+        self.unit = (n / 1_000_000_000) as i64;
+    }
 }
 
 /// Parsed timezone.
@@ -1148,6 +1158,24 @@ fn fill_pdt_from_tokens(
                         ));
                 }
             }
+            // If we got a DateTimeUnits, attempt to convert it to a TimeUnit.
+            (DateTimeUnit(u), TimeUnit(_)) => {
+                let f = match u {
+                    DateTimeUnits::Milliseconds => {
+                        unit_buf.as_mut().map(|b| b.div(1_000));
+                        DateTimeField::Second
+                    }
+                    _ => return Err(format!("unsupported unit {}", u)),
+                };
+                if unit_buf.is_some() && f != current_field {
+                    return Err(format!(
+                            "Invalid syntax at offset {}: provided DateTimeUnit({}) but expected TimeUnit({})",
+                            u,
+                            f,
+                            current_field
+                        ));
+                }
+            }
             (Dot, Dot) => {}
             (Num(val, _), Num(_, _)) => match unit_buf {
                 Some(_) => {
@@ -1308,6 +1336,7 @@ fn determine_format_w_datetimefield(
         }
         // Implies {Num}?{TimeUnit}
         Some(TimeUnit(f)) => Ok(Some(PostgreSql(f))),
+        Some(DateTimeUnit(_)) => Ok(None),
         _ => Err("Cannot determine format of all parts".into()),
     }
 }
@@ -1416,6 +1445,8 @@ pub(crate) enum TimeStrToken {
     TzName(String),
     // Tokenized version of a DateTimeField string e.g. 'YEAR'
     TimeUnit(DateTimeField),
+    // Fallback if TimeUnit isn't parseable.
+    DateTimeUnit(DateTimeUnits),
     // Used to support ISO-formatted timestamps.
     DateTimeDelimiter,
     // Space arbitrary non-enum punctuation (e.g. !), or leading/trailing
@@ -1436,6 +1467,7 @@ impl std::fmt::Display for TimeStrToken {
             Nanos(i) => write!(f, "{}", i),
             TzName(n) => write!(f, "{}", n),
             TimeUnit(d) => write!(f, "{:?}", d),
+            DateTimeUnit(u) => write!(f, "{}", u),
             DateTimeDelimiter => write!(f, "T"),
             Delim => write!(f, " "),
         }
@@ -1499,7 +1531,10 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
             if c == "T" || c == "t" {
                 t.push_back(TimeStrToken::DateTimeDelimiter);
             } else {
-                t.push_back(TimeStrToken::TimeUnit(c.to_uppercase().parse()?));
+                match c.to_uppercase().parse() {
+                    Ok(u) => t.push_back(TimeStrToken::TimeUnit(u)),
+                    Err(_) => t.push_back(TimeStrToken::DateTimeUnit(c.parse()?)),
+                }
             }
             c.clear();
         }
@@ -1834,6 +1869,56 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_datetimefieldvalue_div() {
+        let test_cases = vec![
+            (
+                DateTimeFieldValue::new(0, 0),
+                1,
+                DateTimeFieldValue::new(0, 0),
+            ),
+            (
+                DateTimeFieldValue::new(0, 1),
+                1,
+                DateTimeFieldValue::new(0, 1),
+            ),
+            (
+                DateTimeFieldValue::new(1, 0),
+                1,
+                DateTimeFieldValue::new(1, 0),
+            ),
+            (
+                DateTimeFieldValue::new(1, 0),
+                2,
+                DateTimeFieldValue::new(0, 500_000_000),
+            ),
+            (
+                DateTimeFieldValue::new(2, 2),
+                2,
+                DateTimeFieldValue::new(1, 1),
+            ),
+            (
+                DateTimeFieldValue::new(3, 0),
+                2,
+                DateTimeFieldValue::new(1, 500_000_000),
+            ),
+            (
+                DateTimeFieldValue::new(123, 456_789_321),
+                1_000,
+                DateTimeFieldValue::new(0, 123_456_789),
+            ),
+            (
+                DateTimeFieldValue::new(1_234, 567_890_321),
+                1_000,
+                DateTimeFieldValue::new(1, 234_567_890),
+            ),
+        ];
+        for mut test in test_cases.into_iter() {
+            test.0.div(test.1);
+            assert_eq!(test.0, test.2);
+        }
+    }
 
     #[test]
     fn test_expected_dur_like_tokens() {
@@ -2986,6 +3071,39 @@ mod test {
                 "1.999999999999999999 days",
                 Second,
             ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeFieldValue::new(0, 1_200_000)),
+                    ..Default::default()
+                },
+                "1.2ms",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeFieldValue::new(0, 1_000_000)),
+                    ..Default::default()
+                },
+                "1ms",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeFieldValue::new(2, 100_000_000)),
+                    ..Default::default()
+                },
+                "2100ms",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeFieldValue::new(1, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 2_000_000)),
+                    ..Default::default()
+                },
+                "1h 2ms",
+                Second,
+            ),
         ];
 
         for test in test_cases.iter() {
@@ -3057,12 +3175,12 @@ mod test {
             (
                 "1x2:3.4",
                 Second,
-                "invalid DateTimeField: X",
+                "unknown units x",
             ),
             (
                 "0 foo",
                 Second,
-                "invalid DateTimeField: FOO",
+                "unknown units foo",
             ),
             (
                 "1-2 3:4 5 second",
@@ -3099,6 +3217,36 @@ mod test {
                 "-9223372036854775808 seconds",
                 Day,
                 "Unable to parse value as a number at index 20: number too large to fit in target type",
+            ),
+            (
+                "2s 1ms",
+                Second,
+                "SECOND field set twice",
+            ),
+
+            // Milliseconds aren't well supported. Improve these.
+            (
+                "1 ms",
+                Second,
+                "Cannot determine format of all parts. Add explicit time components, e.g. \
+                INTERVAL '1 day' or INTERVAL '1' DAY",
+            ),
+            (
+                "1.2 ms",
+                Second,
+                "Cannot determine format of all parts. Add explicit time components, e.g. \
+                INTERVAL '1 day' or INTERVAL '1' DAY",
+            ),
+            (
+                "1.0us",
+                Second,
+                "unsupported unit microseconds",
+            ),
+            (
+                "1.2 us",
+                Second,
+                "Cannot determine format of all parts. Add explicit time components, e.g. \
+                INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
         ];
         for test in test_cases.iter() {

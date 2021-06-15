@@ -236,7 +236,7 @@ SELECT INTERVAL '1:2:3.4.5';
 statement error
 SELECT INTERVAL '1+2:3.4';
 
-statement error invalid DateTimeField: X
+statement error unknown units x
 SELECT INTERVAL '1x2:3.4';
 
 ## PostgreSQL format
@@ -348,7 +348,7 @@ SELECT INTERVAL '0 year 0 month 0 day 0 hour 0 minute 0.0 second';
 00:00:00
 
 # Fails any non-DateTimeField string.
-statement error invalid DateTimeField: FOO
+statement error unknown units foo
 SELECT INTERVAL '0 foo';
 
 ## Misc.
