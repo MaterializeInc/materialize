@@ -165,7 +165,13 @@ impl ColumnKnowledge {
                 // Aggregate column knowledge from each input into one `Vec`.
                 let mut knowledges = Vec::new();
                 for input in inputs.iter_mut() {
-                    for knowledge in ColumnKnowledge::harvest(input, knowledge)? {
+                    for mut knowledge in ColumnKnowledge::harvest(input, knowledge)? {
+                        // Do not propagate error literals beyond join inputs, since that may result
+                        // in them being propagated to other inputs of the join and evaluated when
+                        // they should not.
+                        if let Some((Err(_), _)) = knowledge.value {
+                            knowledge.value = None;
+                        }
                         knowledges.push(knowledge);
                     }
                 }
