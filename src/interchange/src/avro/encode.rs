@@ -14,6 +14,7 @@ use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_avro::types::AvroMap;
 use repr::adt::jsonb::JsonbRef;
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
@@ -333,7 +334,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                             (key.to_string(), value)
                         })
                         .collect();
-                    Value::Map(elements)
+                    Value::Map(AvroMap(elements))
                 }
                 ScalarType::Record { fields, .. } => {
                     let list = datum.unwrap_list();

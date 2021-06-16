@@ -29,6 +29,7 @@ use std::str::FromStr;
 use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
 use mz_avro::schema::resolve_schemas;
+use mz_avro::types::AvroMap;
 use mz_avro::{
     error::Error as AvroError,
     from_avro_datum, to_avro_datum,
@@ -49,7 +50,7 @@ lazy_static! {
         (r#"{"type": "fixed", "name": "Test", "size": 1}"#, Value::Fixed(1, vec![b'B'])),
         (r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"]}"#, Value::Enum(1, "B".to_string())),
         (r#"{"type": "array", "items": "long"}"#, Value::Array(vec![Value::Long(1), Value::Long(3), Value::Long(2)])),
-        (r#"{"type": "map", "values": "long"}"#, Value::Map([("a".to_string(), Value::Long(1i64)), ("b".to_string(), Value::Long(3i64)), ("c".to_string(), Value::Long(2i64))].iter().cloned().collect())),
+        (r#"{"type": "map", "values": "long"}"#, Value::Map(AvroMap([("a".to_string(), Value::Long(1i64)), ("b".to_string(), Value::Long(3i64)), ("c".to_string(), Value::Long(2i64))].iter().cloned().collect()))),
         (r#"["string", "null", "long"]"#, Value::Union{
             index: 1,
             inner: Box::new(Value::Null),
@@ -83,7 +84,7 @@ lazy_static! {
         //(r#"{"type": "fixed", "name": "F", "size": 2}"#, r#""\u00FF\u00FF""#, Value::Bytes(vec![0xff, 0xff])),
         //(r#"{"type": "enum", "name": "F", "symbols": ["FOO", "BAR"]}"#, r#""FOO""#, Value::Enum(0, "FOO".to_string())),
         (r#"{"type": "array", "items": "int"}"#, "[1, 2, 3]", Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
-        (r#"{"type": "map", "values": "int"}"#, r#"{"a": 1, "b": 2}"#, Value::Map([("a".to_string(), Value::Int(1)), ("b".to_string(), Value::Int(2))].iter().cloned().collect())),
+        (r#"{"type": "map", "values": "int"}"#, r#"{"a": 1, "b": 2}"#, Value::Map(AvroMap([("a".to_string(), Value::Int(1)), ("b".to_string(), Value::Int(2))].iter().cloned().collect()))),
         //(r#"["int", "null"]"#, "5", Value::Union(Box::new(Value::Int(5)))),
         (r#"{"type": "record", "name": "F", "fields": [{"name": "A", "type": "int"}]}"#, r#"{"A": 5}"#,Value::Record(vec![("A".to_string(), Value::Int(5))])),
     ];
@@ -802,11 +803,11 @@ fn test_complex_resolutions() {
                 ),
                 (
                     "f0_2".to_owned(),
-                    Value::Map(
+                    Value::Map(AvroMap(
                         vec![("a".to_string(), Value::Long(42))]
                             .into_iter()
                             .collect(),
-                    ),
+                    )),
                 ),
             ]),
         ),
