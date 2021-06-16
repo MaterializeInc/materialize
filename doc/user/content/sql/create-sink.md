@@ -257,7 +257,7 @@ CREATE SINK quotes_sink
 FROM quotes
 INTO KAFKA BROKER 'localhost' TOPIC 'quotes-sink'
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' AS OF now();
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
 #### From materialized views
