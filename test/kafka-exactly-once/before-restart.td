@@ -74,7 +74,7 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK output2 FROM input_rt
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-rt-sink-${testdrive.seed}'
-  WITH (exactly_once=true, consistency_topic='output-sink-consistency-${testdrive.seed}')
+  WITH (exactly_once=true, consistency_topic='output-rt-sink-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE MATERIALIZED SOURCE input_byo
@@ -83,8 +83,8 @@ $ kafka-create-topic topic=input
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE SINK output FROM input_byo
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-sink-${testdrive.seed}'
-  WITH (exactly_once=true, consistency_topic='output-sink-consistency-${testdrive.seed}')
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-byo-sink-${testdrive.seed}'
+  WITH (exactly_once=true, consistency_topic='output-byo-sink-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschemakey}
@@ -141,11 +141,10 @@ a  b
 5   6
 
 # Reingest the sink based on rt sources to confirm correct output.
-# TODO: it's brittle to hardcode the global id in the desired topic name like this
 # TODO: this needs to have deduplication='none' because the deduplication code expects
 # certain fields that the sink does not emit
 > CREATE MATERIALIZED SOURCE reingest_rt_sink
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-rt-sink-${testdrive.seed}-u3'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-rt-sink-${testdrive.seed}'
   WITH (deduplication='none')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
