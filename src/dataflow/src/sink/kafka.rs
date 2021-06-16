@@ -620,6 +620,14 @@ where
             return true;
         }
 
+        if !pending_rows.is_empty() {
+            // We have some more rows that we need to wait for frontiers to advance before we
+            // can write them out. Let's make sure to reschedule with a small delay to give the
+            // system time to advance.
+            s.activator.activate_after(Duration::from_millis(100));
+            return true;
+        }
+
         if in_flight > 0 {
             // We still have messages that need to be flushed out to Kafka
             // Let's make sure to keep the sink operator around until
