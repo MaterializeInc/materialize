@@ -216,11 +216,11 @@ impl<T: AstInfo> AstDisplay for DataType<T> {
                 key_type,
                 value_type,
             } => {
-                f.write_str("map(");
+                f.write_str("map[");
                 f.write_node(&key_type);
                 f.write_str("=>");
                 f.write_node(&value_type);
-                f.write_str(")");
+                f.write_str("]");
             }
             DataType::Other { name, typ_mod } => {
                 f.write_node(name);

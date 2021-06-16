@@ -98,6 +98,11 @@ id::bigint
 id::int8
 
 parse-scalar roundtrip
+id::map[text=>int4]
+----
+id::map[text=>int4]
+
+parse-scalar roundtrip
 CAST(id AS BIGINT)
 ----
 id::int8
