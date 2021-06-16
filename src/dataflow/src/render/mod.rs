@@ -866,7 +866,6 @@ pub mod plan {
                         plans.push(Plan::from_mir(input)?);
                     }
                     // Extract temporal predicates as joins cannot currently absorb them.
-                    let temporal_mfp = mfp.extract_temporal();
                     let plan = match implementation {
                         expr::JoinImplementation::Differential((start, _start_arr), order) => {
                             JoinPlan::Linear(LinearJoinPlan::create_from(
@@ -874,7 +873,7 @@ pub mod plan {
                                 equivalences,
                                 order,
                                 input_mapper,
-                                mfp,
+                                &mut mfp,
                             ))
                         }
                         expr::JoinImplementation::DeltaQuery(orders) => {
@@ -882,7 +881,7 @@ pub mod plan {
                                 equivalences,
                                 &orders[..],
                                 input_mapper,
-                                mfp,
+                                &mut mfp,
                             ))
                         }
                         // Other plans are errors, and should be reported as such.
@@ -891,7 +890,7 @@ pub mod plan {
 
                     (
                         // This stage can absorb only non-temporal MFP instances.
-                        Some(temporal_mfp),
+                        Some(mfp),
                         Plan::Join {
                             inputs: plans,
                             plan,
