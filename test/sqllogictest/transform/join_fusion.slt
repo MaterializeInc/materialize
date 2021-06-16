@@ -1,0 +1,276 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (f1 integer, f2 integer)
+
+statement ok
+INSERT INTO t1 VALUES (1, 1), (2, 3), (4, 5);
+
+statement ok
+CREATE TABLE t2 (f1 integer, f2 integer)
+
+statement ok
+INSERT INTO t2 VALUES (2, 3), (5, 5);
+
+statement ok
+CREATE TABLE t3 (f1 integer, f2 integer)
+
+statement ok
+INSERT INTO t3 VALUES (2, 3), (5, 5);
+
+query T multiline
+EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0)), !(isnull(#1)), (#0 > 0)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter !(isnull(#1))
+| ArrangeBy (#1)
+
+%2 =
+| Get materialize.public.t3 (u5)
+| Filter !(isnull(#0)), (#0 > 0)
+
+%3 =
+| Join %0 %1 %2 (= #0 #4) (= #1 #3)
+| | implementation = Differential %2 %0.(#0) %1.(#1)
+| | demand = (#0..#2, #5)
+| Filter (#0 <= #2)
+| Project (#0..#2, #1, #0, #5)
+
+EOF
+
+query IIIIII
+SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
+----
+2  3  2  3  2  3
+
+#
+# Additional queries that came out of the randomized testing of #6936
+#
+
+#
+# Randomized queries against a TPC-like schema
+#
+
+statement ok
+CREATE TABLE customer (c_custkey integer, c_nationkey integer NOT NULL, c_acctbal decimal(15, 2) NOT NULL);
+
+statement ok
+CREATE INDEX pk_customer_custkey ON customer (c_custkey);
+
+statement ok
+CREATE INDEX fk_customer_nationkey ON customer (c_nationkey ASC);
+
+statement ok
+CREATE TABLE orders (o_orderkey integer, o_custkey integer NOT NULL, o_totalprice decimal(15, 2) NOT NULL, o_orderdate DATE NOT NULL);
+
+statement ok
+CREATE INDEX pk_orders_orderkey ON orders (o_orderkey);
+
+statement ok
+CREATE INDEX fk_orders_custkey ON orders (o_custkey ASC);
+
+statement ok
+CREATE TABLE lineitem (l_orderkey integer NOT NULL, l_partkey integer NOT NULL, l_suppkey integer NOT NULL, l_linenumber integer NOT NULL, l_extendedprice decimal(15, 2) NOT NULL, l_shipdate date NOT NULL, l_commitdate date NOT NULL, l_receiptdate date NOT NULL);
+
+statement ok
+CREATE INDEX pk_lineitem_orderkey_linenumber ON lineitem (l_orderkey, l_linenumber);
+
+statement ok
+CREATE INDEX fk_lineitem_orderkey ON lineitem (l_orderkey ASC);
+
+statement ok
+CREATE INDEX fk_lineitem_partkey ON lineitem (l_partkey ASC);
+
+statement ok
+CREATE INDEX fk_lineitem_suppkey ON lineitem (l_suppkey ASC);
+
+statement ok
+CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);
+
+query T multiline
+EXPLAIN SELECT * FROM lineitem
+  JOIN orders ON ( l_orderkey = o_orderkey )
+  JOIN customer ON ( c_acctbal >= o_totalprice )
+  WHERE l_shipDATE <> o_orderdate
+  AND o_orderdate = l_shipDATE - INTERVAL ' 9 MONTHS ';
+----
+%0 =
+| Get materialize.public.lineitem (u15)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.orders (u11)
+| Filter !(isnull(#0)), !(isnull(datetots(#3)))
+| ArrangeBy (#0, datetots(#3))
+
+%2 =
+| Get materialize.public.customer (u7)
+
+%3 =
+| Join %0 %1 %2 (= #0 #8) (= datetots(#11) (#5 - 9 months))
+| | implementation = Differential %2 %0.() %1.(#0, datetots(#3))
+| | demand = (#0..#7, #9..#14)
+| Filter (#5 != #11), (#14 >= #10)
+| Project (#0..#7, #0, #9..#14)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT  MIN( o_orderkey  )
+  FROM lineitem  JOIN orders  ON ( l_extendedprice  = o_totalprice  )
+  WHERE l_commitDATE  = '1997-01-25'
+  AND o_orderkey  BETWEEN  38  AND  195
+  AND o_orderdate  = l_commitDATE  + ' 7 MONTHS '
+  AND o_orderkey  = (  SELECT l_orderkey  FROM lineitem  WHERE l_orderkey  =  38  )
+----
+%0 = Let l0 =
+| Get materialize.public.lineitem (u15)
+| Filter (#0 = 38)
+
+%1 =
+| Get materialize.public.lineitem (u15)
+| Filter (#6 = 1997-01-25)
+| ArrangeBy (#4)
+
+%2 =
+| Get materialize.public.orders (u11)
+| ArrangeBy (#0)
+
+%3 =
+| Get %0 (l0)
+| Project (#0)
+
+%4 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%5 =
+| Union %3 %4
+
+%6 = Let l1 =
+| Join %1 %2 %5 (= #4 #10) (= #8 #12)
+| | implementation = Differential %5 %2.(#0) %1.(#4)
+| | demand = (#8, #11)
+| Filter !(isnull(datetots(#11))), (1997-08-25 00:00:00 = datetots(#11)), (#8 <= 195), (#8 >= 38)
+| Reduce group=()
+| | agg min(#8)
+
+%7 =
+| Get %6 (l1)
+| Negate
+| Project ()
+
+%8 =
+| Constant ()
+
+%9 =
+| Union %7 %8
+| Map null
+
+%10 =
+| Union %6 %9
+
+EOF
+
+query T multiline
+EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col24845
+  FROM lineitem JOIN orders ON ( l_commitDATE = o_orderdate )
+  JOIN customer ON ( o_custkey = c_custkey )
+  WHERE l_extendedprice = o_totalprice
+  AND c_custkey = 134
+  AND l_extendedprice = MOD (o_totalprice , 5 ) ;
+----
+%0 =
+| Get materialize.public.lineitem (u15)
+| Filter (#4 = (#4 % 500dec))
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.orders (u11)
+| Filter (#1 = 134), (#2 = (#2 % 500dec))
+| ArrangeBy (#2, #3)
+
+%2 =
+| Get materialize.public.customer (u7)
+| Filter !(isnull(#0)), (#0 = 134)
+
+%3 =
+| Join %0 %1 %2 (= #4 #10) (= #6 #11)
+| | implementation = Differential %2 %0.() %1.(#2, #3)
+| | demand = (#0, #1)
+| Project (#1, #0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT *
+  FROM lineitem JOIN orders ON ( l_extendedprice = o_totalprice )
+  JOIN customer ON ( o_custkey = c_custkey )
+  WHERE o_custkey = 229
+  AND l_receiptDATE = o_orderdate + INTERVAL ' 6 DAYS '
+  AND l_shipDATE = o_orderdate;
+----
+%0 =
+| Get materialize.public.lineitem (u15)
+| Filter !(isnull(datetots(#7))), (datetots(#7) = (#5 + 6 days))
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.orders (u11)
+| Filter (#1 = 229)
+| ArrangeBy (#2, #3)
+
+%2 =
+| Get materialize.public.customer (u7)
+| Filter !(isnull(#0)), (#0 = 229)
+
+%3 =
+| Join %0 %1 %2 (= #4 #10) (= #5 #11)
+| | implementation = Differential %2 %0.() %1.(#2, #3)
+| | demand = (#0..#9, #12..#14)
+| Project (#0..#9, #4, #5, #12..#14)
+
+EOF
+
+#
+# Randomized queries against the "simple" schema
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2
+WHERE a2.f1 + a1.f2 = (SELECT 1)
+AND a2.f1 IS NULL;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter isnull(#0)
+
+%2 =
+| Join %0 %1 (= 1 (#2 + #1))
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
