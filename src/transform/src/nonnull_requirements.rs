@@ -195,24 +195,55 @@ impl NonNullRequirements {
                 expected_group_size: _,
             } => {
                 let mut new_columns = HashSet::new();
-                // Null rows cannot be discarded if there is any Count aggregation.
-                // In theory, we could discard the null rows from the non-preserving
-                // side of an outer join if there is a non-null requirement on any
-                // non-count aggregation on a column from the non-preserving side
-                // and neither a count(*) nor a count on any column from the
-                // presrerving side. However, there isn't enough information to do
-                // that reasoning here.
-                let null_rows_required = aggregates
-                    .iter()
-                    .any(|e| e.func == expr::AggregateFunc::Count);
-                for column in columns {
-                    if column < group_key.len() {
-                        group_key[column].non_null_requirements(&mut new_columns);
-                    } else if !null_rows_required {
-                        let agg_pos = column - group_key.len();
-                        aggregates[agg_pos]
-                            .expr
-                            .non_null_requirements(&mut new_columns);
+                for column in columns.iter().filter(|c| **c < group_key.len()) {
+                    group_key[*column].non_null_requirements(&mut new_columns);
+                }
+
+                if columns.iter().any(|c| *c >= group_key.len()) {
+                    // We can convert a non-null requirement on an aggregate function into
+                    // a non-null requirement on its parameter only if we are sure that
+                    // won't affect the result of any other aggregation.
+                    // If there is non-null requirement on MAX(c1), for example, it is
+                    // implied that MIN(c1) won't be null either, so we can safely require
+                    // c1 to be non-null as long as there isn't any other aggregation
+                    // depending on any other column or a COUNT(*).
+                    // Note: all columns from the non-preserving side of an outer join could
+                    // be treated as a single column for this analysis, but we don't have
+                    // that information here.
+                    let new_nonnull_columns_per_aggregate = aggregates
+                        .iter()
+                        .map(|aggr| {
+                            let mut aggr_nonnull_columns = HashSet::new();
+                            aggr.non_null_requirements(&mut aggr_nonnull_columns);
+                            aggr_nonnull_columns
+                        })
+                        .collect::<Vec<_>>();
+                    let all_aggregated_nonnull_columns = new_nonnull_columns_per_aggregate
+                        .iter()
+                        .fold(None, |acc: Option<HashSet<usize>>, columns| {
+                            if let Some(previous) = acc {
+                                Some(previous.intersection(&columns).cloned().collect())
+                            } else {
+                                Some(columns.clone())
+                            }
+                        })
+                        .unwrap();
+                    if columns
+                        .iter()
+                        .filter_map(|c| {
+                            if *c >= group_key.len() {
+                                Some(*c - group_key.len())
+                            } else {
+                                None
+                            }
+                        })
+                        .all(|aggr_pos| {
+                            new_nonnull_columns_per_aggregate[aggr_pos]
+                                .iter()
+                                .all(|col| all_aggregated_nonnull_columns.contains(col))
+                        })
+                    {
+                        new_columns.extend(all_aggregated_nonnull_columns);
                     }
                 }
                 self.action(input, new_columns, gets);
