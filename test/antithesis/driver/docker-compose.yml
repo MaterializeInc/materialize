@@ -24,6 +24,8 @@ services:
     networks:
       antithesis-net:
         ipv4_address: 10.0.0.12
+    environment:
+      MZ_LOG: debug,librdkafka=debug
     command:
       --data-directory=/share/mzdata
       --workers 1
@@ -61,16 +63,7 @@ services:
         wait-for-it --timeout=120 cp-combined:9092 &&
         wait-for-it --timeout=120 cp-combined:8081 &&
         wait-for-it --timeout=120 materialized:6875 &&
-        while testdrive
-        --kafka-addr=cp-combined:9092
-        --schema-registry-url=http://cp-combined:8081
-        --materialized-url=postgres://materialize@materialized:6875
-        --validate-catalog=/share/mzdata/catalog
-        --default-timeout 60
-        --shuffle-tests
-        --seed ${ANTITHESIS_RANDOM_SEED:-1}
-        !(*s3|kinesis*).td ;
-        do :; done ; exit 1
+        while true ; do sleep 1 ; done ; exit 1
       - bash
     environment:
       TMPDIR: /share/tmp
