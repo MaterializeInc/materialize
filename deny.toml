@@ -43,9 +43,6 @@ skip = [
     { name = "semver-parser", version = "0.7.0"},
     { name = "rustc_version", version = "0.3.0"},
 
-    # Waiting on parse_duration.
-    { name = "num-bigint", version = "0.2.6" },
-
     # Waiting on https://github.com/hyperium/headers/pull/83.
     { name = "time", version = "0.1.44" },
 ]
