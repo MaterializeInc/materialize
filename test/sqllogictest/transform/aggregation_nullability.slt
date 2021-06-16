@@ -230,15 +230,44 @@ EXPLAIN select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
 
-%2 =
+%2 = Let l0 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
 | | demand = (#0, #1)
+
+%3 =
+| Get materialize.public.t1 (u1)
+
+%4 =
+| Get %2 (l0)
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%5 =
+| Join %3 %4 (= #0 #2)
+| | implementation = Differential %3 %4.(#0)
+| | demand = (#0, #1)
+| Negate
+| Project (#0, #1)
+
+%6 =
+| Get materialize.public.t1 (u1)
+
+%7 =
+| Union %5 %6
+| Map null, null
+
+%8 =
+| Get %2 (l0)
+| Project (#0, #1, #0, #3)
+
+%9 =
+| Union %7 %8
 | Reduce group=(#0)
-| | agg count(#0)
-| | agg sum(#0)
-| | agg max(#0)
-| | agg min(#0)
+| | agg count(#2)
+| | agg sum(#2)
+| | agg max(#2)
+| | agg min(#2)
 | | agg count(#1)
 | | agg sum(#1)
 | | agg min(#1)
@@ -269,6 +298,153 @@ EXPLAIN select t1.f1, sum(t1.f2) from t1 group by t1.f1 having sum(t1.f2) is not
 
 EOF
 
+# check that a filter on a non-count aggregation doesn't change the COUNT value
+statement ok
+drop table t1
+
+statement ok
+drop table t2
+
+statement ok
+create table t1(f1 integer, f2 integer)
+
+statement ok
+create table t2(f1 integer, f2 integer)
+
+statement ok
+insert into t1 values (1, 0), (1, 1), (1, 1)
+
+statement ok
+insert into t2 values (0, 2)
+
+query III
+select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
+----
+1  3  2
+
+query III
+select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+----
+1  3  2
+
+query T multiline
+explain select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| Filter !(isnull(#1))
+| ArrangeBy (#1)
+
+%1 =
+| Get materialize.public.t2 (u7)
+| Filter !(isnull(#0))
+
+%2 = Let l0 =
+| Join %0 %1 (= #1 #2)
+| | implementation = Differential %1 %0.(#1)
+| | demand = (#0, #1, #3)
+
+%3 =
+| Get materialize.public.t1 (u5)
+
+%4 =
+| Get %2 (l0)
+| Distinct group=(#1)
+| ArrangeBy (#0)
+
+%5 =
+| Join %3 %4 (= #1 #2)
+| | implementation = Differential %3 %4.(#0)
+| | demand = (#0, #1)
+| Negate
+| Project (#0, #1)
+
+%6 =
+| Get materialize.public.t1 (u5)
+
+%7 =
+| Union %5 %6
+| Map null, null
+
+%8 =
+| Union %7 %2
+| Reduce group=(#0)
+| | agg count(#1)
+| | agg max(#3)
+
+EOF
+
+query T multiline
+explain select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| Filter !(isnull(#1))
+| ArrangeBy (#1)
+
+%1 =
+| Get materialize.public.t2 (u7)
+| Filter !(isnull(#0))
+
+%2 = Let l0 =
+| Join %0 %1 (= #1 #2)
+| | implementation = Differential %1 %0.(#1)
+| | demand = (#0, #1, #3)
+
+%3 =
+| Get materialize.public.t1 (u5)
+
+%4 =
+| Get %2 (l0)
+| Distinct group=(#1)
+| ArrangeBy (#0)
+
+%5 =
+| Join %3 %4 (= #1 #2)
+| | implementation = Differential %3 %4.(#0)
+| | demand = (#0, #1)
+| Negate
+| Project (#0, #1)
+
+%6 =
+| Get materialize.public.t1 (u5)
+
+%7 =
+| Union %5 %6
+| Map null, null
+
+%8 =
+| Union %7 %2
+| Reduce group=(#0)
+| | agg count(#1)
+| | agg max(#3)
+| Filter (#2 > 0)
+
+EOF
+
+# if the count is removed, the outer join can be safely converted into an inner join
+query T multiline
+explain select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| Filter !(isnull(#1))
+| ArrangeBy (#1)
+
+%1 =
+| Get materialize.public.t2 (u7)
+| Filter !(isnull(#0))
+
+%2 =
+| Join %0 %1 (= #1 #2)
+| | implementation = Differential %1 %0.(#1)
+| | demand = (#0, #3)
+| Reduce group=(#0)
+| | agg max(#3)
+| Filter (#1 > 0)
+
+EOF
+
 # regression test for #7047
 statement ok
 drop table t1
@@ -283,13 +459,13 @@ query T multiline
 EXPLAIN SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 %0 =
-| Get materialize.public.t1 (u5)
+| Get materialize.public.t1 (u9)
 | Reduce group=()
 | | agg count(null)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.t1 (u5)
+| Get materialize.public.t1 (u9)
 | Filter !(isnull(i32toi64(#0)))
 
 %2 =
@@ -305,3 +481,106 @@ query III
 SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 123  0  0
+
+# non-null requeriment on a non-count aggregation coming from a join predicate
+statement ok
+drop table t1
+
+statement ok
+drop table t2
+
+statement ok
+create table t1(f1 integer, f2 integer not null)
+
+statement ok
+insert into t1 values (null, 0)
+
+statement ok
+create table t2(f1 integer, f2 integer)
+
+statement ok
+insert into t2 values (null, 0)
+
+
+statement ok
+create table t3(f1 integer, f2 integer)
+
+statement ok
+insert into t3 values (null, 0), (null, 0), (1, 1), (6, 6)
+
+query I
+SELECT derived.agg1 FROM t1
+JOIN (
+    SELECT COUNT(*) AS agg1 , MAX(t2.f2) AS agg2
+    FROM t2
+    RIGHT JOIN t3 ON t3.f2 = 6
+) AS derived ON TRUE
+WHERE t1.f2 = derived.agg2;
+----
+4
+
+# the count aggregation prevents the outer-to-inner join conversion
+query T multiline
+EXPLAIN SELECT derived.agg1 FROM t1
+JOIN (
+    SELECT COUNT(*) AS agg1 , MAX(t2.f2) AS agg2
+    FROM t2
+    RIGHT JOIN t3 ON t3.f2 = 6
+) AS derived ON TRUE
+WHERE t1.f2 = derived.agg2;
+----
+%0 =
+| Get materialize.public.t2 (u13)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t3 (u15)
+| Filter (#1 = 6)
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#1, #2)
+
+%3 =
+| Get materialize.public.t1 (u11)
+
+%4 =
+| Get %2 (l0)
+| Distinct group=(#2)
+| Negate
+| Map 6
+
+%5 =
+| Get materialize.public.t3 (u15)
+| Distinct group=(#0, #1)
+
+%6 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t3 (u15)
+| ArrangeBy (#0, #1)
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %6 %7.(#0, #1)
+| | demand = ()
+| Map null, null
+| Project (#4, #5, #0, #1)
+
+%9 =
+| Union %2 %8
+| Reduce group=()
+| | agg count(true)
+| | agg max(#1)
+| Filter !(isnull(#1))
+| ArrangeBy (#1)
+
+%10 =
+| Join %3 %9 (= #1 #3)
+| | implementation = Differential %3 %9.(#1)
+| | demand = (#2)
+| Project (#2)
+
+EOF

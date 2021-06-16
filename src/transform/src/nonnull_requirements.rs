@@ -195,22 +195,24 @@ impl NonNullRequirements {
                 expected_group_size: _,
             } => {
                 let mut new_columns = HashSet::new();
+                // Null rows cannot be discarded if there is any Count aggregation.
+                // In theory, we could discard the null rows from the non-preserving
+                // side of an outer join if there is a non-null requirement on any
+                // non-count aggregation on a column from the non-preserving side
+                // and neither a count(*) nor a count on any column from the
+                // presrerving side. However, there isn't enough information to do
+                // that reasoning here.
+                let null_rows_required = aggregates
+                    .iter()
+                    .any(|e| e.func == expr::AggregateFunc::Count);
                 for column in columns {
-                    // No obvious requirements on aggregate columns.
-                    // A "non-empty" requirement, I guess?
                     if column < group_key.len() {
                         group_key[column].non_null_requirements(&mut new_columns);
-                    } else {
+                    } else if !null_rows_required {
                         let agg_pos = column - group_key.len();
-                        match aggregates[agg_pos].func {
-                            // Count is non-null even for all null inputs
-                            expr::AggregateFunc::Count => {}
-                            _ => {
-                                aggregates[agg_pos]
-                                    .expr
-                                    .non_null_requirements(&mut new_columns);
-                            }
-                        }
+                        aggregates[agg_pos]
+                            .expr
+                            .non_null_requirements(&mut new_columns);
                     }
                 }
                 self.action(input, new_columns, gets);
