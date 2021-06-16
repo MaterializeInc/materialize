@@ -93,12 +93,11 @@ pub enum SequencedCommand {
         /// The identifier of the peek request to cancel.
         conn_id: u32,
     },
-    /// Insert `updates` into the local input named `id`.
+    /// Insert `updates` into local inputs.
     Insert {
         /// Identifier of the local input.
-        id: GlobalId,
-        /// A list of updates to be introduced to the input.
-        updates: Vec<Update>,
+        /// Lists of updates to be introduced to the specified inputs.
+        updates: HashMap<GlobalId, Vec<Update>>,
     },
     /// Enable compaction in views.
     ///
@@ -776,16 +775,18 @@ where
                 }
             }
 
-            SequencedCommand::Insert { id, updates } => {
+            SequencedCommand::Insert { updates } => {
                 if self.timely_worker.index() == 0 {
-                    let input = match self.render_state.local_inputs.get_mut(&id) {
-                        Some(input) => input,
-                        None => panic!("local input {} missing for insert", id),
-                    };
-                    let mut session = input.handle.session(input.capability.clone());
-                    for update in updates {
-                        assert!(update.timestamp >= *input.capability.time());
-                        session.give((update.row, update.timestamp, update.diff));
+                    for (id, updates) in updates {
+                        let input = match self.render_state.local_inputs.get_mut(&id) {
+                            Some(input) => input,
+                            None => panic!("local input {} missing for insert", id),
+                        };
+                        let mut session = input.handle.session(input.capability.clone());
+                        for update in updates {
+                            assert!(update.timestamp >= *input.capability.time());
+                            session.give((update.row, update.timestamp, update.diff));
+                        }
                     }
                 }
             }

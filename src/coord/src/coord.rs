@@ -51,7 +51,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
-use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
@@ -409,9 +408,10 @@ impl Coordinator {
                                             // before being fully reloaded.
                                             let updates = std::mem::replace(&mut updates, vec![]);
                                             if !updates.is_empty() {
+                                                let mut updates_map = HashMap::new();
+                                                updates_map.insert(entry.id(), updates);
                                                 self.broadcast(SequencedCommand::Insert {
-                                                    id: entry.id(),
-                                                    updates,
+                                                    updates: updates_map,
                                                 });
                                                 self.broadcast(
                                                     SequencedCommand::AdvanceAllLocalInputs {
@@ -2159,6 +2159,7 @@ impl Coordinator {
         // `update_upper`.
 
         if let EndTransactionAction::Commit = action {
+            let mut updates_map = HashMap::new();
             match txn {
                 TransactionStatus::Default | TransactionStatus::Failed => {}
                 TransactionStatus::Started(ops)
@@ -2187,13 +2188,17 @@ impl Coordinator {
                                 if let Some(tables) = &mut self.persisted_tables {
                                     tables.write(id, &updates);
                                 }
-                                self.broadcast(SequencedCommand::Insert { id, updates });
+
+                                updates_map.insert(id, updates);
                             }
                         }
                         _ => {}
                     }
                 }
             }
+            self.broadcast(SequencedCommand::Insert {
+                updates: updates_map,
+            });
         }
 
         Ok(ExecuteResponse::TransactionExited {
@@ -2987,23 +2992,20 @@ impl Coordinator {
     async fn send_builtin_table_updates_at_offset(
         &mut self,
         timestamp_offset: u64,
-        mut updates: Vec<BuiltinTableUpdate>,
+        updates: Vec<BuiltinTableUpdate>,
     ) {
         let timestamp = self.get_write_ts() + timestamp_offset;
-        updates.sort_by_key(|u| u.id);
-        for (id, updates) in &updates.into_iter().group_by(|u| u.id) {
-            self.broadcast(SequencedCommand::Insert {
-                id,
-                updates: updates
-                    .into_iter()
-                    .map(|u| Update {
-                        row: u.row,
-                        diff: u.diff,
-                        timestamp,
-                    })
-                    .collect(),
+        let mut updates_map: HashMap<GlobalId, Vec<Update>> = HashMap::new();
+        for update in updates {
+            updates_map.entry(update.id).or_default().push(Update {
+                row: update.row,
+                diff: update.diff,
+                timestamp,
             })
         }
+        self.broadcast(SequencedCommand::Insert {
+            updates: updates_map,
+        })
     }
 
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
