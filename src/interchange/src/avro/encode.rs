@@ -295,9 +295,46 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
-                ScalarType::Array(_t) => unimplemented!("array types"),
-                ScalarType::List { .. } => unimplemented!("list types"),
-                ScalarType::Map { .. } => unimplemented!("map types"),
+                ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
+                    let list = match typ.scalar_type {
+                        ScalarType::Array(_) => datum.unwrap_array().elements(),
+                        ScalarType::List { .. } => datum.unwrap_list(),
+                        _ => unreachable!(),
+                    };
+
+                    let values = list
+                        .into_iter()
+                        .map(|datum| {
+                            let datum = TypedDatum::new(
+                                datum,
+                                ColumnType {
+                                    nullable: true,
+                                    scalar_type: (**element_type).clone(),
+                                },
+                            );
+                            datum.avro()
+                        })
+                        .collect();
+                    Value::Array(values)
+                }
+                ScalarType::Map { value_type, .. } => {
+                    let map = datum.unwrap_map();
+                    let elements = map
+                        .into_iter()
+                        .map(|(key, datum)| {
+                            let datum = TypedDatum::new(
+                                datum,
+                                ColumnType {
+                                    nullable: true,
+                                    scalar_type: (**value_type).clone(),
+                                },
+                            );
+                            let value = datum.avro();
+                            (key.to_string(), value)
+                        })
+                        .collect();
+                    Value::Map(elements)
+                }
                 ScalarType::Record { fields, .. } => {
                     let list = datum.unwrap_list();
                     let fields = fields
@@ -367,6 +404,109 @@ pub fn encode_debezium_transaction_unchecked(
     buf
 }
 
+fn build_row_schema_field<F: FnMut() -> String>(
+    namer: &mut F,
+    names_seen: &mut HashSet<String>,
+    typ: &ColumnType,
+) -> serde_json::value::Value {
+    let mut field_type = match &typ.scalar_type {
+        ScalarType::Bool => json!("boolean"),
+        ScalarType::Int32 | ScalarType::Oid => json!("int"),
+        ScalarType::Int64 => json!("long"),
+        ScalarType::Float32 => json!("float"),
+        ScalarType::Float64 => json!("double"),
+        ScalarType::Decimal(p, s) => json!({
+            "type": "bytes",
+            "logicalType": "decimal",
+            "precision": p,
+            "scale": s,
+        }),
+        ScalarType::Date => json!({
+            "type": "int",
+            "logicalType": "date",
+        }),
+        ScalarType::Time => json!({
+            "type": "long",
+            "logicalType": "time-micros",
+        }),
+        ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+            "type": "long",
+            "logicalType": "timestamp-micros"
+        }),
+        ScalarType::Interval => json!({
+            "type": "fixed",
+            "size": 12,
+            "logicalType": "duration"
+        }),
+        ScalarType::Bytes => json!("bytes"),
+        ScalarType::String => json!("string"),
+        ScalarType::Jsonb => json!({
+            "type": "string",
+            "connect.name": "io.debezium.data.Json",
+        }),
+        ScalarType::Uuid => json!({
+            "type": "string",
+            "logicalType": "uuid",
+        }),
+        ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
+            let inner = build_row_schema_field(
+                namer,
+                names_seen,
+                &ColumnType {
+                    nullable: true,
+                    scalar_type: (**element_type).clone(),
+                },
+            );
+            json!({
+                "type": "array",
+                "items": inner
+            })
+        }
+        ScalarType::Map { value_type, .. } => {
+            let inner = build_row_schema_field(
+                namer,
+                names_seen,
+                &ColumnType {
+                    nullable: true,
+                    scalar_type: (**value_type).clone(),
+                },
+            );
+            json!({
+                "type": "map",
+                "values": inner
+            })
+        }
+        ScalarType::Record {
+            fields,
+            custom_name,
+            ..
+        } => {
+            let (name, name_seen) = match custom_name {
+                Some(name) => (name.clone(), !names_seen.insert(name.clone())),
+                None => (namer(), false),
+            };
+            if name_seen {
+                json!(name)
+            } else {
+                let fields = fields.to_vec();
+                let json_fields = build_row_schema_fields(&fields, names_seen, namer);
+                json!({
+                    "type": "record",
+                    "name": name,
+                    "fields": json_fields
+                })
+            }
+        }
+        ScalarType::APD { .. } => {
+            unreachable!("TBD: how to determine the scale of these values")
+        }
+    };
+    if typ.nullable {
+        field_type = json!(["null", field_type]);
+    }
+    field_type
+}
+
 pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
     columns: &[(ColumnName, ColumnType)],
     names_seen: &mut HashSet<String>,
@@ -374,76 +514,7 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
 ) -> Vec<serde_json::value::Value> {
     let mut fields = Vec::new();
     for (name, typ) in columns.iter() {
-        let mut field_type = match &typ.scalar_type {
-            ScalarType::Bool => json!("boolean"),
-            ScalarType::Int32 | ScalarType::Oid => json!("int"),
-            ScalarType::Int64 => json!("long"),
-            ScalarType::Float32 => json!("float"),
-            ScalarType::Float64 => json!("double"),
-            ScalarType::Decimal(p, s) => json!({
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": p,
-                "scale": s,
-            }),
-            ScalarType::Date => json!({
-                "type": "int",
-                "logicalType": "date",
-            }),
-            ScalarType::Time => json!({
-                "type": "long",
-                "logicalType": "time-micros",
-            }),
-            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
-                "type": "long",
-                "logicalType": "timestamp-micros"
-            }),
-            ScalarType::Interval => json!({
-                "type": "fixed",
-                "size": 12,
-                "logicalType": "duration"
-            }),
-            ScalarType::Bytes => json!("bytes"),
-            ScalarType::String => json!("string"),
-            ScalarType::Jsonb => json!({
-                "type": "string",
-                "connect.name": "io.debezium.data.Json",
-            }),
-            ScalarType::Uuid => json!({
-                "type": "string",
-                "logicalType": "uuid",
-            }),
-            ScalarType::Array(_t) => unimplemented!("array types"),
-            ScalarType::List { .. } => unimplemented!("list types"),
-            ScalarType::Map { .. } => unimplemented!("map types"),
-            ScalarType::Record {
-                fields,
-                custom_name,
-                ..
-            } => {
-                let (name, name_seen) = match custom_name {
-                    Some(name) => (name.clone(), !names_seen.insert(name.clone())),
-                    None => (namer(), false),
-                };
-                if name_seen {
-                    json!(name)
-                } else {
-                    let fields = fields.to_vec();
-                    let json_fields = build_row_schema_fields(&fields, names_seen, namer);
-                    json!({
-                        "type": "record",
-                        "name": name,
-                        "fields": json_fields
-                    })
-                }
-            }
-            ScalarType::APD { .. } => {
-                unreachable!("TBD: how to determine the scale of these values")
-            }
-        };
-        if typ.nullable {
-            field_type = json!(["null", field_type]);
-        }
+        let field_type = build_row_schema_field(namer, names_seen, typ);
         fields.push(json!({
             "name": name,
             "type": field_type,
