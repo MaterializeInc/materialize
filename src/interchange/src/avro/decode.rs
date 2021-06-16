@@ -15,9 +15,12 @@ use std::fmt;
 use std::io::Read;
 use std::rc::Rc;
 
-use ordered_float::OrderedFloat;
-use uuid::Uuid;
 use dec::OrderedDecimal;
+use ordered_float::OrderedFloat;
+use repr::adt::apd::cx_datum;
+use repr::adt::apd::APD_AGG_WIDTH;
+use repr::adt::apd::APD_DATUM_WIDTH;
+use uuid::Uuid;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::{
@@ -25,9 +28,9 @@ use mz_avro::{
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
+use repr::adt::apd::{self, Apd, ApdAgg, ApdTwosComp};
 use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
-use repr::adt::apd;
 use repr::{Datum, Row};
 
 use super::envelope_debezium::DebeziumSourceCoordinates;
@@ -487,12 +490,23 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
                 &self.buf
             }
         };
-        let mut n = apd::twos_complement_be_to_apd(buf).map_err(|e| DecodeError::Custom(e.to_string()))?;
-        n.set_exponent(-i32::try_from(scale).unwrap());
 
-        if apd::get_precision(&n) > apd::APD_DATUM_MAX_PRECISION as u32 {
+        let mut n =
+            apd::twos_complement_be_to_apd(buf).map_err(|e| DecodeError::Custom(e.to_string()))?;
+
+        n.set_exponent(match i32::try_from(scale) {
+            Ok(v) => -v,
+            Err(_) => {
+                return Err(AvroError::Decode(DecodeError::Custom(format!(
+                    "Error decoding apd: scale must fit within i32, but got scale {}",
+                    scale,
+                ))))
+            }
+        });
+
+        if n.is_special() || apd::get_precision(&n) > apd::APD_DATUM_MAX_PRECISION as u32 {
             return Err(AvroError::Decode(DecodeError::Custom(format!(
-                "Error encoding apd: exceeds maximum precision {}",
+                "Error decoding apd: exceeds maximum precision {}",
                 apd::APD_DATUM_MAX_PRECISION
             ))));
         }
