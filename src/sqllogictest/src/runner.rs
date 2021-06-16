@@ -516,7 +516,6 @@ impl Runner {
             logging: None,
             timestamp_frequency: Duration::from_secs(1),
             cache: None,
-            persistence: None,
             logical_compaction_window: None,
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),

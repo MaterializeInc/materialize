@@ -562,7 +562,6 @@ dependencies = [
  "serde_json",
  "sql",
  "sql-parser",
- "storage",
  "symbiosis",
  "tempfile",
  "timely",
@@ -4393,23 +4392,6 @@ name = "stdweb-internal-runtime"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "213701ba3370744dcd1a12960caa4843b3d68b4d1c0a5d575e0d65b2ee9d16c0"
-
-[[package]]
-name = "storage"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "byteorder",
- "crossbeam-channel",
- "dataflow-types",
- "expr",
- "lazy_static",
- "log",
- "regex",
- "repr",
- "timely",
- "tokio",
-]
 
 [[package]]
 name = "stringprep"
