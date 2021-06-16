@@ -663,7 +663,7 @@ SELECT '1'::interval::interval;
 query error CAST does not support casting from jsonb to interval
 SELECT '{}'::jsonb::interval
 
-query error invalid input syntax for type interval: invalid DateTimeField: DOG: "dog"
+query error invalid input syntax for type interval: unknown units dog: "dog"
 SELECT 'dog'::text::interval
 
 query T
@@ -817,7 +817,7 @@ SELECT '1'::interval::time;
 query error CAST does not support casting from jsonb to time
 SELECT '{}'::jsonb::time
 
-query error invalid input syntax for type time: invalid DateTimeField: DOG: "dog"
+query error invalid input syntax for type time: unknown units dog: "dog"
 SELECT 'dog'::text::time
 
 query T

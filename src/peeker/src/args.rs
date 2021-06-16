@@ -48,7 +48,7 @@ pub struct Args {
     #[structopt(long)]
     pub only_initialize: bool,
     /// How long to spend trying to initialize.
-    #[structopt(long, parse(try_from_str = parse_duration::parse), default_value = "60s")]
+    #[structopt(long, parse(try_from_str = repr::util::parse_duration), default_value = "60s")]
     pub init_timeout: Duration,
     /// Print the names of the available queries in the config file.
     #[structopt(long)]

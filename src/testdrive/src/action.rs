@@ -458,7 +458,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         if duration.to_lowercase() == "default" {
                             context.timeout = state.default_timeout;
                         } else {
-                            context.timeout = parse_duration::parse(&duration)
+                            context.timeout = repr::util::parse_duration(&duration)
                                 .map_err(|e| wrap_err(e.to_string()))?;
                         }
                         continue;

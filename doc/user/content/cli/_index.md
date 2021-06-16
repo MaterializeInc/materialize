@@ -115,9 +115,10 @@ which Materialize is required to maintain full historical detail in its
 lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
 
-The value of the option is a duration string like `10ms` (10 milliseconds) or
-`1min 30s` (1 minute, 30 seconds).  The special value `off` disables logical
-compaction and corresponds to an unboundedly large duration.
+The value of the option is any valid SQL [interval](/sql/types/interval)
+string, like `10ms` (10 milliseconds) or `1min 30s` (1 minute, 30
+seconds). The special value `off` disables logical compaction and
+corresponds to an unboundedly large duration.
 
 The logical compaction window ends at the current time and extends backwards in
 time for the configured duration. The default window is 1 millisecond.
@@ -338,7 +339,6 @@ the underlying Timely and Differential Dataflow engines work. Typically you
 should only set these parameters in consultation with Materialize engineers.
 
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
-[parse-duration-syntax]: https://docs.rs/parse_duration/2.1.0/parse_duration/#syntax
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
 [cache]: /ops/deployment/#source-caching

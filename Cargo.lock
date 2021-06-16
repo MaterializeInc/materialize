@@ -262,7 +262,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc403c26e6b03005522e6e8053384c4e881dfe5b2bf041c0c2c49be33d64a539"
 dependencies = [
- "num-bigint 0.3.2",
+ "num-bigint",
  "num-integer",
  "num-traits",
  "serde",
@@ -282,12 +282,12 @@ dependencies = [
  "hex",
  "log",
  "ore",
- "parse_duration",
  "postgres-types",
  "protobuf",
  "protoc",
  "rand 0.8.3",
  "rand_distr",
+ "repr",
  "structopt",
  "test-util",
  "tokio",
@@ -2173,7 +2173,6 @@ dependencies = [
  "openssl-sys",
  "ore",
  "os_info",
- "parse_duration",
  "pgrepr",
  "pgtest",
  "pgwire",
@@ -2223,8 +2222,8 @@ dependencies = [
  "mz-avro",
  "ordered-float",
  "ore",
- "parse_duration",
  "rdkafka",
+ "repr",
  "reqwest",
  "serde_json",
  "structopt",
@@ -2370,7 +2369,7 @@ dependencies = [
  "flate2",
  "lazy_static",
  "lexical",
- "num-bigint 0.3.2",
+ "num-bigint",
  "num-traits",
  "rand 0.8.3",
  "regex",
@@ -2477,31 +2476,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf4825417e1e1406b3782a8ce92f4d53f26ec055e3622e1881ca8e9f5f9e08db"
-dependencies = [
- "num-bigint 0.2.6",
- "num-complex",
- "num-integer",
- "num-iter",
- "num-rational",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "090c7f9998ee0ff65aa5b723e4009f7b217707f1fb5ea551329cc4d6231fb304"
-dependencies = [
- "autocfg",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
 name = "num-bigint"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2513,45 +2487,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-complex"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b19411a9719e753aff12e5187b74d60d3dc449ec3f4dc21e3989c3f554bc95"
-dependencies = [
- "autocfg",
- "num-traits",
-]
-
-[[package]]
 name = "num-integer"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2cc698a63b549a70bc047073d2949cce27cd1c7b0a4a862d08a8031bc2801db"
 dependencies = [
  "autocfg",
- "num-traits",
-]
-
-[[package]]
-name = "num-iter"
-version = "0.1.40"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfb0800a0291891dd9f4fe7bd9c19384f98f7fbe0cd0f39a2c6b88b9868bbc00"
-dependencies = [
- "autocfg",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-rational"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da4dc79f9e6c81bef96148c8f6b8e72ad4541caa4a24373e900a36da07de03a3"
-dependencies = [
- "autocfg",
- "num-bigint 0.2.6",
- "num-integer",
  "num-traits",
 ]
 
@@ -2762,17 +2703,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parse_duration"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7037e5e93e0172a5a96874380bf73bc6ecef022e26fa25f2be26864d6b3ba95d"
-dependencies = [
- "lazy_static",
- "num",
- "regex",
-]
-
-[[package]]
 name = "paste"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2808,10 +2738,10 @@ dependencies = [
  "log",
  "mz-process-collector",
  "ore",
- "parse_duration",
  "postgres",
  "prometheus",
  "regex",
+ "repr",
  "serde",
  "structopt",
  "tokio",
@@ -4243,7 +4173,6 @@ dependencies = [
  "log",
  "mz-avro",
  "ore",
- "parse_duration",
  "pgrepr",
  "postgres-protocol",
  "postgres-types",
@@ -4630,12 +4559,12 @@ dependencies = [
  "log",
  "mz-process-collector",
  "ore",
- "parse_duration",
  "pgrepr",
  "postgres",
  "postgres-types",
  "prometheus",
  "regex",
+ "repr",
  "serde",
  "structopt",
  "tokio",
@@ -4682,7 +4611,6 @@ dependencies = [
  "md-5",
  "mz-avro",
  "ore",
- "parse_duration",
  "pgrepr",
  "postgres_array",
  "predicates",

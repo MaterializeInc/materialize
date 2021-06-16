@@ -39,7 +39,7 @@ struct Args {
     )]
     topic_name: Option<String>,
     /// Wait time before checking logs for updates.
-    #[structopt(long, default_value = "250ms", parse(try_from_str = parse_duration::parse), value_name = "DURATION")]
+    #[structopt(long, default_value = "250ms", parse(try_from_str = repr::util::parse_duration), value_name = "DURATION")]
     heartbeat: Duration,
     /// Number of partitions to write to.
     #[structopt(short = "p", long, default_value = "1", value_name = "N")]
@@ -166,7 +166,7 @@ async fn run_stream() -> Result<(), anyhow::Error> {
             } else {
                 record[5].to_string()
             };
-            let heartbeat = parse_duration::parse(&heartbeat)?;
+            let heartbeat = repr::util::parse_duration(&heartbeat)?;
             if min_heartbeat > heartbeat
                 || (min_heartbeat.as_secs() == 0 && min_heartbeat.subsec_nanos() == 0)
             {

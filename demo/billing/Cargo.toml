@@ -16,11 +16,11 @@ futures-channel = "0.3.15"
 hex = "0.4.3"
 log = "0.4.13"
 ore = { path = "../../src/ore" }
-parse_duration = "2.1.1"
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 protobuf = "2.23.0"
 rand = "0.8.3"
 rand_distr = "0.4.0"
+repr = { path = "../../src/repr" }
 structopt = "0.3.21"
 test-util = { path = "../../test/test-util" }
 tokio = "1.6.1"
