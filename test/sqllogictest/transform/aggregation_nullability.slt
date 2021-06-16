@@ -268,3 +268,40 @@ EXPLAIN select t1.f1, sum(t1.f2) from t1 group by t1.f1 having sum(t1.f2) is not
 | Filter !(isnull(#1))
 
 EOF
+
+# regression test for #7047
+statement ok
+drop table t1
+
+statement ok
+create table t1(f1 integer)
+
+statement ok
+insert into t1 values (0), (1)
+
+query T multiline
+EXPLAIN SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| Reduce group=()
+| | agg count(null)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t1 (u5)
+| Filter !(isnull(i32toi64(#0)))
+
+%2 =
+| Join %0 %1 (= #0 i32toi64(#1))
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0, #1)
+| Map 123
+| Project (#2, #0, #1)
+
+EOF
+
+query III
+SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
+----
+123  0  0
