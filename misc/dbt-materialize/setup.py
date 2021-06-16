@@ -26,7 +26,7 @@ package_name = "dbt-materialize"
 # This adapter's version, and its required dbt-postgres version, tracks the
 # target dbt version.
 target_package_version = "0.18.1"
-package_version_suffix = ".post2"
+package_version_suffix = ".post3"
 package_version = "{}{}".format(target_package_version, package_version_suffix)
 description = """The Materialize adapter plugin for dbt (data build tool)"""
 

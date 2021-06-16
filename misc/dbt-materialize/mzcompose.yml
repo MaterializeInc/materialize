@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-x-port-mappings:
-  - &materialized ${MZ_PORT:-6875:6875}
-
 version: '3.7'
 services:
   materialized:
@@ -18,19 +15,46 @@ services:
     environment:
       - MZ_DEV=1
     ports:
-      - *materialized
+      - 6875
+  tls-materialized:
+    mzbuild: materialized
+    command:
+      - --disable-telemetry
+      - --tls-mode=verify-ca
+      - --tls-cert=/share/secrets/materialized.crt
+      - --tls-key=/share/secrets/materialized.key
+      - --tls-ca=/share/secrets/ca.crt
+      - --listen-addr=0.0.0.0:6876
+    volumes:
+      - secrets:/share/secrets
+    environment:
+      - MZ_DEV=1
+    ports:
+      - 6876
+    depends_on: [test-certs]
   dbt-test:
     mzbuild: dbt-materialize
+    volumes:
+      - secrets:/share/secrets
+    depends_on: [test-certs]
+  test-certs:
+    mzbuild: test-certs
+    volumes:
+      - secrets:/secrets
 
 mzworkflows:
   ci:
-    env:
-      MZ_PORT: 6875
     steps:
       - step: start-services
-        services: [materialized]
+        services: [materialized, tls-materialized]
       - step: wait-for-tcp
         host: materialized
         port: 6875
+      - step: wait-for-tcp
+        host: tls-materialized
+        port: 6876
       - step: run
         service: dbt-test
+
+volumes:
+  secrets:

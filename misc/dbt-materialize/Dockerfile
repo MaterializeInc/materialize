@@ -13,4 +13,4 @@ COPY . dbt-materialize/
 
 RUN pip install -r dbt-materialize/requirements.txt
 
-CMD [ "pytest", "dbt-materialize/test/materialize.dbtspec" ]
+CMD [ "pytest", "dbt-materialize/test/" ]
