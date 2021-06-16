@@ -600,7 +600,7 @@ impl PredicatePushdown {
                     } else {
                         // Case 3: There are no literals in the equivalence
                         // class. Push a predicate for every pair of expressions
-                        // in the equivalence that etiher belong to a single
+                        // in the equivalence that either belong to a single
                         // input or can be localized to a given input through
                         // the rest of equivalences.
                         let mut to_remove = Vec::new();
@@ -686,7 +686,7 @@ impl PredicatePushdown {
                                     // The equivalence is either a single input one or fully localizable
                                     // to a single input through other equivalences, so it can be removed
                                     // completely without introducing any new cross join.
-                                    to_remove.extend(localized.iter().filter_map(|(pos, _)| *pos));
+                                    to_remove.extend(0..equivalences[equivalence_pos].len());
                                 } else {
                                     // Leave an expression from this input in the equivalence to avoid
                                     // cross joins
