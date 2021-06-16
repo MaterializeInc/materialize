@@ -15,7 +15,6 @@ from pathlib import Path
 
 import humanize
 
-from materialize import bintray
 from materialize import errors
 from materialize import cargo
 from materialize import ci_util
@@ -55,10 +54,11 @@ def main() -> None:
 
 
 def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
-    """Stage a Debian package on Bintray.
+    """Stage a Debian package on S3.
 
     Note that this function does not cause anything to become public; a
-    step to publish the files will be run in the deploy job.
+    step to publish the files and add them to the apt packages index
+    will be run during the deploy job.
     """
 
     print(f"Staging deb {package} {version}")
@@ -88,37 +88,6 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
         cwd=repo.root,
     )
     deb_size = deb_path.stat().st_size
-
-    # Stage the package on Bintray
-    bt = bintray.Client(
-        "materialize", user="ci@materialize", api_key=os.environ["BINTRAY_API_KEY"]
-    )
-    package = bt.repo("apt").package(package)
-    try:
-        print("Creating Bintray version...")
-        commit_hash = git.rev_parse("HEAD")
-        package.create_version(version, desc="git main", vcs_tag=commit_hash)
-    except bintray.VersionAlreadyExistsError:
-        # Ignore for idempotency.
-        pass
-
-    try:
-        print(f"Uploading Debian package ({humanize.naturalsize(deb_size)})...")
-        package.debian_upload(
-            version,
-            path=f"/{version}/materialized-{commit_hash}.deb",
-            data=open(deb_path, "rb"),
-            distributions=["generic"],
-            components=["main"],
-            architectures=["amd64"],
-        )
-    except bintray.DebAlreadyExistsError:
-        # Ideally `cargo deb` would produce identical output for identical input
-        # to give us idempotency for free, since Bintray won't produce a
-        # DebAlreadyExistsError if you upload the identical .deb file twice. But
-        # it doesn't, so instead we just assume the .deb that's already uploaded
-        # is functionally equivalent to the one we just built.
-        print("Debian package already exists; assuming it is valid and skipping upload")
 
     # Stage the package on S3
     s3 = boto3.client("s3")
