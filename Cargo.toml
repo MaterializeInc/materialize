@@ -34,7 +34,6 @@ members = [
     "src/sql",
     "src/sqllogictest",
     "src/sql-parser",
-    "src/storage",
     "src/symbiosis",
     "src/testdrive",
     "src/transform",
