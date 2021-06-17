@@ -552,6 +552,15 @@ impl Transaction<'_> {
         source_id: GlobalId,
         frontier: Timestamp,
     ) -> Result<(), Error> {
+        let ahead_of_compaction: i32 = self
+            .inner
+            .prepare_cached("SELECT count(*) FROM timestamps WHERE sid = ? AND timestamp >= ?")?
+            .query_row(params![SqlVal(&source_id), frontier], |row| row.get(0))?;
+
+        if ahead_of_compaction == 0 {
+            return Ok(());
+        }
+
         match self
             .inner
             .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND timestamp < ?")?
