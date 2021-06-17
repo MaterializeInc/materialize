@@ -278,6 +278,15 @@ steps:
           composition: pg-cdc-resumption
           run: pg-cdc-resumption
 
+  - id: s3-resumption
+    label: "S3 Retry/Resumption test"
+    depends_on: build
+    inputs: [test/s3-resumption]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: s3-resumption
+          run: s3-resumption
+
   - id: kafka-exactly-once
     label: "Test for the Kafka exactly-once sink"
     depends_on: build
