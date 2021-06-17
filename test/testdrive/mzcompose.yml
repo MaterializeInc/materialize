@@ -159,6 +159,8 @@ services:
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     - KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false
     - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+    - KAFKA_MIN_INSYNC_REPLICAS=1
+    - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
     environment:

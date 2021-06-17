@@ -333,8 +333,7 @@ async fn build_kafka(
         let topic_suffix_nonce = builder.topic_suffix_nonce;
         move |topic: &str| {
             if exactly_once {
-                topic.to_string()
-            // format!("{}-{}", topic, id)
+                topic.into()
             } else {
                 format!("{}-{}-{}", topic, id, topic_suffix_nonce)
             }
