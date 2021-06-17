@@ -11,11 +11,14 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
+use ore::vec::Vector;
+use ore::vec::Vector;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
@@ -27,7 +30,6 @@ use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::Datum;
-use fmt::Debug;
 
 mod encoding;
 
@@ -406,33 +408,6 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 
 fn assert_is_copy<T: Copy>() {}
 
-/// A trait that abstracts over ways to push bytes into a buffer.
-///
-/// This trait exists to allow us to write the `push` logic once for
-/// multiple recipients of the pushed data.
-trait Bytes {
-    fn extend_from_slice(&mut self, slice: &[u8]);
-    fn push(&mut self, byte: u8);
-}
-
-impl Bytes for Vec<u8> {
-    fn extend_from_slice(&mut self, slice: &[u8]) {
-        self.extend_from_slice(slice);
-    }
-    fn push(&mut self, byte: u8) {
-        self.push(byte);
-    }
-}
-
-impl Bytes for Row {
-    fn extend_from_slice(&mut self, slice: &[u8]) {
-        self.data.extend_from_slice(slice);
-    }
-    fn push(&mut self, byte: u8) {
-        self.data.push(byte);
-    }
-}
-
 // See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
 macro_rules! push_copy {
     ($data:expr, $t:expr, $T:ty) => {
@@ -441,12 +416,18 @@ macro_rules! push_copy {
     };
 }
 
-fn push_untagged_bytes<T: Bytes>(data: &mut T, bytes: &[u8]) {
+fn push_untagged_bytes<D>(data: &mut D, bytes: &[u8])
+where
+    D: Vector<u8>,
+{
     push_copy!(data, bytes.len(), usize);
     data.extend_from_slice(bytes);
 }
 
-fn push_lengthed_bytes<T: Bytes>(data: &mut T, bytes: &[u8], tag: Tag) {
+fn push_lengthed_bytes<D>(data: &mut D, bytes: &[u8], tag: Tag)
+where
+    D: Vector<u8>,
+{
     match tag {
         Tag::BytesTiny | Tag::StringTiny => {
             push_copy!(data, bytes.len() as u8, u8);
@@ -465,7 +446,10 @@ fn push_lengthed_bytes<T: Bytes>(data: &mut T, bytes: &[u8], tag: Tag) {
     data.extend_from_slice(bytes);
 }
 
-fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
+fn push_datum<D>(data: &mut D, datum: Datum)
+where
+    D: Vector<u8>,
+{
     match datum {
         Datum::Null => data.push(Tag::Null as u8),
         Datum::False => data.push(Tag::False as u8),
@@ -728,7 +712,7 @@ impl Row {
     where
         D: Borrow<Datum<'a>>,
     {
-        push_datum(self, *datum.borrow())
+        push_datum(&mut self.data, *datum.borrow())
     }
 
     /// Extend an existing `Row` with additional `Datum`s.
@@ -739,7 +723,7 @@ impl Row {
         D: Borrow<Datum<'a>>,
     {
         for datum in iter {
-            push_datum(self, *datum.borrow())
+            push_datum(&mut self.data, *datum.borrow())
         }
     }
 
