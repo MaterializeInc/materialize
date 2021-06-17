@@ -49,15 +49,39 @@ $ set schema={
     ]
   }
 
-$ set trxschemakey={
-      "name": "io.debezium.connector.common.TransactionMetadataKey",
-      "type": "record",
-      "fields": [
+$ set exactlyonceschema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
           {
-              "name": "id",
-              "type": "string"
-          }
-      ]
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "transaction",
+        "type": [
+          {
+            "name": ".transaction",
+            "type": "record",
+            "fields": [
+              {"name": "id", "type": "string"}
+            ]
+          },
+          "null"
+        ]
+      }
+    ]
   }
 
 $ set trxschema={
@@ -99,6 +123,7 @@ $ kafka-create-topic topic=input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'exactly-once-sink-${testdrive.seed}'
   WITH (exactly_once = true, consistency_topic = 'exactly-once-sink-consistency-${testdrive.seed}') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 # exactly_once = true -> causes test failure, false -> test works
 #  WITH (exactly_once = false, consistency_topic = 'exactly-once-sink-consistency-${testdrive.seed}') FORMAT AVRO
 
@@ -144,17 +169,17 @@ $ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messag
 {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink consistency=debezium
-{"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": {"long": 2}}
-{"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "END", "event_count": {"long": 2}}
-{"id": "3", "status": "BEGIN", "event_count": null}
-{"id": "3", "status": "END", "event_count": {"long": 1}}
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "exactly-once-sink-${testdrive.seed}"}]}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "exactly-once-sink-${testdrive.seed}"}]}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "exactly-once-sink-${testdrive.seed}"}]}}
 
 > CREATE MATERIALIZED SOURCE input2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'exactly-once-sink-${testdrive.seed}'
     WITH (consistency_topic = 'exactly-once-sink-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING SCHEMA '${exactlyonceschema}' ENVELOPE DEBEZIUM
 
 > SELECT * FROM input2;
 a  b

@@ -34,11 +34,11 @@ lazy_static! {
         "name": "envelope",
         "fields": [
             {
-                "name": "id",
+                "name": "status",
                 "type": "string"
             },
             {
-                "name": "status",
+                "name": "id",
                 "type": "string"
             },
             {
@@ -403,8 +403,8 @@ pub fn encode_debezium_transaction_unchecked(
     };
 
     let avro = Value::Record(vec![
-        ("id".into(), transaction_id),
         ("status".into(), status),
+        ("id".into(), transaction_id),
         ("event_count".into(), event_count),
         ("data_collections".into(), data_collections),
     ]);

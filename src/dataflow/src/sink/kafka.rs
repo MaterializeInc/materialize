@@ -378,7 +378,7 @@ where
             .activator_for(&builder.operator_info().address[..]);
 
         KafkaSink {
-            name,
+            name: name.clone(),
             shutdown_flag: shutdown_flag.clone(),
             metrics,
             producer,
