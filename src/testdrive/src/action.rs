@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeSet, HashMap};
+use std::env;
 use std::fs;
 use std::future::Future;
 use std::net::ToSocketAddrs;
@@ -384,6 +385,11 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         "testdrive.materialized-user".into(),
         state.materialized_user.clone(),
     );
+
+
+    for (key, value) in env::vars() {
+        vars.insert(format!("env.{}", key), value);
+    }
 
     for cmd in cmds {
         let pos = cmd.pos;
