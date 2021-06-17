@@ -174,7 +174,6 @@ pub enum CatalogItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Raw>>,
@@ -193,7 +192,6 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub connector: SourceConnector,
     pub bare_desc: RelationDesc,
@@ -203,7 +201,6 @@ pub struct Source {
 #[derive(Debug, Clone, Serialize)]
 pub struct Sink {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
     pub envelope: SinkEnvelope,
@@ -220,7 +217,6 @@ pub enum SinkConnectorState {
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub conn_id: Option<u32>,
@@ -230,7 +226,6 @@ pub struct View {
 #[derive(Debug, Clone, Serialize)]
 pub struct Index {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
@@ -240,7 +235,6 @@ pub struct Index {
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub inner: TypeInner,
     pub depends_on: Vec<GlobalId>,
 }
@@ -272,7 +266,6 @@ impl From<sql::plan::TypeInner> for TypeInner {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
-    pub plan_cx: PlanContext,
     #[serde(skip)]
     pub inner: &'static sql::func::Func,
 }
@@ -601,7 +594,6 @@ impl Catalog {
                         name.clone(),
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
-                            plan_cx: PlanContext::default(),
                             optimized_expr,
                             connector: dataflow_types::SourceConnector::Local(
                                 Timeline::EpochMilliseconds,
@@ -633,7 +625,6 @@ impl Catalog {
                                 &log.variant.desc(),
                                 &log.variant.index_by(),
                             ),
-                            plan_cx: PlanContext::default(),
                             conn_id: None,
                             depends_on: vec![log.id],
                         }),
@@ -656,7 +647,6 @@ impl Catalog {
                         name.clone(),
                         CatalogItem::Table(Table {
                             create_sql: "TODO".to_string(),
-                            plan_cx: PlanContext::default(),
                             desc: table.desc.clone(),
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
@@ -679,7 +669,6 @@ impl Catalog {
                                 .map(|i| MirScalarExpr::Column(*i))
                                 .collect(),
                             create_sql: index_sql,
-                            plan_cx: PlanContext::default(),
                             conn_id: None,
                             depends_on: vec![table.id],
                         }),
@@ -713,7 +702,6 @@ impl Catalog {
                         },
                         CatalogItem::Type(Type {
                             create_sql: format!("CREATE TYPE {}", typ.name()),
-                            plan_cx: PlanContext::default(),
                             inner: match typ.kind() {
                                 postgres_types::Kind::Array(element_type) => {
                                     let element_id = catalog.ambient_schemas[PG_CATALOG_SCHEMA]
@@ -735,10 +723,7 @@ impl Catalog {
                         func.id,
                         oid,
                         name.clone(),
-                        CatalogItem::Func(Func {
-                            plan_cx: PlanContext::default(),
-                            inner: func.inner,
-                        }),
+                        CatalogItem::Func(Func { inner: func.inner }),
                     );
                 }
 
@@ -1757,27 +1742,27 @@ impl Catalog {
         let item = match item {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
-                eval_env: Some(table.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
-                eval_env: Some(source.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
-                eval_env: Some(view.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
-                eval_env: Some(index.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
-                eval_env: Some(sink.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
-                eval_env: Some(typ.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
@@ -1811,7 +1796,6 @@ impl Catalog {
                 table, depends_on, ..
             }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
-                plan_cx: pcx,
                 desc: table.desc,
                 defaults: table.defaults,
                 conn_id: None,
@@ -1823,7 +1807,6 @@ impl Catalog {
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
-                    plan_cx: pcx,
                     optimized_expr,
                     connector: source.connector,
                     bare_desc: source.bare_desc,
@@ -1838,7 +1821,6 @@ impl Catalog {
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    plan_cx: pcx,
                     optimized_expr,
                     desc,
                     conn_id: None,
@@ -1849,7 +1831,6 @@ impl Catalog {
                 index, depends_on, ..
             }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
-                plan_cx: pcx,
                 on: index.on,
                 keys: index.keys,
                 conn_id: None,
@@ -1862,7 +1843,6 @@ impl Catalog {
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
-                plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
                 envelope: sink.envelope,
@@ -1873,7 +1853,6 @@ impl Catalog {
                 typ, depends_on, ..
             }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
-                plan_cx: pcx,
                 inner: typ.inner.into(),
                 depends_on,
             }),
@@ -2442,18 +2421,6 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "TODO",
-        }
-    }
-
-    fn plan_cx(&self) -> &PlanContext {
-        match self.item() {
-            CatalogItem::Table(Table { plan_cx, .. }) => plan_cx,
-            CatalogItem::Source(Source { plan_cx, .. }) => plan_cx,
-            CatalogItem::Sink(Sink { plan_cx, .. }) => plan_cx,
-            CatalogItem::View(View { plan_cx, .. }) => plan_cx,
-            CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
-            CatalogItem::Type(Type { plan_cx, .. }) => plan_cx,
-            CatalogItem::Func(Func { plan_cx, .. }) => plan_cx,
         }
     }
 

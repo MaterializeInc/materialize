@@ -534,15 +534,11 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
-    use crate::plan::PlanContext;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
-        let scx = &StatementContext {
-            pcx: &PlanContext::default(),
-            catalog: &DummyCatalog,
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
-        };
+        let scx =
+            &StatementContext::new(None, &DummyCatalog, Rc::new(RefCell::new(BTreeMap::new())));
 
         let parsed = sql_parser::parser::parse_statements(
             "create materialized view foo as select 1 as bar",

@@ -59,7 +59,6 @@ fn datadriven() {
                         },
                         CatalogItem::Table(Table {
                             create_sql: "TODO".to_string(),
-                            plan_cx: PlanContext::default(),
                             desc: RelationDesc::new(
                                 RelationType::new(Vec::new()),
                                 Vec::<Option<String>>::new(),
@@ -78,12 +77,14 @@ fn datadriven() {
                     let catalog = catalog.for_session(&sess);
 
                     let parsed = parse_statements(&test_case.input).unwrap();
-                    let scx = StatementContext {
-                        catalog: &catalog,
-                        pcx: &PlanContext::default(),
-                        param_types: Rc::new(RefCell::new(BTreeMap::new())),
-                    };
-                    let mut qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
+                    let pcx = PlanContext::default();
+                    let scx = StatementContext::new(
+                        Some(&pcx),
+                        &catalog,
+                        Rc::new(RefCell::new(BTreeMap::new())),
+                    );
+                    let mut qcx =
+                        QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
                     let q = parsed[0].clone();
                     let q = match q {
                         Statement::Select(s) => s.query,

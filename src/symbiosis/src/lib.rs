@@ -142,11 +142,7 @@ END $$;
         catalog: &dyn Catalog,
         stmt: &Statement<Raw>,
     ) -> Result<Plan, anyhow::Error> {
-        let scx = StatementContext {
-            pcx,
-            catalog,
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
-        };
+        let scx = StatementContext::new(Some(pcx), catalog, Rc::new(RefCell::new(BTreeMap::new())));
         Ok(match stmt {
             Statement::CreateTable(CreateTableStatement {
                 name,
