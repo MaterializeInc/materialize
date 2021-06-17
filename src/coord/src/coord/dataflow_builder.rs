@@ -174,7 +174,7 @@ impl<'a> DataflowBuilder<'a> {
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
-        envelope: SinkEnvelope,
+        envelope: Option<SinkEnvelope>,
         as_of: SinkAsOf,
     ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);

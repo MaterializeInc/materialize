@@ -1514,9 +1514,6 @@ pub fn plan_create_sink(
     let value_desc = match envelope {
         SinkEnvelope::Debezium => envelopes::dbz_desc(desc.clone()),
         SinkEnvelope::Upsert => desc.clone(),
-        SinkEnvelope::Tail { .. } => {
-            unreachable!("SinkEnvelope::Tail is only used when creating tails, not sinks")
-        }
     };
 
     if as_of.is_some() {

@@ -125,7 +125,7 @@ where
         //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
         // * "Tail" writes some metadata.
         let collection = match sink.envelope {
-            SinkEnvelope::Debezium => {
+            Some(SinkEnvelope::Debezium) => {
                 let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
 
                 // if there is no user-specified key, remove the synthetic
@@ -149,7 +149,7 @@ where
                 });
                 collection
             }
-            SinkEnvelope::Upsert => {
+            Some(SinkEnvelope::Upsert) => {
                 let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
 
                 let collection = combined.map(|(k, v)| {
@@ -158,23 +158,9 @@ where
                 });
                 collection
             }
-            SinkEnvelope::Tail { emit_progress } => keyed
-                .consolidate()
-                .inner
-                .map({
-                    let mut rp = Row::default();
-                    move |((k, v), time, diff)| {
-                        rp.push(Datum::from(numeric::Numeric::from(time)));
-                        if emit_progress {
-                            rp.push(Datum::False);
-                        }
-                        rp.push(Datum::Int64(i64::cast_from(diff)));
-                        rp.extend_by_row(&v);
-                        let v = rp.finish_and_reuse();
-                        ((k, Some(v)), time, 1)
-                    }
-                })
-                .as_collection(),
+            // No envelope, this can only happen for TAIL sinks, which work
+            // on vanilla rows.
+            None => keyed.map(|(key, value)| (key, Some(value))),
         };
 
         // TODO(benesch): errors should stream out through the sink,
@@ -289,6 +275,28 @@ fn render_tail_sink<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let emit_progress = connector.emit_progress;
+
+    let sinked_collection = sinked_collection
+        .consolidate()
+        .inner
+        .map({
+            let mut rp = Row::default();
+            move |((k, v), time, diff)| {
+                rp.push(Datum::from(numeric::Numeric::from(time)));
+                if emit_progress {
+                    rp.push(Datum::False);
+                }
+                rp.push(Datum::Int64(i64::cast_from(diff)));
+                // this is slightly awkward, we know that the value exists
+                // because without an envelope the value is always Some(Row)
+                rp.extend_by_row(&v.expect("missing value"));
+                let v = rp.finish_and_reuse();
+                ((k, Some(v)), time, 1)
+            }
+        })
+        .as_collection();
+
     let batches = sinked_collection
         .map(move |(k, v)| {
             assert!(k.is_none(), "tail does not support keys");
