@@ -62,104 +62,7 @@ where
             .expect("Sink source collection not loaded")
             .as_collection();
 
-        // Some connectors support keys - extract them.
-        let keyed = match sink.connector.clone() {
-            SinkConnector::Kafka(_) => {
-                let user_key_indices = sink
-                    .connector
-                    .get_key_indices()
-                    .map(|key_indices| key_indices.to_vec());
-
-                let relation_key_indices = sink
-                    .connector
-                    .get_relation_key_indices()
-                    .map(|key_indices| key_indices.to_vec());
-
-                // We have three cases here, in descending priority:
-                //
-                // 1. if there is a user-specified key, use that to consolidate and
-                //  distribute work
-                // 2. if the sinked relation has a known primary key, use that to
-                //  consolidate and distribute work but don't write to the sink
-                // 3. if none of the above, use the whole row as key to
-                //  consolidate and distribute work but don't write to the sink
-
-                let keyed = if user_key_indices.is_some() {
-                    let key_indices = user_key_indices.expect("known to exist");
-                    collection.map(move |row| {
-                        // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                        // Does it matter?
-                        let datums = row.unpack();
-                        let key = Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()));
-                        (Some(key), row)
-                    })
-                } else if relation_key_indices.is_some() {
-                    let relation_key_indices = relation_key_indices.expect("known to exist");
-                    collection.map(move |row| {
-                        // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                        // Does it matter?
-                        let datums = row.unpack();
-                        let key =
-                            Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()));
-                        (Some(key), row)
-                    })
-                } else {
-                    collection.map(|row| {
-                        (
-                            Some(Row::pack(Some(Datum::Int64(row.hashed() as i64)))),
-                            row,
-                        )
-                    })
-                };
-                keyed
-            }
-            SinkConnector::Tail(_) | SinkConnector::AvroOcf(_) => collection.map(|row| (None, row)),
-        };
-
-        // Apply the envelope.
-        // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
-        //   It then renders those as Avro.
-        // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
-        //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
-        // * "Tail" writes some metadata.
-        let collection = match sink.envelope {
-            Some(SinkEnvelope::Debezium) => {
-                let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
-
-                // if there is no user-specified key, remove the synthetic
-                // distribution key again
-                let user_key_indices = sink.connector.get_key_indices();
-                let combined = if user_key_indices.is_some() {
-                    combined
-                } else {
-                    combined.map(|(_key, value)| (None, value))
-                };
-
-                // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
-                let rp = Rc::new(RefCell::new(Row::default()));
-                let collection = combined.flat_map(move |(mut k, v)| {
-                    let max_idx = v.len() - 1;
-                    let rp = rp.clone();
-                    v.into_iter().enumerate().map(move |(idx, dp)| {
-                        let k = if idx == max_idx { k.take() } else { k.clone() };
-                        (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))
-                    })
-                });
-                collection
-            }
-            Some(SinkEnvelope::Upsert) => {
-                let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
-
-                let collection = combined.map(|(k, v)| {
-                    let v = upsert_format(v);
-                    (k, v)
-                });
-                collection
-            }
-            // No envelope, this can only happen for TAIL sinks, which work
-            // on vanilla rows.
-            None => keyed.map(|(key, value)| (key, Some(value))),
-        };
+        let collection = apply_sink_envelope(sink, collection);
 
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
@@ -189,6 +92,115 @@ where
             .dataflow_tokens
             .insert(sink_id, Box::new(tokens));
     }
+}
+
+fn apply_sink_envelope<'a, G>(
+    sink: &SinkDesc,
+    collection: Collection<Child<'a, G, G::Timestamp>, Row, Diff>,
+) -> Collection<Child<'a, G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    // Some connectors support keys - extract them.
+    let keyed = match sink.connector.clone() {
+        SinkConnector::Kafka(_) => {
+            let user_key_indices = sink
+                .connector
+                .get_key_indices()
+                .map(|key_indices| key_indices.to_vec());
+
+            let relation_key_indices = sink
+                .connector
+                .get_relation_key_indices()
+                .map(|key_indices| key_indices.to_vec());
+
+            // We have three cases here, in descending priority:
+            //
+            // 1. if there is a user-specified key, use that to consolidate and
+            //  distribute work
+            // 2. if the sinked relation has a known primary key, use that to
+            //  consolidate and distribute work but don't write to the sink
+            // 3. if none of the above, use the whole row as key to
+            //  consolidate and distribute work but don't write to the sink
+
+            let keyed = if user_key_indices.is_some() {
+                let key_indices = user_key_indices.expect("known to exist");
+                collection.map(move |row| {
+                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                    // Does it matter?
+                    let datums = row.unpack();
+                    let key = Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()));
+                    (Some(key), row)
+                })
+            } else if relation_key_indices.is_some() {
+                let relation_key_indices = relation_key_indices.expect("known to exist");
+                collection.map(move |row| {
+                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                    // Does it matter?
+                    let datums = row.unpack();
+                    let key =
+                        Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()));
+                    (Some(key), row)
+                })
+            } else {
+                collection.map(|row| {
+                    (
+                        Some(Row::pack(Some(Datum::Int64(row.hashed() as i64)))),
+                        row,
+                    )
+                })
+            };
+            keyed
+        }
+        SinkConnector::Tail(_) | SinkConnector::AvroOcf(_) => collection.map(|row| (None, row)),
+    };
+
+    // Apply the envelope.
+    // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
+    //   It then renders those as Avro.
+    // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
+    //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
+    // * "Tail" writes some metadata.
+    let collection = match sink.envelope {
+        Some(SinkEnvelope::Debezium) => {
+            let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+
+            // if there is no user-specified key, remove the synthetic
+            // distribution key again
+            let user_key_indices = sink.connector.get_key_indices();
+            let combined = if user_key_indices.is_some() {
+                combined
+            } else {
+                combined.map(|(_key, value)| (None, value))
+            };
+
+            // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
+            let rp = Rc::new(RefCell::new(Row::default()));
+            let collection = combined.flat_map(move |(mut k, v)| {
+                let max_idx = v.len() - 1;
+                let rp = rp.clone();
+                v.into_iter().enumerate().map(move |(idx, dp)| {
+                    let k = if idx == max_idx { k.take() } else { k.clone() };
+                    (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))
+                })
+            });
+            collection
+        }
+        Some(SinkEnvelope::Upsert) => {
+            let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+
+            let collection = combined.map(|(k, v)| {
+                let v = upsert_format(v);
+                (k, v)
+            });
+            collection
+        }
+        // No envelope, this can only happen for TAIL sinks, which work
+        // on vanilla rows.
+        None => keyed.map(|(key, value)| (key, Some(value))),
+    };
+
+    collection
 }
 
 fn render_kafka_sink<G>(
