@@ -102,57 +102,55 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     // Some connectors support keys - extract them.
-    let keyed = match sink.connector.clone() {
-        SinkConnector::Kafka(_) => {
-            let user_key_indices = sink
-                .connector
-                .get_key_indices()
-                .map(|key_indices| key_indices.to_vec());
+    let keyed = if sink.connector.uses_keys() {
+        let user_key_indices = sink
+            .connector
+            .get_key_indices()
+            .map(|key_indices| key_indices.to_vec());
 
-            let relation_key_indices = sink
-                .connector
-                .get_relation_key_indices()
-                .map(|key_indices| key_indices.to_vec());
+        let relation_key_indices = sink
+            .connector
+            .get_relation_key_indices()
+            .map(|key_indices| key_indices.to_vec());
 
-            // We have three cases here, in descending priority:
-            //
-            // 1. if there is a user-specified key, use that to consolidate and
-            //  distribute work
-            // 2. if the sinked relation has a known primary key, use that to
-            //  consolidate and distribute work but don't write to the sink
-            // 3. if none of the above, use the whole row as key to
-            //  consolidate and distribute work but don't write to the sink
+        // We have three cases here, in descending priority:
+        //
+        // 1. if there is a user-specified key, use that to consolidate and
+        //  distribute work
+        // 2. if the sinked relation has a known primary key, use that to
+        //  consolidate and distribute work but don't write to the sink
+        // 3. if none of the above, use the whole row as key to
+        //  consolidate and distribute work but don't write to the sink
 
-            let keyed = if user_key_indices.is_some() {
-                let key_indices = user_key_indices.expect("known to exist");
-                collection.map(move |row| {
-                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                    // Does it matter?
-                    let datums = row.unpack();
-                    let key = Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()));
-                    (Some(key), row)
-                })
-            } else if relation_key_indices.is_some() {
-                let relation_key_indices = relation_key_indices.expect("known to exist");
-                collection.map(move |row| {
-                    // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                    // Does it matter?
-                    let datums = row.unpack();
-                    let key =
-                        Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()));
-                    (Some(key), row)
-                })
-            } else {
-                collection.map(|row| {
-                    (
-                        Some(Row::pack(Some(Datum::Int64(row.hashed() as i64)))),
-                        row,
-                    )
-                })
-            };
-            keyed
-        }
-        SinkConnector::Tail(_) | SinkConnector::AvroOcf(_) => collection.map(|row| (None, row)),
+        let keyed = if user_key_indices.is_some() {
+            let key_indices = user_key_indices.expect("known to exist");
+            collection.map(move |row| {
+                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                // Does it matter?
+                let datums = row.unpack();
+                let key = Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()));
+                (Some(key), row)
+            })
+        } else if relation_key_indices.is_some() {
+            let relation_key_indices = relation_key_indices.expect("known to exist");
+            collection.map(move |row| {
+                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                // Does it matter?
+                let datums = row.unpack();
+                let key = Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()));
+                (Some(key), row)
+            })
+        } else {
+            collection.map(|row| {
+                (
+                    Some(Row::pack(Some(Datum::Int64(row.hashed() as i64)))),
+                    row,
+                )
+            })
+        };
+        keyed
+    } else {
+        collection.map(|row| (None, row))
     };
 
     // Apply the envelope.

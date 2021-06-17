@@ -1059,6 +1059,14 @@ impl SinkConnector {
         }
     }
 
+    pub fn uses_keys(&self) -> bool {
+        match self {
+            SinkConnector::Kafka(_) => true,
+            SinkConnector::Tail(_) => false,
+            SinkConnector::AvroOcf(_) => false,
+        }
+    }
+
     pub fn get_key_desc(&self) -> Option<&RelationDesc> {
         match self {
             SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
