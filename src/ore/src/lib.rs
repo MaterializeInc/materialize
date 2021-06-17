@@ -38,6 +38,7 @@ pub mod hint;
 pub mod iter;
 pub mod lex;
 pub mod netio;
+pub mod now;
 pub mod option;
 pub mod panic;
 pub mod result;

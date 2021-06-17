@@ -14,7 +14,6 @@ use std::convert::{self, TryInto};
 use std::fs::File;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 use anyhow::bail;
 use log::{debug, error, info, warn};
@@ -272,6 +271,7 @@ pub async fn lookup_start_offsets(
     consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
     topic: &str,
     with_options: &BTreeMap<String, Value>,
+    now: u64,
 ) -> Result<Option<Vec<i64>>, anyhow::Error> {
     let time_offset = with_options.get("kafka_time_offset");
     if time_offset.is_none() {
@@ -285,10 +285,7 @@ pub async fn lookup_start_offsets(
         Value::Number(s) => match s.parse::<i64>() {
             // Timestamp in millis *before* now (e.g. -10 means 10 millis ago)
             Ok(ts) if ts < 0 => {
-                let now: i64 = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)?
-                    .as_millis()
-                    .try_into()?;
+                let now: i64 = now.try_into()?;
                 let ts = now - ts.abs();
                 if ts <= 0 {
                     bail!("Relative `kafka_time_offset` must be smaller than current system timestamp")

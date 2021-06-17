@@ -43,7 +43,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use self::prometheus::{Scraper, ScraperMessage};
 use anyhow::{anyhow, Context};
@@ -225,6 +225,7 @@ pub struct Coordinator {
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: HashMap<u32, ConnMeta>,
+    now: ore::now::NowFn,
 
     /// Holds pending compaction messages to be sent to the dataflow workers. When
     /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
@@ -293,12 +294,7 @@ impl Coordinator {
         // This is a hack. In a perfect world we would represent time as having a "real" dimension
         // and a "coordinator" dimension so that clients always observed linearizability from
         // things the coordinator did without being related to the real dimension.
-        let ts = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("failed to get millis since epoch")
-            .as_millis()
-            .try_into()
-            .expect("current time did not fit into u64");
+        let ts = (self.now)();
 
         if ts < self.read_lower_bound {
             self.read_lower_bound
@@ -1090,7 +1086,7 @@ impl Coordinator {
         }
 
         match sql::plan::plan(
-            &pcx,
+            Some(&pcx),
             &self.catalog.for_session(session),
             stmt.clone(),
             params,
@@ -3296,6 +3292,7 @@ pub async fn serve(
         build_info,
         num_workers: workers,
         timestamp_frequency,
+        now: ore::now::system_time,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
@@ -3361,6 +3358,7 @@ pub async fn serve(
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
         .spawn(move || {
+            let now = catalog.config().now;
             let mut coord = Coordinator {
                 worker_guards,
                 worker_txs,
@@ -3388,6 +3386,7 @@ pub async fn serve(
                 since_handles: HashMap::new(),
                 since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
+                now,
             };
             coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
             if let Some(config) = &logging {
@@ -3533,7 +3532,7 @@ pub fn describe(
     catalog: &dyn sql::catalog::Catalog,
     stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
-    session: &Session,
+    session: &mut Session,
 ) -> Result<StatementDesc, CoordError> {
     match stmt {
         // FETCH's description depends on the current session, which describe_statement
@@ -3544,7 +3543,12 @@ pub fn describe(
                 None => Err(CoordError::UnknownCursor(name.to_string())),
             }
         }
-        _ => Ok(sql::plan::describe(catalog, stmt, param_types)?),
+        _ => Ok(sql::plan::describe(
+            &session.pcx(),
+            catalog,
+            stmt,
+            param_types,
+        )?),
     }
 }
 

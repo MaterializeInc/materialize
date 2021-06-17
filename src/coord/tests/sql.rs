@@ -44,7 +44,7 @@ fn datadriven() {
 
     walk("tests/testdata", |f| {
         let catalog_file = NamedTempFile::new().unwrap();
-        let mut catalog = Catalog::open_debug(catalog_file.path()).unwrap();
+        let mut catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
         let mut id: u32 = 1;
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
@@ -77,9 +77,9 @@ fn datadriven() {
                     let catalog = catalog.for_session(&sess);
 
                     let parsed = parse_statements(&test_case.input).unwrap();
-                    let pcx = PlanContext::default();
+                    let pcx = &PlanContext::zero();
                     let scx = StatementContext::new(
-                        Some(&pcx),
+                        Some(pcx),
                         &catalog,
                         Rc::new(RefCell::new(BTreeMap::new())),
                     );

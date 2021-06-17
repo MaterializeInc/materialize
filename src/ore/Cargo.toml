@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 async-trait = "0.1.50"
 bytes = "1.0.1"
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 either = "1.5.1"
 fallible-iterator = "0.2.0"
 futures = "0.3.14"

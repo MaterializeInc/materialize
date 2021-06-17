@@ -33,4 +33,6 @@ pub struct Config<'a> {
     pub num_workers: usize,
     /// Timestamp frequency to use for CREATE SOURCE
     pub timestamp_frequency: Duration,
+    /// Function to generate wall clock now; can be mocked.
+    pub now: ore::now::NowFn,
 }

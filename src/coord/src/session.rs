@@ -81,7 +81,9 @@ impl Session {
     /// This is cleared at the end of a transaction.
     pub fn pcx(&mut self) -> PlanContext {
         if self.pcx == None {
-            self.pcx = Some(PlanContext::default());
+            self.pcx = Some(PlanContext::new(ore::now::to_datetime(
+                ore::now::system_time(),
+            )));
         }
         self.pcx.unwrap()
     }
