@@ -45,8 +45,6 @@ where
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
-        _worker_index: usize,
-        _peers: usize,
     ) {
         // put together tokens that belong to the export
         let mut needed_source_tokens = Vec::new();
