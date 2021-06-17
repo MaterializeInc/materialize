@@ -177,30 +177,6 @@ where
                 .as_collection(),
         };
 
-        // Some sinks require that the timestamp be appended to the end of the value.
-        let append_timestamp = match &sink.connector {
-            SinkConnector::Kafka(c) => c.consistency.is_some(),
-            SinkConnector::Tail(_) => false,
-            SinkConnector::AvroOcf(_) => false,
-        };
-        let collection = if append_timestamp {
-            collection
-                .inner
-                .map(|((k, v), t, diff)| {
-                    let v = v.map(|mut v| {
-                        let t = t.to_string();
-                        v.push_list_with(|rp| {
-                            rp.push(Datum::String(&t));
-                        });
-                        v
-                    });
-                    ((k, v), t, diff)
-                })
-                .as_collection()
-        } else {
-            collection
-        };
-
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
 
@@ -241,6 +217,25 @@ fn render_kafka_sink<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    // consistent/exactly-once Kafka sinks need the timestamp in the row
+    let sinked_collection = if connector.consistency.is_some() {
+        sinked_collection
+            .inner
+            .map(|((k, v), t, diff)| {
+                let v = v.map(|mut v| {
+                    let t = t.to_string();
+                    v.push_list_with(|rp| {
+                        rp.push(Datum::String(&t));
+                    });
+                    v
+                });
+                ((k, v), t, diff)
+            })
+            .as_collection()
+    } else {
+        sinked_collection
+    };
+
     // Extract handles to the relevant source timestamp histories the sink
     // needs to hear from before it can write data out to Kafka.
     let mut source_ts_histories = Vec::new();
