@@ -17,6 +17,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use anyhow::{bail, Context};
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
@@ -1693,7 +1694,15 @@ lazy_static! {
                 params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;
                 params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz, 1159;
                 // PG defines this as `text timetz`
-                params!(String, Time) => BinaryFunc::TimezoneTime, 2037;
+                params!(String, Time) => Operation::binary(|ecx, lhs, rhs| {
+                    match ecx.qcx.lifetime {
+                        QueryLifetime::OneShot(pcx) => {
+                            let wall_time = DateTime::<Utc>::from(pcx.wall_time).naive_utc();
+                            Ok(lhs.call_binary(rhs, BinaryFunc::TimezoneTime{wall_time}))
+                        },
+                        QueryLifetime::Static => bail!("timezone cannot be used in static queries"),
+                    }
+                }), 2037;
                 params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp, 2070;
                 params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz, 1026;
                 // PG defines this as `interval timetz`

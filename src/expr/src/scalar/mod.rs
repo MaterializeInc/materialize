@@ -482,15 +482,20 @@ impl MirScalarExpr {
                             MirScalarExpr::literal(Err(err), e.typ(&relation_type).scalar_type)
                         }
                     }
-                } else if *func == BinaryFunc::TimezoneTime && expr1.is_literal() {
-                    let tz = expr1.as_literal_str().unwrap();
-                    *e = match parse_timezone(tz) {
-                        Ok(tz) => MirScalarExpr::CallUnary {
-                            func: UnaryFunc::TimezoneTime(tz),
-                            expr: Box::new(expr2.take()),
-                        },
-                        Err(err) => {
-                            MirScalarExpr::literal(Err(err), e.typ(&relation_type).scalar_type)
+                } else if let BinaryFunc::TimezoneTime { wall_time } = func {
+                    if expr1.is_literal() {
+                        let tz = expr1.as_literal_str().unwrap();
+                        *e = match parse_timezone(tz) {
+                            Ok(tz) => MirScalarExpr::CallUnary {
+                                func: UnaryFunc::TimezoneTime {
+                                    tz,
+                                    wall_time: *wall_time,
+                                },
+                                expr: Box::new(expr2.take()),
+                            },
+                            Err(err) => {
+                                MirScalarExpr::literal(Err(err), e.typ(&relation_type).scalar_type)
+                            }
                         }
                     }
                 } else if *func == BinaryFunc::And {
