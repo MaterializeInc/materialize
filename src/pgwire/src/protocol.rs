@@ -451,6 +451,11 @@ where
                 self.commit_transaction().await;
             }
         }
+
+        if num_stmts == 0 {
+            self.conn.send(BackendMessage::EmptyQueryResponse).await?;
+        }
+
         self.ready().await
     }
 
