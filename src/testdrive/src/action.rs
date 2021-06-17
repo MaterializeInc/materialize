@@ -386,7 +386,6 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         state.materialized_user.clone(),
     );
 
-
     for (key, value) in env::vars() {
         vars.insert(format!("env.{}", key), value);
     }
