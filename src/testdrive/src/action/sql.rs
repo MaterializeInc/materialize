@@ -166,7 +166,9 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = Catalog::open_debug(path).map_err(|e| e.to_string())?.dump();
+                    let disk_state = Catalog::open_debug(path, ore::now::now_zero)
+                        .map_err(|e| e.to_string())?
+                        .dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
                         state.materialized_addr,

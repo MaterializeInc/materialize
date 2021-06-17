@@ -22,6 +22,7 @@ use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
+use ore::now::{now_zero, EpochMillis, NowFn};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
@@ -149,6 +150,11 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
+
+    /// Returns the number of milliseconds since the system epoch. For normal use
+    /// this means the Unix epoch. This can safely be mocked in tests and start
+    /// at 0.
+    fn now(&self) -> EpochMillis;
 }
 
 /// Configuration associated with a catalog.
@@ -180,6 +186,9 @@ pub struct CatalogConfig {
     pub num_workers: usize,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
+    /// Function that returns a wall clock now time; can safely be mocked to return
+    /// 0.
+    pub now: NowFn,
 }
 
 /// A database in a [`Catalog`].
@@ -366,7 +375,8 @@ lazy_static! {
         cache_directory: None,
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
-        timestamp_frequency: Duration::from_secs(1)
+        timestamp_frequency: Duration::from_secs(1),
+        now: now_zero,
     };
 }
 
@@ -436,6 +446,10 @@ impl Catalog for DummyCatalog {
 
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
+    }
+
+    fn now(&self) -> EpochMillis {
+        (self.config().now)()
     }
 }
 
