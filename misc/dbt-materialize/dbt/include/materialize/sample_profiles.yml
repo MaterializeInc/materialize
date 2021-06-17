@@ -19,22 +19,26 @@ default:
 
     dev:
       type: materialize
-      threads: [1 or more]
-      host: [host - default is localhost]
-      port: [port - default is 6875]
+      threads: 1
+      host: localhost
+      port: 6875
       user: materialize
-      pass: [dev_password - any value]
-      dbname: [dbname - default is materialize]
-      schema: [dev_schema - default is public]
+      pass: password
+      dbname: materialize
+      schema: public
 
-    prod:
+    authenticated:
       type: materialize
-      threads: [1 or more]
-      host: [host - default is localhost]
-      port: [port - default is 6875]
+      threads: 1
+      host: instance.materialize.cloud
+      port: 6875
       user: materialize
-      pass: [prod_password - any value]
-      dbname: [dbname - default is materialize]
-      schema: [prod_schema - default is public]
+      pass: password
+      dbname: materialize
+      schema: analytics
+      sslmode: verify-ca
+      sslcert: materialize.crt
+      sslkey: materialize.key
+      sslrootcert: ca.crt
 
   target: dev
