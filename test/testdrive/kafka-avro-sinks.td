@@ -68,6 +68,26 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+# Test map
+
+> CREATE VIEW map_data (map) AS SELECT '{a => 1, b => 2}'::map[text=>int];
+
+> CREATE SINK map_sink FROM map_data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'map-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
+{"before": null, "after": {"row": {"map": {"a": {"int": 1}, "b": {"int": 2}}}}}
+
+> CREATE VIEW list_data (list) AS SELECT LIST[1, 2];
+
+> CREATE SINK list_sink FROM list_data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'list-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
+{"before": null, "after": {"row": {"list": [{"int": 1}, {"int": 2}]}}}
+
 # Bad Sinks
 
 > CREATE VIEW input (a, b) AS SELECT * FROM (VALUES (1, 2))

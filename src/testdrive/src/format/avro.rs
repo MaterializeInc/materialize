@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 
+use mz_avro::types::AvroMap;
 use regex::Regex;
 
 use serde_json::Value as JsonValue;
@@ -157,7 +158,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
                     )?,
                 );
             }
-            Ok(Value::Map(map))
+            Ok(Value::Map(AvroMap(map)))
         }
         (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();
