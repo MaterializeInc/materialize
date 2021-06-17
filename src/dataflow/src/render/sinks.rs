@@ -9,13 +9,14 @@
 
 //! Logic related to the creation of dataflow sinks.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::Consolidate;
-use differential_dataflow::{AsCollection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -26,7 +27,7 @@ use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use ore::cast::CastFrom;
 use repr::adt::numeric;
-use repr::{Datum, Row, Timestamp};
+use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
@@ -44,8 +45,8 @@ where
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
-        worker_index: usize,
-        peers: usize,
+        _worker_index: usize,
+        _peers: usize,
     ) {
         // put together tokens that belong to the export
         let mut needed_source_tokens = Vec::new();
@@ -205,63 +206,21 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
 
-        match sink.connector.clone() {
-            SinkConnector::Kafka(c) => {
-                // Extract handles to the relevant source timestamp histories the sink
-                // needs to hear from before it can write data out to Kafka.
-                let mut source_ts_histories = Vec::new();
-
-                for id in &c.transitive_source_dependencies {
-                    if let Some(history) = render_state.ts_histories.get(id) {
-                        let mut history_bindings = history.clone();
-                        // We don't want these to block compaction
-                        // ever.
-                        history_bindings.set_compaction_frontier(Antichain::new().borrow());
-                        source_ts_histories.push(history_bindings);
-                    }
-                }
-
-                // TODO: this is a brittle way to indicate the worker that will write to the sink
-                // because it relies on us continuing to hash on the sink_id, with the same hash
-                // function, and for the Exchange pact to continue to distribute by modulo number
-                // of workers.
-                let active_write_worker =
-                    (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
-                let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(0)));
-
-                let token = sink::kafka(
-                    collection,
-                    sink_id,
-                    c,
-                    sink.key_desc.clone(),
-                    sink.value_desc.clone(),
-                    sink.as_of.clone(),
-                    source_ts_histories,
-                    shared_frontier.clone(),
-                );
-
-                if active_write_worker {
-                    render_state
-                        .sink_write_frontiers
-                        .insert(sink_id, shared_frontier);
-                }
-                needed_sink_tokens.push(token);
+        let sink_token = match sink.connector.clone() {
+            SinkConnector::Kafka(connector) => {
+                render_kafka_sink(render_state, sink, sink_id, connector, collection)
             }
-            SinkConnector::Tail(c) => {
-                let batches = collection
-                    .map(move |(k, v)| {
-                        assert!(k.is_none(), "tail does not support keys");
-                        let v = v.expect("tail must have values");
-                        (sink_id, v)
-                    })
-                    .arrange_by_key()
-                    .stream;
-                sink::tail(batches, sink_id, c, sink.as_of.clone());
+            SinkConnector::Tail(connector) => {
+                render_tail_sink(render_state, sink, sink_id, connector, collection)
             }
-            SinkConnector::AvroOcf(c) => {
-                sink::avro_ocf(collection, sink_id, c, sink.value_desc.clone());
+            SinkConnector::AvroOcf(connector) => {
+                render_avro_ocf_sink(render_state, sink, sink_id, connector, collection)
             }
         };
+
+        if let Some(sink_token) = sink_token {
+            needed_sink_tokens.push(sink_token);
+        }
 
         let tokens = Rc::new((
             needed_sink_tokens,
@@ -272,4 +231,102 @@ where
             .dataflow_tokens
             .insert(sink_id, Box::new(tokens));
     }
+}
+
+fn render_kafka_sink<G>(
+    render_state: &mut RenderState,
+    sink: &SinkDesc,
+    sink_id: GlobalId,
+    connector: KafkaSinkConnector,
+    sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+) -> Option<Box<dyn Any>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    // Extract handles to the relevant source timestamp histories the sink
+    // needs to hear from before it can write data out to Kafka.
+    let mut source_ts_histories = Vec::new();
+
+    for id in &connector.transitive_source_dependencies {
+        if let Some(history) = render_state.ts_histories.get(id) {
+            let mut history_bindings = history.clone();
+            // We don't want these to block compaction
+            // ever.
+            history_bindings.set_compaction_frontier(Antichain::new().borrow());
+            source_ts_histories.push(history_bindings);
+        }
+    }
+
+    // TODO: this is a brittle way to indicate the worker that will write to the sink
+    // because it relies on us continuing to hash on the sink_id, with the same hash
+    // function, and for the Exchange pact to continue to distribute by modulo number
+    // of workers.
+    let peers = sinked_collection.inner.scope().peers();
+    let worker_index = sinked_collection.inner.scope().index();
+    let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
+    let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(0)));
+
+    let token = sink::kafka(
+        sinked_collection,
+        sink_id,
+        connector,
+        sink.key_desc.clone(),
+        sink.value_desc.clone(),
+        sink.as_of.clone(),
+        source_ts_histories,
+        shared_frontier.clone(),
+    );
+
+    if active_write_worker {
+        render_state
+            .sink_write_frontiers
+            .insert(sink_id, shared_frontier);
+    }
+
+    Some(token)
+}
+
+fn render_tail_sink<G>(
+    _render_state: &mut RenderState,
+    sink: &SinkDesc,
+    sink_id: GlobalId,
+    connector: TailSinkConnector,
+    sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+) -> Option<Box<dyn Any>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let batches = sinked_collection
+        .map(move |(k, v)| {
+            assert!(k.is_none(), "tail does not support keys");
+            let v = v.expect("tail must have values");
+            (sink_id, v)
+        })
+        .arrange_by_key()
+        .stream;
+    sink::tail(batches, sink_id, connector, sink.as_of.clone());
+
+    // no sink token
+    None
+}
+
+fn render_avro_ocf_sink<G>(
+    _render_state: &mut RenderState,
+    sink: &SinkDesc,
+    sink_id: GlobalId,
+    connector: AvroOcfSinkConnector,
+    sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+) -> Option<Box<dyn Any>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    sink::avro_ocf(
+        sinked_collection,
+        sink_id,
+        connector,
+        sink.value_desc.clone(),
+    );
+
+    // no sink token
+    None
 }
