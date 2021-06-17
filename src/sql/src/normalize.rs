@@ -526,7 +526,7 @@ pub fn aws_connect_info(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
     use std::error::Error;
     use std::rc::Rc;
 
@@ -541,7 +541,6 @@ mod tests {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
             catalog: &DummyCatalog,
-            ids: HashSet::new(),
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         };
 

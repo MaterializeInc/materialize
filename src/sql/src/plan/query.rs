@@ -656,7 +656,6 @@ pub fn plan_copy_from_rows(
     let scx = StatementContext {
         pcx: &PlanContext::default(),
         catalog,
-        ids: HashSet::new(),
         param_types: std::rc::Rc::new(RefCell::new(BTreeMap::new())),
     };
 

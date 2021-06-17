@@ -25,7 +25,6 @@
 //! extremely slow and inefficient on large data sets.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::env;
@@ -146,7 +145,6 @@ END $$;
         let scx = StatementContext {
             pcx,
             catalog,
-            ids: HashSet::new(),
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         };
         Ok(match stmt {
