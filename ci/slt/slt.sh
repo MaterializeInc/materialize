@@ -13,18 +13,6 @@
 
 set -euo pipefail
 
-. misc/shlib/shlib.bash
-
-if [[ ! "${BUILDKITE-}" ]]; then
-    sqllogictest() {
-        cargo run --release --bin sqllogictest -- "$@"
-    }
-fi
-
-if [[ "${BUILDKITE-}" ]]; then
-    await_postgres -h postgres -p 5432
-fi
-
 export RUST_BACKTRACE=full
 
 mkdir -p target
