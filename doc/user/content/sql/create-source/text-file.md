@@ -32,7 +32,11 @@ the **TEXT** formatting option.
 
 {{< diagram "create-source-text.svg" >}}
 
-{{% create-source/syntax-details connector="file" formats="regex text bytes" envelopes="append-only" %}}
+### key_constraint
+
+{{< diagram "key-constraint.svg" >}}
+
+{{% create-source/syntax-details connector="file" formats="regex text bytes" envelopes="append-only" keyConstraint=true %}}
 
 ## Examples
 

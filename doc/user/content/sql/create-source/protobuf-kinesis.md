@@ -20,7 +20,11 @@ stream.
 
 {{< diagram "create-source-protobuf-kinesis.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="protobuf" envelopes="append-only" %}}
+### key_constraint
+
+{{< diagram "key-constraint.svg" >}}
+
+{{% create-source/syntax-details connector="kinesis" formats="protobuf" envelopes="append-only" keyConstraint=true %}}
 
 ## Examples
 

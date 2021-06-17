@@ -19,7 +19,11 @@ topics.
 
 {{< diagram "create-source-protobuf-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only" %}}
+### key_constraint
+
+{{< diagram "key-constraint.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only" keyConstraint=true %}}
 
 ## Examples
 

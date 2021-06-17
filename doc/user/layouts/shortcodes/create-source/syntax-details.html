@@ -1,6 +1,7 @@
 {{ $connector := .Get "connector" }}
 {{ $formats := split ( .Get "formats" ) " " }}
 {{ $envelopes := split ( .Get "envelopes" ) " " }}
+{{ $keyConstraint := .Get "keyConstraint" }}
 
 Field | Use
 ------|-----
@@ -11,6 +12,7 @@ _col&lowbar;name_ | Override default column name with the provided [identifier](
 **WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
 {{ range $formats }}{{ partial (printf "create-source/format/%s/syntax" .) . }}{{ end -}}
 {{ range $envelopes }}{{ partial (printf "create-source/envelope/%s/syntax" .) . }}{{ end -}}
+{{ if $keyConstraint }}{{ partial "create-source/key-constraint/syntax" . }}{{ end -}}
 
 ### `WITH` options
 
@@ -52,3 +54,5 @@ footprint](/sql/create-index/#memory-footprint).
 {{ range $formats }}{{ partial (printf "create-source/format/%s/details" .) . }}{{ end -}}
 
 {{ range $envelopes }}{{ partial (printf "create-source/envelope/%s/details" .) . }}{{ end -}}
+
+{{ if $keyConstraint }}{{ partial "create-source/key-constraint/details" . }}{{ end -}}

@@ -23,7 +23,11 @@ topic.
 
 {{< diagram "format-spec-avro-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" %}}
+### key_constraint
+
+{{< diagram "key-constraint.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" keyConstraint=true %}}
 
 ## Examples
 

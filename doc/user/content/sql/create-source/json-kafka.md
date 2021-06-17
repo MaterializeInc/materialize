@@ -16,7 +16,7 @@ topics.
 
 {{< diagram "create-source-json-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="json-bytes" envelopes="append-only" %}}
+{{% create-source/syntax-details connector="kafka" formats="json-bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples
 
