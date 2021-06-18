@@ -93,8 +93,8 @@ use sql::plan::{
     CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
     DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use transform::Optimizer;
 
@@ -648,7 +648,7 @@ impl Coordinator {
             .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
             .await
         {
-            Ok((pcx, plan)) => self.sequence_plan(tx, session, pcx, plan).await,
+            Ok(plan) => self.sequence_plan(tx, session, plan).await,
             Err(e) => tx.send(Err(e), session),
         }
     }
@@ -1062,7 +1062,7 @@ impl Coordinator {
         session: &mut Session,
         stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
-    ) -> Result<(PlanContext, sql::plan::Plan), CoordError> {
+    ) -> Result<sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
 
         // When symbiosis mode is enabled, use symbiosis planning for:
@@ -1085,7 +1085,7 @@ impl Coordinator {
                 let plan = postgres
                     .execute(&pcx, &self.catalog.for_session(session), &stmt)
                     .await?;
-                return Ok((pcx, plan));
+                return Ok(plan);
             }
         }
 
@@ -1095,13 +1095,13 @@ impl Coordinator {
             stmt.clone(),
             params,
         ) {
-            Ok(plan) => Ok((pcx, plan)),
+            Ok(plan) => Ok(plan),
             Err(err) => match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
                     let plan = postgres
                         .execute(&pcx, &self.catalog.for_session(session), &stmt)
                         .await?;
-                    Ok((pcx, plan))
+                    Ok(plan)
                 }
                 _ => Err(err.into()),
             },
@@ -1266,7 +1266,6 @@ impl Coordinator {
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
-        pcx: PlanContext,
         plan: Plan,
     ) {
         match plan {
@@ -1281,36 +1280,33 @@ impl Coordinator {
             }
             Plan::CreateTable(plan) => {
                 tx.send(
-                    self.sequence_create_table(&mut session, pcx, plan).await,
+                    self.sequence_create_table(&mut session, plan).await,
                     session,
                 );
             }
             Plan::CreateSource(plan) => {
                 tx.send(
-                    self.sequence_create_source(&mut session, pcx, plan).await,
+                    self.sequence_create_source(&mut session, plan).await,
                     session,
                 );
             }
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, pcx, plan, tx).await;
+                self.sequence_create_sink(session, plan, tx).await;
             }
             Plan::CreateView(plan) => {
-                tx.send(
-                    self.sequence_create_view(&mut session, pcx, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_view(&mut session, plan).await, session);
             }
             Plan::CreateViews(plan) => {
                 tx.send(
-                    self.sequence_create_views(&mut session, pcx, plan).await,
+                    self.sequence_create_views(&mut session, plan).await,
                     session,
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(pcx, plan).await, session);
+                tx.send(self.sequence_create_index(plan).await, session);
             }
             Plan::CreateType(plan) => {
-                tx.send(self.sequence_create_type(pcx, plan).await, session);
+                tx.send(self.sequence_create_type(plan).await, session);
             }
             Plan::DropDatabase(plan) => {
                 tx.send(self.sequence_drop_database(plan).await, session);
@@ -1516,7 +1512,6 @@ impl Coordinator {
     async fn sequence_create_table(
         &mut self,
         session: &Session,
-        pcx: PlanContext,
         plan: CreateTablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateTablePlan {
@@ -1536,7 +1531,6 @@ impl Coordinator {
         index_depends_on.push(table_id);
         let table = catalog::Table {
             create_sql: table.create_sql,
-            plan_cx: pcx,
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
@@ -1592,7 +1586,6 @@ impl Coordinator {
     async fn sequence_create_source(
         &mut self,
         session: &mut Session,
-        pcx: PlanContext,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         // TODO(petrosagg): remove this check once postgres sources are properly supported
@@ -1614,7 +1607,7 @@ impl Coordinator {
         }
 
         let if_not_exists = plan.if_not_exists;
-        let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan])?;
+        let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 self.ship_sources(metadata).await;
@@ -1648,7 +1641,6 @@ impl Coordinator {
     fn generate_create_source_ops(
         &mut self,
         session: &mut Session,
-        pcx: PlanContext,
         plans: Vec<CreateSourcePlan>,
     ) -> Result<(Vec<(GlobalId, Option<GlobalId>, bool)>, Vec<catalog::Op>), CoordError> {
         let mut metadata = vec![];
@@ -1666,7 +1658,6 @@ impl Coordinator {
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
             let source = catalog::Source {
                 create_sql: source.create_sql,
-                plan_cx: pcx.clone(),
                 optimized_expr,
                 connector: source.connector,
                 bare_desc: source.bare_desc,
@@ -1715,7 +1706,6 @@ impl Coordinator {
     async fn sequence_create_sink(
         &mut self,
         session: Session,
-        pcx: PlanContext,
         plan: CreateSinkPlan,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
@@ -1755,7 +1745,6 @@ impl Coordinator {
             name,
             item: CatalogItem::Sink(catalog::Sink {
                 create_sql: sink.create_sql,
-                plan_cx: pcx,
                 from: sink.from,
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
                 envelope: sink.envelope,
@@ -1798,7 +1787,6 @@ impl Coordinator {
     fn generate_view_ops(
         &mut self,
         session: &Session,
-        pcx: PlanContext,
         plan: CreateViewPlan,
     ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
         let CreateViewPlan {
@@ -1824,7 +1812,6 @@ impl Coordinator {
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
-            plan_cx: pcx,
             optimized_expr,
             desc,
             conn_id: if view.temporary {
@@ -1874,11 +1861,10 @@ impl Coordinator {
     async fn sequence_create_view(
         &mut self,
         session: &Session,
-        pcx: PlanContext,
         plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let if_not_exists = plan.if_not_exists;
-        let (ops, index_id) = self.generate_view_ops(session, pcx, plan)?;
+        let (ops, index_id) = self.generate_view_ops(session, plan)?;
 
         match self.catalog_transact(ops).await {
             Ok(()) => {
@@ -1899,14 +1885,13 @@ impl Coordinator {
     async fn sequence_create_views(
         &mut self,
         session: &mut Session,
-        pcx: PlanContext,
         plan: CreateViewsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         let mut index_ids = vec![];
 
         for view_plan in plan.views {
-            let (mut view_ops, index_id) = self.generate_view_ops(session, pcx, view_plan)?;
+            let (mut view_ops, index_id) = self.generate_view_ops(session, view_plan)?;
             ops.append(&mut view_ops);
             if let Some(index_id) = index_id {
                 index_ids.push(index_id);
@@ -1931,7 +1916,6 @@ impl Coordinator {
 
     async fn sequence_create_index(
         &mut self,
-        pcx: PlanContext,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
@@ -1947,7 +1931,6 @@ impl Coordinator {
         }
         let index = catalog::Index {
             create_sql: index.create_sql,
-            plan_cx: pcx,
             keys: index.keys,
             on: index.on,
             conn_id: None,
@@ -1978,12 +1961,10 @@ impl Coordinator {
 
     async fn sequence_create_type(
         &mut self,
-        pcx: PlanContext,
         plan: CreateTypePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
-            plan_cx: pcx,
             inner: plan.typ.inner.into(),
             depends_on: plan.depends_on,
         };
@@ -2805,7 +2786,7 @@ impl Coordinator {
         rows: Vec<Row>,
     ) -> Result<ExecuteResponse, CoordError> {
         let catalog = self.catalog.for_session(session);
-        let values = sql::plan::plan_copy_from(&catalog, id, columns, rows)?;
+        let values = sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
         let plan = InsertPlan {
             id,
             values: values.lower(),
@@ -3493,7 +3474,6 @@ fn auto_generate_primary_idx(
     let default_key = on_desc.typ().default_key();
     catalog::Index {
         create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
-        plan_cx: PlanContext::default(),
         on: on_id,
         keys: default_key
             .iter()

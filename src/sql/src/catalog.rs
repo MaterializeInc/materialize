@@ -28,7 +28,6 @@ use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{FullName, PartialName, SchemaName};
-use crate::plan::PlanContext;
 
 /// A catalog keeps track of SQL objects available to the planner.
 ///
@@ -248,9 +247,6 @@ pub trait CatalogItem {
     /// A normalized SQL statement that describes how to create the catalog
     /// item.
     fn create_sql(&self) -> &str;
-
-    /// The [`PlanContext`] associated with the catalog item.
-    fn plan_cx(&self) -> &PlanContext;
 
     /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.

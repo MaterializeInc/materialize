@@ -25,7 +25,6 @@
 //! extremely slow and inefficient on large data sets.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::env;
@@ -143,12 +142,7 @@ END $$;
         catalog: &dyn Catalog,
         stmt: &Statement<Raw>,
     ) -> Result<Plan, anyhow::Error> {
-        let scx = StatementContext {
-            pcx,
-            catalog,
-            ids: HashSet::new(),
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
-        };
+        let scx = StatementContext::new(Some(pcx), catalog, Rc::new(RefCell::new(BTreeMap::new())));
         Ok(match stmt {
             Statement::CreateTable(CreateTableStatement {
                 name,

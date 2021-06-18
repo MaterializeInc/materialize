@@ -2122,8 +2122,8 @@ lazy_static! {
 
 fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr, anyhow::Error> {
     match ecx.qcx.lifetime {
-        QueryLifetime::OneShot => Ok(HirScalarExpr::literal(
-            Datum::from(ecx.qcx.scx.pcx.wall_time),
+        QueryLifetime::OneShot(pcx) => Ok(HirScalarExpr::literal(
+            Datum::from(pcx.wall_time),
             ScalarType::TimestampTz,
         )),
         QueryLifetime::Static => bail!("{} cannot be used in static queries", name),
@@ -2153,7 +2153,7 @@ fn mz_workers(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
 
 fn mz_uptime(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
     match ecx.qcx.lifetime {
-        QueryLifetime::OneShot => Ok(HirScalarExpr::literal(
+        QueryLifetime::OneShot(_) => Ok(HirScalarExpr::literal(
             Datum::from(chrono::Duration::from_std(
                 ecx.catalog().config().start_instant.elapsed(),
             )?),

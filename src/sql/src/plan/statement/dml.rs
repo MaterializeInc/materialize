@@ -12,7 +12,6 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
-use std::collections::HashSet;
 use std::convert::TryFrom;
 
 use anyhow::bail;
@@ -105,7 +104,7 @@ pub fn describe_select(
     SelectStatement { query, .. }: SelectStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let query::PlannedQuery { desc, .. } =
-        query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+        query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -117,7 +116,7 @@ pub fn plan_select(
 ) -> Result<Plan, anyhow::Error> {
     let query::PlannedQuery {
         expr, finishing, ..
-    } = plan_query(scx, query, params, QueryLifetime::OneShot)?;
+    } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
@@ -172,7 +171,7 @@ pub fn plan_explain(
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let is_view = matches!(explainee, Explainee::View(_));
-    let (scx, query) = match explainee {
+    let query = match explainee {
         Explainee::View(name) => {
             let view = scx.resolve_item(name.clone())?;
             if view.item_type() != CatalogItemType::View {
@@ -187,15 +186,9 @@ pub fn plan_explain(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let scx = StatementContext {
-                pcx: view.plan_cx(),
-                catalog: scx.catalog,
-                ids: HashSet::new(),
-                param_types: scx.param_types.clone(),
-            };
-            (scx, query)
+            query
         }
-        Explainee::Query(query) => (scx.clone(), query),
+        Explainee::Query(query) => query,
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
@@ -204,7 +197,7 @@ pub fn plan_explain(
         desc,
         finishing,
         ..
-    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
+    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
