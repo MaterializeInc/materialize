@@ -47,7 +47,7 @@ tokio = "1.6.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-stream = "0.1.6"
 transform = { path = "../transform" }
-unicase = "2.6.0"
+uncased = "0.9.6"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["v4"] }
 

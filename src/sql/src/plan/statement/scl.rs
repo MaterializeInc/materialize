@@ -15,6 +15,7 @@
 use std::convert::TryFrom;
 
 use anyhow::bail;
+use uncased::UncasedStr;
 
 use repr::adt::interval::Interval;
 use repr::{RelationDesc, ScalarType};
@@ -60,7 +61,7 @@ pub fn describe_show_variable(
     _: &StatementContext,
     ShowVariableStatement { variable, .. }: ShowVariableStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let desc = if variable.as_str() == unicase::Ascii::new("ALL") {
+    let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::empty()
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("setting", ScalarType::String.nullable(false))
@@ -76,7 +77,7 @@ pub fn plan_show_variable(
     _: &StatementContext,
     ShowVariableStatement { variable }: ShowVariableStatement,
 ) -> Result<Plan, anyhow::Error> {
-    if variable.as_str() == unicase::Ascii::new("ALL") {
+    if variable.as_str() == UncasedStr::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
         Ok(Plan::ShowVariable(ShowVariablePlan {

@@ -26,7 +26,6 @@
 mod assert;
 
 pub mod antichain;
-pub mod ascii;
 pub mod cast;
 pub mod cli;
 pub mod codegen;
