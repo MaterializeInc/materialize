@@ -64,6 +64,10 @@ Wrap your release notes at the 80 character mark.
 - **Breaking change.** The `timezone(String, Time)` function can no
   longer be used in views.
 
+- Debezium sinks
+  emit [`collection_data`](/sql/create-sink/#consistency-metadata) attributes in
+  their consistency topic.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
