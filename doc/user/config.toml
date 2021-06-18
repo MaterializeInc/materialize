@@ -60,6 +60,11 @@ name = "SQL"
 weight = 70
 
 [[menu.main]]
+identifier = "guides"
+name = "Guides"
+weight = 75
+
+[[menu.main]]
 identifier = "operations"
 name = "Operations"
 weight = 80
@@ -73,6 +78,7 @@ weight = 100
 identifier = "third-party"
 name = "Third-Party Tools"
 weight = 120
+
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
