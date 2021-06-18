@@ -195,11 +195,13 @@ impl NonNullRequirements {
                 expected_group_size: _,
             } => {
                 let mut new_columns = HashSet::new();
-                for column in columns.iter().filter(|c| **c < group_key.len()) {
-                    group_key[*column].non_null_requirements(&mut new_columns);
+                let (group_key_columns, aggs_columns): (Vec<usize>, Vec<usize>) =
+                    columns.iter().partition(|c| **c < group_key.len());
+                for column in group_key_columns {
+                    group_key[column].non_null_requirements(&mut new_columns);
                 }
 
-                if columns.iter().any(|c| *c >= group_key.len()) {
+                if !aggs_columns.is_empty() {
                     // We can convert a non-null requirement on an aggregate function into
                     // a non-null requirement on its parameter only if we are sure that
                     // won't affect the result of any other aggregation.
@@ -228,15 +230,9 @@ impl NonNullRequirements {
                             }
                         })
                         .unwrap();
-                    if columns
+                    if aggs_columns
                         .iter()
-                        .filter_map(|c| {
-                            if *c >= group_key.len() {
-                                Some(*c - group_key.len())
-                            } else {
-                                None
-                            }
-                        })
+                        .map(|c| *c - group_key.len())
                         .all(|aggr_pos| {
                             new_nonnull_columns_per_aggregate[aggr_pos]
                                 .iter()
