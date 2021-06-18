@@ -28,6 +28,18 @@ impl fmt::Display for Error {
     }
 }
 
+// Hack so we can debug_assert_eq against Result<(), Error>.
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        if let Error::String(s) = self {
+            if let Error::String(o) = other {
+                return s == o;
+            }
+        }
+        return false;
+    }
+}
+
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Error::IO(e)
@@ -37,6 +49,12 @@ impl From<io::Error> for Error {
 impl From<String> for Error {
     fn from(e: String) -> Self {
         Error::String(e)
+    }
+}
+
+impl<'a> From<&'a str> for Error {
+    fn from(e: &'a str) -> Self {
+        Error::String(e.into())
     }
 }
 

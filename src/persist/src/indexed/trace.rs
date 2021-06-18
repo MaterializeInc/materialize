@@ -20,7 +20,8 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::{BlobTraceBatch, BlobTraceMeta};
+use crate::indexed::encoding::BlobTraceMeta;
+use crate::indexed::BlobTraceBatch;
 use crate::persister::Snapshot;
 use crate::storage::Blob;
 

@@ -12,13 +12,14 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write as StdWrite};
+use std::io::{self, Read, Seek, SeekFrom, Write as StdWrite};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
 use crate::mem::MemSnapshot;
 use crate::persister::{Meta, Persister, Write};
+use crate::storage::Blob;
 use crate::{Id, Token};
 
 /// A naive implementation of [Write] and [Meta] backed by a file.
@@ -181,11 +182,85 @@ impl Persister for FilePersister {
     }
 }
 
+/// Implementation of [Blob] backed by files.
+pub struct FileBlob {
+    base_dir: PathBuf,
+}
+
+impl FileBlob {
+    const LOCKFILE_PATH: &'static str = "LOCK";
+
+    /// Returns a new [FileBlob] which stores files under the given dir.
+    ///
+    /// To ensure directory-wide mutual exclusion, a LOCK file is placed in
+    /// base_dir at construction time. If this file already exists (indicating
+    /// that another FileBlob is already using the dir), an error is returned
+    /// from `new`.
+    ///
+    /// The contents are `lock_info` are stored in the LOCK file and should
+    /// include anything that would help debug an unexpected LOCK file, such as
+    /// version, ip, worker number, etc.
+    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: &[u8]) -> Result<Self, Error> {
+        let base_dir = base_dir.as_ref();
+        fs::create_dir_all(&base_dir)?;
+        {
+            let lockfile_path = Self::lockfile_path(&base_dir);
+            let mut lockfile = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(lockfile_path)?;
+            lockfile.write_all(&lock_info)?;
+            lockfile.sync_all()?;
+        }
+        Ok(FileBlob {
+            base_dir: base_dir.to_path_buf(),
+        })
+    }
+
+    fn lockfile_path(base_dir: &Path) -> PathBuf {
+        base_dir.join(Self::LOCKFILE_PATH)
+    }
+
+    fn blob_path(&self, key: &str) -> PathBuf {
+        self.base_dir.join(key)
+    }
+}
+
+impl Blob for FileBlob {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        let file_path = self.blob_path(key);
+        let mut file = match File::open(file_path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        Ok(Some(buf))
+    }
+
+    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+        let file_path = self.blob_path(key);
+        let mut file = if allow_overwrite {
+            File::create(file_path)?
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(file_path)?
+        };
+        file.write_all(&value[..])?;
+        file.sync_all()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::NamedTempFile;
 
     use crate::persister::Snapshot;
+    use crate::storage::tests::blob_impl_test;
 
     use super::*;
 
@@ -206,5 +281,14 @@ mod tests {
         assert_eq!(snapshot_data, data);
 
         Ok(())
+    }
+
+    #[test]
+    fn file_blob() -> Result<(), Error> {
+        let temp_dir = tempfile::tempdir()?;
+        blob_impl_test(move |idx| {
+            let instance_dir = temp_dir.path().join(format!("{}", idx));
+            FileBlob::new(instance_dir, &"file_blob_test".as_bytes())
+        })
     }
 }
