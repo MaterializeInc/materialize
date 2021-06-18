@@ -5,6 +5,7 @@ weight: 20
 menu:
   main:
     parent: guides
+disable_toc: true
 ---
 
 Suppose you want to group rows in a table by some key, then filter out all but

@@ -25,4 +25,4 @@ http://materialize.com/* https://materialize.com/:splat 301!
 
 # Temporary redirect of temporal filters doc page to temporal filters blog post.
 
-https://www.materialize.com/doc/guides/temporal-filters https://www.materialize.com/temporal-filters
+https://materialize.com/doc/guides/temporal-filters https://materialize.com/temporal-filters
