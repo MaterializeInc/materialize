@@ -212,7 +212,10 @@ impl NonNullRequirements {
                     // Note: all columns from the non-preserving side of an outer join could
                     // be treated as a single column for this analysis, but we don't have
                     // that information here.
-                    let new_nonnull_columns_per_aggregate = aggregates
+
+                    // For each aggregate, the columns that must be non-null in order for its
+                    // result to be non-null.
+                    let nonnull_req_per_aggregate = aggregates
                         .iter()
                         .map(|aggr| {
                             let mut aggr_nonnull_columns = HashSet::new();
@@ -220,26 +223,24 @@ impl NonNullRequirements {
                             aggr_nonnull_columns
                         })
                         .collect::<Vec<_>>();
-                    let all_aggregated_nonnull_columns = new_nonnull_columns_per_aggregate
-                        .iter()
-                        .fold(None, |acc: Option<HashSet<usize>>, columns| {
-                            if let Some(previous) = acc {
-                                Some(previous.intersection(&columns).cloned().collect())
-                            } else {
-                                Some(columns.clone())
-                            }
-                        })
-                        .unwrap();
+                    // The intersection of the non-null requirements of all aggregates.
+                    let req_intersection = {
+                        let mut iter = nonnull_req_per_aggregate.iter();
+                        iter.next()
+                            .cloned()
+                            .map(|set| iter.fold(set, |set1, set2| &set1 & set2))
+                            .unwrap()
+                    };
+                    // By checking that all column parameters in all the non-null aggregated
+                    // columns are required to be non-null in order for the input of the rest
+                    // of the aggregates to be non-null, we ensure that removing null rows
+                    // won't alter the result of the rest of the aggregates.
                     if aggs_columns
                         .iter()
                         .map(|c| *c - group_key.len())
-                        .all(|aggr_pos| {
-                            new_nonnull_columns_per_aggregate[aggr_pos]
-                                .iter()
-                                .all(|col| all_aggregated_nonnull_columns.contains(col))
-                        })
+                        .all(|aggr_pos| nonnull_req_per_aggregate[aggr_pos] == req_intersection)
                     {
-                        new_columns.extend(all_aggregated_nonnull_columns);
+                        new_columns.extend(req_intersection);
                     }
                 }
                 self.action(input, new_columns, gets);
