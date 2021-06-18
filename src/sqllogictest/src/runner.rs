@@ -420,7 +420,7 @@ where
 }
 
 fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
-    match (typ, d.0) {
+    match match (typ, d.0) {
         (Type::Bool, Value::Bool(b)) => b.to_string(),
 
         (Type::Integer, Value::Int4(i)) => i.to_string(),
@@ -481,6 +481,12 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             "Don't know how to format {:?} as {:?} in column {}",
             d, typ, col,
         ),
+    }
+    .as_str()
+    {
+        "-0" => "0".to_string(), // convert negative zero to zero
+        "-0.000" => "0.000".to_string(),
+        v => v.to_string(),
     }
 }
 

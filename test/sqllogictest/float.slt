@@ -10,9 +10,9 @@
 mode cockroach
 
 query T
-SELECT '-0'::float::text
+SELECT '-0'::float::text = '-0'::text
 ----
--0
+true
 
 query TTTTT
 SELECT 'Inf'::float::text, 'Infinity'::float::text, 'inFinIty'::float::text, '+inf'::float::text, '+infinity'::float::text
