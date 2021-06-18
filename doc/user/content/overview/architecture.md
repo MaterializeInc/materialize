@@ -56,9 +56,7 @@ Broadly, there are three classes of statements in Materialize:
 ### Creating sources
 
 When Materialize receives a `CREATE SOURCE...` statement, it connects to some
-destination to read data. In the case of streaming sources, it attempts to
-connect to a Kafka stream, which it plugs into its local instance of
-[Differential](https://github.com/frankmcsherry/differential-dataflow). You can find more information about how that works in the
+destination to read data. You can find more information about how that works in the
 [Sources](#sources-ingesting-data) section.
 
 ### Reading data
@@ -110,12 +108,12 @@ view is how long the generated dataflow persists.
   read on this data at any given time than it is to create an answer from
   scratch.
 
-The only wrinkle in the above explanation is that when you perform reads on views, no dataflow gets created, and Materialize instead serves the result from an
+In some cases, when the queries are relatively simple, Materialize can avoid creating a new dataflow and instead serves the result from an
 existing dataflow.
 
 ## Sources: Ingesting data
 
-For Materialize to ingest data, it must read it from a source, which comes in two varieties:
+For Materialize to ingest data, it must read it from a source or a table. Sources come in two varieties:
 
 - Streaming sources, like Kakfa
 - File sources, like `.csv` or generic log files

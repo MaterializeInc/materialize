@@ -7,7 +7,7 @@ menu:
 ---
 
 You can use the queries below for spot debugging, but it may also be
-helpful to make them more permanent tools by creating them as views fo `TAIL`ing or materialized views to read more efficiently. Note that the
+helpful to make them more permanent tools by creating them as views for `TAIL`ing or materialized views to read more efficiently. Note that the
 existence of these additional views may itself affect performance.
 
 ### Are my sources loading data in a reasonable fashion?
