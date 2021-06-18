@@ -98,7 +98,7 @@ Wrap your release notes at the 80 character mark.
 - Support [equality operators](/sql/functions/#boolean) on
   [array data](/sql/types/array).
 
-- Stabilized temporal filters (no longer require `--experimental`)
+- Add temporal filters
 
 {{% version-header v0.7.2 %}}
 
