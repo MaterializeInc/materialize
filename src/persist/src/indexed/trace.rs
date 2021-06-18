@@ -121,6 +121,7 @@ impl BlobTrace {
 }
 
 /// A consistent snapshot of the data currently in a persistent [BlobTrace].
+#[derive(Debug)]
 pub struct TraceSnapshot {
     /// An open upper bound on the times of contained updates.
     pub ts_upper: Antichain<u64>,

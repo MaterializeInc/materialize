@@ -8,67 +8,79 @@
 // by the Apache License, Version 2.0.
 
 //! The public API used by the rest of the crate for interacting with an
-//! instance of [Indexed].
+//! instance of [crate::indexed::Indexed] via [RuntimeClient].
 
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::mpsc;
 
 use crate::error::Error;
 use crate::indexed::encoding::Id;
-use crate::indexed::{Indexed, IndexedSnapshot};
+use crate::indexed::runtime::RuntimeClient;
+use crate::indexed::IndexedSnapshot;
 use crate::persister::{Meta, Write};
-use crate::storage::{Blob, Buffer};
 
-/// An implementation of [Write] in terms of an [Indexed].
-pub struct StreamWriteHandle<U: Buffer, L: Blob> {
+/// An implementation of [Write] in terms of an [crate::indexed::Indexed] via a
+/// [RuntimeClient].
+pub struct StreamWriteHandle {
     id: Id,
-    indexed: Arc<Mutex<Indexed<U, L>>>,
+    runtime: RuntimeClient,
 }
 
-impl<U: Buffer, L: Blob> Write for StreamWriteHandle<U, L> {
+impl Write for StreamWriteHandle {
     fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error> {
-        self.indexed.lock()?.write_sync(self.id, updates)
+        // TODO: Make Write::write_sync signature non-blocking.
+        let (rx, tx) = mpsc::channel();
+        self.runtime.write(self.id, updates, rx.into());
+        tx.recv().map_err(|_| Error::RuntimeShutdown)?
     }
 
     fn seal(&mut self, upper: u64) -> Result<(), Error> {
-        self.indexed.lock()?.seal(self.id, upper)
+        // TODO: Make Write::write_sync signature non-blocking.
+        let (rx, tx) = mpsc::channel();
+        self.runtime.seal(self.id, upper, rx.into());
+        tx.recv().map_err(|_| Error::RuntimeShutdown)?
     }
 }
 
-impl<U: Buffer, L: Blob> StreamWriteHandle<U, L> {
+impl StreamWriteHandle {
     /// Returns a new [StreamWriteHandle] for the given stream.
-    pub fn new(id: Id, indexed: Arc<Mutex<Indexed<U, L>>>) -> Self {
-        StreamWriteHandle { id, indexed }
+    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+        StreamWriteHandle { id, runtime }
     }
 }
 
-/// An implementation of [Meta] in terms of an [Indexed].
-pub struct StreamMetaHandle<U: Buffer, L: Blob> {
+/// An implementation of [Meta] in terms of an [crate::indexed::Indexed] via a
+/// [RuntimeClient].
+pub struct StreamMetaHandle {
     id: Id,
-    indexed: Arc<Mutex<Indexed<U, L>>>,
+    runtime: RuntimeClient,
 }
 
-impl<U: Buffer, L: Blob> Clone for StreamMetaHandle<U, L> {
+impl Clone for StreamMetaHandle {
     fn clone(&self) -> Self {
         StreamMetaHandle {
             id: self.id,
-            indexed: self.indexed.clone(),
+            runtime: self.runtime.clone(),
         }
     }
 }
 
-impl<U: Buffer, L: Blob> StreamMetaHandle<U, L> {
+impl StreamMetaHandle {
     /// Returns a new [StreamMetaHandle] for the given stream.
-    pub fn new(id: Id, indexed: Arc<Mutex<Indexed<U, L>>>) -> Self {
-        StreamMetaHandle { id, indexed }
+    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+        StreamMetaHandle { id, runtime }
     }
 }
 
-impl<U: Buffer, L: Blob> Meta for StreamMetaHandle<U, L> {
+impl Meta for StreamMetaHandle {
     type Snapshot = IndexedSnapshot;
 
     fn snapshot(&self) -> Result<Self::Snapshot, Error> {
-        self.indexed.lock()?.snapshot(self.id)
+        // TODO: Make Meta::snapshot signature non-blocking.
+        let (rx, tx) = mpsc::channel();
+        self.runtime.snapshot(self.id, rx.into());
+        tx.recv()
+            .map_err(|_| Error::RuntimeShutdown)
+            .and_then(std::convert::identity)
     }
 
     fn allow_compaction(&mut self, _ts: u64) -> Result<(), Error> {

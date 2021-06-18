@@ -18,6 +18,9 @@ pub enum Error {
     IO(io::Error),
     /// An unstructured persistence related error.
     String(String),
+    /// An error returned when a command is sent to a persistence runtime that
+    /// was previously stopped.
+    RuntimeShutdown,
 }
 
 impl error::Error for Error {}

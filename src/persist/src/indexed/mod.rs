@@ -15,6 +15,7 @@ pub mod cache;
 pub mod encoding;
 pub mod future;
 pub mod handle;
+pub mod runtime;
 pub mod trace;
 
 use std::collections::HashMap;
@@ -368,6 +369,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 }
 
 /// A consistent snapshot of the data currently in a [Buffer].
+#[derive(Debug)]
 struct BufferSnapshot(Vec<((String, String), u64, isize)>);
 
 impl Snapshot for BufferSnapshot {
@@ -378,6 +380,7 @@ impl Snapshot for BufferSnapshot {
 }
 
 /// A consistent snapshot of all data currently stored for an id.
+#[derive(Debug)]
 pub struct IndexedSnapshot(BufferSnapshot, FutureSnapshot, TraceSnapshot);
 
 impl Snapshot for IndexedSnapshot {

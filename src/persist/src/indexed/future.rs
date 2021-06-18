@@ -130,6 +130,7 @@ impl BlobFuture {
 }
 
 /// A consistent snapshot of the data currently in a persistent [BlobFuture].
+#[derive(Debug)]
 pub struct FutureSnapshot {
     /// An open upper bound on the seqnos of contained updates.
     pub seqno_upper: Antichain<SeqNo>,

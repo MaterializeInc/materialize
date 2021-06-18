@@ -270,11 +270,7 @@ impl MemRegistry {
 
     /// Opens the in-memory [Persister] associated with `path` or creates one if
     /// none exists.
-    pub fn open(
-        &mut self,
-        path: usize,
-        lock_info: &str,
-    ) -> Result<Persister<MemBuffer, MemBlob>, Error> {
+    pub fn open(&mut self, path: usize, lock_info: &str) -> Result<Persister, Error> {
         let (buffer, blob) = if let Some((buffer, blob)) = self.by_path.get(&path) {
             (buffer.clone(), blob.clone())
         } else {
