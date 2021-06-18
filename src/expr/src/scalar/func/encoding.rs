@@ -10,7 +10,8 @@
 //! Encoding and decoding support for various formats that represent binary data
 //! as text data.
 
-use ore::ascii::UncasedStr;
+use uncased::UncasedStr;
+
 use ore::fmt::FormatBuffer;
 use repr::strconv;
 

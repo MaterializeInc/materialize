@@ -21,7 +21,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use ore::ascii::UncasedStr;
+use uncased::UncasedStr;
 
 use crate::ast::Ident;
 

@@ -1201,7 +1201,7 @@ dependencies = [
  "serde_json",
  "sha-1",
  "sha2",
- "unicase",
+ "uncased",
 ]
 
 [[package]]
@@ -2637,7 +2637,6 @@ dependencies = [
  "libc",
  "log",
  "openssl",
- "phf_shared",
  "smallvec",
  "structopt",
  "timely",
@@ -2892,18 +2891,18 @@ dependencies = [
 
 [[package]]
 name = "phf"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3dfb61232e34fcb633f43d12c58f83c1df82962dcdfa565a4e866ffc17dafe12"
+checksum = "b2ac8b67553a7ca9457ce0e526948cad581819238f4a9d1ea74545851fa24f37"
 dependencies = [
  "phf_shared",
 ]
 
 [[package]]
 name = "phf_codegen"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbffee61585b0411840d3ece935cce9cb6321f01c45477d30066498cd5e1a815"
+checksum = "963adb11cf22ee65dfd401cf75577c1aa0eca58c0b97f9337d2da61d3e640503"
 dependencies = [
  "phf_generator",
  "phf_shared",
@@ -2911,22 +2910,22 @@ dependencies = [
 
 [[package]]
 name = "phf_generator"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17367f0cc86f2d25802b2c26ee58a7b23faeccf78a396094c13dced0d0182526"
+checksum = "0fc1437ada0f3a97d538f0bb608137bf53c53969028cab74c89893e1e9a12f0e"
 dependencies = [
  "phf_shared",
- "rand 0.7.3",
+ "rand 0.8.3",
 ]
 
 [[package]]
 name = "phf_shared"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c00cf8b9eafe68dde5e9eaa2cef8ee84a9336a47d566ec55ca16589633b65af7"
+checksum = "a68318426de33640f02be62b4ae8eb1261be2efbc337b60c54d845bf4484e0d9"
 dependencies = [
  "siphasher",
- "unicase",
+ "uncased",
 ]
 
 [[package]]
@@ -2982,7 +2981,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#eccab6c23bdeacaa644c3562112cbd6132361511"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -2995,7 +2994,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#eccab6c23bdeacaa644c3562112cbd6132361511"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
 dependencies = [
  "futures",
  "openssl",
@@ -3007,7 +3006,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#eccab6c23bdeacaa644c3562112cbd6132361511"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
 dependencies = [
  "base64",
  "byteorder",
@@ -3024,7 +3023,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#eccab6c23bdeacaa644c3562112cbd6132361511"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
 dependencies = [
  "bytes",
  "chrono",
@@ -3365,7 +3364,6 @@ dependencies = [
  "rand_chacha 0.2.2",
  "rand_core 0.5.1",
  "rand_hc 0.2.0",
- "rand_pcg",
 ]
 
 [[package]]
@@ -3444,15 +3442,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3190ef7066a446f2e7f42e239d161e905420ccab01eb967c9eb27d21b2322a73"
 dependencies = [
  "rand_core 0.6.2",
-]
-
-[[package]]
-name = "rand_pcg"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16abd0c1b639e9eb4d7c50c0b8100b0d0f849be2349829c740fe8e6eb4816429"
-dependencies = [
- "rand_core 0.5.1",
 ]
 
 [[package]]
@@ -4206,7 +4195,7 @@ dependencies = [
  "phf_codegen",
  "repr",
  "stacker",
- "unicase",
+ "uncased",
  "unicode-width",
  "walkabout",
 ]
@@ -4819,7 +4808,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#eccab6c23bdeacaa644c3562112cbd6132361511"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -4991,6 +4980,15 @@ name = "ucd-trie"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56dee185309b50d1f11bfedef0fe6d036842e3fb77413abef29f8f8d1c5d4c1c"
+
+[[package]]
+name = "uncased"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5baeed7327e25054889b9bd4f975f32e5f4c5d434042d59ab6cd4142c0a76ed0"
+dependencies = [
+ "version_check",
+]
 
 [[package]]
 name = "unicase"
