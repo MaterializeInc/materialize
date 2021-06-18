@@ -2569,10 +2569,10 @@ pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
 
 /// Converts the time `t`, which is assumed to be in UTC, to the timezone `tz`.
 /// For example, `EST` and `17:39:14` would return `12:39:14`.
-fn timezone_time(tz: Timezone, t: NaiveTime) -> Datum<'static> {
+fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> Datum<'static> {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
-        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&Utc::now().naive_utc()).fix(),
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&wall_time).fix(),
     };
     (t + offset).into()
 }
@@ -2789,7 +2789,7 @@ pub enum BinaryFunc {
     DateTruncTimestampTz,
     TimezoneTimestamp,
     TimezoneTimestampTz,
-    TimezoneTime,
+    TimezoneTime { wall_time: NaiveDateTime },
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
@@ -2944,8 +2944,15 @@ impl BinaryFunc {
                 eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
                     .map(|tz| timezone_timestamptz(tz, b.unwrap_timestamptz())))
             }
-            BinaryFunc::TimezoneTime => eager!(|a: Datum, b: Datum| parse_timezone(a.unwrap_str())
-                .map(|tz| timezone_time(tz, b.unwrap_time()))),
+            BinaryFunc::TimezoneTime { wall_time } => {
+                eager!(
+                    |a: Datum, b: Datum| parse_timezone(a.unwrap_str()).map(|tz| timezone_time(
+                        tz,
+                        b.unwrap_time(),
+                        wall_time
+                    ))
+                )
+            }
             BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
             BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
             BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),
@@ -3118,7 +3125,7 @@ impl BinaryFunc {
                 ScalarType::TimestampTz.nullable(in_nullable)
             }
 
-            TimezoneTime | TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
+            TimezoneTime { .. } | TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
             SubTime => ScalarType::Interval.nullable(true),
 
@@ -3351,7 +3358,7 @@ impl BinaryFunc {
             | DateTruncTimestampTz
             | TimezoneTimestamp
             | TimezoneTimestampTz
-            | TimezoneTime
+            | TimezoneTime { .. }
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
@@ -3472,7 +3479,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
             BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
             BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
-            BinaryFunc::TimezoneTime => f.write_str("timezonet"),
+            BinaryFunc::TimezoneTime { .. } => f.write_str("timezonet"),
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
@@ -3694,7 +3701,10 @@ pub enum UnaryFunc {
     DateTruncTimestampTz(DateTimeUnits),
     TimezoneTimestamp(Timezone),
     TimezoneTimestampTz(Timezone),
-    TimezoneTime(Timezone),
+    TimezoneTime {
+        tz: Timezone,
+        wall_time: NaiveDateTime,
+    },
     ToTimestamp,
     JsonbArrayLength,
     JsonbTypeof,
@@ -3901,7 +3911,9 @@ impl UnaryFunc {
             UnaryFunc::TimezoneTimestampTz(tz) => {
                 Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz()))
             }
-            UnaryFunc::TimezoneTime(tz) => Ok(timezone_time(*tz, a.unwrap_time())),
+            UnaryFunc::TimezoneTime { tz, wall_time } => {
+                Ok(timezone_time(*tz, a.unwrap_time(), wall_time))
+            }
             UnaryFunc::ToTimestamp => Ok(to_timestamp(a)),
             UnaryFunc::JsonbArrayLength => Ok(jsonb_array_length(a)),
             UnaryFunc::JsonbTypeof => Ok(jsonb_typeof(a)),
@@ -4036,7 +4048,7 @@ impl UnaryFunc {
 
             CastTimestampToDate | CastTimestampTzToDate => ScalarType::Date.nullable(in_nullable),
 
-            CastIntervalToTime | TimezoneTime(_) => ScalarType::Time.nullable(in_nullable),
+            CastIntervalToTime | TimezoneTime { .. } => ScalarType::Time.nullable(in_nullable),
 
             CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => {
                 ScalarType::Timestamp.nullable(in_nullable)
@@ -4304,7 +4316,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::DateTruncTimestampTz(units) => write!(f, "date_trunc_{}_tstz", units),
             UnaryFunc::TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),
             UnaryFunc::TimezoneTimestampTz(tz) => write!(f, "timezone_{}_tstz", tz),
-            UnaryFunc::TimezoneTime(tz) => write!(f, "timezone_{}_t", tz),
+            UnaryFunc::TimezoneTime { tz, .. } => write!(f, "timezone_{}_t", tz),
             UnaryFunc::ToTimestamp => f.write_str("tots"),
             UnaryFunc::JsonbArrayLength => f.write_str("jsonb_array_length"),
             UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),

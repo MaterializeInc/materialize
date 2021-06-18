@@ -61,6 +61,9 @@ Wrap your release notes at the 80 character mark.
   `WITH` option for Kafka sources, which allows to set `start_offset` based on
   Kafka timestamps.
 
+- **Breaking change.** The `timezone(String, Time)` function can no
+  longer be used in views.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
