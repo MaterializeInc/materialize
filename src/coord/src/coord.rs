@@ -1122,7 +1122,7 @@ impl Coordinator {
             &self.catalog.for_session(session),
             stmt.clone(),
             &param_types,
-            Some(session),
+            session,
         )?;
         let params = vec![];
         let result_formats = vec![pgrepr::Format::Text; desc.arity()];
@@ -1142,7 +1142,7 @@ impl Coordinator {
                 &self.catalog.for_session(session),
                 stmt.clone(),
                 &param_types,
-                Some(session),
+                session,
             ) {
                 Ok(desc) => desc,
                 // Describing the query failed. If we're running in symbiosis with
@@ -3534,16 +3534,13 @@ pub fn describe(
     catalog: &dyn sql::catalog::Catalog,
     stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
-    session: Option<&Session>,
+    session: &Session,
 ) -> Result<StatementDesc, CoordError> {
     match stmt {
         // FETCH's description depends on the current session, which describe_statement
         // doesn't (and shouldn't?) have access to, so intercept it here.
         Statement::Fetch(FetchStatement { ref name, .. }) => {
-            match session
-                .map(|session| session.get_portal(name.as_str()).map(|p| p.desc.clone()))
-                .flatten()
-            {
+            match session.get_portal(name.as_str()).map(|p| p.desc.clone()) {
                 Some(desc) => Ok(desc),
                 None => Err(CoordError::UnknownCursor(name.to_string())),
             }
