@@ -777,7 +777,7 @@ pub mod plan {
             let (mut mfp, expr) = MapFilterProject::extract_from_expression(expr);
             // We attempt to plan what we have remaining, in the context of `mfp`.
             // We may not be able to do this, and must wrap some operators with a `Mfp` stage.
-            let (mfp, plan) = match expr {
+            let plan = match expr {
                 // These operators should have been extracted from the expression.
                 MirRelationExpr::Map { .. } => {
                     panic!("This operator should have been extracted");
@@ -798,30 +798,27 @@ pub mod plan {
                                 .collect()
                         }),
                     };
-                    (Some(mfp), plan)
+                    plan
                 }
-                MirRelationExpr::Get { id, typ: _ } => (
+                MirRelationExpr::Get { id, typ: _ } => {
                     // This stage can absorb arbitrary MFP operators.
-                    None,
+                    let mfp = mfp.take();
                     Plan::Get {
                         id: id.clone(),
                         mfp,
-                    },
-                ),
+                    }
+                }
                 MirRelationExpr::Let { id, value, body } => {
                     // It would be unfortunate to have a non-trivial `mfp` here, as we hope
                     // that they would be pushed down. I am not sure if we should take the
                     // initiative to push down the `mfp` ourselves.
                     let value = Box::new(Plan::from_mir(value)?);
                     let body = Box::new(Plan::from_mir(body)?);
-                    (
-                        Some(mfp),
-                        Plan::Let {
-                            id: id.clone(),
-                            value,
-                            body,
-                        },
-                    )
+                    Plan::Let {
+                        id: id.clone(),
+                        value,
+                        body,
+                    }
                 }
                 MirRelationExpr::FlatMap {
                     input,
@@ -835,16 +832,14 @@ pub mod plan {
                         prepend_mfp_demand(&mut mfp, expr, demand);
                     }
                     let input = Box::new(Plan::from_mir(input)?);
-                    (
-                        // This stage can absorb arbitrary MFP instances.
-                        None,
-                        Plan::FlatMap {
-                            input,
-                            func: func.clone(),
-                            exprs: exprs.clone(),
-                            mfp,
-                        },
-                    )
+                    // This stage can absorb arbitrary MFP instances.
+                    let mfp = mfp.take();
+                    Plan::FlatMap {
+                        input,
+                        func: func.clone(),
+                        exprs: exprs.clone(),
+                        mfp,
+                    }
                 }
                 MirRelationExpr::Join {
                     inputs,
@@ -866,7 +861,6 @@ pub mod plan {
                         plans.push(Plan::from_mir(input)?);
                     }
                     // Extract temporal predicates as joins cannot currently absorb them.
-                    let temporal_mfp = mfp.extract_temporal();
                     let plan = match implementation {
                         expr::JoinImplementation::Differential((start, _start_arr), order) => {
                             JoinPlan::Linear(LinearJoinPlan::create_from(
@@ -874,7 +868,7 @@ pub mod plan {
                                 equivalences,
                                 order,
                                 input_mapper,
-                                mfp,
+                                &mut mfp,
                             ))
                         }
                         expr::JoinImplementation::DeltaQuery(orders) => {
@@ -882,21 +876,16 @@ pub mod plan {
                                 equivalences,
                                 &orders[..],
                                 input_mapper,
-                                mfp,
+                                &mut mfp,
                             ))
                         }
                         // Other plans are errors, and should be reported as such.
                         _ => return Err(()),
                     };
-
-                    (
-                        // This stage can absorb only non-temporal MFP instances.
-                        Some(temporal_mfp),
-                        Plan::Join {
-                            inputs: plans,
-                            plan,
-                        },
-                    )
+                    Plan::Join {
+                        inputs: plans,
+                        plan,
+                    }
                 }
                 MirRelationExpr::Reduce {
                     input,
@@ -913,14 +902,11 @@ pub mod plan {
                         *monotonic,
                         *expected_group_size,
                     );
-                    (
-                        Some(mfp),
-                        Plan::Reduce {
-                            input,
-                            key_val_plan,
-                            plan: reduce_plan,
-                        },
-                    )
+                    Plan::Reduce {
+                        input,
+                        key_val_plan,
+                        plan: reduce_plan,
+                    }
                 }
                 MirRelationExpr::TopK {
                     input,
@@ -932,27 +918,24 @@ pub mod plan {
                 } => {
                     let arity = input.arity();
                     let input = Box::new(Self::from_mir(input)?);
-                    (
-                        Some(mfp),
-                        Plan::TopK {
-                            input,
-                            group_key: group_key.clone(),
-                            order_key: order_key.clone(),
-                            limit: *limit,
-                            offset: *offset,
-                            monotonic: *monotonic,
-                            arity,
-                        },
-                    )
+                    Plan::TopK {
+                        input,
+                        group_key: group_key.clone(),
+                        order_key: order_key.clone(),
+                        limit: *limit,
+                        offset: *offset,
+                        monotonic: *monotonic,
+                        arity,
+                    }
                 }
                 MirRelationExpr::Negate { input } => {
                     let input = Box::new(Self::from_mir(input)?);
-                    (Some(mfp), Plan::Negate { input })
+                    Plan::Negate { input }
                 }
                 MirRelationExpr::Threshold { input } => {
                     let arity = input.arity();
                     let input = Box::new(Self::from_mir(input)?);
-                    (Some(mfp), Plan::Threshold { input, arity })
+                    Plan::Threshold { input, arity }
                 }
                 MirRelationExpr::Union { base, inputs } => {
                     let mut plans = Vec::with_capacity(1 + inputs.len());
@@ -960,32 +943,24 @@ pub mod plan {
                     for input in inputs.iter() {
                         plans.push(Self::from_mir(input)?)
                     }
-                    (Some(mfp), Plan::Union { inputs: plans })
+                    Plan::Union { inputs: plans }
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
                     let input = Box::new(Self::from_mir(input)?);
-                    (
-                        Some(mfp),
-                        Plan::ArrangeBy {
-                            input,
-                            keys: keys.clone(),
-                        },
-                    )
+                    Plan::ArrangeBy {
+                        input,
+                        keys: keys.clone(),
+                    }
                 }
-                MirRelationExpr::DeclareKeys { input, keys: _ } => {
-                    (Some(mfp), Self::from_mir(input)?)
-                }
+                MirRelationExpr::DeclareKeys { input, keys: _ } => Self::from_mir(input)?,
             };
 
-            if let Some(mfp) = mfp {
-                if !mfp.is_identity() {
-                    Ok(Plan::Mfp {
-                        input: Box::new(plan),
-                        mfp,
-                    })
-                } else {
-                    Ok(plan)
-                }
+            // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.
+            if !mfp.is_identity() {
+                Ok(Plan::Mfp {
+                    input: Box::new(plan),
+                    mfp,
+                })
             } else {
                 Ok(plan)
             }

@@ -88,7 +88,7 @@ impl DeltaJoinPlan {
         equivalences: &[Vec<MirScalarExpr>],
         join_orders: &[Vec<(usize, Vec<MirScalarExpr>)>],
         input_mapper: JoinInputMapper,
-        map_filter_project: MapFilterProject,
+        map_filter_project: &mut MapFilterProject,
     ) -> Self {
         let number_of_inputs = join_orders.len();
 
@@ -96,6 +96,8 @@ impl DeltaJoinPlan {
         let mut join_plan = DeltaJoinPlan {
             path_plans: Vec::with_capacity(number_of_inputs),
         };
+
+        let temporal_mfp = map_filter_project.extract_temporal();
 
         // Each source relation will contribute a path to the join plan.
         for source_relation in 0..number_of_inputs {
@@ -179,6 +181,10 @@ impl DeltaJoinPlan {
                 final_closure,
             });
         }
+
+        // Now that `map_filter_project` has been capture in the state builder,
+        // assign the remaining temporal predicates to it, for the caller's use.
+        *map_filter_project = temporal_mfp;
 
         join_plan
     }

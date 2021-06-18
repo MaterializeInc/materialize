@@ -71,8 +71,10 @@ impl LinearJoinPlan {
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>)],
         input_mapper: expr::JoinInputMapper,
-        map_filter_project: MapFilterProject,
+        map_filter_project: &mut MapFilterProject,
     ) -> Self {
+        let temporal_mfp = map_filter_project.extract_temporal();
+
         // Construct initial join build state.
         // This state will evolves as we build the join dataflow.
         let mut join_build_state = JoinBuildState::new(
@@ -141,6 +143,10 @@ impl LinearJoinPlan {
         } else {
             Some(final_closure)
         };
+
+        // Now that `map_filter_project` has been capture in the state builder,
+        // assign the remaining temporal predicates to it, for the caller's use.
+        *map_filter_project = temporal_mfp;
 
         // Form and return the complete join plan.
         LinearJoinPlan {
