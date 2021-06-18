@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::mem;
 
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::Stream;
 
@@ -76,44 +77,46 @@ impl Session {
         self.conn_id
     }
 
-    /// Returns (and creates if empty) the default PlanContext.
-    ///
-    /// This is cleared at the end of a transaction.
-    pub fn pcx(&mut self) -> PlanContext {
-        if self.pcx == None {
-            self.pcx = Some(PlanContext::new(ore::now::to_datetime(
-                ore::now::system_time(),
-            )));
-        }
-        self.pcx.unwrap()
+    /// Returns the current transaction's PlanContext. Panics if there is not a
+    /// current transaction.
+    pub fn pcx(&self) -> &PlanContext {
+        &self.transaction().inner().unwrap().pcx
     }
 
-    /// Starts a transaction.
-    pub fn start_transaction(&mut self) {
-        self.transaction = match &mut self.transaction {
+    /// Starts an explicit transaction, or changes an implicit to an explicit
+    /// transaction.
+    pub fn start_transaction(mut self, wall_time: DateTime<Utc>) -> Self {
+        match self.transaction {
             TransactionStatus::Default | TransactionStatus::Started(_) => {
-                TransactionStatus::InTransaction(TransactionOps::None)
+                self.transaction = TransactionStatus::InTransaction(Transaction {
+                    pcx: PlanContext::new(wall_time),
+                    ops: TransactionOps::None,
+                });
             }
-            TransactionStatus::InTransaction(ops)
-            | TransactionStatus::InTransactionImplicit(ops) => {
-                TransactionStatus::InTransaction(mem::replace(ops, TransactionOps::None))
+            TransactionStatus::InTransactionImplicit(txn) => {
+                self.transaction = TransactionStatus::InTransaction(txn);
             }
-            TransactionStatus::Failed => unreachable!(),
+            TransactionStatus::InTransaction(_) => {}
+            TransactionStatus::Failed(_) => unreachable!(),
         };
+        self
     }
 
-    /// Starts an implicit transaction.
-    pub fn start_transaction_implicit(&mut self, stmts: usize) {
+    /// Starts either a single statement or implicit transaction based on the
+    /// number of statements, but only if no transaction has been started already.
+    pub fn start_transaction_implicit(mut self, wall_time: DateTime<Utc>, stmts: usize) -> Self {
         if let TransactionStatus::Default = self.transaction {
+            let txn = Transaction {
+                pcx: PlanContext::new(wall_time),
+                ops: TransactionOps::None,
+            };
             match stmts {
-                1 => self.transaction = TransactionStatus::Started(TransactionOps::None),
-                n if n > 1 => {
-                    self.transaction =
-                        TransactionStatus::InTransactionImplicit(TransactionOps::None)
-                }
+                1 => self.transaction = TransactionStatus::Started(txn),
+                n if n > 1 => self.transaction = TransactionStatus::InTransactionImplicit(txn),
                 _ => {}
             }
         }
+        self
     }
 
     /// Clears a transaction, setting its state to Default and destroying all
@@ -135,8 +138,17 @@ impl Session {
     }
 
     /// Marks the current transaction as failed.
-    pub fn fail_transaction(&mut self) {
-        self.transaction = TransactionStatus::Failed;
+    pub fn fail_transaction(mut self) -> Self {
+        match self.transaction {
+            TransactionStatus::Default => unreachable!(),
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::InTransaction(txn) => {
+                self.transaction = TransactionStatus::Failed(txn);
+            }
+            TransactionStatus::Failed(_) => {}
+        };
+        self
     }
 
     /// Returns the current transaction status.
@@ -148,10 +160,10 @@ impl Session {
     /// cannot be merged (i.e., a read cannot be merged to an insert).
     pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), CoordError> {
         match &mut self.transaction {
-            TransactionStatus::Started(txn_ops)
-            | TransactionStatus::InTransaction(txn_ops)
-            | TransactionStatus::InTransactionImplicit(txn_ops) => match txn_ops {
-                TransactionOps::None => *txn_ops = add_ops,
+            TransactionStatus::Started(Transaction { ops, .. })
+            | TransactionStatus::InTransaction(Transaction { ops, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { ops, .. }) => match ops {
+                TransactionOps::None => *ops = add_ops,
                 TransactionOps::Peeks(txn_ts) => match add_ops {
                     TransactionOps::Peeks(add_ts) => {
                         assert_eq!(*txn_ts, add_ts);
@@ -168,7 +180,7 @@ impl Session {
                     }
                 },
             },
-            TransactionStatus::Default | TransactionStatus::Failed => {
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {
                 unreachable!()
             }
         }
@@ -192,10 +204,11 @@ impl Session {
         // one. We generate one even though we could check here that the transaction
         // isn't in some other conflicting state because we want all of that logic to
         // reside in add_transaction_ops.
-        let ts = match self.transaction {
-            TransactionStatus::Started(TransactionOps::Peeks(ts))
-            | TransactionStatus::InTransaction(TransactionOps::Peeks(ts))
-            | TransactionStatus::InTransactionImplicit(TransactionOps::Peeks(ts)) => ts,
+        let ts = match self.transaction.inner() {
+            Some(Transaction {
+                pcx: _,
+                ops: TransactionOps::Peeks(ts),
+            }) => *ts,
             _ => get_ts()?,
         };
         self.add_transaction_ops(TransactionOps::Peeks(ts))?;
@@ -368,22 +381,54 @@ pub enum TransactionStatus {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
     /// Running a single-query transaction. Matches `TBLOCK_STARTED`.
-    Started(TransactionOps),
+    Started(Transaction),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
-    InTransaction(TransactionOps),
+    InTransaction(Transaction),
     /// Currently in an implicit transaction started from a multi-statement query
     /// with more than 1 statements. Matches `TBLOCK_IMPLICIT_INPROGRESS`.
-    InTransactionImplicit(TransactionOps),
+    InTransactionImplicit(Transaction),
     /// In a failed transaction that was started explicitly (i.e., previously
     /// InTransaction). We do not use Failed for implicit transactions because
     /// those cleanup after themselves. Matches `TBLOCK_ABORT`.
-    Failed,
+    Failed(Transaction),
+}
+
+impl TransactionStatus {
+    /// Extracts the inner transaction ops if not failed.
+    pub fn into_ops(self) -> Option<TransactionOps> {
+        match self {
+            TransactionStatus::Default | TransactionStatus::Failed(_) => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn) => Some(txn.ops),
+        }
+    }
+
+    /// Exposes the inner transaction.
+    pub fn inner(&self) -> Option<&Transaction> {
+        match self {
+            TransactionStatus::Default => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => Some(txn),
+        }
+    }
 }
 
 impl Default for TransactionStatus {
     fn default() -> Self {
         TransactionStatus::Default
     }
+}
+
+/// State data for transactions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transaction {
+    /// Plan context.
+    pub pcx: PlanContext,
+    /// Transaction operations.
+    pub ops: TransactionOps,
 }
 
 /// The type of operation being performed by the transaction.

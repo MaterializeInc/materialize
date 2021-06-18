@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use self::prometheus::{Scraper, ScraperMessage};
 use anyhow::{anyhow, Context};
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
@@ -75,6 +76,7 @@ use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
+use ore::now::{system_time, to_datetime, NowFn};
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
@@ -226,7 +228,7 @@ pub struct Coordinator {
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: HashMap<u32, ConnMeta>,
-    now: ore::now::NowFn,
+    now: NowFn,
 
     /// Holds pending compaction messages to be sent to the dataflow workers. When
     /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
@@ -302,6 +304,10 @@ impl Coordinator {
         } else {
             ts
         }
+    }
+
+    fn now_datetime(&self) -> DateTime<Utc> {
+        to_datetime((self.now)())
     }
 
     /// Generate a new frontiers object that forwards since changes to since_updates.
@@ -791,7 +797,7 @@ impl Coordinator {
                             // Started is almost always safe (started means there's a single statement
                             // being executed). Failed transactions have already been checked in pgwire for
                             // a safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
-                            &TransactionStatus::Started(_) | &TransactionStatus::Failed => {
+                            &TransactionStatus::Started(_) | &TransactionStatus::Failed(_) => {
                                 if let Statement::Declare(_) = stmt {
                                     // Declare is an exception. Although it's not against any spec to execute
                                     // it, it will always result in nothing happening, since all portals will be
@@ -963,6 +969,22 @@ impl Coordinator {
 
             Command::Terminate { mut session } => {
                 self.handle_terminate(&mut session).await;
+            }
+
+            Command::StartTransaction {
+                implicit,
+                session,
+                tx,
+            } => {
+                let now = self.now_datetime();
+                let session = match implicit {
+                    None => session.start_transaction(now),
+                    Some(stmts) => session.start_transaction_implicit(now, stmts),
+                };
+                let _ = tx.send(Response {
+                    result: Ok(()),
+                    session,
+                });
             }
 
             Command::Commit {
@@ -1335,7 +1357,7 @@ impl Coordinator {
             Plan::StartTransaction => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                session.start_transaction();
+                let session = session.start_transaction(self.now_datetime());
                 tx.send(
                     Ok(ExecuteResponse::StartedTransaction { duplicated }),
                     session,
@@ -2087,36 +2109,34 @@ impl Coordinator {
         // `update_upper`.
 
         if let EndTransactionAction::Commit = action {
-            match txn {
-                TransactionStatus::Default | TransactionStatus::Failed => {}
-                TransactionStatus::Started(ops)
-                | TransactionStatus::InTransaction(ops)
-                | TransactionStatus::InTransactionImplicit(ops) => {
-                    match ops {
-                        TransactionOps::Writes(inserts) => {
-                            let timestamp = self.get_write_ts();
-                            for WriteOp { id, rows } in inserts {
-                                // Re-verify this id exists.
-                                if self.catalog.try_get_by_id(id).is_none() {
-                                    return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                        id.to_string(),
-                                    )));
-                                }
-
-                                let updates: Vec<_> = rows
-                                    .into_iter()
-                                    .map(|(row, diff)| Update {
-                                        row,
-                                        diff,
-                                        timestamp,
-                                    })
-                                    .collect();
-
-                                self.broadcast(SequencedCommand::Insert { id, updates });
+            if let Some(ops) = txn.into_ops() {
+                match ops {
+                    TransactionOps::Writes(inserts) => {
+                        // Although the transaction has a wall_time in its pcx, we use a new
+                        // coordinator timestamp here to provide linearizability. The wall_time does
+                        // not have to relate to the write time.
+                        let timestamp = self.get_write_ts();
+                        for WriteOp { id, rows } in inserts {
+                            // Re-verify this id exists.
+                            if self.catalog.try_get_by_id(id).is_none() {
+                                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                    id.to_string(),
+                                )));
                             }
+
+                            let updates: Vec<_> = rows
+                                .into_iter()
+                                .map(|(row, diff)| Update {
+                                    row,
+                                    diff,
+                                    timestamp,
+                                })
+                                .collect();
+
+                            self.broadcast(SequencedCommand::Insert { id, updates });
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
         }
@@ -3293,7 +3313,7 @@ pub async fn serve(
         build_info,
         num_workers: workers,
         timestamp_frequency,
-        now: ore::now::system_time,
+        now: system_time,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
