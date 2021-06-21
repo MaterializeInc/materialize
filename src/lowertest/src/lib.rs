@@ -9,7 +9,7 @@
 
 //! Utilities for testing lower layers of the Materialize stack.
 //!
-//! See [README.md]
+//! See [README.md].
 
 use std::collections::HashMap;
 
@@ -144,11 +144,17 @@ where
         &type_name
     };
     if let Some(first_arg) = stream_iter.next() {
+        // If the type refers to an enum or struct defined by us, go to a
+        // special branch that allows reuse of code paths for the
+        // `(<arg1>..<argn>)` syntax as well as the `<only_arg>` syntax.
+        // Note that `parse_as_enum_or_struct` also calls
+        // `ctx.override_syntax`.
         if let Some(result) =
             parse_as_enum_or_struct(first_arg.clone(), stream_iter, &type_name, rti, ctx)?
         {
             return Ok(Some(result));
         }
+        // Resolving types that are not enums or structs defined by us.
         if let Some(result) =
             ctx.override_syntax(first_arg.clone(), stream_iter, &type_name, rti)?
         {

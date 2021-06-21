@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 //! Macros needed by the `lowertest` crate.
+//!
+//! TODO: eliminate macros in favor of using `walkabout`?
 
 use proc_macro::{TokenStream, TokenTree};
 use proc_macro2::Span;

@@ -147,6 +147,10 @@ If an object being created is registered as an enum or struct in
 * If the spec is an punct, `first_arg` will be the punct, and `rest_of_stream`
   will be `<any_puncts_in_between> <first_not_punct_token>`.
 
+Since a one-arg enum or struct can be specified as `(<the_arg>)` or
+`<the_arg>`, passing in the specification in the manner described above saves
+you from having to implement both syntaxes in `override_syntax`.
+
 ### Supported types
 
 * Enums
