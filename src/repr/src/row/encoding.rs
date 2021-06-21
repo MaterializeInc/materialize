@@ -334,9 +334,6 @@ mod tests {
     use crate::adt::numeric::Numeric;
     use crate::{Datum, Row};
 
-    // TODO: datadriven golden tests for various interesting Datums and Rows to
-    // catch any changes in the encoding.
-
     #[test]
     fn roundtrip() {
         let mut row = Row::pack(vec![

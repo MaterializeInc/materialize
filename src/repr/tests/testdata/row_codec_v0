@@ -1,0 +1,231 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+
+
+# Tests for v0 of Row's implementation of Codec::encode.
+#
+# NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE
+#
+# Do not update any of the expected values in this file without looping in the
+# persistence team to sanity check that its done correctly. See the comment on # row_codec_goldens for why.
+#
+# NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE
+
+# Bool: zero value
+row-codec-golden
+[false] [bool]
+----
+CgIIAg==
+
+# Bool: sanity check
+row-codec-golden
+[true] [bool]
+----
+CgIIAw==
+
+# Int16: zero value
+row-codec-golden
+[0] [int16]
+----
+CgIQAA==
+
+# Int16: sanity check
+row-codec-golden
+[1] [int16]
+----
+CgIQAQ==
+
+# Int16: min value
+row-codec-golden
+[-32768] [int16]
+----
+CgsQgID+////////AQ==
+
+# Int16: max value
+row-codec-golden
+[32767] [int16]
+----
+CgQQ//8B
+
+# Int32: zero value
+row-codec-golden
+[0] [int32]
+----
+CgIYAA==
+
+# Int32: sanity check
+row-codec-golden
+[1] [int32]
+----
+CgIYAQ==
+
+# Int32: min value
+row-codec-golden
+[-2147483648] [int32]
+----
+CgsYgICAgPj/////AQ==
+
+# Int32: max value
+row-codec-golden
+[2147483647] [int32]
+----
+CgYY/////wc=
+
+# Int64: zero value
+row-codec-golden
+[0] [int64]
+----
+CgIgAA==
+
+# Int64: sanity check
+row-codec-golden
+[1] [int64]
+----
+CgIgAQ==
+
+# Int64: min value
+row-codec-golden
+[-9223372036854775808] [int64]
+----
+CgsggICAgICAgICAAQ==
+
+# Int64: max value
+row-codec-golden
+[9223372036854775807] [int64]
+----
+Cgog//////////9/
+
+# Float32: zero value
+row-codec-golden
+[0] [float32]
+----
+CgUtAAAAAA==
+
+# Float32: sanity check
+row-codec-golden
+[1.1] [float32]
+----
+CgUtzcyMPw==
+
+# Float32: min value
+row-codec-golden
+[-3.40282347e+38] [float32]
+----
+CgUt//9//w==
+
+# Float32: min positive value
+row-codec-golden
+[1.17549435e-38] [float32]
+----
+CgUtAACAAA==
+
+# Float32: max value
+row-codec-golden
+[3.40282347e+38] [float32]
+----
+CgUt//9/fw==
+
+# Float64: zero value
+row-codec-golden
+[0] [float64]
+----
+CgkxAAAAAAAAAAA=
+
+# Float64: sanity check
+row-codec-golden
+[1.1] [float64]
+----
+CgkxmpmZmZmZ8T8=
+
+# Float64: min value
+row-codec-golden
+[-1.7976931348623157e+308] [float64]
+----
+Cgkx////////7/8=
+
+# Float64: min positive value
+row-codec-golden
+[2.2250738585072014e-308] [float64]
+----
+CgkxAAAAAAAAEAA=
+
+# Float64: max value
+row-codec-golden
+[1.7976931348623157e+308] [float64]
+----
+Cgkx////////738=
+
+# String: zero value
+row-codec-golden
+[""] [string]
+----
+CgJCAA==
+
+# String: sanity check
+row-codec-golden
+["hello"] [string]
+----
+CgdCBWhlbGxv
+
+# Numeric: zero value
+row-codec-golden
+[0] [numeric]
+----
+Cga6AQMKAQw=
+
+# Numeric: sanity check
+row-codec-golden
+[1.23] [numeric]
+----
+Cgm6AQYKAhI8EAI=
+
+# Timestamp: zero value
+row-codec-golden
+["1970-01-01 00:00:00.000"] [timestamp]
+----
+CgiSAQUIsg8QAQ==
+
+# Timestamp: sanity check
+row-codec-golden
+["1999-12-31 23:42:23.342"] [timestamp]
+----
+ChOSARAIzw8Q7QIY35oFIICDiqMB
+
+# Date: zero value
+row-codec-golden
+["1970-01-01"] [date]
+----
+ERROR: Unsupported literal type Date
+
+# Date: sanity check
+row-codec-golden
+["1999-12-31"] [date]
+----
+ERROR: Unsupported literal type Date
+
+# Time: zero value
+row-codec-golden
+["00:00:00.000"] [time]
+----
+ERROR: Unsupported literal type Time
+
+# Time: sanity check
+row-codec-golden
+["23:42:23.342"] [time]
+----
+ERROR: Unsupported literal type Time
+
+# NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE
+#
+# Do not update any of the expected values in this file without involving
+# danhhz. See the comment on row_codec_goldens for why.
+#
+# NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE

@@ -43,6 +43,9 @@ uuid = "0.8.2"
 mz-protoc = { path = "../protoc" }
 
 [dev-dependencies]
+base64 = "0.13.0"
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
+datadriven = "0.6.0"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 rand = "0.8.4"
+repr_test_util = { path = "../repr-test-util" }
