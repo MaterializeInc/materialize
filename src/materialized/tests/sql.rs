@@ -16,6 +16,7 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -90,8 +91,9 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
     // Return an error to the coordinator, so that we can shutdown cleanly.
     info!("test_no_block: writing fake schema registry error");
     write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
-    info!("test_no_block: dropping fake schema registry connection");
-    drop(stream);
+    info!("test_no_block: shutting down fake schema registry connection");
+
+    stream.shutdown(Shutdown::Write).unwrap();
 
     // Verify that the schema registry error was returned to the client, for
     // good measure.
