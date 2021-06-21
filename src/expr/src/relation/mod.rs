@@ -1445,15 +1445,6 @@ impl AggregateExpr {
             _ => self.expr.is_literal_err(),
         }
     }
-
-    /// Adds any columns that *must* be non-Null for `self` to be non-Null.
-    pub fn non_null_requirements(&self, columns: &mut HashSet<usize>) {
-        match self.func {
-            // Count is never null
-            AggregateFunc::Count => {}
-            _ => self.expr.non_null_requirements(columns),
-        }
-    }
 }
 
 impl fmt::Display for AggregateExpr {

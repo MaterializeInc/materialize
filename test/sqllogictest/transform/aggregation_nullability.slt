@@ -73,7 +73,8 @@ EOF
 query II
 select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having count(t2.f1) >= 0;
 ----
-1 0
+1  0
+
 
 # ... but a filter on any other aggregation should convert a left join into an inner join if its parameter comes from the non-preserving side
 query T multiline
@@ -500,6 +501,125 @@ EXPLAIN select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 
 EOF
 
+# outer join to inner join conversion not allowed
+query T multiline
+EXPLAIN select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter !(isnull(#0))
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0, #3)
+
+%3 =
+| Get materialize.public.t1 (u1)
+
+%4 =
+| Get %2 (l0)
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%5 =
+| Join %3 %4 (= #0 #2)
+| | implementation = Differential %3 %4.(#0)
+| | demand = (#0)
+| Negate
+| Project (#0, #1)
+
+%6 =
+| Get materialize.public.t1 (u1)
+
+%7 =
+| Union %5 %6
+| Map null, null
+
+%8 =
+| Union %7 %2
+| Reduce group=(#0)
+| | agg count(#3)
+
+EOF
+
+# outer join to inner join conversion not allowed
+query T multiline
+EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter !(isnull(#0))
+
+%2 = Let l0 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0, #3)
+
+%3 =
+| Get materialize.public.t1 (u1)
+
+%4 =
+| Get %2 (l0)
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%5 =
+| Join %3 %4 (= #0 #2)
+| | implementation = Differential %3 %4.(#0)
+| | demand = (#0)
+| Negate
+| Project (#0, #1)
+
+%6 =
+| Get materialize.public.t1 (u1)
+
+%7 =
+| Union %5 %6
+| Map null, null
+
+%8 =
+| Union %7 %2
+| Reduce group=(#0)
+| | agg count(#3)
+| | agg max(#3)
+
+EOF
+
+# outer join to inner join conversion allowed
+query T multiline
+EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter !(isnull(#0))
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0, #3)
+| Reduce group=(#0)
+| | agg count(#3)
+| | agg max(#3)
+| Filter (#2 > 0)
+
+EOF
+
 # check that a filter on a non-count aggregation doesn't change the COUNT value
 statement ok
 drop table t1
@@ -683,6 +803,7 @@ query III
 SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 123  0  0
+
 
 # non-null requeriment on a non-count aggregation coming from a join predicate
 statement ok

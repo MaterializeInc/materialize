@@ -195,54 +195,57 @@ impl NonNullRequirements {
                 expected_group_size: _,
             } => {
                 let mut new_columns = HashSet::new();
-                let (group_key_columns, aggs_columns): (Vec<usize>, Vec<usize>) =
+                let (group_key_columns, aggr_columns): (Vec<usize>, Vec<usize>) =
                     columns.iter().partition(|c| **c < group_key.len());
                 for column in group_key_columns {
                     group_key[column].non_null_requirements(&mut new_columns);
                 }
 
-                if !aggs_columns.is_empty() {
-                    // We can convert a non-null requirement on an aggregate function into
-                    // a non-null requirement on its parameter only if we are sure that
-                    // won't affect the result of any other aggregation.
-                    // If there is non-null requirement on MAX(c1), for example, it is
-                    // implied that MIN(c1) won't be null either, so we can safely require
-                    // c1 to be non-null as long as there isn't any other aggregation
-                    // depending on any other column or a COUNT(*).
-                    // Note: all columns from the non-preserving side of an outer join could
-                    // be treated as a single column for this analysis, but we don't have
-                    // that information here.
-
-                    // For each aggregate, the columns that must be non-null in order for its
-                    // result to be non-null.
-                    let nonnull_req_per_aggregate = aggregates
+                if !aggr_columns.is_empty() {
+                    // Intersect the non-null requirements for non-null aggregates
+                    // (one which its result is requested to be non-null)
+                    // that propagate non-null constraints (all of them but COUNT).
+                    // However, if there is a COUNT or any other aggregate we can still
+                    // propagate the non-null requirement as long as the requirements
+                    // of their parameters intersect with the requirements of a non-null
+                    // aggregate.
+                    let aggr_nonnull_req = aggregates
                         .iter()
-                        .map(|aggr| {
+                        .enumerate()
+                        .map(|(pos, aggr)| {
+                            let aggr_nonnull_flag = aggr.func.propagates_nonnull_constraint()
+                                && aggr_columns.contains(&(group_key.len() + pos));
                             let mut aggr_nonnull_columns = HashSet::new();
-                            aggr.non_null_requirements(&mut aggr_nonnull_columns);
-                            aggr_nonnull_columns
+                            aggr.expr.non_null_requirements(&mut aggr_nonnull_columns);
+                            (aggr_nonnull_columns, aggr_nonnull_flag)
                         })
                         .collect::<Vec<_>>();
-                    // The intersection of the non-null requirements of all aggregates.
-                    let req_intersection = {
-                        let mut iter = nonnull_req_per_aggregate.iter();
-                        iter.next()
-                            .cloned()
-                            .map(|set| iter.fold(set, |set1, set2| &set1 & set2))
-                            .unwrap()
-                    };
-                    // By checking that all column parameters in all the non-null aggregated
-                    // columns are required to be non-null in order for the input of the rest
-                    // of the aggregates to be non-null, we ensure that removing null rows
-                    // won't alter the result of the rest of the aggregates.
-                    if aggs_columns
-                        .iter()
-                        .map(|c| *c - group_key.len())
-                        .all(|aggr_pos| nonnull_req_per_aggregate[aggr_pos] == req_intersection)
-                    {
+                    let mut req_intersection: Option<HashSet<usize>> = None;
+                    for (nonnull_columns, nonnull_flag) in aggr_nonnull_req.iter() {
+                        if *nonnull_flag {
+                            if let Some(previous) = req_intersection {
+                                req_intersection = Some(
+                                    nonnull_columns.intersection(&previous).cloned().collect(),
+                                );
+                            } else {
+                                req_intersection = Some(nonnull_columns.clone());
+                            }
+                        } else if !aggr_nonnull_req.iter().any(|(cols, flag)| {
+                            *flag && nonnull_columns.intersection(cols).count() > 0
+                        }) {
+                            // An aggregate function that is either a COUNT or any other
+                            // aggregate not required to be non-null, that doesn't intersect
+                            // with the requirements of any non-null aggregate.
+                            req_intersection = None;
+                            break;
+                        }
+                    }
+
+                    if let Some(req_intersection) = req_intersection {
                         new_columns.extend(req_intersection);
                     }
                 }
+
                 self.action(input, new_columns, gets);
             }
             MirRelationExpr::TopK {

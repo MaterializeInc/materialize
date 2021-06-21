@@ -600,6 +600,15 @@ impl AggregateFunc {
         };
         scalar_type.nullable(nullable)
     }
+
+    /// Whether the result of the aggregate can be non-null with null inputs
+    pub fn propagates_nonnull_constraint(&self) -> bool {
+        match self {
+            // Count is never null
+            AggregateFunc::Count => false,
+            _ => true,
+        }
+    }
 }
 
 fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
