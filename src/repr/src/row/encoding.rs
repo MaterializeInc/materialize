@@ -123,9 +123,6 @@ mod tests {
 
     use crate::{Datum, Row};
 
-    // TODO: datadriven golden tests for various interesting Datums and Rows to
-    // catch any changes in the encoding.
-
     #[test]
     fn decode_errors() {
         let row = Row::pack(vec![Datum::Int64(7)]);

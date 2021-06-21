@@ -38,6 +38,9 @@ smallvec = { version = "1.5.1", features = ["serde", "union"] }
 uuid = "0.8.2"
 
 [dev-dependencies]
+base64 = "0.13.0"
 criterion = "0.3.5"
+datadriven = "0.6.0"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 rand = "0.8.4"
+repr_test_util = { path = "../repr-test-util" }

@@ -3402,10 +3402,12 @@ name = "repr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "byteorder",
  "chrono",
  "chrono-tz",
  "criterion",
+ "datadriven",
  "dec",
  "enum-kinds",
  "fast-float",
@@ -3420,6 +3422,7 @@ dependencies = [
  "proptest",
  "rand",
  "regex",
+ "repr_test_util",
  "ryu",
  "serde",
  "serde_json",
