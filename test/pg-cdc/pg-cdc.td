@@ -176,7 +176,7 @@ db error: FATAL: database "no_such_dbname" does not exist
 "foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
 
 > SELECT pg_typeof(numeric) FROM types_table;
-"numeric(38,4)"
+"numeric"
 
 > SELECT LENGTH(f1) FROM large_text;
 16777216

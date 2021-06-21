@@ -514,12 +514,12 @@ CONCAT3function
 query T
 SELECT concat(3.32::float)
 ----
-3.32
+3.3200000000000003
 
 query T
 SELECT concat(3.32::double precision)
 ----
-3.32
+3.3200000000000003
 
 query T
 SELECT concat(3.32::int)
@@ -534,17 +534,17 @@ SELECT concat(3.32)
 query T
 SELECT concat(3.32::decimal, 3)
 ----
-33
+3.323
 
 query T
 SELECT concat(3.32::float, 3)
 ----
-3.323
+3.32000000000000033
 
 query T
 SELECT concat(3.32::float, '3')
 ----
-3.323
+3.32000000000000033
 
 query T
 SELECT concat(true, false, 'function')

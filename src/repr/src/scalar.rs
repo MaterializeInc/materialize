@@ -356,7 +356,7 @@ impl<'a> Datum<'a> {
     pub fn unwrap_apd(&self) -> OrderedDecimal<Apd> {
         match self {
             Datum::APD(n) => *n,
-            _ => panic!("Datum::unwrap_numeric called on {:?}", self),
+            _ => panic!("Datum::unwrap_apd called on {:?}", self),
         }
     }
 

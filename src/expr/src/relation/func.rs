@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use lowertest::MzEnumReflect;
 use ore::cast::CastFrom;
 use repr::adt::apd;
-use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
+use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 

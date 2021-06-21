@@ -35,7 +35,7 @@ build-scalar
     "hello"
 )
 ----
-if (#0 > -2dec) then {substr(#1, 1, 4)} else {"hello"}
+if (#0 > -2) then {substr(#1, 1, 4)} else {"hello"}
 
 build-scalar
 (call_binary (jsonb_get_string true) #2 ("field1" string))

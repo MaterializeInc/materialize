@@ -373,12 +373,9 @@ impl ParamList {
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
 
-            // Require explicitly cast APD values to prevent confusion
-            // w/ current decimal impls
-            // todo(apd): remove this when merging with decimal
-            if param == &ParamType::Plain(ScalarType::APD { scale: None })
-                && !matches!(typ, Some(ScalarType::APD { .. }))
-            {
+            // Require explicitly cast Decimal values to prevent confusion
+            // w/ current apd impls
+            if param == &ParamType::DecimalAny && !matches!(typ, Some(ScalarType::Decimal(..))) {
                 return false;
             }
 

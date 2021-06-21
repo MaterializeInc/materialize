@@ -33,6 +33,12 @@ impl fmt::Display for Apd {
     }
 }
 
+impl From<AdtApd> for Apd {
+    fn from(n: AdtApd) -> Apd {
+        Apd(OrderedDecimal(n))
+    }
+}
+
 /// `ToSql` and `FromSql` use base 10,000 units.
 const TO_FROM_SQL_BASE_POW: usize = 4;
 

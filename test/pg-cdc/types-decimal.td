@@ -41,7 +41,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t1 LIMIT 1;
-"numeric(38,0)" "numeric(38,20)" "numeric(38,10)"
+numeric numeric numeric
 
 > SELECT * FROM t1;
 99999999999999999999 0.99999999999999999999 9999999999.9999999999

@@ -413,7 +413,7 @@ impl Value {
                 matches!(**value_type, Type::Map { .. }),
                 |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
             )?),
-            Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
+            Type::Numeric => Value::Apd(Apd(strconv::parse_apd(raw)?)),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into())
             }
@@ -422,7 +422,6 @@ impl Value {
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
-            Type::APD => Value::Apd(Apd(strconv::parse_apd(raw)?)),
         })
     }
 
@@ -442,14 +441,13 @@ impl Value {
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Value::decode_text(ty, raw), // just using the text encoding for now
             Type::Map { .. } => Value::decode_text(ty, raw), // just using the text encoding for now
-            Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
+            Type::Numeric => Apd::from_sql(ty.inner(), raw).map(Value::Apd),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
-            Type::APD => Apd::from_sql(ty.inner(), raw).map(Value::Apd),
         }
     }
 }
@@ -500,8 +498,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 custom_oid: None,
             }
         }
-        Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
-        Type::APD => ScalarType::APD { scale: None },
+        Type::Numeric => ScalarType::APD { scale: None },
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
         Type::Time => ScalarType::Time,

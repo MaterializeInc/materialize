@@ -350,8 +350,8 @@ lazy_static! {
                 let scale = to_type.unwrap_apd_scale().unwrap();
                 Some(move |e: HirScalarExpr|e.call_unary(UnaryFunc::RescaleAPD(scale)))
             }),
-            (APD, Float32) => Assignment: CastAPDToFloat32,
-            (APD, Float64) => Assignment: CastAPDToFloat64,
+            (APD, Float32) => Implicit: CastAPDToFloat32,
+            (APD, Float64) => Implicit: CastAPDToFloat64,
             (APD, Int32) => Assignment: CastAPDToInt32,
             (APD, Int64) => Assignment: CastAPDToInt64,
             (APD, String) => Assignment: CastAPDToString
@@ -700,10 +700,6 @@ pub fn plan_cast<D>(
 where
     D: fmt::Display,
 {
-    if let ScalarType::APD { .. } = cast_to {
-        ecx.require_experimental_mode("APD")?;
-    }
-
     let from_typ = ecx.scalar_type(&expr);
     match get_cast(ecx, ccx, &from_typ, cast_to) {
         Some(cast) => Ok(cast(expr)),
