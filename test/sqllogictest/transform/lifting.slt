@@ -790,3 +790,12 @@ explain select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) whe
 | Project (#0..#3)
 
 EOF
+
+# count(null) is always 0
+query T multiline
+explain select count(null) from t;
+----
+%0 =
+| Constant (0)
+
+EOF
