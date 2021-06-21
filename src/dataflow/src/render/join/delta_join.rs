@@ -182,7 +182,7 @@ impl DeltaJoinPlan {
             });
         }
 
-        // Now that `map_filter_project` has been capture in the state builder,
+        // Now that `map_filter_project` has been captured in the state builder,
         // assign the remaining temporal predicates to it, for the caller's use.
         *map_filter_project = temporal_mfp;
 

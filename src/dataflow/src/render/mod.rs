@@ -759,15 +759,9 @@ pub mod plan {
         /// This method converts a MirRelationExpr into a plan that can be directly rendered.
         ///
         /// The rough structure is that we repeatedly extract map/filter/project operators
-        /// from each expression we see, bundle them up
+        /// from each expression we see, bundle them up as a `MapFilterProject` object, and
+        /// the produce a plan for the combination of that with the next operator.
         pub fn from_mir(expr: &MirRelationExpr) -> Result<Self, ()> {
-            // The plan is to repeatedly attempt to convert an expression to a plan, using
-            // the rules that the render thinks are appropriate.
-            //
-            // The gist is that we'll want to extract as much map/filter/project as we can
-            // from each expression, attempt to push this down in to the remaining operator,
-            // and
-
             // Extract a maximally large MapFilterProject from `expr`.
             // We will then try and push this in to the resulting expression.
             //
