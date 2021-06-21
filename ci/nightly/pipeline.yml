@@ -42,3 +42,10 @@
     - ./ci/plugins/mzcompose:
         composition: testdrive
         run: testdrive-redpanda
+
+- id: upgrade
+  label: "Upgrade testing"
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: upgrade
+        run: upgrade
