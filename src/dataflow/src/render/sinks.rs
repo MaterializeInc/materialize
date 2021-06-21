@@ -67,17 +67,9 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
 
-        let sink_token = match sink.connector.clone() {
-            SinkConnector::Kafka(connector) => {
-                render_kafka_sink(render_state, sink, sink_id, connector, collection)
-            }
-            SinkConnector::Tail(connector) => {
-                render_tail_sink(render_state, sink, sink_id, connector, collection)
-            }
-            SinkConnector::AvroOcf(connector) => {
-                render_avro_ocf_sink(render_state, sink, sink_id, connector, collection)
-            }
-        };
+        let sink_render = get_sink_render_for(&sink.connector);
+        let sink_token =
+            sink_render.render_continuous_sink(render_state, sink, sink_id, collection);
 
         if let Some(sink_token) = sink_token {
             needed_sink_tokens.push(sink_token);
@@ -199,6 +191,86 @@ where
     };
 
     collection
+}
+
+trait SinkRender<G>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn render_continuous_sink(
+        &self,
+        render_state: &mut RenderState,
+        sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>;
+}
+
+fn get_sink_render_for<G>(connector: &SinkConnector) -> Box<dyn SinkRender<G>>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    match connector {
+        SinkConnector::Kafka(connector) => Box::new(connector.clone()),
+        SinkConnector::AvroOcf(connector) => Box::new(connector.clone()),
+        SinkConnector::Tail(connector) => Box::new(connector.clone()),
+    }
+}
+
+impl<G> SinkRender<G> for KafkaSinkConnector
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn render_continuous_sink(
+        &self,
+        render_state: &mut RenderState,
+        sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        render_kafka_sink(render_state, sink, sink_id, self.clone(), sinked_collection)
+    }
+}
+
+impl<G> SinkRender<G> for AvroOcfSinkConnector
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn render_continuous_sink(
+        &self,
+        render_state: &mut RenderState,
+        sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        render_avro_ocf_sink(render_state, sink, sink_id, self.clone(), sinked_collection)
+    }
+}
+
+impl<G> SinkRender<G> for TailSinkConnector
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn render_continuous_sink(
+        &self,
+        render_state: &mut RenderState,
+        sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        render_tail_sink(render_state, sink, sink_id, self.clone(), sinked_collection)
+    }
 }
 
 fn render_kafka_sink<G>(
