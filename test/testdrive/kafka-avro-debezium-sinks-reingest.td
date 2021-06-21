@@ -69,6 +69,19 @@ $ set exactlyonceschema={
       },
       { "name": "after", "type": ["row", "null"] },
       {
+        "name": "source",
+        "type": [
+          {
+            "name": ".source",
+            "type": "record",
+            "fields": [
+              {"name": "mz_id", "type": "string"}
+            ]
+          },
+          "null"
+        ]
+      },
+      {
         "name": "transaction",
         "type": [
           {
@@ -81,6 +94,29 @@ $ set exactlyonceschema={
           "null"
         ]
       }
+    ]
+  }
+
+$ set exactlyonceschema2={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] },
+      { "name": "mz_ts", "type": "long" }
     ]
   }
 
@@ -158,15 +194,15 @@ a  b
 # guarantee on the order within a transaction.
 
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"mz_ts": "1"}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}, "source": {"mz_ts": "1"}, "transaction": {"id": "1"}}
 
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "source": {"mz_ts": "2"}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 4, "b": 2}}, "source": {"mz_ts": "2"}, "transaction": {"id": "2"}}
 
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+{"before": null, "after": {"row": {"a": 1, "b": 7}}, "source": {"mz_ts": "3"}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}

@@ -217,6 +217,7 @@ impl<'b, R: AvroRead> AvroFieldAccess<'b, R> {
     pub fn decode_field<D: AvroDecode>(self, d: D) -> Result<D::Out, AvroError> {
         match self.schema {
             SchemaOrDefault::Schema(r, schema) => {
+                println!("AvroFieldAccess decode_field schema: {:?}", schema.inner);
                 let des = GeneralDeserializer { schema };
                 des.deserialize(r, d)
             }

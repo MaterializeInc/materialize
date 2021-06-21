@@ -80,6 +80,7 @@ fn push_coords(coords: Option<DebeziumSourceCoordinates>, packer: &mut Row) -> R
                             event_serial_no,
                         ))
                     }
+                    RowCoordinates::MZ { timestamp } => Some((0, timestamp, 0)),
                     RowCoordinates::Unknown => {
                         is_unknown = true;
                         None
@@ -165,7 +166,10 @@ impl Decoder {
             let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
+            println!("decode schema: {:?}", resolved_schema.top_node());
+            println!("       bytes: {:?}", bytes);
             let coords = dsr.deserialize(bytes, dec)?;
+            println!("       coords: {:?}", coords);
             if let Err(()) = push_coords(coords, &mut self.packer) {
                 if !self.warned_on_unknown {
                     self.warned_on_unknown = true;

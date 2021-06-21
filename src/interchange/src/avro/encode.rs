@@ -114,7 +114,12 @@ fn encode_message_unchecked(
     let mut buf = vec![];
     encode_avro_header(&mut buf, schema_id);
     let value = encode_datums_as_avro(row.iter(), columns);
+    println!(
+        "encode_message_unchecked schema_id: {} schema: {:?}, value: {:?}",
+        schema_id, schema, value
+    );
     mz_avro::encode_unchecked(&value, schema, &mut buf);
+    println!(" ... buf: {:?}", buf);
     buf
 }
 
@@ -146,6 +151,23 @@ impl Encoder {
             // those because the order is not stable across reruns and has no semantic
             // meaning for records within a timestamp in Materialize. These fields may
             // be useful in the future for deduplication.
+            value_columns.push((
+                "source".into(),
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Record {
+                        fields: vec![(
+                            "mz_ts".into(),
+                            ColumnType {
+                                scalar_type: ScalarType::String,
+                                nullable: false,
+                            },
+                        )],
+                        custom_oid: None,
+                        custom_name: Some("source".to_string()),
+                    },
+                },
+            ));
             value_columns.push((
                 "transaction".into(),
                 ColumnType {

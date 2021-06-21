@@ -289,6 +289,7 @@ fn update_source_timestamps(
                         continue;
                     }
                     Ok(record) => {
+                        println!("update_source_timestamps record: {:?}", record);
                         generate_ts_updates_from_debezium(&id, tx, byo_consumer, record)?;
                     }
                 }
@@ -356,6 +357,7 @@ fn parse_debezium(
     let mut collections = vec![];
     let mut event_count = 0;
     for (key, value) in record {
+        println!("parse_debezium key: {}, value: {:?}", key, value);
         match (key.as_str(), value) {
             ("data_collections", Value::Union { inner: value, .. }) => match *value {
                 Value::Array(items) => {

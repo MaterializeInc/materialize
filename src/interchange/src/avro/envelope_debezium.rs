@@ -12,7 +12,7 @@
 //! The most important struct in here is the [`AvroDebeziumDecoder`]
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -54,6 +54,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
         let mut coords = None;
         let mut transaction = None;
         while let Some((name, _, field)) = a.next_field()? {
+            println!("AvroDecode AvroDebeziumDecoder name: {}", name);
             match name {
                 "before" => {
                     let d = OptionalRecordDecoder {
@@ -86,9 +87,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                     let d = DebeziumTransactionDecoder;
                     transaction = field.decode_field(d)?;
                 }
-                _ => {
-                    field.decode_field(TrivialDecoder)?;
-                }
+                _ => {}
             }
         }
         if let Some(transaction) = transaction {
@@ -129,6 +128,9 @@ pub(crate) enum RowCoordinates {
     MSSql {
         change_lsn: MSSqlLsn,
         event_serial_no: usize,
+    },
+    MZ {
+        timestamp: usize,
     },
     Unknown,
 }
@@ -290,6 +292,8 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         let mut row = None;
         // "log sequence number" - monotonically increasing log offset in Postgres
         let mut lsn = None;
+        // Materialize timestamp
+        let mut mz_ts = None;
         // SQL Server lsn - 10-byte, hex-encoded value.
         // and "event_serial_no" - serial number of the event, when there is more than one per LSN.
         let mut change_lsn = None;
@@ -297,6 +301,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
 
         let mut file_idx = None;
         while let Some((name, _, field)) = a.next_field()? {
+            println!("AvroDecode::record name: {}", name);
             match name {
                 "snapshot" => {
                     let d = AvroDbzSnapshotDecoder;
@@ -346,6 +351,18 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                     };
                     lsn = Some(val.into_integral().ok_or_else(|| {
                         DecodeError::Custom("\"lsn\" is not an integer".to_string())
+                    })?);
+                }
+                // Materialize
+                "mz_ts" => {
+                    let next = ValueDecoder;
+                    let val = field.decode_field(next)?;
+                    let val = match val {
+                        Value::Union { inner, .. } => *inner,
+                        val => val,
+                    };
+                    mz_ts = Some(val.into_integral().ok_or_else(|| {
+                        DecodeError::Custom("\"mz_ts\" is not an integer".to_string())
                     })?);
                 }
                 // SQL Server
@@ -402,7 +419,8 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         let mysql_any = pos.is_some() || row.is_some() || file_idx.is_some();
         let pg_any = lsn.is_some();
         let mssql_any = change_lsn.is_some() || event_serial_no.is_some();
-        if (mysql_any as usize) + (pg_any as usize) + (mssql_any as usize) > 1 {
+        let mz_any = mz_ts.is_some();
+        if (mysql_any as usize) + (pg_any as usize) + (mssql_any as usize) + (mz_any as usize) > 1 {
             return Err(DecodeError::Custom(
             "Found source coordinate information for multiple databases - we don't know how to interpret this.".to_string()).into());
         }
@@ -429,6 +447,9 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                 change_lsn,
                 event_serial_no,
             }
+        } else if mz_any {
+            let mz_ts = mz_ts.ok_or_else(|| DecodeError::Custom("no mz_ts".to_string()))? as usize;
+            RowCoordinates::MZ { timestamp: mz_ts }
         } else {
             RowCoordinates::Unknown
         };

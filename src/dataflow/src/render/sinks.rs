@@ -193,6 +193,9 @@ where
                         v.push_list_with(|rp| {
                             rp.push(Datum::String(&t));
                         });
+                        v.push_list_with(|rp| {
+                            rp.push(Datum::String(&t));
+                        });
                         v
                     });
                     ((k, v), t, diff)
