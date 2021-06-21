@@ -39,6 +39,17 @@ table | YES | Creates a [materialized view](https://materialize.com/docs/sql/cre
 ephemeral | YES | Executes queries using CTEs.
 incremental | NO | Use the `materializedview` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).
 
+### Additional macros
+
+dbt only supports a limited set of [materialization types](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/materializations). To create other types of objects in Materialize
+via dbt, use the following Materialize-specific macros:
+
+Macro | Details
+------|----------
+mz_generate_name(identifier) | Generates a fully-qualified name (including the database and schema) given an object name.
+mz_create_source(sql) | Given some [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/) sql statement, creates the source in the Materialize instance.
+mz_drop_source(name, if_exists, cascade) | [Drops the named source](https://materialize.com/docs/sql/drop-source/) in Materialize.
+
 ### Seeds
 
 [`dbt seed`](https://docs.getdbt.com/reference/commands/seed/) will create a static materialized
