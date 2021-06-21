@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - command: ci/slt/slt.sh
+  - id: sqllogictest
+    label: ":bulb: SQL logic tests"
     timeout_in_minutes: 300
     artifact_paths: target/slt-summary.json
     plugins:

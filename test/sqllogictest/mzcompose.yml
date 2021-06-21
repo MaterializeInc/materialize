@@ -18,6 +18,17 @@ mzworkflows:
         dbname: postgres
       - step: run
         service: sqllogictest-svc
+        entrypoint: ci/test/slt-fast.sh
+
+  sqllogictest:
+    steps:
+      - step: start-services
+        services: [postgres]
+      - step: wait-for-postgres
+        dbname: postgres
+      - step: run
+        service: sqllogictest-svc
+        entrypoint: ci/slt/slt.sh
 
 services:
   sqllogictest-svc:
@@ -31,8 +42,6 @@ services:
     - PGHOST=postgres
     - PGPASSWORD=postgres
     depends_on: [postgres]
-    entrypoint:
-    - ci/test/slt-fast.sh
   postgres:
     image: postgres:11.4
     ports:
