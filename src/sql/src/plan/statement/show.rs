@@ -25,14 +25,14 @@ use crate::ast::{
     ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
-    ShowStatementFilter, Statement, UnresolvedObjectName, Value,
+    ShowProgressStatement, ShowStatementFilter, Statement, UnresolvedObjectName, Value,
 };
 use crate::catalog::{Catalog, CatalogItemType};
 use crate::names::PartialName;
 use crate::parse;
 use crate::plan::query::{resolve_names_stmt, ResolvedObjectName};
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{Aug, Params, Plan, SendRowsPlan};
+use crate::plan::{Aug, Params, Plan, SendRowsPlan, ShowProgressPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -200,6 +200,25 @@ pub fn plan_show_create_index(
     } else {
         bail!("'{}' is not an index", index.name());
     }
+}
+
+pub fn describe_show_progress(
+    _: &StatementContext,
+    _: ShowProgressStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_named_column("Index", ScalarType::String.nullable(false))
+            .with_named_column("Progress", ScalarType::Int64.nullable(false)),
+    )))
+}
+
+pub fn plan_show_progress(
+    scx: &StatementContext,
+    ShowProgressStatement { table_name }: ShowProgressStatement,
+) -> Result<Plan, anyhow::Error> {
+    let index = scx.resolve_item(table_name)?;
+    Ok(Plan::ShowProgress(ShowProgressPlan { id: index.id() }))
 }
 
 pub fn show_databases<'a>(

@@ -60,6 +60,7 @@ pub enum Statement<T: AstInfo> {
     ShowCreateTable(ShowCreateTableStatement),
     ShowCreateSink(ShowCreateSinkStatement),
     ShowCreateIndex(ShowCreateIndexStatement),
+    ShowProgress(ShowProgressStatement),
     ShowVariable(ShowVariableStatement),
     StartTransaction(StartTransactionStatement),
     SetTransaction(SetTransactionStatement),
@@ -115,6 +116,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ShowCreateTable(stmt) => f.write_node(stmt),
             Statement::ShowCreateSink(stmt) => f.write_node(stmt),
             Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            Statement::ShowProgress(stmt) => f.write_node(stmt),
             Statement::ShowVariable(stmt) => f.write_node(stmt),
             Statement::StartTransaction(stmt) => f.write_node(stmt),
             Statement::SetTransaction(stmt) => f.write_node(stmt),
@@ -1099,6 +1101,22 @@ impl<T: AstInfo> AstDisplay for ShowColumnsStatement<T> {
     }
 }
 impl_display_t!(ShowColumnsStatement);
+
+/// `SHOW PROGRESS`
+///
+/// Note: this is a Materialize-specific statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowProgressStatement {
+    pub table_name: UnresolvedObjectName,
+}
+
+impl AstDisplay for ShowProgressStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW PROGRESS FROM");
+        f.write_node(&self.table_name);
+    }
+}
+impl_display!(ShowProgressStatement);
 
 /// `SHOW CREATE VIEW <view>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

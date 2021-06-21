@@ -130,6 +130,7 @@ pub fn describe(
         Statement::ShowDatabases(stmt) => show::show_databases(&scx, stmt)?.describe()?,
         Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
         Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
+        Statement::ShowProgress(stmt) => show::describe_show_progress(&scx, stmt)?,
 
         // SCL statements.
         Statement::SetVariable(stmt) => scl::describe_set_variable(&scx, stmt)?,
@@ -223,6 +224,7 @@ pub fn plan(
         Statement::ShowDatabases(stmt) => show::show_databases(scx, stmt)?.plan(),
         Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.plan(),
         Statement::ShowIndexes(stmt) => show::show_indexes(scx, stmt)?.plan(),
+        Statement::ShowProgress(stmt) => show::plan_show_progress(&scx, stmt),
 
         // SCL statements.
         Statement::SetVariable(stmt) => scl::plan_set_variable(scx, stmt),

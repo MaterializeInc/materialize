@@ -56,6 +56,7 @@ use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
@@ -88,7 +89,6 @@ use sql::ast::{
 };
 use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
-use sql::plan::StatementDesc;
 use sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
     CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
@@ -97,6 +97,7 @@ use sql::plan::{
     IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, SendDiffsPlan,
     SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
+use sql::plan::{ShowProgressPlan, StatementDesc};
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
@@ -846,6 +847,7 @@ impl Coordinator {
                                 | Statement::ShowDatabases(_)
                                 | Statement::ShowIndexes(_)
                                 | Statement::ShowObjects(_)
+                                | Statement::ShowProgress(_)
                                 | Statement::ShowVariable(_)
                                 | Statement::StartTransaction(_)
                                 | Statement::Tail(_) => {
@@ -1353,6 +1355,9 @@ impl Coordinator {
                     self.sequence_set_variable(&mut session, plan).await,
                     session,
                 );
+            }
+            Plan::ShowProgress(plan) => {
+                tx.send(self.sequence_show_progress(plan).await, session);
             }
             Plan::StartTransaction => {
                 let duplicated =
@@ -2087,6 +2092,32 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         session.vars_mut().set(&plan.name, &plan.value)?;
         Ok(ExecuteResponse::SetVariable { name: plan.name })
+    }
+
+    async fn sequence_show_progress(
+        &self,
+        plan: ShowProgressPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        fn pack_antichain(frontier: &MutableAntichain<Timestamp>) -> Datum {
+            match frontier.frontier().iter().next() {
+                Some(ts) => Datum::Int64(*ts as _),
+                None => Datum::Null,
+            }
+        }
+        match self.sources.get(&plan.id) {
+            Some(frontiers) => Ok(send_immediate_rows(vec![
+                Row::pack_slice(&[Datum::String("upper"), pack_antichain(&frontiers.upper)]),
+                Row::pack_slice(&[
+                    Datum::String("durability"),
+                    pack_antichain(&frontiers.durability),
+                ]),
+                Row::pack_slice(&[
+                    Datum::String("since"),
+                    pack_antichain(&frontiers.since.borrow()),
+                ]),
+            ])),
+            None => coord_bail!("Not a source"),
+        }
     }
 
     async fn sequence_end_transaction(

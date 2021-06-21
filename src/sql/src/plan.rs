@@ -83,6 +83,7 @@ pub enum Plan {
     EmptyQuery,
     ShowAllVariables,
     ShowVariable(ShowVariablePlan),
+    ShowProgress(ShowProgressPlan),
     SetVariable(SetVariablePlan),
     StartTransaction,
     CommitTransaction,
@@ -209,6 +210,11 @@ pub struct ShowVariablePlan {
 pub struct SetVariablePlan {
     pub name: String,
     pub value: String,
+}
+
+#[derive(Debug)]
+pub struct ShowProgressPlan {
+    pub id: GlobalId,
 }
 
 #[derive(Debug)]

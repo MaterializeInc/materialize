@@ -3329,6 +3329,8 @@ impl<'a> Parser<'a> {
 
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
+        } else if self.parse_one_of_keywords(&[PROGRESS]).is_some() {
+            self.parse_show_progress()
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
             OBJECTS, ROLES, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
         ]) {
@@ -3427,6 +3429,14 @@ impl<'a> Parser<'a> {
             full,
             table_name,
             filter,
+        }))
+    }
+
+    fn parse_show_progress(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_one_of_keywords(&[FROM, IN])?;
+        let table_name = self.parse_object_name()?;
+        Ok(Statement::ShowProgress(ShowProgressStatement {
+            table_name,
         }))
     }
 
