@@ -166,12 +166,12 @@ $ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=
 {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.non_keyed_sink consistency=debezium
-{"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": {"long": 2}}
-{"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "END", "event_count": {"long": 2}}
-{"id": "3", "status": "BEGIN", "event_count": null}
-{"id": "3", "status": "END", "event_count": {"long": 1}}
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "non-keyed-sink"}]}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "non-keyed-sink"}]}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "non-keyed-sink"}]}}
 
 # Again, compare split by transaction. See comment just above.
 
@@ -187,12 +187,12 @@ $ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relat
 {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation consistency=debezium
-{"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": {"long": 2}}
-{"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "END", "event_count": {"long": 2}}
-{"id": "3", "status": "BEGIN", "event_count": null}
-{"id": "3", "status": "END", "event_count": {"long": 1}}
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "non-keyed-sink-of-keyed-relation"}]}}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "non-keyed-sink-of-keyed-relation"}]}}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "non-keyed-sink-of-keyed-relation"}]}}}
 
 # Again, compare split by transaction. See comment just above.
 
@@ -208,12 +208,12 @@ $ kafka-verify format=avro sink=materialize.public.keyed_sink sort-messages=true
 {"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.keyed_sink consistency=debezium
-{"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": {"long": 2}}
-{"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "END", "event_count": {"long": 2}}
-{"id": "3", "status": "BEGIN", "event_count": null}
-{"id": "3", "status": "END", "event_count": {"long": 1}}
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "keyed-sink"}]}}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "keyed-sink"}]}}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "keyed-sink"}]}}}
 
 # Again, compare split by transaction. See comment just above.
 
@@ -229,12 +229,12 @@ $ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation 
 {"b": 7} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation consistency=debezium
-{"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": {"long": 2}}
-{"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "END", "event_count": {"long": 2}}
-{"id": "3", "status": "BEGIN", "event_count": null}
-{"id": "3", "status": "END", "event_count": {"long": 1}}
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "keyed-sink-of-keyed-relation"}]}}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "keyed-sink-of-keyed-relation"}]}}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "keyed-sink-of-keyed-relation"}]}}}
 
 # Again, compare split by transaction. See comment just above.
 
@@ -250,9 +250,9 @@ $ kafka-verify format=avro sink=materialize.public.multi_keyed_sink sort-message
 {"b": 7, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.multi_keyed_sink consistency=debezium
-{"id": "1", "status": "BEGIN", "event_count": null}
-{"id": "1", "status": "END", "event_count": {"long": 2}}
-{"id": "2", "status": "BEGIN", "event_count": null}
-{"id": "2", "status": "END", "event_count": {"long": 2}}
-{"id": "3", "status": "BEGIN", "event_count": null}
-{"id": "3", "status": "END", "event_count": {"long": 1}}
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "multi-keyed-sink"}]}}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "multi-keyed-sink"}]}}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "multi-keyed-sink"}]}}}

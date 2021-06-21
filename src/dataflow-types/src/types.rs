@@ -971,6 +971,7 @@ pub struct KafkaSinkConsistencyConnector {
 pub struct KafkaSinkConnector {
     pub addrs: KafkaAddrs,
     pub topic: String,
+    pub topic_prefix: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,

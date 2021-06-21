@@ -170,6 +170,9 @@ When requested, Materialize will send consistency metadata that describes timest
 Materialize sends two main pieces of information:
 - A timestamp for each change. This is sent inline with the change itself.
 - A count of how many changes occurred for each timestamp. This is sent as part of a separate consistency topic.
+- A count of how many changes occurred for each collection covered by the topic.
+  In Materialize, this will always correspond to the above count as each topic
+  uniquely maps to a single collection.
 
 Materialize uses a simplified version of the Debezium [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata) protocol to send this information.
 The generated [diff envelope](#debezium-envelope-details) schema used for data messages is decorated with a `transaction` field which has the following schema.
@@ -216,6 +219,30 @@ Each message in the consistency topic has the schema below.
                 null,
                 "long"
             ]
+        },
+        {
+            "name": "data_collections",
+            "type": [
+                "null",
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "record",
+                        "name": "data_collection",
+                        "fields": [
+                            {
+                                "name": "data_collection",
+                                "type": "string"
+                            },
+                            {
+                                "name": "event_count",
+                                "type": "long"
+                            },
+                        ]
+                    }
+                }
+            ],
+            "default": null,
         }
     ]
 }
@@ -226,6 +253,7 @@ Field | Use
 _id_ | The transaction id this record refers to.
 _status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and it sends a `END` record after it has written all data messages for `id`.
 _event&lowbar;count_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
+_data&lowbar;collections_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id` and collection.
 
 ##### Consistency information details
 - Materialize writes consistency output to a different topic per sink.
