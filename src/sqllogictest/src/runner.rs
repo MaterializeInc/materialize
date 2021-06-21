@@ -426,8 +426,8 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
         (Type::Integer, Value::Numeric(d)) => format!("{:.0}", d),
-        (Type::Integer, Value::Float4(f)) => format!("{:.0}", f.trunc()),
-        (Type::Integer, Value::Float8(f)) => format!("{:.0}", f.trunc()),
+        (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
+        (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
         (Type::Integer, Value::Text(_)) => "0".to_string(),
         (Type::Integer, Value::Bool(b)) => i8::from(b).to_string(),
