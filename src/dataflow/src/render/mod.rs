@@ -760,7 +760,7 @@ pub mod plan {
         ///
         /// The rough structure is that we repeatedly extract map/filter/project operators
         /// from each expression we see, bundle them up as a `MapFilterProject` object, and
-        /// the produce a plan for the combination of that with the next operator.
+        /// then produce a plan for the combination of that with the next operator.
         pub fn from_mir(expr: &MirRelationExpr) -> Result<Self, ()> {
             // Extract a maximally large MapFilterProject from `expr`.
             // We will then try and push this in to the resulting expression.
