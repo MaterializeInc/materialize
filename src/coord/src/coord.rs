@@ -75,7 +75,6 @@ use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
-use ore::antichain::AntichainToken;
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
@@ -106,6 +105,7 @@ use crate::client::{Client, Handle};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
+use crate::coord::antichain::AntichainToken;
 use crate::error::CoordError;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
@@ -114,6 +114,7 @@ use crate::sink_connector;
 use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 
+mod antichain;
 mod arrangement_state;
 mod dataflow_builder;
 mod prometheus;

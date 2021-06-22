@@ -18,6 +18,7 @@
 use std::fmt;
 use std::io;
 
+#[cfg(feature = "network")]
 use bytes::{BufMut, BytesMut};
 
 /// A trait for objects that can be infallibly written to.
@@ -136,8 +137,7 @@ impl FormatBuffer for String {
 
 impl FormatBuffer for Vec<u8> {
     fn write_fmt(&mut self, fmt: fmt::Arguments) {
-        io::Write::write_fmt(&mut self.writer(), fmt)
-            .expect("io::Write::write_fmt cannot fail on Vec<u8>")
+        io::Write::write_fmt(self, fmt).expect("io::Write::write_fmt cannot fail on Vec<u8>")
     }
 
     fn write_char(&mut self, c: char) {
@@ -161,6 +161,7 @@ impl FormatBuffer for Vec<u8> {
     }
 }
 
+#[cfg(feature = "network")]
 impl FormatBuffer for BytesMut {
     fn write_fmt(&mut self, fmt: fmt::Arguments) {
         io::Write::write_fmt(&mut self.writer(), fmt)
