@@ -18,6 +18,8 @@ members = [
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
+    "src/lowertest",
+    "src/lowertest-derive",
     "src/materialized",
     "src/metabase",
     "src/mz-process-collector",

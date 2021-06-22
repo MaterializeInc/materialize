@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests that this module supports the default syntax as specified in the
+# readme.
+
+build
+----
+None
+
+build
+(multi_unnamed_fields
+    (
+        [
+            [3 [["world" 5] ["this" 2]] 4]
+            [2 [] 0]
+        ]
+        "hello"
+    )
+    ([true false null] [[[100 true] [200 false]][]])
+    (single_named_field [0 10 42]))
+----
+Some(MultiUnnamedFields(TestStruct2([(3, [("world", 5), ("this", 2)], 4), (2, [], 0)], "hello"), TestStruct3 { fizz: [Some(true), Some(false), None], bizz: [[(TestStruct1(100.0), true), (TestStruct1(200.0), false)], []] }, SingleNamedField { foo: [0, 10, 42] }))
+
+build
+(multi_named_fields null false)
+----
+Some(MultiNamedFields { bar: None, baz: false })
+
+# test that unit enum variants and structs with a single field can be
+# constructed with and without parenthesis around them
+build
+unit
+----
+Some(Unit)
+
+build
+(single_unnamed_field -1.1)
+----
+Some(SingleUnnamedField(TestStruct1(-1.1)))
+
+build
+(unit)
+----
+Some(Unit)
+
+build
+(single_unnamed_field (-1.1))
+----
+Some(SingleUnnamedField(TestStruct1(-1.1)))
+
+# default argument tests
+
+build
+multi_named_fields
+----
+Some(MultiNamedFields { bar: None, baz: false })
+
+build
+(multi_named_fields "realm")
+----
+Some(MultiNamedFields { bar: Some("realm"), baz: false })
