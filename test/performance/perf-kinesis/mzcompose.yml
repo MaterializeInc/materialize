@@ -24,6 +24,10 @@ services:
     command: --stream-prefix testdrive-perf-kinesis
     environment:
       - RUST_LOG=perf-kinesis=debug,info
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
+      - AWS_SECURITY_TOKEN
     depends_on: [materialized]
 
   materialized:

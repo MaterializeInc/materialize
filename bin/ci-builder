@@ -92,6 +92,7 @@ case "$cmd" in
             --env AWS_ACCESS_KEY_ID
             --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
+            --env AWS_SESSION_TOKEN
             --env BUILDKITE
             --env BUILDKITE_AGENT_ACCESS_TOKEN
             --env BUILDKITE_BRANCH
