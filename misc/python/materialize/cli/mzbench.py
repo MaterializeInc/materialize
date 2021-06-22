@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# mzbuild.py -- script to run materialized benchmarks
+# mzbench.py -- script to run materialized benchmarks
 
 import argparse
 import csv
