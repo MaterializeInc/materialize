@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
     operators::{Capability, Event},
@@ -35,6 +35,7 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{debug, error};
+use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{
     register_int_counter, register_int_counter_vec, register_int_gauge_vec,
@@ -115,6 +116,8 @@ pub struct SourceConfig<'a, G> {
     pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Timely worker logger for source events
     pub logger: Option<Logger>,
+    /// The function to return a now time.
+    pub now: NowFn,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -1052,20 +1055,17 @@ pub struct Timestamper {
     inner: Arc<RwLock<Timestamp>>,
     sender: EventSender,
     tick_duration: Duration,
+    now: NowFn,
 }
 
 impl Timestamper {
-    fn new(sender: EventSender, tick_duration: Duration) -> Self {
-        let now = UNIX_EPOCH
-            .elapsed()
-            .expect("system clock before 1970")
-            .as_millis()
-            .try_into()
-            .expect("materialize has existed for more than 500M years");
+    fn new(sender: EventSender, tick_duration: Duration, now: NowFn) -> Self {
+        let ts = now();
         Self {
-            inner: Arc::new(RwLock::new(now)),
+            inner: Arc::new(RwLock::new(ts)),
             sender,
             tick_duration,
+            now,
         }
     }
 
@@ -1107,10 +1107,7 @@ impl Timestamper {
     async fn tick(&self) -> anyhow::Result<()> {
         tokio::time::sleep(self.tick_duration).await;
         let mut timestamp = self.inner.write().await;
-        let mut now = UNIX_EPOCH
-            .elapsed()
-            .expect("system clock before 1970")
-            .as_millis();
+        let mut now: u128 = (self.now)().into();
 
         // Round to the next greatest self.tick_duration increment.
         // This is to guarantee that different workers downgrade (without coordination) to the
@@ -1171,6 +1168,7 @@ where
         worker_id,
         timestamp_frequency,
         logger,
+        now,
         ..
     } = config;
 
@@ -1178,7 +1176,7 @@ where
 
     if active {
         tokio::spawn(async move {
-            let timestamper = Timestamper::new(tx, timestamp_frequency);
+            let timestamper = Timestamper::new(tx, timestamp_frequency, now);
             let source = connector.start(&timestamper);
             tokio::pin!(source);
 

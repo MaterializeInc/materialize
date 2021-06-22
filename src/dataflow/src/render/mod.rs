@@ -119,6 +119,7 @@ use dataflow_types::*;
 use expr::{GlobalId, Id};
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
+use ore::now::NowFn;
 use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -178,6 +179,7 @@ pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     render_state: &mut RenderState,
     dataflow: DataflowDesc,
+    now: NowFn,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -211,6 +213,7 @@ pub fn build_dataflow<A: Allocate>(
                     src_id,
                     src,
                     orig_id,
+                    now,
                 );
             }
 

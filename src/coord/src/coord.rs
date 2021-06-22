@@ -3325,6 +3325,7 @@ pub async fn serve(
         command_receivers: worker_rxs,
         timely_worker,
         experimental_mode,
+        now: system_time,
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
