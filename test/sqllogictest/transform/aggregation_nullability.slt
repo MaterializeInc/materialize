@@ -907,3 +907,86 @@ WHERE t1.f2 = derived.agg2;
 | Project (#2)
 
 EOF
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER NOT NULL);
+
+statement ok
+INSERT INTO t1 VALUES (1);
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+CREATE TABLE t2 (f1 INTEGER NOT NULL);
+
+statement ok
+INSERT INTO t2 VALUES (1);
+
+statement ok
+INSERT INTO t2 VALUES (2);
+
+# outer-to-inner join conversion not allowed
+query T multiline
+EXPLAIN SELECT SUM(t1.f1 + t2.f1), SUM(t2.f1 + 0)
+FROM t2
+LEFT JOIN t1
+ON t1.f1 < t2.f1
+HAVING SUM(t1.f1 + t2.f1) > 0;
+----
+%0 =
+| Get materialize.public.t2 (u19)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u17)
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0, #1)
+| Filter (#1 < #0)
+
+%3 =
+| Get %2 (l0)
+| Distinct group=(#0)
+| Negate
+
+%4 =
+| Get materialize.public.t2 (u19)
+| Distinct group=(#0)
+
+%5 =
+| Union %3 %4
+
+%6 =
+| Get materialize.public.t2 (u19)
+| ArrangeBy (#0)
+
+%7 =
+| Join %5 %6 (= #0 #1)
+| | implementation = Differential %5 %6.(#0)
+| | demand = (#0)
+| Map null
+| Project (#0, #2)
+
+%8 =
+| Union %2 %7
+| Reduce group=()
+| | agg sum((#1 + #0))
+| | agg sum((#0 + 0))
+| Filter (#0 > 0)
+
+EOF
+
+query II
+SELECT SUM(t1.f1 + t2.f1), SUM(t2.f1 + 0)
+FROM t2
+LEFT JOIN t1
+ON t1.f1 < t2.f1
+HAVING SUM(t1.f1 + t2.f1) > 0;
+----
+3  3

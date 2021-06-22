@@ -230,9 +230,10 @@ impl NonNullRequirements {
                             } else {
                                 req_intersection = Some(nonnull_columns.clone());
                             }
-                        } else if !aggr_nonnull_req.iter().any(|(cols, flag)| {
-                            *flag && nonnull_columns.intersection(cols).count() > 0
-                        }) {
+                        } else if !aggr_nonnull_req
+                            .iter()
+                            .any(|(cols, flag)| *flag && cols.is_subset(&nonnull_columns))
+                        {
                             // An aggregate function that is either a COUNT or any other
                             // aggregate not required to be non-null, that doesn't intersect
                             // with the requirements of any non-null aggregate.
