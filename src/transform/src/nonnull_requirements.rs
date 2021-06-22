@@ -202,48 +202,68 @@ impl NonNullRequirements {
                 }
 
                 if !aggr_columns.is_empty() {
-                    // Intersect the non-null requirements for non-null aggregates
-                    // (one which its result is requested to be non-null)
-                    // that propagate non-null constraints (all of them but COUNT).
-                    // However, if there is a COUNT or any other aggregate we can still
-                    // propagate the non-null requirement as long as the requirements
-                    // of their parameters intersect with the requirements of a non-null
-                    // aggregate.
-                    let aggr_nonnull_req = aggregates
+                    // For each aggregate, determine if it is both
+                    // 1. appropriate to consider as an aggregation that can push down non-null constraints, and
+                    // 2. which columns of the input being null would allow an input record to be discardable.
+                    let nonnull_info_per_aggregate = aggregates
                         .iter()
                         .enumerate()
                         .map(|(pos, aggr)| {
-                            let aggr_nonnull_flag = aggr.func.propagates_nonnull_constraint()
+                            let should_push_down = aggr.func.propagates_nonnull_constraint()
                                 && aggr_columns.contains(&(group_key.len() + pos));
-                            let mut aggr_nonnull_columns = HashSet::new();
-                            aggr.expr.non_null_requirements(&mut aggr_nonnull_columns);
-                            (aggr_nonnull_columns, aggr_nonnull_flag)
+                            let mut ignores_nulls_on_columns = HashSet::new();
+                            aggr.expr
+                                .non_null_requirements(&mut ignores_nulls_on_columns);
+                            (should_push_down, ignores_nulls_on_columns)
                         })
                         .collect::<Vec<_>>();
-                    let mut req_intersection: Option<HashSet<usize>> = None;
-                    for (nonnull_columns, nonnull_flag) in aggr_nonnull_req.iter() {
-                        if *nonnull_flag {
-                            if let Some(previous) = req_intersection {
-                                req_intersection = Some(
-                                    nonnull_columns.intersection(&previous).cloned().collect(),
+                    let mut pushable_nonnull_constraints: Option<HashSet<usize>> = None;
+                    for (should_push_down, ignores_nulls_on_columns) in
+                        nonnull_info_per_aggregate.iter()
+                    {
+                        // Each aggregate may either
+                        // 1. directly support non-null pushdown, on any of an indicated set of columns,
+                        // 2. allow non-null pushdowns if there is another aggregate that will push down a non-null
+                        //    constraint for any column whose null values result in a null input for the current
+                        //    aggregate, or
+                        // 3. disqualify all other non-null pushdowns, as they require all records to be surfaced.
+                        //
+                        // An example of 2 is when `MAX(column0)` is requested to be non-null, and there is any
+                        // other aggregate on `column0`. That other aggregate is implied to be non-null and
+                        // ignoring rows with nulls in `column0` won't alter its result.
+                        //
+                        // If no aggregate prevents other non-null pushdowns, `pushable_nonnull_constraints`
+                        // contains the columns whose nulls are ignored by all aggregates that can push down
+                        // non-null constraints.
+                        if *should_push_down {
+                            if let Some(previous) = pushable_nonnull_constraints {
+                                pushable_nonnull_constraints = Some(
+                                    ignores_nulls_on_columns
+                                        .intersection(&previous)
+                                        .cloned()
+                                        .collect(),
                                 );
                             } else {
-                                req_intersection = Some(nonnull_columns.clone());
+                                pushable_nonnull_constraints =
+                                    Some(ignores_nulls_on_columns.clone());
                             }
-                        } else if !aggr_nonnull_req
-                            .iter()
-                            .any(|(cols, flag)| *flag && cols.is_subset(&nonnull_columns))
-                        {
-                            // An aggregate function that is either a COUNT or any other
-                            // aggregate not required to be non-null, that doesn't intersect
-                            // with the requirements of any non-null aggregate.
-                            req_intersection = None;
+                        } else if !nonnull_info_per_aggregate.iter().any(
+                            // check for 2.
+                            |(should_push_down2, ignores_nulls_on_columns2)| {
+                                *should_push_down2
+                                    && ignores_nulls_on_columns2
+                                        .is_subset(&ignores_nulls_on_columns)
+                            },
+                        ) {
+                            // 3. Early exist. The current aggregate discualifies all other non-null pushdowns as
+                            // it may require all records to reach the reduction.
+                            pushable_nonnull_constraints = Some(HashSet::new());
                             break;
                         }
                     }
 
-                    if let Some(req_intersection) = req_intersection {
-                        new_columns.extend(req_intersection);
+                    if let Some(pushable_nonnull_constraints) = pushable_nonnull_constraints {
+                        new_columns.extend(pushable_nonnull_constraints);
                     }
                 }
 
