@@ -1698,7 +1698,7 @@ impl<'a> SchemaNode<'a> {
                 SchemaPiece::Decimal {
                     precision, scale, ..
                 },
-            ) => AvroValue::Decimal(DecimalValue {
+            ) => AvroValue::Apd(DecimalValue {
                 precision: *precision,
                 scale: *scale,
                 unscaled: s.clone().into_bytes(),

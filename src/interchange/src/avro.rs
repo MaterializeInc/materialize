@@ -52,6 +52,7 @@ mod tests {
     use std::fs::File;
 
     use mz_avro::types::{DecimalValue, Value};
+    use repr::adt::apd;
     use repr::adt::decimal::Significand;
     use repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
 
@@ -92,10 +93,11 @@ mod tests {
     /// documentation:
     /// https://avro.apache.org/docs/current/spec.html#schemas
     fn test_diff_pair_to_avro_primitive_types() -> anyhow::Result<()> {
+        use dec::OrderedDecimal;
         // Data to be used later in assertions.
         let date = NaiveDate::from_ymd(2020, 1, 8);
         let date_time = NaiveDateTime::new(date, NaiveTime::from_hms(1, 1, 1));
-        let bytes: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let bytes: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10];
         let string = String::from("test");
 
         // Simple transformations from primitive Avro Schema types
@@ -130,9 +132,31 @@ mod tests {
                 ScalarType::Decimal(1, 1),
                 Datum::Decimal(Significand::new(1i128)),
                 Value::Decimal(DecimalValue {
-                    unscaled: bytes.clone(),
+                    unscaled: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
                     precision: 1,
                     scale: 1,
+                }),
+            ),
+            (
+                ScalarType::APD { scale: Some(1) },
+                Datum::APD(OrderedDecimal(apd::Apd::from(1))),
+                Value::Apd(DecimalValue {
+                    unscaled: bytes.clone(),
+                    precision: 39,
+                    scale: 1,
+                }),
+            ),
+            (
+                ScalarType::APD { scale: None },
+                Datum::APD(OrderedDecimal(apd::Apd::from(1))),
+                Value::Apd(DecimalValue {
+                    // equivalent to 1E39
+                    unscaled: vec![
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 240, 80, 254, 147, 137,
+                        67, 172, 196, 95, 101, 86, 128, 0, 0, 0, 0,
+                    ],
+                    precision: 81,
+                    scale: 39,
                 }),
             ),
             (

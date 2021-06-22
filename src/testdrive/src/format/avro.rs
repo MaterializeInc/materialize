@@ -90,7 +90,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
                 Some(bytes) => bytes,
                 None => return Err("decimal was not represented by byte array".into()),
             };
-            Ok(Value::Decimal(DecimalValue {
+            Ok(Value::Apd(DecimalValue {
                 unscaled: bytes,
                 precision: *precision,
                 scale: *scale,

@@ -770,7 +770,7 @@ fn test_complex_resolutions() {
         ),
         (
             "f6".to_owned(),
-            Value::Decimal(DecimalValue {
+            Value::Apd(DecimalValue {
                 precision: 2,
                 scale: 2,
                 unscaled: vec![1, 2, 3, 4],
@@ -778,7 +778,7 @@ fn test_complex_resolutions() {
         ),
         (
             "f7".to_owned(),
-            Value::Decimal(DecimalValue {
+            Value::Apd(DecimalValue {
                 precision: 2,
                 scale: 2,
                 unscaled: vec![1, 2],
@@ -835,7 +835,7 @@ fn test_complex_resolutions() {
         ("f7".to_owned(), Value::Bytes(vec![1, 2])),
         (
             "f8".to_owned(),
-            Value::Decimal(DecimalValue {
+            Value::Apd(DecimalValue {
                 precision: 2,
                 scale: 2,
                 unscaled: vec![0, 1],
@@ -843,7 +843,7 @@ fn test_complex_resolutions() {
         ),
         (
             "f9".to_owned(),
-            Value::Decimal(DecimalValue {
+            Value::Apd(DecimalValue {
                 precision: 2,
                 scale: 2,
                 unscaled: vec![3, 4, 5],

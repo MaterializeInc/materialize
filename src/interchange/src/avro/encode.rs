@@ -15,6 +15,7 @@ use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_avro::types::AvroMap;
+use repr::adt::apd::{self, APD_AGG_MAX_PRECISION, APD_DATUM_MAX_PRECISION};
 use repr::adt::jsonb::JsonbRef;
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
@@ -296,6 +297,34 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     precision: (*p).into(),
                     scale: (*s).into(),
                 }),
+                ScalarType::APD { scale } => {
+                    let mut d = datum.unwrap_apd().0;
+                    let (unscaled, precision, scale) = match scale {
+                        Some(scale) => {
+                            // Values must be rescaled to resaturate trailing zeroes
+                            apd::rescale(&mut d, *scale).unwrap();
+                            (
+                                apd::apd_to_twos_complement_be(d).to_vec(),
+                                APD_DATUM_MAX_PRECISION,
+                                usize::from(*scale),
+                            )
+                        }
+                        // Decimals without specified scale must nonetheless be
+                        // expressed as a fixed scale, so we write everything as
+                        // a 78-digit number with a scale of 39, which
+                        // definitively expresses all valid APD values.
+                        None => (
+                            apd::apd_to_twos_complement_wide(d).to_vec(),
+                            APD_AGG_MAX_PRECISION,
+                            APD_DATUM_MAX_PRECISION,
+                        ),
+                    };
+                    Value::Apd(DecimalValue {
+                        unscaled,
+                        precision,
+                        scale,
+                    })
+                }
                 ScalarType::Date => Value::Date(datum.unwrap_date()),
                 ScalarType::Time => Value::Long({
                     let time = datum.unwrap_time();
@@ -374,7 +403,6 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Record(fields)
                 }
-                ScalarType::APD { .. } => unreachable!(),
             };
             if typ.nullable {
                 val = Value::Union {
@@ -545,8 +573,17 @@ fn build_row_schema_field<F: FnMut() -> String>(
                 })
             }
         }
-        ScalarType::APD { .. } => {
-            unreachable!("TBD: how to determine the scale of these values")
+        ScalarType::APD { scale } => {
+            let (p, s) = match scale {
+                Some(scale) => (APD_DATUM_MAX_PRECISION, usize::from(*scale)),
+                None => (APD_AGG_MAX_PRECISION, APD_DATUM_MAX_PRECISION),
+            };
+            json!({
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": p,
+                "scale": s,
+            })
         }
     };
     if typ.nullable {

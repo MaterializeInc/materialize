@@ -394,6 +394,18 @@ impl Value {
                     fixed_size: _,
                 },
             ) => vp == *sp && vs == *ss,
+            (
+                &Value::Apd(DecimalValue {
+                    precision: vp,
+                    scale: vs,
+                    ..
+                }),
+                SchemaPiece::Decimal {
+                    precision: sp,
+                    scale: ss,
+                    fixed_size: _,
+                },
+            ) => vp == *sp && vs == *ss,
             (&Value::Bytes(_), SchemaPiece::Bytes) => true,
             (&Value::String(_), SchemaPiece::String) => true,
             (&Value::Fixed(n, _), SchemaPiece::Fixed { size }) => n == *size,
@@ -626,7 +638,7 @@ mod tests {
 
     #[test]
     fn validate_decimal() {
-        assert!(Value::Decimal(DecimalValue {
+        assert!(Value::Apd(DecimalValue {
             unscaled: vec![7],
             precision: 12,
             scale: 5
@@ -646,7 +658,7 @@ mod tests {
             .top_node()
         ));
 
-        assert!(!Value::Decimal(DecimalValue {
+        assert!(!Value::Apd(DecimalValue {
             unscaled: vec![7],
             precision: 13,
             scale: 5
