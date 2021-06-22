@@ -490,43 +490,37 @@ where
                     mut open_transaction,
                 } => {
                     let rows = ready_rows.front().expect("missing data");
-                    let encoded_row = &rows[row_index];
-                    let record = BaseRecord::to(&connector.topic);
-                    let record = if encoded_row.value.is_some() {
-                        record.payload(encoded_row.value.as_ref().unwrap())
-                    } else {
-                        record
-                    };
-                    let record = if encoded_row.key.is_some() {
-                        record.key(encoded_row.key.as_ref().unwrap())
-                    } else {
-                        record
-                    };
-                    if let Err(retry) = s.send(record) {
-                        return retry;
-                    }
 
-                    // advance to the next repetition of this row, or the next row if all
-                    // reptitions are exhausted
-                    open_transaction.total_sent += 1;
-                    repeat_counter += 1;
-                    if repeat_counter == encoded_row.count {
-                        repeat_counter = 0;
-                        row_index += 1;
-                        s.metrics.rows_queued.dec();
-                    }
+                    while row_index < rows.len() {
+                        let encoded_row = &rows[row_index];
+                        let record = BaseRecord::to(&connector.topic);
+                        let record = if encoded_row.value.is_some() {
+                            record.payload(encoded_row.value.as_ref().unwrap())
+                        } else {
+                            record
+                        };
+                        let record = if encoded_row.key.is_some() {
+                            record.key(encoded_row.key.as_ref().unwrap())
+                        } else {
+                            record
+                        };
+                        if let Err(retry) = s.send(record) {
+                            return retry;
+                        }
 
-                    // move to the end state if we've finished all rows in this timestamp
-                    if row_index == rows.len() {
-                        ready_rows.pop_front();
-                        SendState::AwaitingCompletion(open_transaction)
-                    } else {
-                        SendState::Draining {
-                            row_index,
-                            repeat_counter,
-                            open_transaction,
+                        // advance to the next repetition of this row, or the next row if all
+                        // reptitions are exhausted
+                        open_transaction.total_sent += 1;
+                        repeat_counter += 1;
+                        if repeat_counter == encoded_row.count {
+                            repeat_counter = 0;
+                            row_index += 1;
+                            s.metrics.rows_queued.dec();
                         }
                     }
+
+                    ready_rows.pop_front();
+                    SendState::AwaitingCompletion(open_transaction)
                 }
                 SendState::AwaitingCompletion(open_transaction) => {
                     // did anything come in while we're waiting
