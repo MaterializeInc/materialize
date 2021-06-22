@@ -10,13 +10,14 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::{Collection, Hashable};
+use kafka_util::KafkaAddrs;
 use lazy_static::lazy_static;
 use log::{error, info};
 use prometheus::{
@@ -307,53 +308,14 @@ pub fn produce_to_kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &connector.addrs.to_string());
+    let config = create_kafka_config(
+        &connector.topic,
+        &connector.addrs,
+        connector.exactly_once,
+        &connector.config_options,
+    );
 
-    // Ensure that messages are sinked in order and without duplicates. Note that
-    // this only applies to a single instance of a producer - in the case of restarts,
-    // all bets are off and full exactly once support is required.
-    config.set("enable.idempotence", "true");
-
-    // Increase limits for the Kafka producer's internal buffering of messages
-    // Currently we don't have a great backpressure mechanism to tell indexes or
-    // views to slow down, so the only thing we can do with a message that we
-    // can't immediately send is to put it in a buffer and there's no point
-    // having buffers within the dataflow layer and Kafka
-    // If the sink starts falling behind and the buffers start consuming
-    // too much memory the best thing to do is to drop the sink
-    // Sets the buffer size to be 16 GB (note that this setting is in KB)
-    config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
-
-    // Set the max messages buffered by the producer at any time to 10MM which
-    // is the maximum allowed value
-    config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
-
-    // Make the Kafka producer wait at least 10 ms before sending out MessageSets
-    // TODO(rkhaitan): experiment with different settings for this value to see
-    // if it makes a big difference
-    config.set("queue.buffering.max.ms", &format!("{}", 10));
-
-    for (k, v) in connector.config_options.iter() {
-        // We explicitly reject `statistics.interval.ms` here so that we don't
-        // flood the INFO log with statistics messages.
-        // TODO: properly support statistics on Kafka sinks
-        // We explicitly reject 'isolation.level' as it's a consumer property
-        // and, while benign, will fill the log with WARN messages
-        if k != "statistics.interval.ms" && k != "isolation.level" {
-            config.set(k, v);
-        }
-    }
-
-    let transactional = if connector.exactly_once {
-        // TODO(aljoscha): this only works for now, once there's an actual
-        // Kafka producer on each worker they would step on each others toes
-        let transactional_id = format!("mz-producer-{}", connector.topic);
-        config.set("transactional.id", transactional_id);
-        true
-    } else {
-        false
-    };
+    let transactional = connector.exactly_once;
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let mut builder = OperatorBuilder::new(name.clone(), stream.scope());
@@ -653,6 +615,60 @@ where
     });
 
     Box::new(KafkaSinkToken { shutdown_flag })
+}
+
+fn create_kafka_config(
+    topic: &str,
+    addrs: &KafkaAddrs,
+    exactly_once: bool,
+    config_options: &BTreeMap<String, String>,
+) -> ClientConfig {
+    let mut config = ClientConfig::new();
+    config.set("bootstrap.servers", addrs.to_string());
+
+    // Ensure that messages are sinked in order and without duplicates. Note that
+    // this only applies to a single instance of a producer - in the case of restarts,
+    // all bets are off and full exactly once support is required.
+    config.set("enable.idempotence", "true");
+
+    // Increase limits for the Kafka producer's internal buffering of messages
+    // Currently we don't have a great backpressure mechanism to tell indexes or
+    // views to slow down, so the only thing we can do with a message that we
+    // can't immediately send is to put it in a buffer and there's no point
+    // having buffers within the dataflow layer and Kafka
+    // If the sink starts falling behind and the buffers start consuming
+    // too much memory the best thing to do is to drop the sink
+    // Sets the buffer size to be 16 GB (note that this setting is in KB)
+    config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
+
+    // Set the max messages buffered by the producer at any time to 10MM which
+    // is the maximum allowed value
+    config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
+
+    // Make the Kafka producer wait at least 10 ms before sending out MessageSets
+    // TODO(rkhaitan): experiment with different settings for this value to see
+    // if it makes a big difference
+    config.set("queue.buffering.max.ms", &format!("{}", 10));
+
+    for (k, v) in config_options.iter() {
+        // We explicitly reject `statistics.interval.ms` here so that we don't
+        // flood the INFO log with statistics messages.
+        // TODO: properly support statistics on Kafka sinks
+        // We explicitly reject 'isolation.level' as it's a consumer property
+        // and, while benign, will fill the log with WARN messages
+        if k != "statistics.interval.ms" && k != "isolation.level" {
+            config.set(k, v);
+        }
+    }
+
+    if exactly_once {
+        // TODO(aljoscha): this only works for now, once there's an actual
+        // Kafka producer on each worker they would step on each others toes
+        let transactional_id = format!("mz-producer-{}", topic);
+        config.set("transactional.id", transactional_id);
+    }
+
+    config
 }
 
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using Avro.
