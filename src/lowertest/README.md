@@ -74,7 +74,7 @@ fields have default values.
 ### 1. Parsing the test syntax
 
 Parse the string `s` containing your specification by calling
-`let mut stream_iter = s.to_string().parse::<proc_macro2::TokenStream>()?.into_iter()`.
+`let mut stream_iter = lowertest::parse_str(s)?.into_iter()`.
 
 You now have an iterator over [`TokenTree`][proc_macro2] that you can pass
 into `deserialize`.

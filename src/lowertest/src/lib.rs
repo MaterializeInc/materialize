@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use proc_macro2::{Delimiter, TokenTree};
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 
 use ore::str::separated;
@@ -50,6 +50,10 @@ pub trait MzStructReflect {
     /// The second vector comprises the types of the struct's fields. It is
     /// empty if the struct has no fields.
     fn mz_struct_reflect() -> (Vec<&'static str>, Vec<&'static str>);
+}
+
+pub fn parse_str(s: &str) -> Result<TokenStream, String> {
+    s.parse::<TokenStream>().map_err(|e| e.to_string())
 }
 
 /// If the `stream_iter` is not empty, deserialize the next `TokenTree` into a `D`.
@@ -511,7 +515,7 @@ where
         .map(|v| v.clone())
         .ok_or_else(|| {
             format!(
-                "{}::{} is not a supported enum ",
+                "{}::{} is not a supported enum.",
                 type_name, variant_camel_case
             )
         })?;
