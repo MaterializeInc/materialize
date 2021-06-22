@@ -98,6 +98,10 @@ impl<U: Buffer, L: Blob> Persister for StoragePersister<U, L> {
             return Err(format!("internal error: {:?} already registered", id).into());
         }
         self.registered.insert(id);
+        {
+            let mut guard = self.indexed.lock()?;
+            guard.register(id);
+        }
         let write = StreamWriteHandle::new(id, self.indexed.clone());
         let meta = StreamMetaHandle::new(id, self.indexed.clone());
         Ok(Token { write, meta })
