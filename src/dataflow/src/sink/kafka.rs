@@ -159,18 +159,22 @@ impl KafkaSink {
     fn transition_on_txn_error(
         &self,
         current_state: SendState,
-        ts: u64,
+        ts: Option<u64>,
         e: KafkaError,
     ) -> SendState {
         error!(
-            "encountered error during kafka interaction. {} in state {:?} at time {} : {}",
+            "encountered error during kafka interaction. {} in state {:?} at time {:?} : {}",
             &self.name, current_state, ts, e
         );
 
         match e {
             KafkaError::Transaction(e) => {
                 if e.txn_requires_abort() {
-                    SendState::AbortTxn
+                    if let SendState::CommitTxn(open_transaction) = current_state {
+                        SendState::AbortTxn(open_transaction)
+                    } else {
+                        panic!("Can only abort txn if there is an open txn.");
+                    }
                 } else if e.is_retriable() {
                     current_state
                 } else {
@@ -211,24 +215,34 @@ enum SendState {
     BeginTxn,
     // Write BEGIN consistency record
     Begin,
-    // Flush pending rows for closed timestamps
+    // Flush rows whose timestamp is less-equal to the timestamp of the
+    // currently open transaction
     Draining {
         // row_index points to the current flushing row within the closed timestamp
         // we're processing
         row_index: usize,
         // multiple copies of a row may need to be sent if its cardinality is >1
         repeat_counter: usize,
-        // a count of all rows sent, accounting for the repeat counter
-        total_sent: i64,
+        open_transaction: OpenTransaction,
     },
+    // Wait for the input frontier and durability frontier to advance
+    // beyond the timestamp of our open transaction
+    AwaitingCompletion(OpenTransaction),
     // Write END consistency record
-    End(i64),
+    End(OpenTransaction),
     // Corresponds to a Kafka commit_transaction call
-    CommitTxn,
+    CommitTxn(OpenTransaction),
     // Transitioned to when an error in a previous transactional state requires an abort
-    AbortTxn,
+    AbortTxn(OpenTransaction),
     // Transitioned to when the sink needs to be closed
     Shutdown,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct OpenTransaction {
+    upper_timestamp: Timestamp,
+    // a count of all rows sent, accounting for the repeat counter
+    total_sent: i64,
 }
 
 #[derive(Debug)]
@@ -349,7 +363,7 @@ where
     };
 
     let mut pending_rows: HashMap<Timestamp, Vec<EncodedRow>> = HashMap::new();
-    let mut ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)> = VecDeque::new();
+    let mut ready_rows: VecDeque<Vec<EncodedRow>> = VecDeque::new();
     let mut state = SendState::Init;
     let mut vector = Vec::new();
 
@@ -403,63 +417,44 @@ where
             }
         });
 
-        // Figure out the durablity frontier for all sources we depent on
-        let mut durability_frontier = Antichain::new();
-
-        for history in source_timestamp_histories.iter() {
-            use differential_dataflow::lattice::Lattice;
-            durability_frontier.meet_assign(&history.durability_frontier());
-        }
-        // Move any newly closed timestamps from pending to ready
-        let mut closed_ts: Vec<u64> = pending_rows
-            .iter()
-            .filter(|(ts, _)| {
-                !input.frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts)
-            })
-            .map(|(&ts, _)| ts)
-            .collect();
-        closed_ts.sort_unstable();
-        closed_ts.into_iter().for_each(|ts| {
-            let rows = pending_rows.remove(&ts).unwrap();
-            ready_rows.push_back((ts, rows));
-        });
-
         // Send a bounded number of records to Kafka from the ready queue.
         // This loop has explicitly been designed so that each iteration sends
         // at most one record to Kafka
         for _ in 0..connector.fuel {
-            if let Some((ts, rows)) = ready_rows.front() {
-                state = match state {
-                    SendState::Init => {
-                        let result = if transactional {
-                            s.producer.init_transactions(s.txn_timeout)
-                        } else {
-                            Ok(())
-                        };
+            state = match state {
+                SendState::Init => {
+                    let result = if transactional {
+                        s.producer.init_transactions(s.txn_timeout)
+                    } else {
+                        Ok(())
+                    };
 
-                        match result {
-                            Ok(()) => SendState::BeginTxn,
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
-                        }
+                    match result {
+                        Ok(()) => SendState::BeginTxn,
+                        Err(e) => s.transition_on_txn_error(state, None, e),
                     }
-                    SendState::BeginTxn => {
-                        let result = if transactional {
-                            s.producer.begin_transaction()
-                        } else {
-                            Ok(())
-                        };
+                }
+                SendState::BeginTxn => {
+                    let result = if transactional {
+                        s.producer.begin_transaction()
+                    } else {
+                        Ok(())
+                    };
 
-                        match result {
-                            Ok(()) => SendState::Begin,
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
-                        }
+                    match result {
+                        Ok(()) => SendState::Begin,
+                        Err(e) => s.transition_on_txn_error(state, None, e),
                     }
-                    SendState::Begin => {
+                }
+                SendState::Begin => {
+                    let lowest_seen_ts = pending_rows.iter().map(|(&ts, _)| ts).min();
+
+                    if let Some(lowest_seen_ts) = lowest_seen_ts {
                         if let Some(consistency) = &connector.consistency {
                             let encoded = avro::encode_debezium_transaction_unchecked(
                                 consistency.schema_id,
                                 &connector.topic_prefix,
-                                &ts.to_string(),
+                                &lowest_seen_ts.to_string(),
                                 "BEGIN",
                                 None,
                             );
@@ -469,109 +464,174 @@ where
                                 return retry;
                             }
                         }
+
+                        let rows = pending_rows.remove(&lowest_seen_ts).unwrap();
+                        ready_rows.push_back(rows);
+
+                        // sort incoming rows into either ready rows
                         SendState::Draining {
                             row_index: 0,
                             repeat_counter: 0,
-                            total_sent: 0,
+                            open_transaction: OpenTransaction {
+                                upper_timestamp: lowest_seen_ts,
+                                total_sent: 0,
+                            },
+                        }
+                    } else {
+                        // No records. Stay in state Begin but break out of the
+                        // loop for now which will return from the operator
+                        // invocation.
+                        break;
+                    }
+                }
+                SendState::Draining {
+                    mut row_index,
+                    mut repeat_counter,
+                    mut open_transaction,
+                } => {
+                    let rows = ready_rows.front().expect("missing data");
+                    let encoded_row = &rows[row_index];
+                    let record = BaseRecord::to(&connector.topic);
+                    let record = if encoded_row.value.is_some() {
+                        record.payload(encoded_row.value.as_ref().unwrap())
+                    } else {
+                        record
+                    };
+                    let record = if encoded_row.key.is_some() {
+                        record.key(encoded_row.key.as_ref().unwrap())
+                    } else {
+                        record
+                    };
+                    if let Err(retry) = s.send(record) {
+                        return retry;
+                    }
+
+                    // advance to the next repetition of this row, or the next row if all
+                    // reptitions are exhausted
+                    open_transaction.total_sent += 1;
+                    repeat_counter += 1;
+                    if repeat_counter == encoded_row.count {
+                        repeat_counter = 0;
+                        row_index += 1;
+                        s.metrics.rows_queued.dec();
+                    }
+
+                    // move to the end state if we've finished all rows in this timestamp
+                    if row_index == rows.len() {
+                        ready_rows.pop_front();
+                        SendState::AwaitingCompletion(open_transaction)
+                    } else {
+                        SendState::Draining {
+                            row_index,
+                            repeat_counter,
+                            open_transaction,
                         }
                     }
-                    SendState::Draining {
-                        mut row_index,
-                        mut repeat_counter,
-                        mut total_sent,
-                    } => {
-                        let encoded_row = &rows[row_index];
-                        let record = BaseRecord::to(&connector.topic);
-                        let record = if encoded_row.value.is_some() {
-                            record.payload(encoded_row.value.as_ref().unwrap())
+                }
+                SendState::AwaitingCompletion(open_transaction) => {
+                    // did anything come in while we're waiting
+                    let mut ready_ts: Vec<Timestamp> = pending_rows
+                        .iter()
+                        .map(|(&ts, _)| ts)
+                        .filter(|&ts| ts <= open_transaction.upper_timestamp)
+                        .collect();
+
+                    ready_ts.sort_unstable();
+                    ready_ts.into_iter().for_each(|ts| {
+                        let rows = pending_rows.remove(&ts).unwrap();
+                        ready_rows.push_back(rows);
+                    });
+
+                    if !ready_rows.is_empty() {
+                        SendState::Draining {
+                            row_index: 0,
+                            repeat_counter: 0,
+                            open_transaction,
+                        }
+                    } else {
+                        // No eligible rows that we could still send. See if the
+                        // frontiers are far enough to finalize this batch
+
+                        // Figure out the durablity frontier for all sources we
+                        // depend on
+                        let mut durability_frontier = Antichain::new();
+
+                        for history in source_timestamp_histories.iter() {
+                            use differential_dataflow::lattice::Lattice;
+                            durability_frontier.meet_assign(&history.durability_frontier());
+                        }
+
+                        if !input.frontier.less_equal(&open_transaction.upper_timestamp)
+                            && !durability_frontier.less_equal(&open_transaction.upper_timestamp)
+                        {
+                            SendState::End(open_transaction)
                         } else {
-                            record
-                        };
-                        let record = if encoded_row.key.is_some() {
-                            record.key(encoded_row.key.as_ref().unwrap())
-                        } else {
-                            record
-                        };
+                            // No records and frontiers are not far enough. Keep
+                            // waiting but break out of the loop which will return
+                            // from the operator invocation.
+                            break;
+                        }
+                    }
+                }
+                SendState::End(open_transaction) => {
+                    if let Some(consistency) = &connector.consistency {
+                        let encoded = avro::encode_debezium_transaction_unchecked(
+                            consistency.schema_id,
+                            &connector.topic_prefix,
+                            &open_transaction.upper_timestamp.to_string(),
+                            "END",
+                            Some(open_transaction.total_sent),
+                        );
+
+                        let record = BaseRecord::to(&consistency.topic).payload(&encoded);
                         if let Err(retry) = s.send(record) {
                             return retry;
                         }
-
-                        // advance to the next repetition of this row, or the next row if all
-                        // reptitions are exhausted
-                        total_sent += 1;
-                        repeat_counter += 1;
-                        if repeat_counter == encoded_row.count {
-                            repeat_counter = 0;
-                            row_index += 1;
-                            s.metrics.rows_queued.dec();
-                        }
-
-                        // move to the end state if we've finished all rows in this timestamp
-                        if row_index == rows.len() {
-                            SendState::End(total_sent)
-                        } else {
-                            SendState::Draining {
-                                row_index,
-                                repeat_counter,
-                                total_sent,
-                            }
-                        }
                     }
-                    SendState::End(total_count) => {
-                        if let Some(consistency) = &connector.consistency {
-                            let encoded = avro::encode_debezium_transaction_unchecked(
-                                consistency.schema_id,
-                                &connector.topic_prefix,
-                                &ts.to_string(),
-                                "END",
-                                Some(total_count),
-                            );
+                    SendState::CommitTxn(open_transaction)
+                }
+                SendState::CommitTxn(open_transaction) => {
+                    let result = if transactional {
+                        s.producer.commit_transaction(s.txn_timeout)
+                    } else {
+                        Ok(())
+                    };
 
-                            let record = BaseRecord::to(&consistency.topic).payload(&encoded);
-                            if let Err(retry) = s.send(record) {
-                                return retry;
-                            }
+                    match result {
+                        Ok(()) => {
+                            let ts = open_transaction.upper_timestamp;
+                            assert!(write_frontier.borrow().less_equal(&ts));
+                            write_frontier.borrow_mut().clear();
+                            write_frontier.borrow_mut().insert(ts);
+                            SendState::BeginTxn
                         }
-                        SendState::CommitTxn
-                    }
-                    SendState::CommitTxn => {
-                        let result = if transactional {
-                            s.producer.commit_transaction(s.txn_timeout)
-                        } else {
-                            Ok(())
-                        };
-
-                        match result {
-                            Ok(()) => {
-                                assert!(write_frontier.borrow().less_equal(ts));
-                                write_frontier.borrow_mut().clear();
-                                write_frontier.borrow_mut().insert(*ts);
-                                ready_rows.pop_front();
-                                SendState::BeginTxn
-                            }
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                        Err(e) => {
+                            let ts = open_transaction.upper_timestamp;
+                            s.transition_on_txn_error(state, Some(ts), e)
                         }
                     }
-                    SendState::AbortTxn => {
-                        let result = if transactional {
-                            s.producer.abort_transaction(s.txn_timeout)
-                        } else {
-                            Ok(())
-                        };
+                }
+                SendState::AbortTxn(open_transaction) => {
+                    let result = if transactional {
+                        s.producer.abort_transaction(s.txn_timeout)
+                    } else {
+                        Ok(())
+                    };
 
-                        match result {
-                            Ok(()) => SendState::BeginTxn,
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
-                        }
+                    match result {
+                        Ok(()) => SendState::BeginTxn,
+                        Err(e) => s.transition_on_txn_error(
+                            state,
+                            Some(open_transaction.upper_timestamp),
+                            e,
+                        ),
                     }
-                    SendState::Shutdown => {
-                        s.shutdown_flag.store(false, Ordering::SeqCst);
-                        break;
-                    }
-                };
-            } else {
-                break;
-            }
+                }
+                SendState::Shutdown => {
+                    s.shutdown_flag.store(false, Ordering::SeqCst);
+                    break;
+                }
+            };
         }
 
         let in_flight = s.producer.in_flight_count();
