@@ -395,7 +395,17 @@ pub fn plan_create_source(
     let mut with_options = normalize::options(with_options);
 
     let mut consistency = Consistency::RealTime;
-    let mut ts_frequency = scx.catalog.config().timestamp_frequency;
+
+    let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
+        Some(val) => match val {
+            Value::Number(n) => match n.parse::<u64>() {
+                Ok(n) => Duration::from_millis(n),
+                Err(_) => bail!("timestamp_frequency_ms must be an u64"),
+            },
+            _ => bail!("timestamp_frequency_ms must be an u64"),
+        },
+        None => scx.catalog.config().timestamp_frequency,
+    };
 
     let (external_connector, encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
@@ -415,11 +425,6 @@ pub fn plan_create_source(
                 Some(Value::String(s)) => Some(s),
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
-
-            ts_frequency = extract_timestamp_frequency_option(
-                scx.catalog.config().timestamp_frequency,
-                &mut with_options,
-            )?;
 
             if with_options.contains_key("start_offset") && consistency != Consistency::RealTime {
                 bail!("`start_offset` is not yet implemented for non-realtime consistency sources.")
@@ -516,10 +521,6 @@ pub fn plan_create_source(
                 None => Consistency::RealTime,
                 Some(_) => bail!("BYO consistency not supported for file sources"),
             };
-            ts_frequency = extract_timestamp_frequency_option(
-                scx.catalog.config().timestamp_frequency,
-                &mut with_options,
-            )?;
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
@@ -626,11 +627,6 @@ pub fn plan_create_source(
             if consistency != Consistency::RealTime {
                 bail!("BYO consistency is not supported for Avro OCF sources");
             }
-
-            ts_frequency = extract_timestamp_frequency_option(
-                scx.catalog.config().timestamp_frequency,
-                &mut with_options,
-            )?;
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
@@ -1776,20 +1772,6 @@ pub fn plan_create_type(
         typ: Type { create_sql, inner },
         depends_on: ids,
     }))
-}
-
-fn extract_timestamp_frequency_option(
-    default: Duration,
-    with_options: &mut BTreeMap<String, Value>,
-) -> Result<Duration, anyhow::Error> {
-    match with_options.remove("timestamp_frequency_ms") {
-        None => Ok(default),
-        Some(Value::Number(n)) => match n.parse::<u64>() {
-            Ok(n) => Ok(Duration::from_millis(n)),
-            _ => bail!("timestamp_frequency_ms must be an u64"),
-        },
-        Some(_) => bail!("timestamp_frequency_ms must be an u64"),
-    }
 }
 
 pub fn describe_create_role(
