@@ -10,7 +10,6 @@
 //! An abstraction for multiplexed streams of persisted data.
 
 use crate::error::Error;
-use crate::{Id, Token};
 
 /// An abstraction for a writer of (Key, Value, Time, Diff) updates.
 pub trait Write {
@@ -49,28 +48,4 @@ pub trait Meta: Clone {
 
     /// Unblocks compaction for updates before a time.
     fn allow_compaction(&mut self, ts: u64) -> Result<(), Error>;
-}
-
-/// An implementation of a persister for multiplexed streams of (Key, Value,
-/// Time, Diff) updates.
-pub trait Persister: Sized {
-    /// The persister's associated [Write] implementation.
-    type Write: Write;
-
-    /// The persister's associated [Meta] implementation.
-    type Meta: Meta;
-
-    /// Returns a token used to construct a persisted stream operator.
-    ///
-    /// If data was written by a previous Persister for this id, it's loaded and
-    /// replayed into the stream once constructed.
-    ///
-    /// Within a process, this can only be called once per id, even if that id
-    /// has since been destroyed. An `Err` is returned for calls after the
-    /// first. TODO: Is this restriction necessary/helpful?
-    fn create_or_load(&mut self, id: Id) -> Result<Token<Self::Write, Self::Meta>, Error>;
-
-    ///
-    /// TODO: Should this live on Meta?
-    fn destroy(&mut self, id: Id) -> Result<(), Error>;
 }

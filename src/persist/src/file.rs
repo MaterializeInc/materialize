@@ -9,7 +9,6 @@
 
 //! File backed implementations for testing and benchmarking.
 
-use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write as StdWrite};
@@ -19,9 +18,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
 use crate::mem::MemSnapshot;
-use crate::persister::{Meta, Persister, Write};
+use crate::persister::{Meta, Write};
 use crate::storage::{Blob, Buffer, SeqNo};
-use crate::{Id, Token};
 
 /// A naive implementation of [Write] and [Meta] backed by a file.
 #[derive(Clone, Debug)]
@@ -128,57 +126,6 @@ impl Meta for FileStream {
 
     fn allow_compaction(&mut self, _ts: u64) -> Result<(), Error> {
         // No-op for now.
-        Ok(())
-    }
-}
-
-/// Implementation of [Persister] backed by files.
-pub struct FilePersister {
-    base_path: PathBuf,
-    registered: HashSet<Id>,
-    dataz: HashMap<Id, FileStream>,
-}
-
-impl FilePersister {
-    /// Constructs a new, empty FilePersister with the specified base path.
-    pub fn new<P: AsRef<Path>>(base_path: P) -> Result<Self, Error> {
-        fs::create_dir_all(&base_path)?;
-        Ok(FilePersister {
-            base_path: base_path.as_ref().to_path_buf(),
-            registered: HashSet::new(),
-            dataz: HashMap::new(),
-        })
-    }
-}
-
-impl Persister for FilePersister {
-    type Write = FileStream;
-    type Meta = FileStream;
-
-    fn create_or_load(&mut self, id: Id) -> Result<Token<Self::Write, Self::Meta>, Error> {
-        if self.registered.contains(&id) {
-            return Err(format!("internal error: {:?} already registered", id).into());
-        }
-
-        self.registered.insert(id);
-        let path = self.base_path.join(format!("file-persister-{}", id.0));
-        let file_stream = FileStream::new(path)?;
-        let p = self.dataz.entry(id).or_insert(file_stream);
-        let t = Token {
-            write: p.clone(),
-            meta: p.clone(),
-        };
-        Ok(t)
-    }
-
-    /// Removes the persisted stream for `id`.
-    ///
-    /// Note that this function does not unregister `id` to ensure that each `id`
-    /// is only ever registered exactly once.
-    fn destroy(&mut self, id: Id) -> Result<(), Error> {
-        if self.dataz.remove(&id).is_none() {
-            return Err(format!("internal error: {:?} not registered", id).into());
-        }
         Ok(())
     }
 }
