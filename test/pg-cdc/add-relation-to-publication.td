@@ -38,16 +38,10 @@ ALTER PUBLICATION mz_source ADD TABLE nonpk_table;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO nonpk_table VALUES (3, 3);
 
-# Trigger the new table to be picked up, wait for the table to be synced,
-# and then insert new data.
-> SELECT mz_internal.mz_sleep(10)
-<null>
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO nonpk_table VALUES (3, 3);
+$ set-sql-timeout duration=100s
 
 > SELECT COUNT(*) FROM mz_source
-8
+7
 
 > CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (nonpk_table)
 
@@ -56,5 +50,4 @@ INSERT INTO nonpk_table VALUES (3, 3);
 1 1
 2 2
 2 2
-3 3
 3 3

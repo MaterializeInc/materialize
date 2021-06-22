@@ -198,6 +198,7 @@ impl PostgresSourceReader {
         let consistent_lsn: PgLsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
+        log::info!("source {}: consistent LSN for {} is {:#?}", &self.source_name, &slot_name, &consistent_lsn);
         if initial_sync {
             self.lsn = consistent_lsn;
         } else {
@@ -385,6 +386,20 @@ impl PostgresSourceReader {
         let mut deletes = vec![];
         while let Some(item) = stream.try_next().await? {
             use ReplicationMessage::*;
+            if !self.pending_relids.is_empty() {
+                match &item {
+                    ReplicationMessage::XLogData(body) => {
+                        let wal_start: PgLsn = body.wal_start().into();
+                        let wal_end: PgLsn = body.wal_end().into();
+                        log::info!("source {}: self.lsn is {:#?}, got XLogData wal_start {:#?}, wal_end {:#?}", &self.source_name, &self.lsn, &wal_start, &wal_end);
+                    }
+                    ReplicationMessage::PrimaryKeepAlive(body) => {
+                        let wal_end: PgLsn = body.wal_end().into();
+                        log::info!("source {}: self.lsn is {:#?}, got PrimaryKeepAlive wal_end {:#?}", &self.source_name, &self.lsn, &wal_end);
+                    }
+                    _ => unreachable!("different message"),
+                }
+            }
             // The upstream will periodically request keepalive responses by setting the reply field
             // to 1. However, we cannot rely on these messages arriving on time. For example, when
             // the upstream is sending a big transaction its keepalive messages are queued and can

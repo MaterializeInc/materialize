@@ -19,7 +19,7 @@ mzworkflows:
         dbname: postgres
       - step: run
         service: testdrive-svc
-        command: ${TD_TEST:-*.td}
+        command: add-relation-to-publication.td
 
 services:
   test-certs:
