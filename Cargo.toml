@@ -33,6 +33,7 @@ members = [
     "src/prof",
     "src/protoc",
     "src/repr",
+    "src/repr-test-util",
     "src/sql",
     "src/sqllogictest",
     "src/sql-parser",

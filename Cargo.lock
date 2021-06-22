@@ -3602,6 +3602,7 @@ dependencies = [
  "hex",
  "itertools",
  "lazy_static",
+ "lowertest",
  "num-traits",
  "ordered-float",
  "ore",
@@ -3614,6 +3615,17 @@ dependencies = [
  "serde_regex",
  "smallvec",
  "uuid",
+]
+
+[[package]]
+name = "repr_test_util"
+version = "0.0.0"
+dependencies = [
+ "datadriven",
+ "lazy_static",
+ "lowertest",
+ "proc-macro2",
+ "repr",
 ]
 
 [[package]]
