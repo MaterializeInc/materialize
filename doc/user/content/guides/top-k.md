@@ -1,6 +1,6 @@
 ---
 title: "Top K by Group"
-description: "Filter out all but the top elements in a group."
+description: "Find the top- or bottom-K elements in a group."
 weight: 20
 menu:
   main:
