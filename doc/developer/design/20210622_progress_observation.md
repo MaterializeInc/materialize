@@ -96,6 +96,44 @@ in a single `SELECT` statement.
 
 ## Alternatives
 
+### Kafka: Reading the statistics log
+
+For Kafka sources, Materialize reports detailed statistic through
+the `mz_kafka_consumer_partitions` table. The table contains the Kafka
+watermarks and the application's offset per partition. The information could be
+monitored to give users a mechanism to observe how far behind a source is.
+
+The following statement computes the number of known pending rows for Kafka
+sources at the current time:
+
+```sql
+SELECT
+    source_id,
+    source_name,
+    partition_id,
+    hi_offset - app_offset AS lag
+FROM
+    mz_kafka_consumer_partitions
+        INNER JOIN mz_source_info USING (source_id, dataflow_id, partition_id)
+ORDER BY source_id, source_name, partition_id;
+```
+
+The progress can be monitored with Materialize's own infrastructure:
+
+```sql
+CREATE MATERIALIZED VIEW kafka_lag AS (
+SELECT
+    source_id,
+    source_name,
+    partition_id,
+    hi_offset - app_offset AS lag
+FROM
+    mz_kafka_consumer_partitions
+        INNER JOIN mz_source_info USING (source_id, dataflow_id, partition_id)
+);
+COPY (TAIL kafka_lag) TO STDOUT;
+```
+
 <!--
 // Similar to the Description section. List of alternative approaches considered, pros/cons or why they were not chosen
 -->
