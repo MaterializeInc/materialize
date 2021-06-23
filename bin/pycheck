@@ -26,7 +26,12 @@ if ! bin/pyactivate --dev -m compileall -q -l -i - <<< "$py_files"; then
     exit 1
 fi
 
-try xargs bin/pyactivate --dev -m mypy --pretty --no-error-summary <<< "$py_files"
+try xargs bin/pyactivate --dev -m mypy \
+    --pretty \
+    --no-error-summary \
+    --namespace-packages \
+    --explicit-package-bases \
+    <<< "$py_files"
 try bin/pyactivate --dev -m pytest -qq --doctest-modules misc/python
 
 try_finish

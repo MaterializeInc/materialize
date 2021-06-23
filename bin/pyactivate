@@ -57,7 +57,7 @@ def main(args: List[str]) -> int:
     logger.debug("python={}".format(python))
 
     # Reinvoke with the interpreter from the virtualenv.
-    os.environ["PYTHONPATH"] = str(py_dir.resolve())
+    os.environ["PYTHONPATH"] = os.environ["MYPYPATH"] = str(py_dir.resolve())
     os.environ["MZ_ROOT"] = str(root_dir.resolve())
     os.execvp(python, [python, *args])
 
