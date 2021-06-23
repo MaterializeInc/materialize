@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+use ore::cast::CastFrom;
+
 use crate::error::Error;
 use crate::persister::{Meta, Persister, Snapshot, Write};
 use crate::storage::{Blob, Buffer, SeqNo};
@@ -40,7 +42,7 @@ impl Buffer for MemBuffer {
         self.seqno = self.seqno.start..SeqNo(self.seqno.end.0 + 1);
         self.dataz.push(buf);
         debug_assert_eq!(
-            (self.seqno.end.0 - self.seqno.start.0) as usize,
+            usize::cast_from(self.seqno.end.0 - self.seqno.start.0),
             self.dataz.len()
         );
         Ok(write_seqno)
@@ -53,7 +55,7 @@ impl Buffer for MemBuffer {
         self.dataz
             .iter()
             .enumerate()
-            .map(|(idx, x)| logic(SeqNo(self.seqno.start.0 + idx as u64), &x[..]))
+            .map(|(idx, x)| logic(SeqNo(self.seqno.start.0 + u64::cast_from(idx)), &x[..]))
             .collect::<Result<(), Error>>()?;
         Ok(self.seqno.clone())
     }
@@ -69,9 +71,9 @@ impl Buffer for MemBuffer {
         }
         let removed = upper.0 - self.seqno.start.0;
         self.seqno = upper..self.seqno.end;
-        self.dataz.drain(0..removed as usize);
+        self.dataz.drain(0..usize::cast_from(removed));
         debug_assert_eq!(
-            (self.seqno.end.0 - self.seqno.start.0) as usize,
+            usize::cast_from(self.seqno.end.0 - self.seqno.start.0),
             self.dataz.len()
         );
         Ok(())

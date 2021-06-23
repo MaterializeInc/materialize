@@ -2833,6 +2833,7 @@ dependencies = [
  "abomonation_derive",
  "criterion",
  "differential-dataflow",
+ "ore",
  "tempfile",
  "timely",
 ]

@@ -15,6 +15,7 @@ harness = false
 abomonation = "0.7"
 abomonation_derive = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+ore = { path = "../ore", default-features = false }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tempfile = "3.2.0"
 

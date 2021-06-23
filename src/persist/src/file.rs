@@ -17,6 +17,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use ore::cast::CastFrom;
+
 use crate::error::Error;
 use crate::mem::MemSnapshot;
 use crate::persister::{Meta, Persister, Write};
@@ -53,16 +55,16 @@ impl Write for FileStream {
         self.buf.clear();
         for ((key, val), ts, diff) in updates.iter() {
             let key_bytes = key.as_bytes();
-            let key_bytes_len = key_bytes.len() as u64;
+            let key_bytes_len = u64::cast_from(key_bytes.len());
             let val_bytes = val.as_bytes();
-            let val_bytes_len = val_bytes.len() as u64;
+            let val_bytes_len = u64::cast_from(val_bytes.len());
 
             self.buf.extend(&key_bytes_len.to_le_bytes());
             self.buf.extend(key_bytes);
             self.buf.extend(&val_bytes_len.to_le_bytes());
             self.buf.extend(val_bytes);
             self.buf.extend(&ts.to_le_bytes());
-            self.buf.extend(&(*diff as i64).to_le_bytes());
+            self.buf.extend(&(i64::cast_from(*diff)).to_le_bytes());
         }
 
         self.buf.shrink_to_fit();
@@ -121,7 +123,7 @@ impl Meta for FileStream {
             bytes.read_exact(&mut buf)?;
             let diff = i64::from_le_bytes(buf);
 
-            dataz.push(((key, val), ts, diff as isize));
+            dataz.push(((key, val), ts, isize::cast_from(diff)));
         }
         Ok(MemSnapshot::new(dataz))
     }
@@ -322,7 +324,7 @@ impl Buffer for FileBuffer {
         let write_seqno = self.seqno.end;
         self.seqno = self.seqno.start..SeqNo(write_seqno.0 + 1);
         // Write length prefixed data, and then the sequence number.
-        let len = buf.len() as u64;
+        let len = u64::cast_from(buf.len());
 
         // NB: the write buffer never shrinks, and this pattern may not be what we want
         // under write workloads with rare very large writes.
@@ -358,7 +360,7 @@ impl Buffer for FileBuffer {
             bytes.read_exact(&mut len_raw)?;
             let data_len = u64::from_le_bytes(len_raw);
             // TODO: could reuse the underlying buffer here to avoid allocating each time.
-            let mut data = vec![0u8; data_len as usize];
+            let mut data = vec![0u8; usize::cast_from(data_len)];
             bytes.read_exact(&mut data[..])?;
 
             // Decode sequence number
