@@ -22,6 +22,7 @@ from materialize import git
 from materialize import mzbuild
 from materialize import spawn
 from . import deploy_util
+from .deploy_util import apt_materialized_path, APT_BUCKET
 
 
 def main() -> None:
@@ -56,19 +57,15 @@ def main() -> None:
 def publish_deb(package: str, version: str) -> None:
     print(f"{package} v{version}")
 
-    s3 = boto3.client("s3")
-    bucket = "apt.materialize.com"
-    object_key = f"pool/generic/m/ma/materialized-{version}.deb"
-    # Download the staged package (deb-s3 needs to get various metadata from it)
-    s3.download_file(bucket, object_key, f"materialized-{version}.deb")
-    # Import the private key into GPG
-    key = os.environ["GPG_KEY"]
-    gpg = subprocess.Popen(["gpg", "--import"], stdin=subprocess.PIPE)
-    gpg.communicate(key.encode("ascii"))
+    # Download the staged package, as deb-s3 needs various metadata from it.
+    boto3.client("s3").download_file(
+        APT_BUCKET, apt_materialized_path(version), f"materialized-{version}.deb"
+    )
 
-    # Make the package public
-    s3.put_object_acl(ACL="public-read", Key=object_key, Bucket=bucket)
-    # Run deb-s3 to update the repository (no need to upload the file again)
+    # Import our GPG signing key from the environment.
+    spawn.runv(["gpg", "--import"], stdin=os.environ["GPG_KEY"].encode("ascii"))
+
+    # Run deb-s3 to update the repository. No need to upload the file again.
     spawn.runv(
         [
             "deb-s3",
@@ -77,7 +74,7 @@ def publish_deb(package: str, version: str) -> None:
             "--skip-package-upload",
             "--sign",
             "-b",
-            bucket,
+            APT_BUCKET,
             "-c",
             "generic",
             f"./materialized-{version}.deb",

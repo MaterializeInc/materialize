@@ -18,6 +18,14 @@ import tempfile
 import time
 
 
+APT_BUCKET = "materialize-apt"
+BINARIES_BUCKET = "materialize-binaries"
+
+
+def apt_materialized_path(version: str) -> str:
+    return f"pool/generic/m/ma/materialized-{version}.deb"
+
+
 def _tardir(name: str) -> tarfile.TarInfo:
     d = tarfile.TarInfo(name)
     d.mtime = int(time.time())
@@ -35,7 +43,9 @@ def _sanitize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
 def upload_tarball(tarball: Path, platform: str, version: str) -> None:
     s3_object = f"materialized-{version}-{platform}.tar.gz"
     boto3.client("s3").upload_file(
-        str(tarball), "downloads.mtrlz.dev", s3_object, ExtraArgs={"ACL": "public-read"}
+        str(tarball),
+        BINARIES_BUCKET,
+        s3_object,
     )
 
 
@@ -43,10 +53,9 @@ def set_latest_redirect(platform: str, version: str) -> None:
     with tempfile.NamedTemporaryFile() as empty:
         boto3.client("s3").upload_fileobj(
             empty,
-            "downloads.mtrlz.dev",
+            BINARIES_BUCKET,
             f"materialized-latest-{platform}.tar.gz",
             ExtraArgs={
-                "ACL": "public-read",
                 "WebsiteRedirectLocation": f"/materialized-{version}-{platform}.tar.gz",
             },
         )

@@ -149,8 +149,8 @@ the PR.
 ## Deployment
 
 Binary tarballs are deployed to an S3 bucket accessible at
-https://downloads.mtrlz.dev. If you're a Materialize developer,
-see https://mtrlz.dev for the specific links.
+https://binaries.materialize.com. If you're a Materialize developer,
+see https://dev.materialize.com for the specific links.
 
 A [ready-to-use materialized image][materialized-docker] is also shipped to
 Docker Hub. Unlike the intra-build Docker image, this image contains debug

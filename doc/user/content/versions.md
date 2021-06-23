@@ -139,7 +139,7 @@ If you choose to use these unstable interfaces, you do so at your own risk.
 Backwards-incompatible changes may be made to these unstable interfaces at any
 time and without mention in the release notes.
 
-[Linux]: https://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz
-[macOS]: https://downloads.mtrlz.dev/materialized-latest-x86_64-apple-darwin.tar.gz
+[Linux]: https://binaries.materialize.com/materialized-latest-x86_64-unknown-linux-gnu.tar.gz
+[macOS]: https://binaries.materialize.com/materialized-latest-x86_64-apple-darwin.tar.gz
 [github]: https://github.com/MaterializeInc/materialize
 [Semantic Versioning]: https://semver.org
