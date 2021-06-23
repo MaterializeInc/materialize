@@ -12,21 +12,19 @@ cat
 ----
 ok
 
-build
+# Regression test for #5520
+build apply=NonNullRequirements
 (filter
-  (map (get x) [12345])
-  [#0 #1])
+  (flat_map
+    (map (get x) [(null int32)])
+    generate_series_int32
+    [#1]
+  )
+  [(call_binary eq #0 #3)]
+)
 ----
 %0 =
 | Get x (u0)
-| Map 12345
-| Filter #0, #1
-
-build
-(constant
-  [[1 2 3]
-   [4 5 6]]
-  [int64 int64 int64])
-----
-%0 =
-| Constant (1, 2, 3) (4, 5, 6)
+| Map null
+| FlatMap generate_series(#1)
+| Filter (#0 = #3)

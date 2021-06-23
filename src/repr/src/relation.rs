@@ -14,6 +14,8 @@ use std::vec;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
+use lowertest::MzStructReflect;
+
 use crate::ScalarType;
 
 /// The type of a [`Datum`](crate::Datum).
@@ -23,7 +25,9 @@ use crate::ScalarType;
 ///
 /// To construct a column type, either initialize the struct directly, or
 /// use the [`ScalarType::nullable`] method.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzStructReflect,
+)]
 pub struct ColumnType {
     /// Whether this datum can be null.
     pub nullable: bool,

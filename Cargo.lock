@@ -1188,6 +1188,7 @@ dependencies = [
  "hex",
  "hmac",
  "itertools",
+ "lowertest",
  "md-5",
  "num_enum",
  "ordered-float",
@@ -1202,6 +1203,20 @@ dependencies = [
  "sha-1",
  "sha2",
  "uncased",
+]
+
+[[package]]
+name = "expr_test_util"
+version = "0.0.0"
+dependencies = [
+ "datadriven",
+ "expr",
+ "lazy_static",
+ "lowertest",
+ "proc-macro2",
+ "repr",
+ "repr_test_util",
+ "serde_json",
 ]
 
 [[package]]
@@ -3597,6 +3612,7 @@ dependencies = [
  "hex",
  "itertools",
  "lazy_static",
+ "lowertest",
  "num-traits",
  "ordered-float",
  "ore",
@@ -3609,6 +3625,17 @@ dependencies = [
  "serde_regex",
  "smallvec",
  "uuid",
+]
+
+[[package]]
+name = "repr_test_util"
+version = "0.0.0"
+dependencies = [
+ "datadriven",
+ "lazy_static",
+ "lowertest",
+ "proc-macro2",
+ "repr",
 ]
 
 [[package]]
@@ -4960,7 +4987,9 @@ dependencies = [
  "datadriven",
  "dataflow-types",
  "expr",
+ "expr_test_util",
  "itertools",
+ "lazy_static",
  "repr",
 ]
 

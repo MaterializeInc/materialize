@@ -1,0 +1,88 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+build-datum
+0
+----
+Int64(0)
+
+build-datum
+null
+----
+Null
+
+build-datum
+true
+----
+True
+
+build-datum
+false
+----
+False
+
+build-datum
+"string"
+----
+String("string")
+
+build-datum
+-100
+----
+Int64(-100)
+
+build-datum
+-10.45
+----
+Float64(OrderedFloat(-10.45))
+
+build-datum
+34.56
+----
+Float64(OrderedFloat(34.56))
+
+build-datum
+-2.234
+float64
+----
+Float64(OrderedFloat(-2.234))
+
+build-datum
+1.1 float32
+----
+Float32(OrderedFloat(1.1))
+
+build-datum
+"hello" string
+----
+String("hello")
+
+build-datum
+null string
+----
+Null
+
+build-datum
+true bool
+----
+True
+
+build-datum
+5 int32
+----
+Int32(5)
+
+build-datum
+2 (list jsonb 100)
+----
+error: Unsupported literal type List { element_type: Jsonb, custom_oid: Some(100) }
+
+build-datum
+----
+error: error when parsing  into i64: cannot parse integer from empty string
