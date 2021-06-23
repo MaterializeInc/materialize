@@ -18,7 +18,8 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 
 use expr::GlobalId;
-use ore::antichain::AntichainToken;
+
+use crate::coord::antichain::AntichainToken;
 
 /// A map from global identifiers to arrangement frontier state.
 pub struct ArrangementFrontiers<T: Timestamp> {

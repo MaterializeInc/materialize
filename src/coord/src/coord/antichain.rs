@@ -46,18 +46,6 @@ impl<T: PartialOrder + Ord + Clone + std::fmt::Debug> AntichainToken<T> {
         }
     }
 
-    /// Apply direct updates to the maintained antichain.
-    pub fn update<I>(&mut self, updates: I)
-    where
-        I: IntoIterator<Item = (T, i64)>,
-    {
-        self.changes.borrow_mut().extend(updates.into_iter());
-        (self.action.borrow_mut())(
-            self.antichain
-                .update_iter(self.changes.borrow_mut().drain()),
-        );
-    }
-
     /// Advance the frontier of the mutable antichain to `frontier`, if `frontier` is
     /// ahead of the current frontier.
     ///
