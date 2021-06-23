@@ -604,9 +604,37 @@ impl AggregateFunc {
     /// Whether the result of the aggregate can be non-null with null inputs
     pub fn propagates_nonnull_constraint(&self) -> bool {
         match self {
+            AggregateFunc::MaxApd
+            | AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxDecimal
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinApd
+            | AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinDecimal
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+            | AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumDecimal
+            | AggregateFunc::SumAPD => true,
             // Count is never null
             AggregateFunc::Count => false,
-            _ => true,
+            _ => false,
         }
     }
 }

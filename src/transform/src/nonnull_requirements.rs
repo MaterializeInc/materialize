@@ -212,8 +212,10 @@ impl NonNullRequirements {
                             let should_push_down = aggr.func.propagates_nonnull_constraint()
                                 && aggr_columns.contains(&(group_key.len() + pos));
                             let mut ignores_nulls_on_columns = HashSet::new();
-                            aggr.expr
-                                .non_null_requirements(&mut ignores_nulls_on_columns);
+                            if let repr::Datum::Null = aggr.func.identity_datum() {
+                                aggr.expr
+                                    .non_null_requirements(&mut ignores_nulls_on_columns);
+                            }
                             (should_push_down, ignores_nulls_on_columns)
                         })
                         .collect::<Vec<_>>();
