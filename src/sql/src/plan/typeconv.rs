@@ -160,7 +160,7 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToDecimal(s)))
             }),
-            (Float32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            (Float32, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToAPD(s)))
             }),
@@ -174,7 +174,7 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToDecimal(s)))
             }),
-            (Float64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            (Float64, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToAPD(s)))
             }),
