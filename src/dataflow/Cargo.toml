@@ -22,7 +22,7 @@ dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.
 expr = { path = "../expr" }
 flate2 = "1.0.20"
 futures = "0.3.14"
-globset = "0.4.0"
+globset = "0.4.8"
 inotify = "0.9.3"
 interchange = { path = "../interchange" }
 itertools = "0.9.0"

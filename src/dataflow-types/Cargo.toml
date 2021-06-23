@@ -10,7 +10,7 @@ anyhow = "1.0.41"
 aws-util = { path = "../aws-util" }
 ccsr = { path = "../ccsr" }
 expr = { path = "../expr" }
-globset = { version = "0.4.0", features = ["serde1"] }
+globset = { version = "0.4.8", features = ["serde1"] }
 interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.13"
