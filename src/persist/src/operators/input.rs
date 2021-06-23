@@ -114,7 +114,6 @@ mod tests {
 
     use crate::error::Error;
     use crate::mem::MemRegistry;
-    use crate::Id;
 
     use super::*;
 
@@ -125,7 +124,7 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut handle, cap) = worker.dataflow(|scope| {
-                let persister = p.create_or_load(Id(1)).unwrap();
+                let persister = p.create_or_load("1").unwrap();
                 let (input, _stream) = scope.new_persistent_unordered_input(persister);
                 input
             });
@@ -141,7 +140,7 @@ mod tests {
         let mut p = registry.open(1, "new_persistent_unordered_input_2")?;
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
-                let persister = p.create_or_load(Id(1)).unwrap();
+                let persister = p.create_or_load("1").unwrap();
                 let (input, stream) = scope.new_persistent_unordered_input(persister);
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct

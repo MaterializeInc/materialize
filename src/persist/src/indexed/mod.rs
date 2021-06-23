@@ -26,12 +26,11 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch, BufferEntry};
+use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch, BufferEntry, Id};
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::persister::Snapshot;
 use crate::storage::{Blob, Buffer, SeqNo};
-use crate::Id;
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
@@ -68,9 +67,14 @@ use crate::Id;
 /// for indexed use, instead of the current situation, which is more complicated
 /// to reason about.
 pub struct Indexed<U: Buffer, L: Blob> {
-    blob: BlobCache<L>,
     last_file_id: u128,
+    next_stream_id: Id,
+    // This is conceptually a map from `String` -> `Id`, but lookups are rare
+    // and this representation is optimized for the metadata serialization path,
+    // which is less rare.
+    id_mapping: Vec<(String, Id)>,
     buf: U,
+    blob: BlobCache<L>,
     futures: HashMap<Id, BlobFuture>,
     traces: HashMap<Id, BlobTrace>,
 }
@@ -84,17 +88,19 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         let futures = meta
             .futures
             .into_iter()
-            .map(|(id, meta)| (Id(id), BlobFuture::new(meta)))
+            .map(|(id, meta)| (id, BlobFuture::new(meta)))
             .collect();
         let traces = meta
             .traces
             .into_iter()
-            .map(|(id, meta)| (Id(id), BlobTrace::new(meta)))
+            .map(|(id, meta)| (id, BlobTrace::new(meta)))
             .collect();
         let indexed = Indexed {
-            blob,
             last_file_id: meta.last_file_id,
+            next_stream_id: meta.next_stream_id,
+            id_mapping: meta.id_mapping,
             buf,
+            blob,
             futures,
             traces,
         };
@@ -112,13 +118,24 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         file_id.to_string()
     }
 
-    /// Creates, if necessary, a new future and trace with the given id.
+    /// Creates, if necessary, a new future and trace with the given external
+    /// stream name, returning the corresponding internal stream id.
     ///
-    /// This method is idempotent: ids may be registered multiple times. TODO:
-    /// Is this idempotence necessary/useful?
-    pub fn register(&mut self, id: Id) {
+    /// This method is idempotent: ids may be registered multiple times.
+    pub fn register(&mut self, id_str: &str) -> Id {
+        let id = self.id_mapping.iter().find(|(s, _)| s == &id_str);
+        let id = match id {
+            Some((_, id)) => *id,
+            None => {
+                let id = self.next_stream_id;
+                self.id_mapping.push((id_str.to_owned(), id));
+                self.next_stream_id = Id(id.0 + 1);
+                id
+            }
+        };
         self.futures.entry(id).or_default();
         self.traces.entry(id).or_default();
+        id
     }
 
     /// Drains writes from the buffer into the future and does any necessary
@@ -151,7 +168,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         }
 
         let entry = BufferEntry {
-            id: id.0,
+            id: id,
             updates: updates.to_vec(),
         };
         let mut entry_bytes = Vec::new();
@@ -163,7 +180,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
     /// Atomically moves all writes currently in the buffer into the future.
     fn drain_buf(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<u64, Vec<(SeqNo, (String, String), u64, isize)>> =
+        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (String, String), u64, isize)>> =
             HashMap::new();
         let desc = self.buf.snapshot(|seqno, buf| {
             let mut buf = buf.to_vec();
@@ -256,7 +273,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
         // ...writing that snapshot's data into trace...
         let batch = BlobTraceBatch {
-            id: id.0,
+            id: id,
             desc: desc.clone(),
             updates,
         };
@@ -277,7 +294,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     fn append_future(&mut self, key: String, batch: BlobFutureBatch) -> Result<(), Error> {
         let future = self
             .futures
-            .get_mut(&Id(batch.id))
+            .get_mut(&batch.id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
         future.append(key, batch, &mut self.blob)?;
         // TODO: Instead of fully overwriting META each time, this should be
@@ -290,7 +307,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     fn append_trace(&mut self, key: String, batch: BlobTraceBatch) -> Result<(), Error> {
         let trace = self
             .traces
-            .get_mut(&Id(batch.id))
+            .get_mut(&batch.id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
         trace.append(key, batch, &mut self.blob)?;
         // TODO: Instead of fully overwriting META each time, this should be
@@ -301,15 +318,17 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     fn serialize_meta(&self) -> BlobMeta {
         BlobMeta {
             last_file_id: self.last_file_id,
+            next_stream_id: self.next_stream_id,
+            id_mapping: self.id_mapping.clone(),
             futures: self
                 .futures
                 .iter()
-                .map(|(id, future)| (id.0, future.meta()))
+                .map(|(id, future)| (*id, future.meta()))
                 .collect(),
             traces: self
                 .traces
                 .iter()
-                .map(|(id, trace)| (id.0, trace.meta()))
+                .map(|(id, trace)| (*id, trace.meta()))
                 .collect(),
         }
     }
@@ -336,7 +355,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                 let entry: Abomonated<BufferEntry, Vec<u8>> =
                     unsafe { Abomonated::new(buf.to_owned()) }
                         .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
-                if entry.id != id.0 || !buf_lower.less_equal(&seqno) {
+                if entry.id != id || !buf_lower.less_equal(&seqno) {
                     return Ok(());
                 }
                 buffer.0.extend(entry.updates.iter().cloned());
@@ -395,8 +414,7 @@ mod tests {
             MemBuffer::new("single_stream")?,
             MemBlob::new("single_stream")?,
         )?;
-        let id = Id(0);
-        i.register(id);
+        let id = i.register("0");
 
         // Empty things are empty.
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
