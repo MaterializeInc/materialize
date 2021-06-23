@@ -140,3 +140,22 @@ $ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
 {"before": null, "after": {"row": {"a": "UID"}}}
 {"before": null, "after": {"row": {"a": "UID"}}}
+
+# absolute directory paths in $ avro-{create|append}
+
+$ set writer-schema={
+    "name": "row",
+    "type": "record",
+    "fields": [
+      {"name": "a", "type": "long"},
+      {"name": "b", "type": "int"}
+    ]
+  }
+
+$ avro-ocf-write path=/tmp/data.ocf schema=${writer-schema}
+{"a": 1, "b": 2}
+{"a": 3, "b": 4}
+
+$ avro-ocf-append path=/tmp/data.ocf
+{"a": 5, "b": 6}
+{"a": 7, "b": 8}

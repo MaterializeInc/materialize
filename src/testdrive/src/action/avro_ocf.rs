@@ -35,7 +35,7 @@ pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
 
     let records = cmd.input;
     cmd.args.done()?;
-    if path.contains(path::MAIN_SEPARATOR) {
+    if !path.starts_with(path::MAIN_SEPARATOR) && path.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
         return Err("separators in paths are forbidden".into());
     }
@@ -55,7 +55,11 @@ impl SyncAction for WriteAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = if self.path.starts_with(path::MAIN_SEPARATOR) {
+            PathBuf::from(&self.path)
+        } else {
+            state.temp_dir.path().join(&self.path)
+        };
         println!("Writing to {}", path.display());
         let mut file = File::create(path).map_err(|e| e.to_string())?;
         let schema =
@@ -77,10 +81,11 @@ pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
     let path = cmd.args.string("path")?;
     let records = cmd.input;
     cmd.args.done()?;
-    if path.contains(path::MAIN_SEPARATOR) {
+    if !path.starts_with(path::MAIN_SEPARATOR) && path.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
         return Err("separators in paths are forbidden".into());
     }
+
     Ok(AppendAction { path, records })
 }
 
@@ -90,7 +95,12 @@ impl SyncAction for AppendAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = if self.path.starts_with(path::MAIN_SEPARATOR) {
+            PathBuf::from(&self.path)
+        } else {
+            state.temp_dir.path().join(&self.path)
+        };
+
         println!("Appending to {}", path.display());
         let file = OpenOptions::new()
             .read(true)
