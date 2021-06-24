@@ -17,7 +17,9 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{bail, Context};
-use log::{trace, warn};
+use log::trace;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+use log::warn;
 use nix::errno;
 use nix::sys::signal;
 
