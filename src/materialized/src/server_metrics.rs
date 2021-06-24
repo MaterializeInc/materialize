@@ -51,8 +51,10 @@ lazy_static! {
             &num_cpus::get().to_string(),
             &num_cpus::get_physical().to_string(),
             &{
-                let cpu0 = &system.get_processors()[0];
-                format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency())
+                match &system.get_processors().get(0) {
+                    None => "<Failed to get CPU information>".to_string(),
+                    Some(cpu0) => format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency()),
+                }
             },
             &system.get_total_memory().to_string(),
         ])

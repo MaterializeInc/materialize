@@ -529,8 +529,10 @@ swap: {swap_total}KB total, {swap_used}KB used",
         ncpus_logical = num_cpus::get(),
         ncpus_physical = num_cpus::get_physical(),
         cpu0 = {
-            let cpu0 = &system.get_processors()[0];
-            format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency())
+            match &system.get_processors().get(0) {
+                None => "<Failed to get CPU information>".to_string(),
+                Some(cpu0) => format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency()),
+            }
         },
         memory_total = system.get_total_memory(),
         memory_used = system.get_used_memory(),
