@@ -513,7 +513,7 @@ mzworkflows:
   of a series of steps that are executed in sequence and a set of environment
   variables that are set during the execution of the workflow. The available
   steps and their options are only documented by way of the developer docs.
-  See <https://mtrlz.dev/api/python/materialize/mzcompose.html>.
+  See <https://dev.materialize.com/api/python/materialize/mzcompose.html>.
 
   Also see the [chbench demo mzcompose](../../demo/chbench/mzcompose.yml) for
   a detailed example.
