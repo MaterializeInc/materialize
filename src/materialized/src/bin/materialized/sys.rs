@@ -17,7 +17,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{bail, Context};
-use log::{trace, warn};
+use log::trace;
 use nix::errno;
 use nix::sys::signal;
 
@@ -29,6 +29,7 @@ pub fn adjust_rlimits() {
 /// Attempts to increase the soft nofile rlimit to the maximum possible value.
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
 pub fn adjust_rlimits() {
+    use log::warn;
     use rlimit::{Resource, Rlim};
 
     // getrlimit/setrlimit can have surprisingly different behavior across
