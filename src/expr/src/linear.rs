@@ -1447,10 +1447,5 @@ pub mod plan {
                 None.into_iter().chain(None.into_iter())
             }
         }
-
-        /// True when `self` contains no temporal predicates.
-        pub fn non_temporal(&self) -> bool {
-            self.lower_bounds.is_empty() && self.upper_bounds.is_empty()
-        }
     }
 }
