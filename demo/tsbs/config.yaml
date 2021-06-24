@@ -1,0 +1,32 @@
+data-source:
+  simulator:
+    debug: 0
+    initial-scale: "0"
+    log-interval: 10s
+    max-data-points: "0"
+    max-metric-count: "100"
+    scale: "100"
+    seed: 123
+    timestamp-end: "2020-01-15T00:00:00Z"
+    timestamp-start: "2020-01-01T00:00:00Z"
+    use-case: cpu-only
+  type: SIMULATOR
+loader:
+  db-specific:
+      user: XXX
+      use-hypertable: false
+  runner:
+    batch-size: "10000"
+    channel-capacity: "0"
+    db-name: benchmark
+    do-abort-on-exist: false
+    do-create-db: false
+    do-load: true
+    flow-control: false
+    hash-workers: false
+    insert-intervals: ""
+    limit: "0"
+    reporting-period: 10s
+    seed: 0
+    workers: "1"
+  target: prometheus
