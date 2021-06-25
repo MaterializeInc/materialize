@@ -62,8 +62,8 @@ Field          | Type       | Meaning
 
 ### `mz_arrangement_sharing`
 
-The `mz_arrangement_sharing` source describes how many [dataflows][dataflow]
-share each [arrangement] in the system.
+The `mz_arrangement_sharing` source describes how times each [arrangement] in
+the system is used.
 
 Field      | Type       | Meaning
 -----------|------------|--------
@@ -316,7 +316,7 @@ Field      | Type       | Meaning
 
 ### `mz_materialization_frontiers`
 
-The `mz_materialization_frontiers` source describes the frontier for each
+The `mz_materialization_frontiers` view describes the frontier for each
 [dataflow] in the system across all workers. The frontier describes the earliest
 timestamp at which the output of the dataflow may change; data prior to that
 timestamp is sealed.
