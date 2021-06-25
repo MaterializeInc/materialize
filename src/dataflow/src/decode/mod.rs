@@ -612,7 +612,7 @@ where
                     value_decoder.log_errors(n_errors);
                 }
                 if n_successes > 0 {
-                    value_decoder.log_successes(n_errors);
+                    value_decoder.log_successes(n_successes);
                 }
             }
         },
