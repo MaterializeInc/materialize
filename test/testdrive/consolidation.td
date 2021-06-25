@@ -147,9 +147,9 @@ $ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
 > BEGIN
 > DECLARE cur CURSOR FOR TAIL nums AS OF 3
 > FETCH ALL cur
-timestamp  diff  num
---------------------
-3          1     5
+mz_timestamp  mz_diff  num
+--------------------------
+3             1        5
 > COMMIT
 
 # ==> Test compaction.

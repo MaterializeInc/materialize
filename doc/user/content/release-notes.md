@@ -68,6 +68,10 @@ Wrap your release notes at the 80 character mark.
   emit [`collection_data`](/sql/create-sink/#consistency-metadata) attributes in
   their consistency topic.
 
+- **Breaking change.** Renamed the `timestamp`, `diff`, and `progressed`
+  columns in [`TAIL`](/sql/tail) to `mz_timestamp`, `mz_diff`, and
+  `mz_progressed`.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
