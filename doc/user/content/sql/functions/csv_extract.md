@@ -34,7 +34,7 @@ INSERT INTO t
 Extract the component columns from the table column which is a CSV string, sorted by column `id`:
 
 ```sql
-SELECT csv.* FROM t, csv_extract (2, csv) csv
+SELECT csv.* FROM t, csv_extract(2, data) csv
   ORDER BY t.id;
 ```
 ```nofmt
