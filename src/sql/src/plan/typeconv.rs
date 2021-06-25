@@ -510,13 +510,14 @@ fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
         ScalarType::Int32 => 0,
         ScalarType::Int64 => 1,
         ScalarType::Decimal(_, _) => 2,
-        ScalarType::Float32 => 3,
-        ScalarType::Float64 => 4,
+        ScalarType::APD { scale: None } => 3,
+        ScalarType::Float32 => 4,
+        ScalarType::Float64 => 5,
         // [`TypeCategory::DateTime`]
-        ScalarType::Date => 5,
-        ScalarType::Timestamp => 6,
-        ScalarType::TimestampTz => 7,
-        _ => 8,
+        ScalarType::Date => 6,
+        ScalarType::Timestamp => 7,
+        ScalarType::TimestampTz => 8,
+        _ => 9,
     })
 }
 
