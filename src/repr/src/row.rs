@@ -140,19 +140,13 @@ pub struct DatumDictIter<'a> {
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
 #[derive(Debug)]
 pub struct RowArena {
-    inner: RefCell<RowArenaInner>,
-}
-
-#[derive(Debug)]
-struct RowArenaInner {
-    // Semantically, `owned_bytes` is better represented by a `Vec<Box<[u8]>>`,
+    // Semantically, this field would be better represented by a `Vec<Box<[u8]>>`,
     // as once the arena takes ownership of a byte vector the vector is never
     // modified. But `RowArena::push_bytes` takes ownership of a `Vec<u8>`, so
     // storing that `Vec<u8>` directly avoids an allocation. The cost is
     // additional memory use, as the vector may have spare capacity, but row
     // arenas are short lived so this is the better tradeoff.
-    owned_bytes: Vec<Vec<u8>>,
-    owned_rows: Vec<Row>,
+    inner: RefCell<Vec<Vec<u8>>>,
 }
 
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
@@ -1214,10 +1208,7 @@ impl<'a> Iterator for DatumDictIter<'a> {
 impl RowArena {
     pub fn new() -> Self {
         RowArena {
-            inner: RefCell::new(RowArenaInner {
-                owned_bytes: vec![],
-                owned_rows: vec![],
-            }),
+            inner: RefCell::new(vec![]),
         }
     }
 
@@ -1225,14 +1216,14 @@ impl RowArena {
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
         let mut inner = self.inner.borrow_mut();
-        inner.owned_bytes.push(bytes);
-        let owned_bytes = &inner.owned_bytes[inner.owned_bytes.len() - 1];
+        inner.push(bytes);
+        let owned_bytes = &inner[inner.len() - 1];
         unsafe {
             // This is safe because:
-            //   * We only ever append to self.owned_bytes, so the byte vector
+            //   * We only ever append to self.inner, so the byte vector
             //     will live as long as the arena.
             //   * We return a reference to the byte vector's contents, so it's
-            //     okay if self.owned_bytes reallocates and moves the byte
+            //     okay if self.inner reallocates and moves the byte
             //     vector.
             //   * We don't allow access to the byte vector itself, so it will
             //     never reallocate.
@@ -1256,17 +1247,18 @@ impl RowArena {
     /// would be called `push_owned_datum`.
     pub fn push_unary_row<'a>(&'a self, row: Row) -> Datum<'a> {
         let mut inner = self.inner.borrow_mut();
-        inner.owned_rows.push(row);
-        let datum = inner.owned_rows[inner.owned_rows.len() - 1].unpack_first();
+        inner.push(row.data.into_vec());
         unsafe {
             // This is safe because:
-            //   * We only ever append to self.owned_rows, so the row will live
+            //   * We only ever append to self.inner, so the row data will live
             //     as long as the arena.
-            //   * We return a reference to the heap allocation inside the row,
-            //     so it's okay if self.owned_rows reallocates and moves the
-            //     row.
-            //   * We don't allow access to the row itself, so row.data will
+            //   * We force the row data into its own heap allocation--
+            //     importantly, we do NOT store the SmallVec, which might be
+            //     storing data inline--so it's okay if self.inner reallocates
+            //     and moves the row.
+            //   * We don't allow access to the byte vector itself, so it will
             //     never reallocate.
+            let datum = read_datum(&inner[inner.len() - 1], &mut 0);
             transmute::<Datum<'_>, Datum<'a>>(datum)
         }
     }
