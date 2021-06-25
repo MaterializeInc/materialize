@@ -890,40 +890,21 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
     needs_logs: false,
 };
 
-pub const MZ_ADDRESSES_WITH_UNIT_LENGTHS: BuiltinView = BuiltinView {
-    name: "mz_addresses_with_unit_length",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_addresses_with_unit_length AS SELECT
-    mz_dataflow_operator_addresses.id,
-    mz_dataflow_operator_addresses.worker
-FROM
-    mz_catalog.mz_dataflow_operator_addresses
-WHERE
-    mz_catalog.list_length(mz_dataflow_operator_addresses.address) = 1
-GROUP BY
-    mz_dataflow_operator_addresses.id,
-    mz_dataflow_operator_addresses.worker",
-    id: GlobalId::System(5003),
-    needs_logs: true,
-};
-
 pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
     name: "mz_dataflow_names",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_dataflow_names AS SELECT
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker,
-    mz_dataflow_operator_addresses.address[1] as local_id,
+    mz_dataflow_operator_addresses.address[1] AS local_id,
     mz_dataflow_operators.name
 FROM
     mz_catalog.mz_dataflow_operator_addresses,
-    mz_catalog.mz_dataflow_operators,
-    mz_catalog.mz_addresses_with_unit_length
+    mz_catalog.mz_dataflow_operators
 WHERE
     mz_dataflow_operator_addresses.id = mz_dataflow_operators.id AND
     mz_dataflow_operator_addresses.worker = mz_dataflow_operators.worker AND
-    mz_dataflow_operator_addresses.id = mz_addresses_with_unit_length.id AND
-    mz_dataflow_operator_addresses.worker = mz_addresses_with_unit_length.worker",
+    mz_catalog.list_length(mz_dataflow_operator_addresses.address) = 1",
     id: GlobalId::System(5004),
     needs_logs: true,
 };
@@ -1363,7 +1344,6 @@ lazy_static! {
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),
-            Builtin::View(&MZ_ADDRESSES_WITH_UNIT_LENGTHS),
             Builtin::View(&MZ_DATAFLOW_NAMES),
             Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
             Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
