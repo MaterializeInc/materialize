@@ -120,7 +120,6 @@ fn convert_metrics_to_histogram_rows<
 fn metric_family_metadata(family: &prometheus::proto::MetricFamily) -> Row {
     Row::pack(&[
         Datum::from(family.get_name()),
-        Datum::from(family.get_help()),
         Datum::from(match family.get_field_type() {
             MetricType::COUNTER => "counter",
             MetricType::GAUGE => "gauge",
@@ -128,6 +127,7 @@ fn metric_family_metadata(family: &prometheus::proto::MetricFamily) -> Row {
             MetricType::SUMMARY => "summary",
             MetricType::UNTYPED => "untyped",
         }),
+        Datum::from(family.get_help()),
     ])
 }
 

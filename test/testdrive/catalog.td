@@ -460,7 +460,6 @@ test_table
 41
 
 > SHOW VIEWS FROM mz_catalog
-mz_addresses_with_unit_length
 mz_catalog_names
 mz_dataflow_names
 mz_dataflow_operator_dataflows
@@ -479,7 +478,6 @@ mz_relations
 > SHOW FULL VIEWS FROM mz_catalog
 name                              type   materialized  volatility
 -----------------------------------------------------------------
-mz_addresses_with_unit_length     system false         volatile
 mz_dataflow_names                 system false         volatile
 mz_dataflow_operator_dataflows    system false         volatile
 mz_materialization_frontiers      system false         volatile

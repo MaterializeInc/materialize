@@ -56,19 +56,42 @@ schema.
 The `mz_array_types` table contains a row for each array type in the system.
 
 Field          | Type       | Meaning
----------------|------------|----------
+---------------|------------|--------
 `type_id`      | [`text`]   | The ID of the array type.
 `element_id`   | [`text`]   | The ID of the array's element type.
+
+### `mz_arrangement_sharing`
+
+The `mz_arrangement_sharing` source describes how times each [arrangement] in
+the system is used.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
+`count`    | [`bigint`] | The number of operators that share the arrangement.
+
+### `mz_arrangement_sizes`
+
+The `mz_arrangement_sizes` source describes the size of each [arrangement] in
+the system.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`   | [`bigint`] | The worker hosting the arrangement.
+`records`  | [`bigint`] | The number of records in the arrangement.
+`batches`  | [`bigint`] | The number of batches in the arrangement.
 
 ### `mz_avro_ocf_sinks`
 
 The `mz_avro_ocf_sinks` table contains a row for each Avro OCF sink in the
 system.
 
-Field     | Type     | Meaning
-----------|----------|--------
-`sink_id` | [`text`] | The ID of the sink.
-`path`    | `bytea`  | The path to the Avro OCF file into which the sink is writing.
+Field     | Type      | Meaning
+----------|-----------|--------
+`sink_id` | [`text`]  | The ID of the sink.
+`path`    | [`bytea`] | The path to the Avro OCF file into which the sink is writing.
 
 ### `mz_base_types`
 
@@ -100,6 +123,67 @@ Field  | Type       | Meaning
 `id`   | [`bigint`] | Materialize's unique ID for the database.
 `oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
 `name` | [`text`]   | The name of the database.
+
+### `mz_dataflow_channels`
+
+The `mz_dataflow_channels` source describes the communication channels between
+[dataflow] operators. A communication channel connects one of the the outputs of a
+source operator to one of the inputs of a target operator.
+
+Field         | Type       | Meaning
+--------------|------------|--------
+`id`          | [`bigint`] | The ID of the channel.
+`worker`      | [`bigint`] | The ID of the worker thread hosting the channel.
+`source_node` | [`bigint`] | The ID of the source operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`source_port` | [`bigint`] | The source operator's output port.
+`target_node` | [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`target_port` | [`bigint`] | The target operator's input port.
+
+### `mz_dataflow_names`
+
+The `mz_dataflow_names` view describes the [dataflows][dataflow] in the system.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`id`       | [`bigint`] | The ID of the dataflow.
+`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`local_id` | [`bigint`] | The scope-local index of the dataflow.
+`name`     | [`text`]   | The internal name of the dataflow.
+
+### `mz_dataflow_operator_addresses`
+
+The `mz_dataflow_operator_addresses` source describes how the dataflow channels
+and operators in the system are nested into scopes.
+
+Field     | Type            | Meaning
+----------|-----------------|--------
+`id`      | [`bigint`]      | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`  | [`bigint`]      | The ID of the worker thread hosting the channel or operator.
+`address` | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.
+
+### `mz_dataflow_operator_dataflows`
+
+The `mz_dataflow_operator_dataflows` view describes the [dataflow] to which each
+dataflow operator belongs.
+
+Field           | Type       | Meaning
+----------------|------------|--------
+`id`            | [`bigint`] | The ID of the operator.
+`name`          | [`text`]   | The internal name of the operator.
+`worker`        | [`bigint`] | The ID of the worker thread hosting the operator.
+`dataflow_id`   | [`bigint`] | The ID of the dataflow hosting the operator.
+`dataflow_name` | [`text`]   | The name of the dataflow hosting the operator.
+
+### `mz_dataflow_operators`
+
+The `mz_dataflow_operators` source describes the dataflow operators in the
+system.
+
+Field    | Type       | Meaning
+---------|------------|--------
+`id`     | [`bigint`] | The ID of the operator.
+`worker` | [`bigint`] | The ID of the worker thread hosting the operator.
+`name`   | [`text`]   | The name of the operator.
 
 ### `mz_functions`
 
@@ -143,16 +227,39 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
+### `mz_kafka_broker_rtt`
+
+The `mz_kafka_broker_rtt` table contains round-trip time (RTT) statistics for
+the Kafka consumers in the system.
+
+Field           | Type       | Meaning
+----------------|------------|--------
+`consumer_name` | [`text`]   | The internal name of the Kafka consumer.
+`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
+`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to [`mz_source_info.dataflow_id`](#mz_source_info).
+`broker_name`   | [`text`]   | The name of the Kafka broker.
+`min`           | [`bigint`] | The minimum RTT in milliseconds.
+`max`           | [`bigint`] | The maximum RTT in milliseconds.
+`avg`           | [`bigint`] | The average RTT in milliseconds.
+`sum`           | [`bigint`] | The sum of all RTTs in milliseconds.
+`cnt`           | [`bigint`] | The number of round trips recorded.
+`stddev`        | [`bigint`] | The standard deviation of the RTT in milliseconds.
+`p50`           | [`bigint`] | The 50th percentile RTT in milliseconds.
+`p90`           | [`bigint`] | The 90th percentile RTT in milliseconds.
+`p95`           | [`bigint`] | The 95th percentile RTT in milliseconds.
+`p99`           | [`bigint`] | The 99th percentile RTT in milliseconds.
+`p99_99`        | [`bigint`] | The 99.99th percentile RTT in milliseconds.
+
 ### `mz_kafka_consumer_partitions`
 
-The `mz_kafka_consumer_partitions` table contains a row for partition being
+The `mz_kafka_consumer_partitions` table contains a row for each partition being
 read by a Kafka consumer in the system.
 
 Field           | Type       | Meaning
 ----------------|------------|--------
 `consumer_name` | [`text`]   | The handle name for the consumer.
-`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to `mz_source_info.source_id`.
-`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to `mz_source_info.dataflow_id`.
+`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to [`mz_source_info.source_id`](#mz_source_info).
+`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to [`mz_source_info.dataflow_id`](#mz_source_info).
 `partition_id`  | [`text`]   | The ID of the topic partition the consumer is reading from.
 `rx_msgs`       | [`bigint`] | The number of messages read by this consumer since materialized startup.
 `rx_bytes`      | [`bigint`] | The number of bytes read by this consumer since materialized startup.
@@ -174,6 +281,63 @@ Field                | Type     | Meaning
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
 `consistency_topic`  | [`text`] | The name of the Kafka topic into which the sink is writing consistency information. This is `NULL` when the sink does not write consistency information.
 
+### `mz_list_types`
+
+The `mz_list_types` table contains a row for each list type in the system.
+
+Field        | Type     | Meaning
+-------------|----------|--------
+`type_id`    | [`text`] | The ID of the list type.
+`element_id` | [`text`] | The IID of the list's element type.
+
+### `mz_message_counts`
+
+The `mz_message_counts` source describes the messages sent and received over the
+dataflow channels in the system.
+
+Field           | Type       | Meaning
+----------------|------------|--------
+`channel`       | [`bigint`] | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
+`source_worker` | [`bigint`] | The ID of the worker thread sending the message.
+`target_worker` | [`bigint`] | The ID of the worker thread receiving the message.
+`sent`          | [`bigint`] | The number of messages sent.
+`received`      | [`bigint`] | The number of messages received.
+
+### `mz_materialization_dependencies`
+
+The `mz_materialization_dependencies` source describes the sources that each
+[dataflow] depends on.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`dataflow` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes).
+`source`   | [`text`]   | The ID of the source. Corresponds to [`mz_sources.id`](#mz_sources).
+`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
+
+### `mz_materialization_frontiers`
+
+The `mz_materialization_frontiers` view describes the frontier for each
+[dataflow] in the system across all workers. The frontier describes the earliest
+timestamp at which the output of the dataflow may change; data prior to that
+timestamp is sealed.
+
+For per-worker frontier information, see
+[`mz_worker_materialization_frontiers`](#mz_worker_materialization_frontiers).
+
+Field       | Type       | Meaning
+------------|------------|--------
+`global_id` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes).
+`time`      | [`bigint`] | The next timestamp at which the materialization may change.
+
+### `mz_materializations`
+
+The `mz_materializations` source describes the indexes in the system.
+
+Field    | Type       | Meaning
+---------|------------|--------
+`name`   | [`text`]   | The ID of the index. (`name` is a misnomer.)
+`worker` | [`bigint`] | The ID of the worker thread hosting the index.
+
 ### `mz_map_types`
 
 The `mz_map_types` table contains a row for each map type in the system.
@@ -183,6 +347,46 @@ Field          | Type       | Meaning
 `type_id`      | [`text`]   | The ID of the map type.
 `key_id `      | [`text`]   | The ID of the map's key type.
 `value_id`     | [`text`]   | The ID of the map's value type.
+
+### `mz_metrics`
+
+The `mz_metrics` table contains recordings for each [Prometheus
+metric](/ops/monitoring#prometheus) in the system that is a counter or gauge.
+The values are recorded every second and retained for five minutes.
+
+Field    | Type                 | Meaning
+---------|----------------------|--------
+`metric` | [`text`]             | The name of the metric.
+`time`   | [`timestamp`]        | The time at which the metric was recorded.
+`labels` | [`jsonb`]            | The metric's labels and their associated values as a JSON object.
+`value`  | [`double precision`] | The value of the counter or gauge.
+
+### `mz_metrics_meta`
+
+The `mz_metrics_meta` table describes metadata about each [Prometheus
+metric](/ops/monitoring#prometheus) in the system.
+
+Field    | Type     | Meaning
+---------|----------|--------
+`metric` | [`text`] | The name of the metric.
+`type`   | [`text`] | The type of the metric (`counter`, `gauge`, or `histogram`).
+`help`   | [`text`] | The description of the metric.
+
+### `mz_metric_histograms`
+
+The `mz_metric_histograms` table contains recordings for each [Prometheus
+metric](/ops/monitoring#prometheus) in the system that is a histogram. The
+values are recorded every second and retained for five minutes. Each row of the
+table represents one bucket of one histogram from one recording. Note that
+Prometheus histograms are cumulative.
+
+Field    | Type                 | Meaning
+---------|----------------------|--------
+`metric` | [`text`]             | The name of the metric.
+`time`   | [`timestamp`]        | The time at which the metric was recor
+`labels` | [`jsonb`]            | The metric's labels and their associated values as a JSON object.
+`bound`  | [`double precision`] | The upper bound of the bucket.
+`count`  | [`bigint`]            | The (cumulative) count of observations in the bucket.
 
 ### `mz_objects`
 
@@ -197,6 +401,41 @@ Field       | Type       | Meaning
 `name`      | [`text`]   | The name of the object.
 `type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
 
+### `mz_peek_active`
+
+The `mz_peek_active` source describes all read queries ("peeks") that are
+pending in the dataflow layer.
+
+Field    | Type       | Meaning
+---------|------------|--------
+`uuid`   | [`text`]   | The ID of the connection that requested the peek. `uuid` is a misnomer; connection IDs are 32-bit unsigned integers.
+`worker` | [`bigint`] | The ID of the worker thread servicing the peek.
+`id`     | [`text`]   | The ID of the index the peek is targeting.
+`time`   | [`bigint`] | The timestamp the peek has requested.
+
+### `mz_peek_durations`
+
+The `mz_peek_durations` source describes a histogram of the duration of read
+queries ("peeks") in the dataflow layer.
+
+Field         | Type       | Meaning
+--------------|------------|--------
+`worker`      | [`bigint`] | The ID of the worker thread servicing the peek.
+`duration_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
+`count`       | [`bigint`] | The (noncumulative) count of peeks in this bucket.
+
+### `mz_perf_dependency_frontiers`
+
+The `mz_perf_dependency_frontiers` view describes the lag between a dataflow's
+outputs and its sources. It contains a row for every dataflow in the system that
+depends on at least one source.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`dataflow` | [`text`]   | The name of the dataflow hosting the source.
+`source`   | [`text`]   | The name of the source.
+`lag_ms`   | [`bigint`] | The amount of lag between when a record is emitted by the source and when the output of the dataflow reflects that record.
+
 ### `mz_pseudo_types`
 
 The `mz_pseudo_types` table contains a row for each psuedo type in the system.
@@ -204,6 +443,48 @@ The `mz_pseudo_types` table contains a row for each psuedo type in the system.
 Field          | Type       | Meaning
 ---------------|------------|----------
 `type_id`      | [`text`]   | The ID of the type.
+
+### `mz_records_per_dataflow`
+
+The `mz_records_per_dataflow` view describes the number of records in each
+[dataflow] on each worker in the system.
+
+For the same information aggregated across all workers, see
+[`mz_records_per_dataflow_global`](#mz_records_per_dataflow_global).
+
+Field     | Type        | Meaning
+----------|-------------|--------
+`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`name`    | [`text`]    | The internal name of the dataflow.
+`worker`  | [`bigint`]  | The ID of the worker thread hosting the dataflow.
+`records` | [`numeric`] | The number of records in the dataflow.
+
+### `mz_records_per_dataflow_global`
+
+The `mz_records_per_dataflow_global` view describes the number of records in each
+[dataflow] in the system.
+
+For the same information broken down across workers, see
+[`mz_records_per_dataflow`](#mz_records_per_dataflow).
+
+Field     | Type        | Meaning
+----------|-------------|--------
+`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`name`    | [`text`]    | The internal name of the dataflow.
+`records` | [`numeric`] | The number of records in the dataflow.
+
+### `mz_records_per_dataflow_operator`
+
+The `mz_records_per_dataflow_operator` view describes the number of records in
+each [dataflow] operator in the system.
+
+Field         | Type        | Meaning
+--------------|-------------|--------
+`id`          | [`bigint`]  | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`name`        | [`text`]    | The internal name of the dataflow.
+`worker`      | [`bigint`]  | The ID of the worker thread hosting the dataflow.
+`dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`records`     | [`numeric`] | The number of records in the dataflow.
 
 ### `mz_relations`
 
@@ -228,6 +509,40 @@ Field  | Type       | Meaning
 `oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
 `name` | [`text`]   | The name of the role.
 
+### `mz_scheduling_elapsed`
+
+The `mz_scheduling_elapsed` source describes the total amount of time spent in
+each [dataflow] operator.
+
+Field        | Type       | Meaning
+-------------|------------|--------
+`id`         | [`bigint`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`     | [`bigint`] | The ID of the worker thread hosting the operator.
+`elapsed_ns` | [`bigint`] | The total elapsed time spent in the operator in nanoseconds.
+
+### `mz_scheduling_histogram`
+
+The `mz_scheduling_histogram` source stores a histogram describing the
+duration of each invocation for each [dataflow] operator.
+
+Field         | Type       | Meaning
+--------------|------------|--------
+`id`          | [`bigint`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`      | [`bigint`] | The ID of the worker thread hosting the operator.
+`duration_ns` | [`bigint`] | The upper bound of the bucket.
+`count`       | [`bigint`] | The number of recordings in the bucket.
+
+### `mz_scheduling_parks`
+
+The `mz_scheduling_parks` source stores a histogram describing [dataflow] worker
+park events. A park event occurs when a worker has no outstanding work.
+
+Field       | Type       | Meaning
+------------|------------| -------
+`worker`    | [`bigint`] | The ID of the worker thread.
+`slept_for` | [`bigint`] | The actual length of the park event.
+`requested` | [`bigint`] | The requested length of the park event.
+`count`     | [`bigint`] | The number of park events in this bucket.
 
 ### `mz_schemas`
 
@@ -260,7 +575,7 @@ in the system.
 Field          | Type       | Meaning
 ---------------|------------|----------
 `source_name`  | [`text`]   | Materialize's internal name for the source.
-`source_id`    | [`text`]   | Materialize's unique ID for the source. Corresponds to `mz_sources.id`.
+`source_id`    | [`text`]   | Materialize's unique ID for the source. Corresponds to [`mz_sources.id`](#mz_sources).
 `dataflow_id`  | [`bigint`] | The ID of the dataflow responsible for processing this source.
 `partition_id` | [`text`]   | The ID of the partition within the source. The concept of partition varies by source type. Not all sources types have multiple partitions, in which case there will be only one entry for partition ID `0`.
 `offset`       | [`bigint`] | The highest offset processed by this source.
@@ -312,6 +627,22 @@ Field          | Type        | Meaning
 `name`         | [`text`]    | The name of the view.
 `volatility`   | [`text`]    | Whether the view is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
+### `mz_worker_materialization_frontiers`
+
+The `mz_worker_materialization_frontiers` source describes each worker's
+frontier for each [dataflow] in the system. The frontier describes the earliest
+timestamp at which the output of the dataflow may change; data prior to that
+timestamp is sealed.
+
+For frontier information aggregated across all workers, see
+[`mz_materialization_frontiers`](#mz_materialization_frontiers).
+
+Field       | Type       | Meaning
+------------|------------|--------
+`global_id` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes).
+`worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`time`      | [`bigint`] | The next timestamp at which the dataflow may change.
+
 ## `pg_catalog`
 
 Materialize has compatibility shims for the following tables from [PostgreSQL's
@@ -339,9 +670,17 @@ If you are having trouble making a PostgreSQL tool work with Materialize, please
 Materialize with minor changes to the `pg_catalog` compatibility shim.
 
 [`bigint`]: /sql/types/bigint
+[`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
+[`bytea`]: /sql/types/bytea
+[`double precision`]: /sql/types/double-precision
+[`jsonb`]: /sql/types/jsonb
+[`numeric`]: /sql/types/numeric
 [`oid`]: /sql/types/oid
 [`text`]: /sql/types/text
+[`timestamp`]: /sql/types/timestamp
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [oid]: /sql/types/oid
 [`text array`]: /sql/types/array
+[arrangement]: /overview/arrangements/#arrangements
+[dataflow]: /overview/arrangements/#dataflows
