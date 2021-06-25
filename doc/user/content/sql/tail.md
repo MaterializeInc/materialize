@@ -58,7 +58,7 @@ the nature of the update:
 </thead>
 <tbody>
   <tr>
-    <td><code>timestamp</code></td>
+    <td><code>mz_timestamp</code></td>
     <td><code>numeric</code></td>
     <td>
       Materialize's internal logical timestamp. This will never be less than any
@@ -66,7 +66,7 @@ the nature of the update:
     </td>
   </tr>
   <tr>
-    <td><code>progressed</code></td>
+    <td><code>mz_progressed</code></td>
     <td><code>boolean</code></td>
     <td>
       <p>
@@ -76,17 +76,17 @@ the nature of the update:
         </em>
       </p>
       If <code>true</code>, indicates that the <code>TAIL</code> will not emit
-      additional records at times strictly less than <code>timestamp</code>. See
+      additional records at times strictly less than <code>mz_timestamp</code>. See
       <a href="#progress"><code>PROGRESS</code></a> below.
     </td>
   </tr>
   <tr>
-    <td><code>diff</code></td>
+    <td><code>mz_diff</code></td>
     <td><code>bigint</code></td>
     <td>
       The change in frequency of the row. A positive number indicates that
-      <code>diff</code> copies of the row were inserted, while a negative
-      number indicates that <code>|diff|</code> copies of the row were deleted.
+      <code>mz_diff</code> copies of the row were inserted, while a negative
+      number indicates that <code>|mz_diff|</code> copies of the row were deleted.
     </td>
   </tr>
   <tr>
@@ -125,6 +125,10 @@ Either use an API in your driver that does not buffer rows or use the
 See the [examples](#examples) for details.
 
 {{< /warning >}}
+
+{{< version-changed v0.8.1 >}}
+Columns names added by `TAIL` now prepended by `mz_`.
+{{</ version-changed >}}
 
 {{< version-changed v0.5.1 >}}
 The timestamp and diff information moved to leading, well-typed columns.
@@ -175,7 +179,7 @@ consists of a series of updates describing the contents of the relation at its
 [`AS OF`](#as-of) timestamp. After the snapshot, `TAIL` emits further updates as
 they occur.
 
-For updates in the snapshot, the `timestamp` field will be fast-forwarded to the
+For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the
 `AS OF` timestamp. For example, `TAIL ... AS OF 21` would present an insert that
 occured at time 15 as if it occurred at time 21.
 
@@ -195,15 +199,15 @@ Intuitively, progress messages communicate that no updates have occurred in a
 given time window. Without explicit progress messages, it is impossible to
 distinguish between a stall in Materialize and a legimate period of no updates.
 
-Not all timestamps that appear will have a corresponding `progressed` row.
+Not all timestamps that appear will have a corresponding `mz_progressed` row.
 For example, the following is a valid sequence of updates:
 
-`timestamp` | `progressed` | `diff` | `column1`
-------------|--------------|--------|----------------
-1           | `false`      | 1      | data
-1           | `false`      | 1      | more data
-2           | `false`      | 1      | even more data
-4           | `true`       | `NULL` | `NULL`
+`mz_timestamp` | `mz_progressed` | `mz_diff` | `column1`
+---------------|-----------------|-----------|----------------
+1              | `false`         | 1         | data
+1              | `false`         | 1         | more data
+2              | `false`         | 1         | even more data
+4              | `true`          | `NULL`    | `NULL`
 
 Notice how Materialize did not emit explicit progress messages for timestamps
 `1`, `2`, or `3`. The receipt of the update at timestamp `2` implies that there
