@@ -22,7 +22,9 @@ use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
-use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
+use crate::{
+    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr, UnaryFunc,
+};
 
 pub mod canonicalize;
 pub mod func;
@@ -397,6 +399,23 @@ impl MirRelationExpr {
                     .collect::<Vec<_>>();
                 for key_set in &mut input_typ.keys {
                     key_set.retain(|k| !cols_equal_to_literal.contains(&k));
+                }
+                for predicate in predicates {
+                    if let MirScalarExpr::CallUnary {
+                        func: UnaryFunc::Not,
+                        expr,
+                    } = predicate
+                    {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull,
+                            expr,
+                        } = &**expr
+                        {
+                            if let MirScalarExpr::Column(c) = &**expr {
+                                input_typ.column_types[*c].nullable = false;
+                            }
+                        }
+                    }
                 }
                 input_typ
             }
