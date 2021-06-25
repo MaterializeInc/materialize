@@ -353,7 +353,7 @@ where
         trace.stream.unary(Pipeline, &name, move |_, info| {
             // Acquire an activator to reschedule the operator when it has unfinished work.
             use timely::scheduling::Activator;
-            let activations = trace.stream.scope().activations().clone();
+            let activations = trace.stream.scope().activations();
             let activator = Activator::new(&info.address[..], activations);
             // Maintain a list of work to do, cursor to navigate and process.
             let mut todo = std::collections::VecDeque::new();
