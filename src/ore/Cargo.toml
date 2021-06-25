@@ -7,7 +7,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["network", "cli", "test"]
+default = ["network", "cli", "test", "chrono"]
 network = ["tokio", "tokio-openssl", "async-trait", "futures", "smallvec", "bytes", "openssl"]
 cli = ["structopt"]
 test = ["tracing-subscriber"]
@@ -21,6 +21,7 @@ test = ["tracing-subscriber"]
 [dependencies]
 async-trait = { version = "0.1.50", optional = true }
 bytes = { version = "1.0.1", optional = true }
+chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
 either = "1.5.1"
 futures = { version = "0.3.14", optional = true }
 # This isn't directly imported by anything, but it's required at link time. The

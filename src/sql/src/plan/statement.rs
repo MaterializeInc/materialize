@@ -85,6 +85,7 @@ impl StatementDesc {
 ///
 /// See the documentation of [`StatementDesc`] for details.
 pub fn describe(
+    pcx: &PlanContext,
     catalog: &dyn Catalog,
     stmt: Statement<Raw>,
     param_types_in: &[Option<pgrepr::Type>],
@@ -96,10 +97,9 @@ pub fn describe(
         }
     }
 
-    let pcx = PlanContext::default();
     let scx = StatementContext {
+        pcx: Some(pcx),
         catalog,
-        pcx: Some(&pcx),
         param_types: Rc::new(RefCell::new(param_types)),
     };
 
@@ -169,7 +169,7 @@ pub fn describe(
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
 pub fn plan(
-    pcx: &PlanContext,
+    pcx: Option<&PlanContext>,
     catalog: &dyn Catalog,
     stmt: Statement<Raw>,
     params: &Params,
@@ -182,7 +182,7 @@ pub fn plan(
         .collect();
 
     let scx = &StatementContext {
-        pcx: Some(pcx),
+        pcx,
         catalog,
         param_types: Rc::new(RefCell::new(param_types)),
     };

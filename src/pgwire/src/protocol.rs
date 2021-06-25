@@ -400,6 +400,13 @@ where
         result
     }
 
+    async fn start_transaction(&mut self, stmts: Option<usize>) {
+        // start_transaction can't error (but assert that just in case it changes in
+        // the future.
+        let res = self.coord_client.start_transaction(stmts).await;
+        assert!(res.is_ok());
+    }
+
     // See "Multiple Statements in a Simple Query" which documents how implicit
     // transactions are handled.
     // From https://www.postgresql.org/docs/current/protocol-flow.html
@@ -430,9 +437,7 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.coord_client
-                .session()
-                .start_transaction_implicit(num_stmts);
+            self.start_transaction(Some(num_stmts)).await;
 
             match self.one_query(stmt).await? {
                 State::Ready => (),
@@ -465,6 +470,9 @@ where
         sql: String,
         param_oids: Vec<u32>,
     ) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
         let mut param_types = vec![];
         for oid in param_oids {
             match pgrepr::Type::from_oid(oid) {
@@ -541,6 +549,9 @@ where
         raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
         let aborted_txn = self.is_aborted_txn();
         let stmt = self
             .coord_client
@@ -670,7 +681,7 @@ where
                     // in bind. We don't do it in bind because I'm not sure what purpose it would
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
-                    self.coord_client.session().start_transaction_implicit(1);
+                    self.start_transaction(Some(1)).await;
 
                     match self.coord_client.execute(portal_name.clone()).await {
                         Ok(response) => {
@@ -1534,7 +1545,7 @@ where
         match txn {
             // Error can be called from describe and parse and so might not be in an active
             // transaction.
-            TransactionStatus::Default | TransactionStatus::Failed => {}
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {}
             // In Started (i.e., a single statement), cleanup ourselves.
             TransactionStatus::Started(_) => {
                 self.rollback_transaction().await;
@@ -1545,7 +1556,7 @@ where
             }
             // Explicit transactions move to failed.
             TransactionStatus::InTransaction(_) => {
-                self.coord_client.session().fail_transaction();
+                self.coord_client.fail_transaction();
             }
         };
         if is_fatal {
@@ -1568,7 +1579,7 @@ where
     fn is_aborted_txn(&mut self) -> bool {
         matches!(
             self.coord_client.session().transaction(),
-            TransactionStatus::Failed
+            TransactionStatus::Failed(_)
         )
     }
 }

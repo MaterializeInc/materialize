@@ -57,6 +57,12 @@ pub enum Command {
         tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
+    StartTransaction {
+        implicit: Option<usize>,
+        session: Session,
+        tx: oneshot::Sender<Response<()>>,
+    },
+
     Commit {
         action: EndTransactionAction,
         session: Session,

@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::Mutex;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
@@ -37,6 +37,7 @@ use dataflow_types::{
     SourceConnector, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
+use ore::now::NowFn;
 use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -200,6 +201,8 @@ pub struct Config {
     pub timely_worker: timely::WorkerConfig,
     /// Whether the server is running in experimental mode.
     pub experimental_mode: bool,
+    /// Function to get wall time now.
+    pub now: NowFn,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -218,6 +221,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
         Mutex::new(config.command_receivers.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
+    let now = config.now;
     timely::execute::execute(
         timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -249,6 +253,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 last_bindings_feedback: Instant::now(),
                 metrics: Metrics::for_worker_id(worker_idx),
                 experimental_mode,
+                now,
             }
             .run()
         },
@@ -285,6 +290,7 @@ where
     metrics: Metrics,
     /// Whether the server is running in experimental mode
     experimental_mode: bool,
+    now: NowFn,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -306,7 +312,7 @@ where
         // started, so that the logging sources can be joined with tables and
         // other real time sources for semi-sensible results.
         let now = Instant::now();
-        let unix = UNIX_EPOCH.elapsed().expect("time went backwards");
+        let unix = Duration::from_millis((self.now)());
 
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
@@ -666,7 +672,12 @@ where
                         }
                     }
 
-                    render::build_dataflow(self.timely_worker, &mut self.render_state, dataflow);
+                    render::build_dataflow(
+                        self.timely_worker,
+                        &mut self.render_state,
+                        dataflow,
+                        self.now,
+                    );
                 }
             }
 
@@ -834,9 +845,11 @@ where
                     ..
                 } = connector
                 {
-                    let byo_default = TimestampBindingRc::new(None);
-                    let rt_default =
-                        TimestampBindingRc::new(Some(ts_frequency.as_millis().try_into().unwrap()));
+                    let byo_default = TimestampBindingRc::new(None, self.now);
+                    let rt_default = TimestampBindingRc::new(
+                        Some(ts_frequency.as_millis().try_into().unwrap()),
+                        self.now,
+                    );
                     match (connector, consistency) {
                         (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
                             byo_default.add_partition(PartitionId::Kafka(0));

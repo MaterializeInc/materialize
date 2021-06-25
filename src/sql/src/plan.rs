@@ -434,10 +434,17 @@ pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
 }
 
-impl Default for PlanContext {
-    fn default() -> PlanContext {
+impl PlanContext {
+    pub fn new(wall_time: DateTime<Utc>) -> Self {
+        Self { wall_time }
+    }
+
+    /// Return a PlanContext with zero values. This should only be used when
+    /// planning is required but unused (like in `plan_create_table()`) or in
+    /// tests.
+    pub fn zero() -> Self {
         PlanContext {
-            wall_time: Utc::now(),
+            wall_time: ore::now::to_datetime(ore::now::now_zero()),
         }
     }
 }

@@ -272,7 +272,7 @@ impl From<&CoordTransactionStatus> for TransactionStatus {
             CoordTransactionStatus::Started(_) => TransactionStatus::InTransaction,
             CoordTransactionStatus::InTransaction(_) => TransactionStatus::InTransaction,
             CoordTransactionStatus::InTransactionImplicit(_) => TransactionStatus::InTransaction,
-            CoordTransactionStatus::Failed => TransactionStatus::Failed,
+            CoordTransactionStatus::Failed(_) => TransactionStatus::Failed,
         }
     }
 }

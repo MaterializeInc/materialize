@@ -40,6 +40,7 @@ pub mod iter;
 pub mod lex;
 #[cfg(feature = "network")]
 pub mod netio;
+pub mod now;
 pub mod option;
 pub mod panic;
 pub mod result;

@@ -22,6 +22,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
+use ore::now::{to_datetime, EpochMillis, NowFn};
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -502,7 +503,7 @@ impl Catalog {
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
-                start_time: Utc::now(),
+                start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
                 nonce: rand::random(),
                 experimental_mode,
@@ -513,6 +514,7 @@ impl Catalog {
                 build_info: config.build_info,
                 num_workers: config.num_workers,
                 timestamp_frequency: config.timestamp_frequency,
+                now: config.now,
             },
         };
 
@@ -677,7 +679,7 @@ impl Catalog {
 
                 Builtin::View(view) if config.enable_logging || !view.needs_logs => {
                     let item = catalog
-                        .parse_item(view.sql.into(), PlanContext::default())
+                        .parse_item(view.sql.into(), None)
                         .unwrap_or_else(|e| {
                             panic!(
                                 "internal error: failed to load bootstrap view:\n\
@@ -813,7 +815,7 @@ impl Catalog {
     /// This function should not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub fn open_debug(path: &Path) -> Result<Catalog, anyhow::Error> {
+    pub fn open_debug(path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let (catalog, _) = Self::open(&Config {
             path,
             enable_logging: true,
@@ -823,6 +825,7 @@ impl Catalog {
             build_info: &DUMMY_BUILD_INFO,
             num_workers: 0,
             timestamp_frequency: Duration::from_secs(1),
+            now,
         })?;
         Ok(catalog)
     }
@@ -1772,25 +1775,18 @@ impl Catalog {
     fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
-            eval_env,
+            eval_env: _,
         } = serde_json::from_slice(&bytes)?;
-        let pcx = match eval_env {
-            // Old sources and sinks don't have plan contexts, but it's safe to
-            // just give them a default, as they clearly don't depend on the
-            // plan context.
-            None => PlanContext::default(),
-            Some(eval_env) => eval_env.into(),
-        };
-        self.parse_item(create_sql, pcx)
+        self.parse_item(create_sql, Some(&PlanContext::zero()))
     }
 
     fn parse_item(
         &self,
         create_sql: String,
-        pcx: PlanContext,
+        pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
-        let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
@@ -2355,6 +2351,10 @@ impl SqlCatalog for ConnCatalog<'_> {
     fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.catalog.config
     }
+
+    fn now(&self) -> EpochMillis {
+        (self.catalog.config.now)()
+    }
 }
 
 impl sql::catalog::CatalogDatabase for Database {
@@ -2514,7 +2514,7 @@ mod tests {
         ];
 
         let catalog_file = NamedTempFile::new()?;
-        let catalog = Catalog::open_debug(catalog_file.path())?;
+        let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero)?;
         for tc in test_cases {
             assert_eq!(
                 catalog

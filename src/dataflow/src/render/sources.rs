@@ -24,6 +24,7 @@ use timely::dataflow::Scope;
 use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
+use ore::now::NowFn;
 use repr::RelationDesc;
 use repr::ScalarType;
 use repr::{Datum, Row, Timestamp};
@@ -62,6 +63,7 @@ where
         // have its own transient ID) and a relational transformation (which has the original source
         // ID).
         orig_id: GlobalId,
+        now: NowFn,
     ) {
         // Extract the linear operators, as we will need to manipulate them.
         // extracting them reduces the change we might accidentally communicate
@@ -171,6 +173,7 @@ where
                     logger: materialized_logging,
                     encoding: encoding.clone(),
                     caching_tx,
+                    now,
                 };
 
                 let (collection, capability) =

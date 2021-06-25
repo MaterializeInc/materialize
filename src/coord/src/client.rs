@@ -271,6 +271,20 @@ impl SessionClient {
         .await
     }
 
+    /// Starts a transaction based on implicit:
+    /// - `None`: InTransaction
+    /// - `Some(1)`: Started
+    /// - `Some(n > 1)`: InTransactionImplicit
+    /// - `Some(0)`: no change
+    pub async fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), CoordError> {
+        self.send(|tx, session| Command::StartTransaction {
+            implicit,
+            session,
+            tx,
+        })
+        .await
+    }
+
     /// Ends a transaction.
     pub async fn end_transaction(
         &mut self,
@@ -282,6 +296,13 @@ impl SessionClient {
             tx,
         })
         .await
+    }
+
+    /// Fails a transaction.
+    pub fn fail_transaction(&mut self) {
+        let session = self.session.take().expect("session invariant violated");
+        let session = session.fail_transaction();
+        self.session = Some(session);
     }
 
     /// Dumps the catalog to a JSON string.
@@ -364,7 +385,7 @@ impl SessionClient {
         }
 
         let stmts = sql::parse::parse(&stmt).map_err(|e| CoordError::Unstructured(e.into()))?;
-        self.session().start_transaction();
+        self.start_transaction(None).await?;
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
         for stmt in stmts {
