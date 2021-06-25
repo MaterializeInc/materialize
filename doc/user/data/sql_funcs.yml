@@ -474,6 +474,10 @@
     description: Generate all integer values between `start` and `stop`, inclusive.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
     description: Values of the capture groups of `regex` as matched in `haystack`
+  - signature: 'unnest(a: anyarray)'
+    description: Expands the array `a` into a set of rows.
+  - signature: 'unnest(l: anylist)'
+    description: Expands the list `l` into a set of rows.
 
 - type: Array
   functions:
