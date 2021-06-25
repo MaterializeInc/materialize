@@ -3176,8 +3176,13 @@ impl BinaryFunc {
             ListLengthMax { .. } | ArrayLength | ArrayLower | ArrayUpper => {
                 ScalarType::Int64.nullable(true)
             }
-            ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
-            ElementListConcat => input2_type.scalar_type.nullable(true),
+
+            ListListConcat | ListElementConcat => {
+                input1_type.scalar_type.unscale_any_apd().nullable(true)
+            }
+
+            ElementListConcat => input2_type.scalar_type.unscale_any_apd().nullable(true),
+
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Position => ScalarType::Int32.nullable(in_nullable),
             Encode => ScalarType::String.nullable(in_nullable),
@@ -4085,11 +4090,13 @@ impl UnaryFunc {
             }
             CastJsonbToBool => ScalarType::Bool.nullable(nullable),
 
-            CastList1ToList2 { return_ty, .. }
-            | CastStringToArray { return_ty, .. }
-            | CastStringToList { return_ty, .. }
+            CastStringToArray { return_ty, .. }
             | CastStringToMap { return_ty, .. }
             | CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
+
+            CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
+                return_ty.unscale_any_apd().nullable(false)
+            }
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(nullable),
