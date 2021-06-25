@@ -1950,3 +1950,16 @@ query T
 SELECT jsonb_object_agg(a, a) FILTER (WHERE a IS NOT NULL) FROM t1
 ----
 {"1":1,"2":2,"3":3}
+
+# Null casts. Protects against #7183.
+query TTTTTTT
+SELECT
+    NULL::jsonb::text,
+    NULL::jsonb::int4,
+    NULL::jsonb::int8,
+    NULL::jsonb::float4,
+    NULL::jsonb::float8,
+    NULL::jsonb::decimal,
+    NULL::jsonb::bool
+----
+NULL NULL NULL NULL NULL NULL NULL
