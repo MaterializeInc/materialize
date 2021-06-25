@@ -124,7 +124,7 @@ Here is a complete example of what the user will type into materialize:
 
 ```sql
 CREATE SOURCE "repl_stream"
-       FROM POSTGRES HOST 'host=postgres user=postgres dbname=postgres'
+       FROM POSTGRES CONNECTION 'host=postgres user=postgres dbname=postgres'
        PUBLICATION 'mz_source';
 
 CREATE VIEWS FROM SOURCE "repl_stream" ("table_a", "table_b");

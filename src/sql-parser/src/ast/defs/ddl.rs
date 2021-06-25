@@ -430,7 +430,7 @@ impl AstDisplay for Connector {
                 publication,
                 slot,
             } => {
-                f.write_str("POSTGRES HOST '");
+                f.write_str("POSTGRES CONNECTION '");
                 f.write_str(&display::escape_single_quote_string(conn));
                 f.write_str("' PUBLICATION '");
                 f.write_str(&display::escape_single_quote_string(publication));

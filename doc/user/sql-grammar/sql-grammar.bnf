@@ -102,7 +102,7 @@ create_source_json_kafka ::=
 create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? '"'src_name'"'
   'FROM' 'POSTGRES'
-  'HOST' '('connection_info')'
+  'CONNECTION' '('connection_info')'
   'PUBLICATION' 'publication_name'
 create_source_protobuf_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name

@@ -31,13 +31,13 @@ CREATE PUBLICATION mz_source2 FOR ALL TABLES;
 > CREATE SCHEMA schema1
 
 > CREATE MATERIALIZED SOURCE mz_source1
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source1';
 
 > CREATE VIEWS FROM SOURCE mz_source1 (t1 AS t1_1);
 
 > CREATE MATERIALIZED SOURCE mz_source2
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source2';
 
 > CREATE VIEWS FROM SOURCE mz_source2 (t1 AS t1_2);

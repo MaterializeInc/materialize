@@ -33,7 +33,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SCHEMA schema1
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 # Wait for snapshot to be complete

@@ -83,39 +83,39 @@ CREATE TABLE "space table" ("space column" INTEGER);
 #
 
 ! CREATE MATERIALIZED SOURCE "no_such_host"
-  FROM POSTGRES HOST 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
 error connecting to server: failed to lookup address information: Name or service not known
 
 ! CREATE MATERIALIZED SOURCE "no_such_port"
-  FROM POSTGRES HOST 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
 error connecting to server: Connection refused (os error 111)
 
 ! CREATE MATERIALIZED SOURCE "no_such_user"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=no_such_user password=postgres dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=no_such_user password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
 db error: FATAL: role "no_such_user" does not exist
 
 ! CREATE MATERIALIZED SOURCE "no_such_password"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
   PUBLICATION 'mz_source';
 db error: FATAL: password authentication failed for user "postgres"
 
 ! CREATE MATERIALIZED SOURCE "no_such_dbname"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
   PUBLICATION 'mz_source';
 db error: FATAL: database "no_such_dbname" does not exist
 
 > CREATE MATERIALIZED SOURCE "no_such_publication"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'no_such_publication';
 # TODO: This should produce an error
 
 > DROP SOURCE "no_such_publication"
 
 > CREATE MATERIALIZED SOURCE "mz_source"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 > CREATE VIEWS FROM SOURCE "mz_source" ("no_replica_identity")
@@ -337,7 +337,7 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=tes
 
 > CREATE MATERIALIZED SOURCE "test_slot_source"
   FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
     SLOT 'test_slot';
 

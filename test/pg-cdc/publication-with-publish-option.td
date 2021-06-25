@@ -27,15 +27,15 @@ CREATE PUBLICATION mz_source_update FOR TABLE t1 WITH ( publish = 'update') ;
 CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 
 > CREATE MATERIALIZED SOURCE mz_source_insert
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source_insert';
 
 > CREATE MATERIALIZED SOURCE mz_source_update
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source_update';
 
 > CREATE MATERIALIZED SOURCE mz_source_delete
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source_delete';
 
 # Make sure that the above sources are fully instantiated so that the DML statements below

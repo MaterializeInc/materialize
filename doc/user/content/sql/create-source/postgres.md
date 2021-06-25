@@ -23,7 +23,7 @@ Field | Use
 **MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. **Currently required for all Postgres sources.** For more information, see [Materialized source details](#materialized-source-details).
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**HOST** _connection_info_ | Postgres host. See the Postgres documentation on [supported correction parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
+**CONNECTION** _connection_info_ | Postgres connection parameters. See the Postgres documentation on [supported correction parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS) for details.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
 ## Details
@@ -136,7 +136,7 @@ Once you have set up Postgres, you can create the source in Materialize.
 
 ```sql
 CREATE MATERIALIZED SOURCE "mz_source" FROM POSTGRES
-HOST 'host=postgres port=5432 user=host sslmode=require dbname=postgres'
+CONNECTION 'host=postgres port=5432 user=host sslmode=require dbname=postgres'
 PUBLICATION 'mz_source';
 ```
 
