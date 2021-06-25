@@ -4071,14 +4071,14 @@ impl UnaryFunc {
             // converts null to jsonnull
             CastJsonbOrNullToJsonb => ScalarType::Jsonb.nullable(false),
 
-            // can return null for other jsonb types
+            // These return null when their input is SQL null.
             CastJsonbToString => ScalarType::String.nullable(true),
-            CastJsonbToInt32 => ScalarType::Int32.nullable(false),
-            CastJsonbToInt64 => ScalarType::Int64.nullable(false),
-            CastJsonbToFloat32 => ScalarType::Float32.nullable(false),
-            CastJsonbToFloat64 => ScalarType::Float64.nullable(false),
+            CastJsonbToInt32 => ScalarType::Int32.nullable(true),
+            CastJsonbToInt64 => ScalarType::Int64.nullable(true),
+            CastJsonbToFloat32 => ScalarType::Float32.nullable(true),
+            CastJsonbToFloat64 => ScalarType::Float64.nullable(true),
             CastJsonbToDecimal(scale) => {
-                ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale).nullable(false)
+                ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale).nullable(true)
             }
             CastJsonbToBool => ScalarType::Bool.nullable(true),
 
