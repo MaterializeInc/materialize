@@ -36,6 +36,7 @@ from typing_extensions import Literal, TypedDict
 import functools
 import os
 import pathlib
+import ipaddress
 import shlex
 import json
 import subprocess
@@ -356,7 +357,12 @@ class Composition:
             if md["Config"]["Labels"]["com.docker.compose.service"] == service:
                 for (name, port_entry) in md["NetworkSettings"]["Ports"].items():
                     for p in port_entry or []:
-                        if p["HostPort"] not in ports:
+                        # When IPv6 is enabled, Docker will bind each port
+                        # twice. Consider only IPv4 address to avoid spurious
+                        # warnings about duplicate ports.
+                        if p["HostPort"] not in ports and isinstance(
+                            ipaddress.ip_address(p["HostIp"]), ipaddress.IPv4Address
+                        ):
                             ports.append(p["HostPort"])
         return ports
 
