@@ -224,7 +224,7 @@ impl<'a> FuncRewriter<'a> {
                     let (lhs, rhs) = (args[0].clone(), args[1].clone());
                     match name.item.as_str() {
                         "mod" => lhs.modulo(rhs),
-                        "pow" => Expr::call(vec!["power"], vec![lhs, rhs]),
+                        "pow" => Expr::call(vec!["pg_catalog", "power"], vec![lhs, rhs]),
                         _ => return None,
                     }
                 } else {
