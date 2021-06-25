@@ -284,6 +284,7 @@ fn lex_to_adjacent_string(buf: &mut LexBuf) -> bool {
 fn lex_dollar_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
     let pos = buf.pos() - 1;
     let tag = format!("${}$", buf.take_while(|ch| ch != '$'));
+    let _ = buf.next();
     if let Some(s) = buf.take_to_delimiter(&tag) {
         Ok(Token::String(s.into()))
     } else {
