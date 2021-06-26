@@ -1,8 +1,8 @@
 <div class="sidebar-wrapper">
   {{ $currentPage := . }}
   <nav role="navigation" class="sidebar">
-    <input id="search-input" placeholder="Search">
-
+    <div id="search-input"></div>
+    <div id="search-hits"></div>
     <ul>
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1 {{if .HasChildren }}has-children{{end}}">

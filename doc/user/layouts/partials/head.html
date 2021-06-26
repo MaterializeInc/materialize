@@ -1,24 +1,17 @@
 <meta name="viewport" content="width=1024">
+<meta name="environment" content="{{ hugo.Environment }}">
 
 {{/*  Include all JavaScript files here  */}}
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/anchor-js/anchor.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/simple-scrollspy@2.0.3/dist/simple-scrollspy.min.js"></script>
 
+{{/* Algolia InstantSearchv4 */}}
+<script src="https://cdn.jsdelivr.net/npm/algoliasearch@4/dist/algoliasearch-lite.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/instantsearch.js@4"></script>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/instantsearch.css@7.4.5/themes/satellite-min.css" integrity="sha256-TehzF/2QvNKhGQrrNpoOb2Ck4iGZ1J/DI4pkd2oUsBc=" crossorigin="anonymous">
+
 {{/*  Sass processing here  */}}
 {{ $style := resources.Get "sass/main.scss" | toCSS | fingerprint }}
 <link rel="stylesheet" href="{{ $style.RelPermalink }}">
-
-{{/* Algolia DocSearch */}}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css" />
-<script src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
-<script defer>
-addEventListener("DOMContentLoaded", () => {
-  docsearch({
-    apiKey: "4a00e9b5208d93ae2445d7ea064ddbac",
-    indexName: "materialize",
-    inputSelector: '#search-input',
-    debug: true,
-  });
-});
-</script>
