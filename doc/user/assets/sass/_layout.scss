@@ -123,7 +123,6 @@ header {
     }
 
     a {
-
         padding-left: 0.5rem;
         margin-left: 2px;
 
@@ -151,6 +150,10 @@ header {
     .parentTitle {
         font-weight: normal;
         margin-right: 12px;
+
+        &:empty {
+            display: none;
+        }
 
         &:after {
             content: "›";
