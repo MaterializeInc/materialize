@@ -162,6 +162,25 @@ error: extra token after expression
 1e10.1
     ^
 
+parse-scalar
+1e+
+----
+error: missing required exponent
+1e+
+  ^
+
+parse-scalar
+1e-
+----
+error: missing required exponent
+1e-
+  ^
+
+parse-statement roundtrip
+SELECT 1e
+----
+SELECT 1 AS e
+
 # Test that unexpected unicode characters do not cause the error message to
 # crash when rendered...
 parse-statement
