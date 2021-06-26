@@ -1,5 +1,6 @@
 ---
 title: "Stylesheet"
+hidden: true
 ---
 
 The following page works as a quick visual demo of how we render common HTML elements using our stylesheet.
