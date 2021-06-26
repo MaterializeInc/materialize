@@ -23,7 +23,7 @@ search.addWidgets([
     container: '#search-hits',
     templates: {
       item: `
-        <a href="{{permalink}}">
+        <a href="{{url}}">
           <div class="hit-title">
             <span class="parentTitle">{{parentTitle}}</span>{{#helpers.highlight}}{ "attribute": "title" }{{/helpers.highlight}}
           </div>
