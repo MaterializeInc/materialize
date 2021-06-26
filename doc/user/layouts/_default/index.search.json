@@ -1,0 +1,73 @@
+{{- $.Scratch.Add "index" slice -}}
+
+{{- /* Index every page */ -}}
+{{- range $page := .Site.Pages -}}
+	
+	{{- $section := .Site.GetPage .Section -}}
+	
+	{{- /* Exclude homepage, drafts, hidden pages, descendants of drafts, descendants of hidden pages */ -}}
+	{{- if and (not ($page.IsHome)) (not (.Params.draft)) (not (.Params.hidden))  (not ($section.Params.draft)) (not ($section.Params.hidden)) -}}
+		
+		{{- /* If no description is provided, use the first x chars of summary */ -}}
+		{{- $description := (cond (gt (len $page.Description) 0) $page.Description (print (substr $page.Summary 0 240) "…")) -}}
+
+		{{- /* Build breadcrumb context string */ -}}
+		{{- $.Scratch.Set "breadcrumbs" "" }}
+    {{- $.Scratch.Set "level" 0 }}
+		{{- if $page.Parent -}}
+			{{- $.Scratch.Set "breadcrumbs" $page.Parent.LinkTitle -}}
+      {{- $.Scratch.Set "level" 1 }}
+			{{- if $page.Parent.Parent -}}
+				{{- $.Scratch.Set "breadcrumbs" (print $page.Parent.Parent.LinkTitle " / " ($.Scratch.Get "breadcrumbs")) -}}
+        {{- $.Scratch.Set "level" 2 }}
+				{{- if $page.Parent.Parent.Parent -}}
+					{{- $.Scratch.Set "breadcrumbs" (print $page.Parent.Parent.Parent.LinkTitle " / " ($.Scratch.Get "breadcrumbs")) -}}
+          {{- $.Scratch.Set "level" 3 }}
+				{{- end -}}
+			{{- end -}}
+		{{- end -}}
+
+    {{- $.Scratch.Set "breadcrumbs" (replace ($.Scratch.Get "breadcrumbs") "Docs Home" "Docs") -}}
+
+		{{- $.Scratch.Set "currPage" (dict) -}}
+    {{- $.Scratch.SetInMap "currPage" "objectID"    $page.Permalink -}}
+    {{- $.Scratch.SetInMap "currPage" "parentTitle" "" -}}
+		{{- $.Scratch.SetInMap "currPage" "title"       $page.Title -}}
+		{{- $.Scratch.SetInMap "currPage" "description" $description -}}
+		{{- $.Scratch.SetInMap "currPage" "tags"        (plainify $page.Section) -}}
+		{{- $.Scratch.SetInMap "currPage" "breadcrumbs" ($.Scratch.Get "breadcrumbs") -}}
+		{{- $.Scratch.SetInMap "currPage" "url"         $page.Permalink -}}
+		{{- $.Scratch.SetInMap "currPage" "level"       ($.Scratch.Get "level") -}}
+		{{- $.Scratch.SetInMap "currPage" "category"    "docs" -}}
+		
+		{{- $.Scratch.Add "index" ($.Scratch.Get "currPage") -}}
+		
+		{{- /* Split a single page up into blocks of deeplinkable anchors (e.g. <h2 id="...">) and content */ -}}
+		{{- /* Skip first sections using `after 2` - first anchorlink is typically a subheading or toc */ -}}
+		{{- range $subsection := after 2 (split (replaceRE "<[^>]+ id=\"[^\"]+\"[^>]*>" "ALGOLIA-SPLIT" $page.Content) "ALGOLIA-SPLIT" ) -}}
+			
+			{{- $sectionLines := split . "\n" -}}
+			{{- $subTitle := (plainify (htmlUnescape (index $sectionLines 0))) -}}
+			{{- $subContent := (plainify (htmlUnescape ((delimit (after 1 $sectionLines) "")))) -}}
+			
+			{{- /* Only index subsections that actually have content */ -}}
+			{{- if and (gt (len $subContent) 0) (gt (len $subTitle) 0) -}}
+
+				{{- $.Scratch.Set "currPage" (dict) -}}
+        {{- $.Scratch.SetInMap "currPage" "objectID"    (print $page.Permalink "#" (anchorize $subTitle)) -}}
+				{{- $.Scratch.SetInMap "currPage" "parentTitle" $page.Title -}}
+        {{- $.Scratch.SetInMap "currPage" "title"       $subTitle -}}
+				{{- $.Scratch.SetInMap "currPage" "description" (print $subContent) -}}
+		    {{- $.Scratch.SetInMap "currPage" "breadcrumbs" ($.Scratch.Get "breadcrumbs") -}}
+				{{- $.Scratch.SetInMap "currPage" "permalink"   (print $page.Permalink "#" (anchorize $subTitle)) -}}
+				{{- $.Scratch.SetInMap "currPage" "level"       (add ($.Scratch.Get "level") 1) -}}
+				{{- $.Scratch.SetInMap "currPage" "category"    "docs" -}}
+				
+				{{- $.Scratch.Add "index" ($.Scratch.Get "currPage") -}}
+			
+			{{- end -}}
+		{{- end -}}
+	{{- end -}}
+{{- end -}}
+
+{{ $.Scratch.Get "index" | jsonify }}

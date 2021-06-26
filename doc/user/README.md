@@ -199,6 +199,27 @@ programming language). For expressivity, we chose `nofmt`.
   would like to volunteer their web development expertise to make this more
   sane, I would be really happy to help them out.
 
+## Search
+
+Search is powered by Algolia. A [custom JSON index template]( doc/user/layouts/_default/index.search.json) renders metadata (documented below) for each page. The metadata is pushed into Algolia using a post-deploy action. The front-end uses a lightly customized out-of-the-box Algolia search widget (instantsearch.js) to query the index.
+
+**How are deleted pages removed from index?** If we only ever updated search results, deleted pages or pages with changed URLs would cause issues. To work around that, upon every deploy: 1. We delete all results from the index, 2. We push the updated set of results to the index.
+
+### Search Specification
+
+The following metadata attributes are pushed to the JSON index for every page and sub-page.
+
+| Field | Type | Limits | Description
+| ----- | ---- | ------ | ----------- |
+| `objectId` | string | unique | Unique identifier required by search index, for docs we just use absolute URL.  |
+| `category` | string | "docs" OR "blog" | This field can eventually be used to give us universal search across docs, blog, etc... but is set to "docs" for everything in hugo.  |
+| `parentTitle` | string | not required | When the result is a subsection of a page, this is set to parent page title. |
+| `title` | string | required | The title to be displayed in results, carries the most weight for text matching. |
+| `description` | string | up to 241 chars | The description to be displayed and ...snippetted... in results, also used for text matching. In the event that a result doesn't have a description explicity set in hugo frontmatter, the first 240 chars of plain text are used.|
+| `url` | string | required | Absolute URL the user should be taken to upon clicking the result. Can include anchor tags for deeplinks. |
+| `breadcrumbs` | string | | Currently just a visual
+| `level` | integer | required | Level indicates the level of depth from the docs home of a result, closer to homepage acts as tie-breaker for results with equal text matching scores. |
+
 ## Miscellany, trivia, & footguns
 
 - Headers are automatically hyperlinked using [AnchorJS].

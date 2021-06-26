@@ -77,3 +77,12 @@ weight = 120
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true
+
+[outputFormats.search]
+baseName = "search"
+isPlainText = true
+mediaType = "application/json"
+notAlternative = true
+
+[outputs]
+home = [ "HTML", "search"]
