@@ -60,7 +60,7 @@
 				{{- $.Scratch.SetInMap "currPage" "description" (print $subContent) -}}
 		    {{- $.Scratch.SetInMap "currPage" "breadcrumbs" ($.Scratch.Get "breadcrumbs") -}}
 				{{- $.Scratch.SetInMap "currPage" "url"         (print $page.Permalink "#" (anchorize $subTitle)) -}}
-				{{- $.Scratch.SetInMap "currPage" "level"       (add ($.Scratch.Get "level") 1) -}}
+				{{- $.Scratch.SetInMap "currPage" "level"       (add ($.Scratch.Get "level") 3) -}}
 				{{- $.Scratch.SetInMap "currPage" "category"    "docs" -}}
 				
 				{{- $.Scratch.Add "index" ($.Scratch.Get "currPage") -}}
