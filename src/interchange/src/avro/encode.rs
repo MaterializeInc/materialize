@@ -292,11 +292,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
                 ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
                 ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
-                ScalarType::Decimal(p, s) => Value::Decimal(DecimalValue {
-                    unscaled: datum.unwrap_decimal().as_i128().to_be_bytes().to_vec(),
-                    precision: (*p).into(),
-                    scale: (*s).into(),
-                }),
+                ScalarType::Decimal(..) => unreachable!(),
                 ScalarType::APD { scale } => {
                     let mut d = datum.unwrap_apd().0;
                     let (unscaled, precision, scale) = match scale {

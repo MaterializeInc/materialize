@@ -15,7 +15,6 @@ use std::fmt;
 use std::io::Read;
 use std::rc::Rc;
 
-use dec::OrderedDecimal;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -484,7 +483,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             ))));
         }
 
-        self.packer.push(Datum::APD(OrderedDecimal(n)));
+        self.packer.push(Datum::from(n));
 
         Ok(())
     }

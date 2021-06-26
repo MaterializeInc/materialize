@@ -11,7 +11,6 @@
 //! other cast-related functions.
 
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
@@ -23,7 +22,7 @@ use lazy_static::lazy_static;
 use expr::VariadicFunc;
 use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
-use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
+use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
 
@@ -123,10 +122,6 @@ lazy_static! {
             (Int32, Int64) => Implicit: CastInt32ToInt64,
             (Int32, Float32) => Implicit: CastInt32ToFloat32,
             (Int32, Float64) => Implicit: CastInt32ToFloat64,
-            (Int32, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
-            }),
             (Int32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToAPD(s)))
@@ -136,10 +131,6 @@ lazy_static! {
             // INT64
             (Int64, Bool) => Explicit: CastInt64ToBool,
             (Int64, Int32) => Assignment: CastInt64ToInt32,
-            (Int64, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
-            }),
             (Int64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToAPD(s)))
@@ -156,10 +147,6 @@ lazy_static! {
             (Float32, Int32) => Assignment: CastFloat32ToInt32,
             (Float32, Int64) => Assignment: CastFloat32ToInt64,
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
-            (Float32, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToDecimal(s)))
-            }),
             (Float32, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToAPD(s)))
@@ -170,49 +157,11 @@ lazy_static! {
             (Float64, Int32) => Assignment: CastFloat64ToInt32,
             (Float64, Int64) => Assignment: CastFloat64ToInt64,
             (Float64, Float32) => Assignment: CastFloat64ToFloat32,
-            (Float64, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToDecimal(s)))
-            }),
             (Float64, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToAPD(s)))
             }),
             (Float64, String) => Assignment: CastFloat64ToString,
-
-            // DECIMAL
-            (Decimal, Int32) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToInt32(s)))
-            }),
-            (Decimal, Int64) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToInt64(s)))
-            }),
-            (Decimal, Float32) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                let factor = 10_f32.powi(i32::from(s));
-                let factor =
-                    HirScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
-                Some(|e: HirScalarExpr| e.call_unary(CastSignificandToFloat32)
-                    .call_binary(factor, BinaryFunc::DivFloat32))
-            }),
-            (Decimal, Float64) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                let factor = 10_f64.powi(i32::from(s));
-                let factor = HirScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
-                Some(|e: HirScalarExpr| e.call_unary(CastSignificandToFloat64)
-                    .call_binary(factor, BinaryFunc::DivFloat64))
-            }),
-            (Decimal, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
-                let (_, f) = from_type.unwrap_decimal_parts();
-                let (_, t) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| rescale_decimal(e, f, t))
-            }),
-            (Decimal, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToString(s)))
-            }),
 
             // DATE
             (Date, Timestamp) => Implicit: CastDateToTimestamp,
@@ -247,10 +196,6 @@ lazy_static! {
             (String, Oid) => Explicit: CastStringToInt32,
             (String, Float32) => Explicit: CastStringToFloat32,
             (String, Float64) => Explicit: CastStringToFloat64,
-            (String, Decimal) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToDecimal(s)))
-            }),
             (String, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToAPD(s)))
@@ -331,10 +276,6 @@ lazy_static! {
             (Jsonb, Int64) => Explicit: CastJsonbToInt64,
             (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
-            (Jsonb, Decimal) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToDecimal(s)))
-            }),
             (Jsonb, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToAPD(s)))
@@ -421,24 +362,6 @@ fn get_cast(
         _ => None,
     };
     template.and_then(|template| (template.0)(ecx, ccx, from, to))
-}
-
-pub fn rescale_decimal(expr: HirScalarExpr, s1: u8, s2: u8) -> HirScalarExpr {
-    match s1.cmp(&s2) {
-        Ordering::Less => {
-            let factor = 10_i128.pow(u32::from(s2 - s1));
-            let factor =
-                HirScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s2 - s1));
-            expr.call_binary(factor, BinaryFunc::MulDecimal)
-        }
-        Ordering::Equal => expr,
-        Ordering::Greater => {
-            let factor = 10_i128.pow(u32::from(s1 - s2));
-            let factor =
-                HirScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s1 - s2));
-            expr.call_binary(factor, BinaryFunc::DivDecimal)
-        }
-    }
 }
 
 /// Converts an expression to `ScalarType::String`.

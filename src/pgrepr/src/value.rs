@@ -100,9 +100,6 @@ impl Value {
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
-            (Datum::Decimal(d), ScalarType::Decimal(_, scale)) => {
-                Some(Value::Numeric(Numeric(d.with_scale(*scale))))
-            }
             (Datum::APD(mut d), ScalarType::APD { scale }) => {
                 if let Some(scale) = scale {
                     adt_apd::rescale(&mut d.0, *scale).unwrap();

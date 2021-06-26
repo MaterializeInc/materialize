@@ -768,10 +768,6 @@ pub fn eval_as_of<'a>(
         ScalarType::APD { .. } => apd::cx_datum()
             .try_into_i128(evaled.unwrap_apd().0)?
             .try_into()?,
-        ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
-        ScalarType::Decimal(_, _) => {
-            bail!("decimal with fractional component is not a valid timestamp")
-        }
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
         ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,

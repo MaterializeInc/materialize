@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
@@ -18,7 +19,7 @@ use dataflow_types::PeekResponse;
 use expr::GlobalId;
 use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
-use repr::{ColumnType, Datum, Row, ScalarType};
+use repr::{ColumnType, Datum, Row};
 use sql::ast::{Raw, Statement};
 
 use crate::command::{
@@ -389,15 +390,17 @@ impl SessionClient {
                 Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Float32(n) => float_to_json(n.into_inner() as f64),
                 Datum::Float64(n) => float_to_json(n.into_inner()),
-                Datum::String(s) => serde_json::Value::String(s.to_string()),
-                Datum::Decimal(d) => serde_json::Value::String(if col_types.len() > idx {
-                    match col_types[idx].scalar_type {
-                        ScalarType::Decimal(_precision, scale) => d.with_scale(scale).to_string(),
-                        _ => datum.to_string(),
+                Datum::APD(d) => {
+                    // serde_json requires floats to be finite
+                    if d.0.is_infinite() {
+                        serde_json::Value::String(d.0.to_string())
+                    } else {
+                        serde_json::Value::Number(
+                            serde_json::Number::from_f64(f64::try_from(d.0).unwrap()).unwrap(),
+                        )
                     }
-                } else {
-                    datum.to_string()
-                }),
+                }
+                Datum::String(s) => serde_json::Value::String(s.to_string()),
                 Datum::List(list) => serde_json::Value::Array(
                     list.iter()
                         .map(|entry| datum_to_json(&entry, idx, col_types))

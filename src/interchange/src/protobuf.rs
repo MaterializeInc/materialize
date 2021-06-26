@@ -22,7 +22,7 @@ use serde_protobuf::descriptor::{
 use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
-use repr::adt::decimal::Significand;
+use repr::adt::apd::Apd;
 use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
 
 fn proto_message_name(message_name: &str) -> String {
@@ -253,8 +253,8 @@ fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
         ProtoValue::Bool(false) => Ok(Datum::False),
         ProtoValue::I32(i) => Ok(Datum::Int32(*i)),
         ProtoValue::I64(i) => Ok(Datum::Int64(*i)),
-        ProtoValue::U32(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
-        ProtoValue::U64(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
+        ProtoValue::U32(u) => Ok(Datum::from(Apd::from(*u))),
+        ProtoValue::U64(u) => Ok(Datum::from(Apd::from(*u))),
         ProtoValue::F32(f) => Ok(Datum::Float32((*f).into())),
         ProtoValue::F64(f) => Ok(Datum::Float64((*f).into())),
         ProtoValue::String(s) => Ok(Datum::String(s)),
@@ -287,7 +287,7 @@ fn default_datum_from_field<'a>(
         FieldType::Float => Ok(Datum::Float32(OrderedFloat::from(0.0))),
         FieldType::Double => Ok(Datum::Float64(OrderedFloat::from(0.0))),
         FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
-            Ok(Datum::Decimal(Significand::new(0)))
+            Ok(Datum::from(Apd::from(0)))
         }
         FieldType::String => Ok(Datum::String("")),
         FieldType::Bytes => Ok(Datum::Bytes(&[])),
@@ -378,8 +378,8 @@ fn json_from_serde_value(
         SerdeValue::I64(i) => Datum::Int64(*i),
         SerdeValue::U8(i) => Datum::Int32(*i as i32),
         SerdeValue::U16(i) => Datum::Int32(*i as i32),
-        SerdeValue::U32(u) => Datum::Decimal(Significand::new(*u as i128)),
-        SerdeValue::U64(u) => Datum::Decimal(Significand::new(*u as i128)),
+        SerdeValue::U32(u) => Datum::from(Apd::from(*u)),
+        SerdeValue::U64(u) => Datum::from(Apd::from(*u)),
         SerdeValue::F32(f) => Datum::Float32((*f).into()),
         SerdeValue::F64(f) => Datum::Float64((*f).into()),
         SerdeValue::String(s) => Datum::String(s),
@@ -485,7 +485,6 @@ mod tests {
         Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
     };
 
-    use repr::adt::decimal::Significand;
     use repr::{Datum, DatumList, RelationDesc, ScalarType};
 
     use gen::fuzz::{
@@ -636,6 +635,7 @@ mod tests {
 
     #[test]
     fn test_decode() {
+        use repr::adt::apd::Apd;
         let mut test_record = TestRecord::new();
 
         test_record.set_int_field(1);
@@ -663,8 +663,8 @@ mod tests {
             Datum::String("one"),
             Datum::Int64(10000),
             Datum::String("BLUE"),
-            Datum::Decimal(Significand::new(5)),
-            Datum::Decimal(Significand::new(55)),
+            Datum::from(Apd::from(5)),
+            Datum::from(Apd::from(55)),
             Datum::Float32(OrderedFloat::from(5.456)),
             Datum::Float64(OrderedFloat::from(99.99)),
         ];
@@ -674,6 +674,7 @@ mod tests {
 
     #[test]
     fn test_decode_with_null() {
+        use repr::adt::apd::Apd;
         let mut test_record = TestRecord::new();
 
         test_record.set_int_field(1);
@@ -693,8 +694,8 @@ mod tests {
             Datum::String(""),
             Datum::Int64(0),
             Datum::String("RED"),
-            Datum::Decimal(Significand::new(0)),
-            Datum::Decimal(Significand::new(0)),
+            Datum::from(Apd::from(0)),
+            Datum::from(Apd::from(0)),
             Datum::Float32(OrderedFloat::from(0.0)),
             Datum::Float64(OrderedFloat::from(0.0)),
         ];

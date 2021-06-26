@@ -256,10 +256,9 @@ pub fn describe_tail(
     let sql_object = scx.resolve_item(name)?;
     let options = TailOptions::try_from(options)?;
     let progress = options.progress.unwrap_or(false);
-    const MAX_U64_DIGITS: u8 = 20;
     let mut desc = RelationDesc::empty().with_named_column(
         "mz_timestamp",
-        ScalarType::Decimal(MAX_U64_DIGITS, 0).nullable(false),
+        ScalarType::APD { scale: Some(0) }.nullable(false),
     );
     if progress {
         desc = desc.with_named_column("mz_progressed", ScalarType::Bool.nullable(false));

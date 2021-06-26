@@ -23,7 +23,6 @@ use lowertest::MzEnumReflect;
 
 use crate::adt::apd::Apd;
 use crate::adt::array::Array;
-use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 
@@ -52,9 +51,6 @@ pub enum Datum<'a> {
     TimestampTz(DateTime<Utc>),
     /// A span of time.
     Interval(Interval),
-    /// An exact decimal number, possibly with a fractional component, with up
-    /// to 38 digits of precision.
-    Decimal(Significand),
     /// A sequence of untyped bytes.
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
@@ -70,8 +66,8 @@ pub enum Datum<'a> {
     List(DatumList<'a>),
     /// A mapping from string keys to `Datum`s.
     Map(DatumMap<'a>),
-    /// A refactor of `Decimal` using `rust-dec`; allows up to 39 digits of
-    /// precision.
+    /// An exact decimal number, possibly with a fractional component, with up
+    /// to 39 digits of precision.
     APD(OrderedDecimal<Apd>),
     /// An unknown value within a JSON-typed `Datum`.
     ///
@@ -256,19 +252,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the decimal value within this datum.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the datum is not [`Datum::Decimal`].
-    #[track_caller]
-    pub fn unwrap_decimal(&self) -> Significand {
-        match self {
-            Datum::Decimal(d) => *d,
-            _ => panic!("Datum::unwrap_decimal called on {:?}", self),
-        }
-    }
-
     /// Unwraps the string value within this datum.
     ///
     /// # Panics
@@ -408,8 +391,6 @@ impl<'a> Datum<'a> {
                     (Datum::TimestampTz(_), _) => false,
                     (Datum::Interval(_), ScalarType::Interval) => true,
                     (Datum::Interval(_), _) => false,
-                    (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
-                    (Datum::Decimal(_), _) => false,
                     (Datum::Bytes(_), ScalarType::Bytes) => true,
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String) => true,
@@ -504,15 +485,9 @@ impl From<i128> for Datum<'static> {
     }
 }
 
-impl From<Significand> for Datum<'static> {
-    fn from(d: Significand) -> Datum<'static> {
-        Datum::Decimal(d)
-    }
-}
-
 impl From<Apd> for Datum<'static> {
-    fn from(d: Apd) -> Datum<'static> {
-        Datum::APD(OrderedDecimal(d))
+    fn from(n: Apd) -> Datum<'static> {
+        Datum::APD(OrderedDecimal(n))
     }
 }
 
@@ -625,7 +600,6 @@ impl fmt::Display for Datum<'_> {
             Datum::Timestamp(t) => write!(f, "{}", t),
             Datum::TimestampTz(t) => write!(f, "{}", t),
             Datum::Interval(iv) => write!(f, "{}", iv),
-            Datum::Decimal(sig) => write!(f, "{}dec", sig.as_i128()),
             Datum::Bytes(dat) => {
                 f.write_str("0x")?;
                 for b in dat.iter() {
@@ -684,7 +658,7 @@ pub enum ScalarType {
     Float32,
     /// The type of [`Datum::Float64`].
     Float64,
-    /// The type of [`Datum::Decimal`].
+    /// (TO BE DEPRECATED) The type of `Datum::Decimal`.
     ///
     /// This type additionally specifies the precision and scale of the decimal
     /// . The precision constrains the total number of digits in the number,
@@ -761,18 +735,6 @@ pub enum ScalarType {
 }
 
 impl<'a> ScalarType {
-    /// Returns the contained decimal precision and scale.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the scalar type is not [`ScalarType::Decimal`].
-    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
-        match self {
-            ScalarType::Decimal(p, s) => (*p, *s),
-            _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
-        }
-    }
-
     /// Returns the contained apd scale.
     ///
     /// # Panics

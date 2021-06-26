@@ -227,7 +227,6 @@ impl ColumnKnowledge {
                         | AggregateFunc::MaxInt64
                         | AggregateFunc::MaxFloat32
                         | AggregateFunc::MaxFloat64
-                        | AggregateFunc::MaxDecimal
                         | AggregateFunc::MaxBool
                         | AggregateFunc::MaxString
                         | AggregateFunc::MaxDate
@@ -237,7 +236,6 @@ impl ColumnKnowledge {
                         | AggregateFunc::MinInt64
                         | AggregateFunc::MinFloat32
                         | AggregateFunc::MinFloat64
-                        | AggregateFunc::MinDecimal
                         | AggregateFunc::MinBool
                         | AggregateFunc::MinString
                         | AggregateFunc::MinDate
