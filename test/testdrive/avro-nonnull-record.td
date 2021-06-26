@@ -1,0 +1,41 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for #7170, in which non-nullable fields of nullable records
+# were not correctly handled.
+
+$ set writer-schema={
+    "name": "row",
+    "type": "record",
+    "fields": [
+      {
+        "name": "a",
+        "type": {
+          "name": "b",
+          "fields": [
+            {"name": "b", "type": "int"},
+            {"name": "c", "type": "int"}
+          ],
+          "type": "record"
+        }
+      }
+    ]
+  }
+
+$ avro-ocf-write path=data.ocf schema=${writer-schema}
+{"a": {"b": 1, "c": 1}}
+{"a": {"b": 2, "c": 1}}
+
+> CREATE MATERIALIZED SOURCE basic
+  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
+
+> SELECT (b1.a).b, (b2.a).b FROM basic b1 LEFT JOIN basic b2 ON (b1.a).b = (b2.a).c
+1 1
+1 2
+2 <null>

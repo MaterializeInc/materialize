@@ -4122,7 +4122,11 @@ impl UnaryFunc {
             JsonbPretty => ScalarType::String.nullable(in_nullable),
 
             RecordGet(i) => match input_type.scalar_type {
-                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1,
+                ScalarType::Record { mut fields, .. } => {
+                    let (_name, mut ty) = fields.swap_remove(*i);
+                    ty.nullable = ty.nullable || input_type.nullable;
+                    ty
+                }
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
