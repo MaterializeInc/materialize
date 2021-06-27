@@ -16,10 +16,10 @@ set -euo pipefail
 aws s3 cp misc/www/index.html s3://materialize-dev-website/index.html
 
 bin/doc
-aws s3 sync target/doc/ s3://materialize-dev-website/api/rust
+aws s3 sync --size-only target/doc/ s3://materialize-dev-website/api/rust
 
 bin/doc --document-private-items
-aws s3 sync target/doc/ s3://materialize-dev-website/api/rust-private
+aws s3 sync --size-only target/doc/ s3://materialize-dev-website/api/rust-private
 
 bin/pydoc
-aws s3 sync target/pydoc/ s3://materialize-dev-website/api/python
+aws s3 sync --size-only target/pydoc/ s3://materialize-dev-website/api/python
