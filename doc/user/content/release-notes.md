@@ -72,6 +72,9 @@ Wrap your release notes at the 80 character mark.
   columns in [`TAIL`](/sql/tail) to `mz_timestamp`, `mz_diff`, and
   `mz_progressed`.
 
+- Add the [`current_role`](/sql/functions/#system-information-func) system
+  information function.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
