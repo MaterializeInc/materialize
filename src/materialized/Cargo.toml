@@ -56,7 +56,7 @@ mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.20.0"
 num_cpus = "1.0.0"
 openssl = { version = "0.10.34", features = ["vendored"] }
-openssl-sys = { version = "0.9.63", features = ["vendored"] }
+openssl-sys = { version = "0.9.65", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.6"
 pgwire = { path = "../pgwire" }
