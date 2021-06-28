@@ -16,12 +16,5 @@ tempfile = "3.2.0"
 tokio = { version = "1.6.1", features = ["time"] }
 
 [features]
-# Whether to automatically enable the jemalloc feature if compiling for a target
-# besides macOS.
-#
-# TODO(benesch): remove this crate's build script and this feature once Cargo
-# supports target-specific features.
-# See: https://github.com/rust-lang/cargo/issues/1197
-auto-jemalloc = ["jemalloc-ctl"]
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["jemalloc-ctl"]

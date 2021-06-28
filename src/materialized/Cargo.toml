@@ -60,7 +60,7 @@ openssl-sys = { version = "0.9.63", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.6"
 pgwire = { path = "../pgwire" }
-prof = { path = "../prof", features = ["auto-jemalloc"] }
+prof = { path = "../prof" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 repr = { path = "../repr" }
@@ -92,6 +92,7 @@ uuid = "0.8.2"
 # (Namely: if the application relies on new threads not being created for whatever reason)
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
+prof = { path = "../prof", features = ["jemalloc"] }
 jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
@@ -117,6 +118,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 
 [build-dependencies]
 anyhow = "1.0.41"
+askama_shared = { version = "0.11.1", features = ["config"] }
 cc = "1.0.68"
 flate2 = "1.0.20"
 hex = "0.4.3"

@@ -2170,6 +2170,7 @@ version = "0.8.2-dev"
 dependencies = [
  "anyhow",
  "askama",
+ "askama_shared",
  "assert_cmd",
  "async-trait",
  "atty",
