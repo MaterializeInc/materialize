@@ -64,7 +64,7 @@ prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 repr = { path = "../repr" }
-reqwest = { version = "0.11.3", features = ["json"] }
+reqwest = { version = "0.11.4", features = ["json"] }
 rlimit = "0.5.4"
 semver = "0.11.0"
 serde = { version = "1.0.126", features = ["derive"] }
@@ -77,7 +77,7 @@ sysinfo = "0.18.2"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.6.1", features = ["sync"] }
-tokio-openssl = "0.6.1"
+tokio-openssl = "0.6.2"
 tokio-stream = { version = "0.1.6", features = ["net"] }
 tracing = "0.1.26"
 # TODO(benesch): we can use the default features here once tracing-subscriber
@@ -109,9 +109,9 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", br
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 predicates = "1.0.8"
-rand = "0.8.3"
+rand = "0.8.4"
 repr = { path = "../repr" }
-reqwest = { version = "0.11.3", features = ["blocking"] }
+reqwest = { version = "0.11.4", features = ["blocking"] }
 serde_json = "1.0.64"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
@@ -121,7 +121,7 @@ cc = "1.0.68"
 flate2 = "1.0.20"
 hex = "0.4.3"
 hex-literal = "0.3.1"
-reqwest = { version = "0.11.3", features = ["blocking"] }
+reqwest = { version = "0.11.4", features = ["blocking"] }
 sha2 = "0.9.5"
 tar = "0.4.35"
 walkdir = "2.3.2"
