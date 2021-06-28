@@ -5,14 +5,12 @@ Materialize.
 
 ### Overview
 
-A persistence user would start by constructing a `PersistManager` which is a
-thin `Send+Sync+Clone` handle around a `Persister` impl which does the heavy
-lifting (see details below). `PersistManager` is a registry for multiple streams
-(each corresponding to a table, source, or operator) in a single process. This
-allows us to funnel everything a process is persisting through a single place
-for batching and rate limiting.
+A persistence user would start by constructing a `Persister` which is a registry
+for multiple streams (each corresponding to a table, source, or operator) in a
+single process. This allows us to funnel everything a process is persisting through
+a single place for batching and rate limiting.
 
-Given a unique `Id`, `PersistManager` will hand back a `Token`. This
+Given a unique `Id`, `Persister` will hand back a `Token`. This
 can be handed in (consumed) to create a timely operator that persists and passes
 through its input.
 

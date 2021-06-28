@@ -9,35 +9,58 @@
 
 //! In-memory implementations for testing and benchmarking.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::persister::{Meta, Persister, Snapshot, Write};
-use crate::storage::{Blob, Buffer, SeqNo};
-use crate::{Id, Token};
+use crate::persister::{Meta, Snapshot, Write};
+use crate::storage::{Blob, Buffer, Persister, SeqNo};
 
-/// An in-memory implementation of [Buffer].
-pub struct MemBuffer {
+struct MemBufferCore {
     seqno: Range<SeqNo>,
     dataz: Vec<Vec<u8>>,
+    lock: Option<String>,
 }
 
-impl MemBuffer {
-    /// Constructs a new, empty MemBuffer.
-    pub fn new() -> Self {
-        MemBuffer {
+impl MemBufferCore {
+    fn new() -> Self {
+        MemBufferCore {
             seqno: SeqNo(0)..SeqNo(0),
             dataz: Vec::new(),
+            lock: None,
         }
     }
-}
 
-impl Buffer for MemBuffer {
+    fn open(&mut self, lock_info: &str) -> Result<(), Error> {
+        if let Some(lock) = &self.lock {
+            return Err(format!("buffer is already open: {}", lock).into());
+        }
+
+        self.lock = Some(lock_info.to_string());
+
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), Error> {
+        self.ensure_open()?;
+
+        self.lock = None;
+        Ok(())
+    }
+
+    fn ensure_open(&self) -> Result<(), Error> {
+        if self.lock.is_none() {
+            return Err("buffer unexpectedly closed".into());
+        }
+
+        Ok(())
+    }
+
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
+        self.ensure_open()?;
         let write_seqno = self.seqno.end;
         self.seqno = self.seqno.start..SeqNo(self.seqno.end.0 + 1);
         self.dataz.push(buf);
@@ -52,6 +75,7 @@ impl Buffer for MemBuffer {
     where
         F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
     {
+        self.ensure_open()?;
         self.dataz
             .iter()
             .enumerate()
@@ -61,6 +85,7 @@ impl Buffer for MemBuffer {
     }
 
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
+        self.ensure_open()?;
         // TODO: Test the edge cases here.
         if upper <= self.seqno.start || upper > self.seqno.end {
             return Err(format!(
@@ -80,26 +105,101 @@ impl Buffer for MemBuffer {
     }
 }
 
-/// An in-memory implementation of [Blob].
-pub struct MemBlob {
-    dataz: HashMap<String, Vec<u8>>,
+/// An in-memory implementation of [Buffer].
+pub struct MemBuffer {
+    core: Arc<Mutex<MemBufferCore>>,
 }
 
-impl MemBlob {
-    /// Constructs a new, empty MemBlob.
-    pub fn new() -> Self {
-        MemBlob {
-            dataz: HashMap::new(),
-        }
+impl MemBuffer {
+    /// Constructs a new, empty MemBuffer.
+    pub fn new(lock_info: &str) -> Result<Self, Error> {
+        let mut core = MemBufferCore::new();
+        core.open(lock_info)?;
+        Ok(Self {
+            core: Arc::new(Mutex::new(core)),
+        })
+    }
+
+    /// Open a pre-existing MemBuffer.
+    fn open(core: Arc<Mutex<MemBufferCore>>, lock_info: &str) -> Result<Self, Error> {
+        core.lock()?.open(lock_info)?;
+        Ok(Self { core })
+    }
+
+    /// Close a pre-existing MemBuffer
+    fn close(&mut self) -> Result<(), Error> {
+        self.core.lock()?.close()
     }
 }
 
-impl Blob for MemBlob {
+impl Drop for MemBuffer {
+    fn drop(&mut self) {
+        self.close().expect("closing MemBuffer cannot fail");
+    }
+}
+
+impl Buffer for MemBuffer {
+    fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
+        self.core.lock()?.write_sync(buf)
+    }
+
+    fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
+    where
+        F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
+    {
+        self.core.lock()?.snapshot(logic)
+    }
+
+    fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
+        self.core.lock()?.truncate(upper)
+    }
+}
+
+struct MemBlobCore {
+    dataz: HashMap<String, Vec<u8>>,
+    lock: Option<String>,
+}
+
+impl MemBlobCore {
+    fn new() -> Self {
+        MemBlobCore {
+            dataz: HashMap::new(),
+            lock: None,
+        }
+    }
+
+    fn open(&mut self, lock_info: &str) -> Result<(), Error> {
+        if let Some(lock) = &self.lock {
+            return Err(format!("blob is already open: {}", lock).into());
+        }
+
+        self.lock = Some(lock_info.to_string());
+
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), Error> {
+        self.ensure_open()?;
+
+        self.lock = None;
+        Ok(())
+    }
+
+    fn ensure_open(&self) -> Result<(), Error> {
+        if self.lock.is_none() {
+            return Err("blob unexpectedly closed".into());
+        }
+
+        Ok(())
+    }
+
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.ensure_open()?;
         Ok(self.dataz.get(key).cloned())
     }
 
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+        self.ensure_open()?;
         if allow_overwrite {
             self.dataz.insert(key.to_owned(), value);
         } else if self.dataz.contains_key(key) {
@@ -111,60 +211,83 @@ impl Blob for MemBlob {
     }
 }
 
-/// An in-memory implementation of [Persister].
-pub struct MemPersister {
-    registered: HashSet<Id>,
-    dataz: HashMap<Id, MemStream>,
+/// An in-memory implementation of [Blob].
+pub struct MemBlob {
+    core: Arc<Mutex<MemBlobCore>>,
 }
 
-impl MemPersister {
-    /// Constructs a new, empty MemPersister.
+impl MemBlob {
+    /// Constructs a new, empty MemBlob.
+    pub fn new(lock_info: &str) -> Result<Self, Error> {
+        let mut core = MemBlobCore::new();
+        core.open(lock_info)?;
+        Ok(MemBlob {
+            core: Arc::new(Mutex::new(core)),
+        })
+    }
+
+    /// Open a pre-existing MemBlob.
+    fn open(core: Arc<Mutex<MemBlobCore>>, lock_info: &str) -> Result<Self, Error> {
+        core.lock()?.open(lock_info)?;
+        Ok(Self { core })
+    }
+
+    /// Close a pre-existing MemBlob
+    fn close(&mut self) -> Result<(), Error> {
+        self.core.lock()?.close()
+    }
+}
+
+impl Drop for MemBlob {
+    fn drop(&mut self) {
+        self.close().expect("closing MemBlob cannot fail");
+    }
+}
+
+impl Blob for MemBlob {
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.core.lock()?.get(key)
+    }
+
+    fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
+        self.core.lock()?.set(key, value, allow_overwrite)
+    }
+}
+
+/// An in-memory representation of a set of [Buffer]s and [Blob]s that can be reused
+/// across dataflows
+pub struct MemRegistry {
+    by_path: HashMap<usize, (Arc<Mutex<MemBufferCore>>, Arc<Mutex<MemBlobCore>>)>,
+}
+
+impl MemRegistry {
+    /// Constructs a new, empty MemRegistry
     pub fn new() -> Self {
-        MemPersister {
-            registered: HashSet::new(),
-            dataz: HashMap::new(),
+        MemRegistry {
+            by_path: HashMap::new(),
         }
     }
 
-    /// Consumes this MemPersister, returning the underlying data.
-    #[cfg(test)]
-    pub fn into_inner(self) -> HashMap<Id, MemStream> {
-        self.dataz
-    }
+    /// Opens the in-memory [Persister] associated with `path` or creates one if
+    /// none exists.
+    pub fn open(
+        &mut self,
+        path: usize,
+        lock_info: &str,
+    ) -> Result<Persister<MemBuffer, MemBlob>, Error> {
+        let (buffer, blob) = if let Some((buffer, blob)) = self.by_path.get(&path) {
+            (buffer.clone(), blob.clone())
+        } else {
+            let buffer = Arc::new(Mutex::new(MemBufferCore::new()));
+            let blob = Arc::new(Mutex::new(MemBlobCore::new()));
 
-    /// Constructs a MemPersister from a previous MemPersister's data but with
-    /// the create_or_load registrations reset.
-    #[cfg(test)]
-    pub fn from_inner(inner: HashMap<Id, MemStream>) -> Self {
-        MemPersister {
-            registered: HashSet::new(),
-            dataz: inner,
-        }
-    }
-}
-
-impl Persister for MemPersister {
-    type Write = MemStream;
-    type Meta = MemStream;
-
-    fn create_or_load(&mut self, id: Id) -> Result<Token<Self::Write, Self::Meta>, Error> {
-        if self.registered.contains(&id) {
-            return Err(format!("internal error: {:?} already registered", id).into());
-        }
-        self.registered.insert(id);
-        let p = self.dataz.entry(id).or_insert_with(MemStream::new);
-        let t = Token {
-            write: p.clone(),
-            meta: p.clone(),
+            self.by_path.insert(path, (buffer.clone(), blob.clone()));
+            (buffer, blob)
         };
-        Ok(t)
-    }
 
-    fn destroy(&mut self, id: Id) -> Result<(), Error> {
-        if self.dataz.remove(&id).is_none() {
-            return Err(format!("internal error: {:?} not registered", id).into());
-        }
-        Ok(())
+        let buffer = MemBuffer::open(buffer, lock_info)?;
+        let blob = MemBlob::open(blob, lock_info)?;
+        Persister::new(buffer, blob)
     }
 }
 
@@ -245,7 +368,7 @@ mod tests {
                 return Err(Error::from(format!("LOCKED: memory buffer {}", idx)));
             }
             registered.insert(idx);
-            Ok(MemBuffer::new())
+            MemBuffer::new("buffer_impl_test")
         })
     }
 
@@ -257,7 +380,7 @@ mod tests {
                 return Err(Error::from(format!("LOCKED: memory buffer {}", idx)));
             }
             registered.insert(idx);
-            Ok(MemBlob::new())
+            MemBlob::new("blob_impl_test")
         })
     }
 }

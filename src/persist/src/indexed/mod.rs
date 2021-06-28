@@ -391,7 +391,10 @@ mod tests {
             (("2".into(), "".into()), 2, 1),
         ];
 
-        let mut i = Indexed::new(MemBuffer::new(), MemBlob::new())?;
+        let mut i = Indexed::new(
+            MemBuffer::new("single_stream")?,
+            MemBlob::new("single_stream")?,
+        )?;
         let id = Id(0);
         i.register(id);
 

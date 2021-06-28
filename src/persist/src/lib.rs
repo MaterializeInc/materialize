@@ -24,11 +24,6 @@ pub mod operators;
 pub mod persister;
 pub mod storage;
 
-use std::sync::{Arc, Mutex};
-
-use crate::error::Error;
-use crate::persister::Persister;
-
 // TODO
 // - The concurrency story. I imagine this working something like the following:
 //   - Writes from all streams are funnelled to a single thread which
@@ -50,8 +45,6 @@ use crate::persister::Persister;
 //   them as type parameters? Materialize will only be using one combination of
 //   them (two with `()` vals?) but the generality might make things easier to
 //   read. Of course, it also might make things harder to read.
-// - Is PersistManager getting us anything over a type alias? At the moment, the
-//   only thing it does is wrap mutex poison errors in this crate's error type.
 // - This method of getting the metadata handle ends up being pretty clunky in
 //   practice. Maybe instead the user should pass in a mutable reference to a
 //   `Meta` they've constructed like `probe_with`?
@@ -82,41 +75,6 @@ use crate::persister::Persister;
 /// A unique id for a persisted stream.
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Id(pub u64);
-
-/// A thread-safe, clone-able wrapper for [Persister].
-pub struct PersistManager<P> {
-    persister: Arc<Mutex<P>>,
-}
-
-// The derived Send, Sync, and Clone don't work because of the type parameter.
-unsafe impl<P> Send for PersistManager<P> {}
-unsafe impl<P> Sync for PersistManager<P> {}
-impl<P> Clone for PersistManager<P> {
-    fn clone(&self) -> Self {
-        PersistManager {
-            persister: self.persister.clone(),
-        }
-    }
-}
-
-impl<P: Persister> PersistManager<P> {
-    /// Returns a [PersistManager] wrapper for the given [Persister].
-    pub fn new(persister: P) -> Self {
-        PersistManager {
-            persister: Arc::new(Mutex::new(persister)),
-        }
-    }
-
-    /// A wrapper for [Persister::create_or_load].
-    pub fn create_or_load(&mut self, id: Id) -> Result<Token<P::Write, P::Meta>, Error> {
-        self.persister.lock()?.create_or_load(id)
-    }
-
-    /// A wrapper for [Persister::destroy].
-    pub fn destroy(&mut self, id: Id) -> Result<(), Error> {
-        self.persister.lock()?.destroy(id)
-    }
-}
 
 /// An exclusivity token needed to construct persistence [operators].
 ///

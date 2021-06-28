@@ -18,7 +18,6 @@ use abomonation_derive::Abomonation;
 use crate::error::Error;
 use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
 use crate::indexed::Indexed;
-use crate::persister::Persister;
 use crate::{Id, Token};
 
 /// A "sequence number", uniquely associated with an entry in a Buffer.
@@ -72,38 +71,51 @@ pub trait Blob {
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
 }
 
-/// An implementation of [Persister] in terms of a [Buffer] and [Blob].
-pub struct StoragePersister<U: Buffer, L: Blob> {
+/// An implementation of a persister for multiplexed streams of (Key, Value,
+/// Time, Diff) updates.
+pub struct Persister<U: Buffer, L: Blob> {
     registered: HashSet<Id>,
     indexed: Arc<Mutex<Indexed<U, L>>>,
 }
 
-impl<U: Buffer, L: Blob> StoragePersister<U, L> {
-    /// Returns a [StoragePersister] initialized with previous data, if any.
+impl<U: Buffer, L: Blob> Persister<U, L> {
+    /// Returns a [Persister] initialized with previous data, if any.
     pub fn new(buf: U, blob: L) -> Result<Self, Error> {
-        Ok(StoragePersister {
+        Ok(Persister {
             registered: HashSet::new(),
             indexed: Arc::new(Mutex::new(Indexed::new(buf, blob)?)),
         })
     }
-}
 
-impl<U: Buffer, L: Blob> Persister for StoragePersister<U, L> {
-    type Write = StreamWriteHandle<U, L>;
-
-    type Meta = StreamMetaHandle<U, L>;
-
-    fn create_or_load(&mut self, id: Id) -> Result<Token<Self::Write, Self::Meta>, Error> {
+    /// Returns a token used to construct a persisted stream operator.
+    ///
+    /// If data was written by a previous [Persister] for this id, it's loaded and
+    /// replayed into the stream once constructed.
+    ///
+    /// Within a process, this can only be called once per id, even if that id
+    /// has since been destroyed. An `Err` is returned for calls after the
+    /// first. TODO: Is this restriction necessary/helpful?
+    pub fn create_or_load(
+        &mut self,
+        id: Id,
+    ) -> Result<Token<StreamWriteHandle<U, L>, StreamMetaHandle<U, L>>, Error> {
         if self.registered.contains(&id) {
             return Err(format!("internal error: {:?} already registered", id).into());
         }
         self.registered.insert(id);
+        {
+            let mut guard = self.indexed.lock()?;
+            guard.register(id);
+        }
         let write = StreamWriteHandle::new(id, self.indexed.clone());
         let meta = StreamMetaHandle::new(id, self.indexed.clone());
         Ok(Token { write, meta })
     }
 
-    fn destroy(&mut self, _id: Id) -> Result<(), Error> {
+    /// Remove the persisted stream.
+    ///
+    /// TODO: Should this live on Meta?
+    pub fn destroy(&mut self, _id: Id) -> Result<(), Error> {
         unimplemented!()
     }
 }
