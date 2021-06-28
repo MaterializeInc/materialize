@@ -33,11 +33,11 @@ def main() -> None:
     # images that we build to Docker Hub, where they will be accessible to
     # other build agents.
     print("--- Acquiring mzbuild images")
+    commit_tag = f'unstable-{git.rev_parse("HEAD")}'
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
     deps.acquire()
-    for d in deps:
-        if not d.pushed():
-            d.push()
+    deps.push()
+    deps.push_tagged(commit_tag)
 
     print("--- Staging Debian package")
     if os.environ["BUILDKITE_BRANCH"] == "main":
