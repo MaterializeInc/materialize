@@ -383,19 +383,22 @@ fn get_cast(
     }
 
     if from == to {
-        return if let ScalarType::APD {
-            scale: Some(ref scale),
-        } = to
-        {
+        return match (from, to) {
             // All APD variations should be treated as equal to one another
             // except in the case where we want to cast an APD to another APD with a
-            // specified scale (e.g. during an insert).
-            let scale = *scale;
-            Some(Box::new(move |e: HirScalarExpr| {
-                e.call_unary(UnaryFunc::RescaleAPD(scale))
-            }))
-        } else {
-            Some(Box::new(|expr| expr))
+            // specified scale (e.g. during an insert) and their scales differ.
+            (
+                ScalarType::APD { scale: from_scale },
+                ScalarType::APD {
+                    scale: to_scale @ Some(..),
+                },
+            ) if from_scale != to_scale => {
+                let scale = to.unwrap_apd_scale().unwrap();
+                Some(Box::new(move |e: HirScalarExpr| {
+                    e.call_unary(UnaryFunc::RescaleAPD(scale))
+                }))
+            }
+            _ => Some(Box::new(|expr| expr)),
         };
     }
 
