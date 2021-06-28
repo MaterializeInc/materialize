@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
+use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
 use repr::{ColumnType, Datum, Row, ScalarType};
 use sql::ast::{Raw, Statement};
@@ -91,6 +92,28 @@ impl Client {
             conn_id: self.id_alloc.alloc()?,
             inner: self.clone(),
         })
+    }
+
+    /// Executes SQL statements, as if by [`SessionClient::simple_execute`], as
+    /// a system user.
+    pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, CoordError> {
+        let conn_client = self.new_conn()?;
+        let session = Session::new(conn_client.conn_id(), "mz_system".into());
+        let (mut session_client, _) = conn_client.startup(session).await?;
+        let res = session_client.simple_execute(stmts).await;
+        session_client.terminate().await;
+        res
+    }
+
+    /// Like [`Client::system_execute`], but for cases when `stmt` is known to
+    /// contain just one statement.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stmt` parses to more than one SQL statement.
+    pub async fn system_execute_one(&self, stmt: &str) -> Result<SimpleResult, CoordError> {
+        let response = self.system_execute(stmt).await?;
+        Ok(response.results.into_element())
     }
 }
 
@@ -332,18 +355,18 @@ impl SessionClient {
         .await
     }
 
-    /// Executes a SQL statement using a simple protocol that does not involve
+    /// Executes SQL statements using a simple protocol that does not involve
     /// portals.
     ///
     /// The standard flow for executing a SQL statement requires parsing the
     /// statement, binding it into a portal, and then executing that portal.
     /// This function is a wrapper around that complexity with a simpler
-    /// interface. The provided `stmt` is executed directly, and its results
+    /// interface. The provided `stmts` are executed directly, and their results
     /// are returned as a vector of rows, where each row is a vector of JSON
     /// objects.
     pub async fn simple_execute(
         &mut self,
-        stmt: &str,
+        stmts: &str,
     ) -> Result<SimpleExecuteResponse, CoordError> {
         // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
         // Infinity, so those will still be rendered as strings.
@@ -384,7 +407,7 @@ impl SessionClient {
             }
         }
 
-        let stmts = sql::parse::parse(&stmt).map_err(|e| CoordError::Unstructured(e.into()))?;
+        let stmts = sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
         self.start_transaction(None).await?;
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
