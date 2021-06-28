@@ -82,6 +82,8 @@ Wrap your release notes at the 80 character mark.
 - Support manually declaring a [`(non-enforced) primary key`](/sql/create-source/avro-kafka/#key-constraint-details)
   on sources.
 
+- S3 sources retry failed requests to list buckets and download objects.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a
