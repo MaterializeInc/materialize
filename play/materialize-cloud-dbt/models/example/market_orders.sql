@@ -23,10 +23,20 @@
     CHANNEL 'pubnub-market-orders';
 {% endset %}
 
-{{ mz_drop_source(source_name, if_exists=True, cascade=True) }}
+--- DROP SOURCE, CREATE SOURCE
+{{ mz_drop_source(source_name, cascade=True) }}
 {{ mz_create_source(stmt) }}
 
+--- CREATE INDEX ON UNMATERIALIZED SOURCE, DROP THEM
+{{ mz_drop_index(source_name, default=True, cascade=True) }}
+{{ mz_create_index(source_name, default=True) }}
+{{ mz_drop_index("non_default_idx", cascade=True) }}
+{{ mz_create_index(source_name, idx_name="non_default_idx", col_refs=["text"], with_options=["logical_compaction_window = '500ms'"])}}
+
+-- CREATE THE MATERIALIZED VIEW FROM THE UNMATERIALIZED SOURCE
 {{ config(materialized='materializedview') }}
 
-select *
-from {{ source_name }}
+SELECT
+    val->>'symbol' AS symbol,
+    (val->'bid_price')::float AS bid_price
+FROM (SELECT text::jsonb AS val FROM {{ source_name }})
