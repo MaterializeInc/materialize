@@ -22,7 +22,7 @@ test = ["tracing-subscriber"]
 async-trait = { version = "0.1.50", optional = true }
 bytes = { version = "1.0.1", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
-either = "1.5.1"
+either = "1.6.1"
 futures = { version = "0.3.14", optional = true }
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.
