@@ -4241,7 +4241,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat64ToFloat32 => f.write_str("f64tof32"),
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
             UnaryFunc::CastFloat64ToDecimal(_) => f.write_str("f64todec"),
-            UnaryFunc::CastFloat64ToAPD(_) => f.write_str("f32toapd"),
+            UnaryFunc::CastFloat64ToAPD(_) => f.write_str("f64toapd"),
             UnaryFunc::CastDecimalToInt32(_) => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64(_) => f.write_str("dectoi64"),
             UnaryFunc::CastAPDToInt32 => f.write_str("apdtoi32"),
