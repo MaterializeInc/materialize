@@ -1998,26 +1998,40 @@ impl Catalog {
     }
 
     /// Returns all tables, views, and sources in the same schemas as a set of
-    /// input ids.
-    pub fn schema_adjacent_relations(&self, sources: &[GlobalId], conn_id: u32) -> Vec<GlobalId> {
+    /// input ids. The indexes of all relations are included.
+    pub fn schema_adjacent_indexed_relations(
+        &self,
+        ids: &[GlobalId],
+        conn_id: u32,
+    ) -> Vec<GlobalId> {
         // Find all relations referenced by the expression. Find their parent schemas
         // and add all tables, views, and sources in those schemas to a set.
-        let mut ids = HashSet::new();
-        for id in sources {
+        let mut relations: HashSet<GlobalId> = HashSet::new();
+        for id in ids {
+            // Always add in the user-specified ids.
+            relations.insert(*id);
             let entry = self.get_by_id(&id);
             let name = entry.name();
             if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
                 for id in schema.items.values() {
-                    if let SqlCatalogItemType::Table
-                    | SqlCatalogItemType::View
-                    | SqlCatalogItemType::Source = self.get_by_id(id).item_type()
-                    {
-                        ids.insert(*id);
+                    match self.get_by_id(id).item_type() {
+                        SqlCatalogItemType::Table => {
+                            relations.insert(*id);
+                        }
+                        SqlCatalogItemType::View | SqlCatalogItemType::Source => {
+                            let (indexes, unmaterialized) = self.nearest_indexes(&[*id]);
+                            relations.extend(indexes);
+                            // Add in the view/source if fully materialized.
+                            if unmaterialized.is_empty() {
+                                relations.insert(*id);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
         }
-        ids.into_iter().collect()
+        relations.into_iter().collect()
     }
 }
 

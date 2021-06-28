@@ -2158,7 +2158,9 @@ impl Coordinator {
         source_timeline: &Option<Timeline>,
         conn_id: u32,
     ) -> Result<Vec<GlobalId>, CoordError> {
-        let mut timedomain_ids = self.catalog.schema_adjacent_relations(&source_ids, conn_id);
+        let mut timedomain_ids = self
+            .catalog
+            .schema_adjacent_indexed_relations(&source_ids, conn_id);
 
         // Filter out ids from different timelines. The timeline code only verifies
         // that the SELECT doesn't cross timelines. The schema-adjacent code looks
