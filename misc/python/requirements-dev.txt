@@ -1,5 +1,4 @@
 black==20.8b1
-boto3==1.17.46
 boto3-stubs[kinesis,s3,sqs]==1.17.46.0
 humanize==2.3.0
 mypy==0.800

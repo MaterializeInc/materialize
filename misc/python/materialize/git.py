@@ -158,3 +158,7 @@ def commit_all_changed(message: str) -> None:
 def tag_annotated(tag: str) -> None:
     """Create an annotated tag on HEAD"""
     spawn.runv(["git", "tag", "-a", "-m", tag, tag])
+
+
+def push(remote: str) -> None:
+    spawn.runv(["git", "push", remote])
