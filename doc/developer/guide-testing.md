@@ -203,8 +203,7 @@ There are currently three classes of sqllogictest files:
 
   2. Additional test files from CockroachDB are in
      [test/sqllogictest/cockroach](/test/sqllogictest/cockroach). Note that we
-     certainly don't pass every Cockroach sqllogictest test at the moment. You
-     can see the latest status at https://mtrlz.dev/civiz.
+     certainly don't pass every Cockroach sqllogictest test at the moment.
 
   3. Additional Materialize-specific sqllogictest files live in
      [test/sqllogictest](/test/sqllogictest).
