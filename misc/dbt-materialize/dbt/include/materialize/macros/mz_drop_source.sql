@@ -14,8 +14,7 @@
 -- limitations under the License.
 
 {% macro mz_drop_source(name, if_exists=True, cascade=False) -%}
-  -- todo@jldlaughlin
-  -- figure out docs and hooks!
+  {# todo@jldlaughlin: figure out docs and hooks! #}
 
   {% set dropstmt %}
     DROP SOURCE

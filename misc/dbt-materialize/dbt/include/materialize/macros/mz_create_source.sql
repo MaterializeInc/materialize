@@ -14,8 +14,7 @@
 -- limitations under the License.
 
 {% macro mz_create_source(sql) -%}
-  -- todo@jldlaughlin
-  -- figure out docs and hooks!
+  {# todo@jldlaughlin: figure out docs and hooks! #}
 
   {% call statement('main', auto_begin=False) -%}
     {{ materialize__create_arbitrary_object(sql) }}
