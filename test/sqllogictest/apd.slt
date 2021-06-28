@@ -83,6 +83,42 @@ SELECT ('1.   2'::apd)::text
 query error invalid input syntax for type apd: "-123abc456"
 SELECT ('-123abc456'::apd)::text;
 
+query error invalid input syntax for type apd: "1.   2"
+SELECT ('1.   2'::apd)::text
+
+query error invalid input syntax for type apd: "-123abc456"
+SELECT ('-123abc456'::apd)::text;
+
+query error invalid input syntax for type apd: "e25"
+SELECT 'e25'::apd::text
+
+query error invalid input syntax for type apd: "1e"
+SELECT '1e'::apd::text
+
+query error invalid input syntax for type apd: "1x25"
+SELECT '1x25'::apd::text
+
+query error invalid input syntax for type apd: "!1"
+SELECT '!1'::apd::text
+
+query error invalid input syntax for type apd: "--1"
+SELECT '--1'::apd::text
+
+query error invalid input syntax for type apd: "-1-"
+SELECT '-1-'::apd::text
+
+query error invalid input syntax for type apd: "1-"
+SELECT '1-'::apd::text
+
+query error invalid input syntax for type apd: "1..1"
+SELECT '1..1'::apd::text
+
+query error invalid input syntax for type apd: "..1"
+SELECT '..1'::apd::text
+
+query error invalid input syntax for type apd: "1.1.1"
+SELECT '1.1.1'::apd::text
+
 query T
 SELECT ('-0.0'::apd)::text
 ----
