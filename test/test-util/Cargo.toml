@@ -11,7 +11,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["clock", "st
 kafka-util = { path = "../../src/kafka-util" }
 log = "0.4.13"
 ore = { path = "../../src/ore" }
-rand = "0.8.3"
+rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 tokio = "1.6.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
