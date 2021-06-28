@@ -17,7 +17,11 @@ This document details how to connect Materialize to local CSV files.
 
 {{< diagram "create-source-csv-file.svg" >}}
 
-{{% create-source/syntax-details connector="file" formats="csv" envelopes="append-only" %}}
+### key_constraint
+
+{{< diagram "key-constraint.svg" >}}
+
+{{% create-source/syntax-details connector="file" formats="csv" envelopes="append-only" keyConstraint=true %}}
 
 ## Example
 

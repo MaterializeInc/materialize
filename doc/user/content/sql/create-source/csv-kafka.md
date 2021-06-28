@@ -14,7 +14,11 @@ This document details how to connect Materialize to a CSV-formatted Kafka topic.
 
 {{< diagram "create-source-csv-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="csv" envelopes="append-only" %}}
+### key_constraint
+
+{{< diagram "key-constraint.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="csv" envelopes="append-only" keyConstraint=true %}}
 
 ## Example
 

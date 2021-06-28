@@ -135,3 +135,21 @@ Dollars,Category
 
 ! SELECT * FROM bad_text_csv
 Decode error: Text: CSV error at record number 2: invalid UTF-8
+
+# Declare a key constraint (PRIMARY KEY NOT ENFORCED)
+
+$ kafka-create-topic topic=static-csv-pkne-sink
+
+> CREATE MATERIALIZED SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FORMAT CSV WITH HEADER
+
+> CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'static-csv-pkne-sink'
+  KEY (zip)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+
+$ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
+{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "mz_line_no": 2}
+{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618", "mz_line_no": 1}
+{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679", "mz_line_no": 3}

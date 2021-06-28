@@ -79,6 +79,9 @@ Wrap your release notes at the 80 character mark.
 - Add the [`current_role`](/sql/functions/#system-information-func) system
   information function.
 
+- Support manually declaring a [`(non-enforced) primary key`](/sql/create-source/avro-kafka/#key-constraint-details)
+  on sources.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a

@@ -23,7 +23,7 @@ streams.
 
 {{< diagram "create-source-json-kinesis.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="json-bytes" envelopes="append-only" %}}
+{{% create-source/syntax-details connector="kinesis" formats="json-bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples
 

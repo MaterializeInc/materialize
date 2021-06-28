@@ -20,7 +20,7 @@ Kinesis stream.
 
 {{< diagram "create-source-text-kinesis.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="text bytes" envelopes="append-only" %}}
+{{% create-source/syntax-details connector="kinesis" formats="text bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples
 
