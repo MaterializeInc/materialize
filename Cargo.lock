@@ -346,6 +346,9 @@ dependencies = [
 [[package]]
 name = "build-info"
 version = "0.0.0"
+dependencies = [
+ "semver 0.11.0",
+]
 
 [[package]]
 name = "build_const"

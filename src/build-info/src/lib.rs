@@ -41,4 +41,20 @@ impl BuildInfo {
     pub fn human_version(&self) -> String {
         format!("v{} ({})", self.version, &self.sha[..9])
     }
+
+    /// Returns the version as a rich [semantic version][semver].
+    ///
+    /// This method is only available when the `semver` feature is active.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `version` field is not a valid semantic version.
+    ///
+    /// [semver]: https://semver.org
+    #[cfg(feature = "semver")]
+    pub fn semver_version(&self) -> semver::Version {
+        self.version
+            .parse()
+            .expect("build version is not valid semver")
+    }
 }
