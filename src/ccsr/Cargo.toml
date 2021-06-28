@@ -10,7 +10,7 @@ anyhow = "1.0.41"
 futures = "0.3.14"
 http-util = { path = "../http-util" }
 native-tls = "0.2.7"
-openssl = { version = "0.10.34", features = ["vendored"] }
+openssl = { version = "0.10.35", features = ["vendored"] }
 reqwest = { version = "0.11.4", features = ["blocking", "json", "native-tls-vendored"] }
 serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.64"
