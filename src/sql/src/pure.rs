@@ -69,7 +69,9 @@ pub fn purify(
     } else {
         Err(anyhow!("SQL statement does not refer to a source"))
     };
+
     let now = catalog.now();
+    let experimental_mode = catalog.config().experimental_mode;
 
     async move {
         if let Statement::CreateSource(CreateSourceStatement {
@@ -174,6 +176,13 @@ pub fn purify(
                     publication,
                     slot,
                 } => {
+                    if !experimental_mode {
+                        bail!(
+                            "Postgres sources require experimental mode; \
+                            see https://materialize.com/docs/cli/#experimental-mode"
+                        );
+                    }
+
                     slot.get_or_insert_with(|| {
                         format!(
                             "materialize_{}",
