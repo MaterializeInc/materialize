@@ -48,12 +48,12 @@ List { element_type: Jsonb, custom_oid: Some(100) }
 
 build-scalar-type
 (record
-    [["col1name" (true date)]
-     ["col2name" (false (list (map bytes 98) null))]
-     ["col3name" (false (list interval 34234))]]
+    [["col1name" (date true)]
+     ["col2name" ((list (map bytes 98) null) false)]
+     ["col3name" ((list interval 34234) false) ]]
      0 "recordname")
 ----
-Record { fields: [(ColumnName("col1name"), ColumnType { nullable: true, scalar_type: Date }), (ColumnName("col2name"), ColumnType { nullable: false, scalar_type: List { element_type: Map { value_type: Bytes, custom_oid: Some(98) }, custom_oid: None } }), (ColumnName("col3name"), ColumnType { nullable: false, scalar_type: List { element_type: Interval, custom_oid: Some(34234) } })], custom_oid: Some(0), custom_name: Some("recordname") }
+Record { fields: [(ColumnName("col1name"), ColumnType { scalar_type: Date, nullable: true }), (ColumnName("col2name"), ColumnType { scalar_type: List { element_type: Map { value_type: Bytes, custom_oid: Some(98) }, custom_oid: None }, nullable: false }), (ColumnName("col3name"), ColumnType { scalar_type: List { element_type: Interval, custom_oid: Some(34234) }, nullable: false })], custom_oid: Some(0), custom_name: Some("recordname") }
 
 build-scalar-type
 nonexistent

@@ -29,10 +29,18 @@ use crate::ScalarType;
     Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzStructReflect,
 )]
 pub struct ColumnType {
-    /// Whether this datum can be null.
-    pub nullable: bool,
     /// The underlying scalar type (e.g., Int32 or String) of this column.
     pub scalar_type: ScalarType,
+    /// Whether this datum can be null.
+    #[serde(default = "return_true")]
+    pub nullable: bool,
+}
+
+/// The default value for a bool. This method exists solely for the purpose of
+/// making ColumnType nullable by default in unit tests.
+#[inline(always)]
+fn return_true() -> bool {
+    true
 }
 
 impl ColumnType {
@@ -104,7 +112,7 @@ impl ColumnType {
 }
 
 /// The type of a relation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
 pub struct RelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,
@@ -117,6 +125,7 @@ pub struct RelationType {
     ///
     /// A collection can contain multiple sets of keys, although it is common to
     /// have either zero or one sets of key indices.
+    #[serde(default)]
     pub keys: Vec<Vec<usize>>,
 }
 

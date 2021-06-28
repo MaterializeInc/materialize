@@ -23,7 +23,7 @@ use lazy_static::lazy_static;
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use ore::now::{now_zero, EpochMillis, NowFn};
-use repr::{ColumnType, RelationDesc, ScalarType};
+use repr::{RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
@@ -460,9 +460,5 @@ impl ExprHumanizer for DummyCatalog {
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
-    }
-
-    fn humanize_column_type(&self, ty: &ColumnType) -> String {
-        DummyHumanizer.humanize_column_type(ty)
     }
 }

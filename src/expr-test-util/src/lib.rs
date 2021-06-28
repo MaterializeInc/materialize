@@ -32,7 +32,7 @@ gen_reflect_info_func!(
         MirRelationExpr,
         JoinImplementation
     ],
-    [ColumnType]
+    [ColumnType, RelationType]
 );
 
 lazy_static! {
@@ -123,25 +123,8 @@ impl<'a> TestCatalog {
                         }?;
 
                         let mut ctx = GenericTestDeserializeContext::default();
-                        let scalar_types: Vec<ScalarType> =
-                            deserialize(&mut inner_iter, "Vec<ScalarType>", &RTI, &mut ctx)?;
-
-                        let mut typ = RelationType::new(
-                            scalar_types
-                                .into_iter()
-                                .map(|t| t.nullable(true))
-                                .collect::<Vec<_>>(),
-                        );
-
-                        let keys: Option<Vec<Vec<usize>>> = deserialize_optional(
-                            &mut inner_iter,
-                            "Vec<Vec<usize>>",
-                            &RTI,
-                            &mut ctx,
-                        )?;
-                        if let Some(keys) = keys {
-                            typ = typ.with_keys(keys)
-                        }
+                        let typ: RelationType =
+                            deserialize(&mut inner_iter, "RelationType", &RTI, &mut ctx)?;
 
                         self.insert(&name, typ);
                         Ok(())
@@ -161,10 +144,6 @@ impl ExprHumanizer for TestCatalog {
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
-    }
-
-    fn humanize_column_type(&self, ty: &ColumnType) -> String {
-        DummyHumanizer.humanize_column_type(ty)
     }
 }
 

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
-use repr::{ColumnType, RelationDesc, ScalarType};
+use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
 use sql::catalog::{
@@ -2186,14 +2186,6 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 }
             }
         }
-    }
-
-    fn humanize_column_type(&self, typ: &ColumnType) -> String {
-        format!(
-            "{}{}",
-            self.humanize_scalar_type(&typ.scalar_type),
-            if typ.nullable { "?" } else { "" }
-        )
     }
 }
 
