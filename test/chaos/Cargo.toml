@@ -12,7 +12,7 @@ futures = "0.3.14"
 log = "0.4.13"
 md-5 = "0.9.0"
 ore = { path = "../../src/ore" }
-rand = "0.8.3"
+rand = "0.8.4"
 structopt = "0.3.21"
 test-util = { path = "../test-util" }
 tokio = "1.6.1"
