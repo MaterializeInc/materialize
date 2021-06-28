@@ -581,9 +581,16 @@ where
 
                         match result {
                             Ok(()) => {
+                                // sanity check for the continuous updating
+                                // of the write frontier below
+                                //
+                                // While we're processing records of timestamp t
+                                // the write frontier is already at t. Which is
+                                // okay because the Source "since", which this
+                                // holds back, is used to compact timestamp
+                                // bindings < t, not <= t.
                                 assert!(write_frontier.borrow().less_equal(ts));
-                                write_frontier.borrow_mut().clear();
-                                write_frontier.borrow_mut().insert(*ts);
+
                                 ready_rows.pop_front();
                                 SendState::BeginTxn
                             }
@@ -610,6 +617,17 @@ where
             } else {
                 break;
             }
+        }
+
+        // If we don't have ready rows, our write frontier equals the minimum
+        // of the input frontier and any stashed timestamps.
+        // While we still have ready rows that we're emitting, hold the write
+        // frontier at the previous time.
+        if ready_rows.is_empty() {
+            write_frontier.borrow_mut().clear();
+            let mut write_frontier = write_frontier.borrow_mut();
+            write_frontier.extend(pending_rows.keys().cloned());
+            write_frontier.extend(input.frontier.frontier().iter().cloned());
         }
 
         let in_flight = s.producer.in_flight_count();
