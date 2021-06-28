@@ -1727,7 +1727,7 @@ impl<'a> Parser<'a> {
                 })
             }
             POSTGRES => {
-                self.expect_keyword(HOST)?;
+                self.expect_keyword(CONNECTION)?;
                 let conn = self.parse_literal_string()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;

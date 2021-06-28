@@ -59,6 +59,7 @@ Commit
 Committed
 Compression
 Confluent
+Connection
 Constraint
 Copy
 Create
@@ -113,7 +114,6 @@ Having
 Header
 Headers
 Hold
-Host
 Hour
 Hours
 If

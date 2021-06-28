@@ -29,7 +29,7 @@ INSERT INTO t2 VALUES (5);
 CREATE PUBLICATION mz_source FOR TABLE t1;
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 > CREATE VIEWS FROM SOURCE mz_source (t1);

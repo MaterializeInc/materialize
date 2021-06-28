@@ -36,7 +36,7 @@ ALTER TABLE identity_nothing REPLICA IDENTITY NOTHING;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 # Make sure that the above sources are fully instantiated so that the DML statements below
