@@ -16,6 +16,3 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: sqllogictest
-  - wait
-  - command: bin/ci-builder run stable ci/slt/upload.sh
-    timeout_in_minutes: 10
