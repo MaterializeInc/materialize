@@ -9,7 +9,7 @@
 
 //! Tools for interacting with Prometheus metrics
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Instant;
 
@@ -89,24 +89,6 @@ pub fn update_uptime(start_time: Instant) {
     let uptime = start_time.elapsed();
     let (secs, milli_part) = (uptime.as_secs() as f64, uptime.subsec_millis() as f64);
     SERVER_METADATA.set(secs + milli_part / 1_000.0);
-}
-
-pub fn filter_metrics<'a>(
-    metrics: &'a [prometheus::proto::MetricFamily],
-    filter: &HashSet<&str>,
-) -> BTreeMap<&'a str, Vec<PromMetric<'a>>> {
-    metrics
-        .iter()
-        .filter(|m| filter.contains(m.get_name()))
-        .filter_map(|m| PromMetric::from_metric_family(m).ok())
-        .filter_map(|ms| {
-            if let Some(m) = ms.get(0) {
-                Some((m.name(), ms))
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 #[derive(Debug)]
@@ -197,30 +179,5 @@ impl<'p> PromMetric<'p> {
                 })
             })
             .collect()
-    }
-
-    pub fn name(&self) -> &'p str {
-        match self {
-            PromMetric::Counter { name, .. } => name,
-            PromMetric::Gauge { name, .. } => name,
-            PromMetric::Histogram { name, .. } => name,
-        }
-    }
-
-    pub fn label(&self, key: &str) -> Option<&str> {
-        match self {
-            PromMetric::Counter { labels, .. } => labels.get(key).copied(),
-            PromMetric::Gauge { labels, .. } => labels.get(key).copied(),
-            PromMetric::Histogram { labels, .. } => labels.get(key).copied(),
-        }
-    }
-
-    /// Get the value of this metric as an i64
-    pub fn value(&self) -> f64 {
-        match self {
-            PromMetric::Counter { value, .. } => *value,
-            PromMetric::Gauge { value, .. } => *value,
-            PromMetric::Histogram { count, .. } => *count as f64,
-        }
     }
 }

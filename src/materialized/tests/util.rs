@@ -135,7 +135,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         tls: config.tls,
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
-        telemetry_url: None,
+        telemetry: None,
         introspection_frequency: Duration::from_secs(1),
     }))?;
     let server = Server {

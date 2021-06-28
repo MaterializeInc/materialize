@@ -97,7 +97,7 @@ struct Args {
     #[structopt(long, hidden = true)]
     debug_introspection: bool,
     /// Retain prometheus metrics for this amount of time.
-    #[structopt(short, long, hidden = true, parse(try_from_str =repr::util::parse_duration), default_value = "5min")]
+    #[structopt(short, long, hidden = true, parse(try_from_str = repr::util::parse_duration), default_value = "5min")]
     retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
@@ -253,11 +253,14 @@ struct Args {
     // TODO(benesch): add an environment variable once we upgrade to clap v3.
     // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     /// Disable telemetry reporting.
-    #[structopt(long, conflicts_with = "telemetry-url")]
+    #[structopt(long, conflicts_with_all = &["telemetry-domain", "telemetry-interval"])]
     disable_telemetry: bool,
-    /// The URL of the telemetry server to report to.
-    #[structopt(long, env = "MZ_TELEMETRY_URL", hidden = true)]
-    telemetry_url: Option<String>,
+    /// The domain hosting the telemetry server.
+    #[structopt(long, env = "MZ_TELEMETRY_DOMAIN", hidden = true)]
+    telemetry_domain: Option<String>,
+    /// The interval at which to report telemetry data.
+    #[structopt(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = repr::util::parse_duration), hidden = true)]
+    telemetry_interval: Option<Duration>,
 }
 
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
@@ -396,20 +399,26 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
-    // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry
-    // URL. Otherwise (the defaults), enable the production server for release mode
-    // and disable telemetry in debug mode. This should allow for good defaults (on
-    // in release, off in debug), but also easy development during testing of this
-    // feature via the environment variable.
-    let telemetry_url = match args.disable_telemetry {
-        true => None,
-        false => match args.telemetry_url {
-            Some(url) => Some(url),
-            None => match cfg!(debug_assertions) {
-                true => None,
-                false => Some("https://telemetry.materialize.com".into()),
-            },
-        },
+    // custom telemetry domain or interval is provided, enable telemetry as
+    // specified. Otherwise (the defaults), enable the production server for
+    // release mode and disable telemetry in debug mode. This should allow for
+    // good defaults (on in release, off in debug), but also easy development
+    // during testing of this feature via the command-line flags.
+    let telemetry = if args.disable_telemetry
+        || (cfg!(debug_assertions)
+            && args.telemetry_domain.is_none()
+            && args.telemetry_interval.is_none())
+    {
+        None
+    } else {
+        Some(materialized::TelemetryConfig {
+            domain: args
+                .telemetry_domain
+                .unwrap_or_else(|| "telemetry.materialize.com".into()),
+            interval: args
+                .telemetry_interval
+                .unwrap_or_else(|| Duration::from_secs(3600)),
+        })
     };
 
     // Configure tracing.
@@ -579,7 +588,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
         symbiosis_url: args.symbiosis,
         experimental_mode: args.experimental,
         safe_mode: args.safe,
-        telemetry_url,
+        telemetry,
         introspection_frequency: args
             .introspection_frequency
             .unwrap_or_else(|| Duration::from_secs(1)),

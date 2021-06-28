@@ -56,7 +56,6 @@ use crate::session::Session;
 mod builtin_table_updates;
 mod config;
 mod error;
-mod metrics;
 mod migrate;
 
 pub mod builtin;
@@ -1657,7 +1656,6 @@ impl Catalog {
                     name,
                     item,
                 } => {
-                    metrics::item_created(id, &item);
                     self.insert_item(id, oid, name, item);
                     builtin_table_updates.extend(self.pack_item_update(id, 1));
                 }
@@ -1685,7 +1683,6 @@ impl Catalog {
                     if !metadata.item.is_placeholder() {
                         info!("drop {} {} ({})", metadata.item_type(), metadata.name, id);
                     }
-                    metrics::item_dropped(id, &metadata.item);
                     for u in metadata.uses() {
                         if let Some(dep_metadata) = self.by_id.get_mut(&u) {
                             dep_metadata.used_by.retain(|u| *u != metadata.id)
