@@ -41,7 +41,7 @@ use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::CreateSourceFormat;
+use sql_parser::ast::{CreateSourceFormat, KeyConstraint};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -389,7 +389,7 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
         format,
-        key_constraint: _,
+        key_constraint,
     } = &stmt;
 
     let with_options_original = with_options;
@@ -818,6 +818,41 @@ pub fn plan_create_source(
     };
     bare_desc =
         plan_utils::maybe_rename_columns(format!("source {}", name), bare_desc, &col_names)?;
+
+    // Apply user-specified key constraint
+    if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
+        let key_columns = columns
+            .into_iter()
+            .map(normalize::column_name)
+            .collect::<Vec<_>>();
+
+        let mut uniq = HashSet::new();
+        for col in key_columns.iter() {
+            if !uniq.insert(col) {
+                bail!("Repeated column name in source key constraint: {}", col);
+            }
+        }
+
+        let key_indices = key_columns
+            .iter()
+            .map(|col| -> anyhow::Result<usize> {
+                let name_idx = bare_desc
+                    .get_by_name(col)
+                    .map(|(idx, _type)| idx)
+                    .ok_or_else(|| anyhow!("No such column in source key constraint: {}", col))?;
+                if bare_desc.get_unambiguous_name(name_idx).is_none() {
+                    bail!("Ambiguous column in source key constraint: {}", col);
+                }
+                Ok(name_idx)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !bare_desc.typ().keys.is_empty() {
+            return Err(key_constraint_err(&bare_desc, &key_columns));
+        } else {
+            bare_desc = bare_desc.with_key(key_indices);
+        }
+    }
 
     // TODO(benesch): the available metadata columns should not depend
     // on the format.
@@ -1525,6 +1560,28 @@ fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]
         format!("valid keys are: {}", valid_keys)
     };
     anyhow!("Invalid upsert key: {}, {}", requested_user_key, valid_keys)
+}
+
+fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> anyhow::Error {
+    let user_keys = user_keys.iter().map(|column| column.as_str()).join(", ");
+
+    let existing_keys = desc
+        .typ()
+        .keys
+        .iter()
+        .map(|key_columns| {
+            key_columns
+                .iter()
+                .map(|col| desc.get_name(*col).expect("known to exist").as_str())
+                .join(", ")
+        })
+        .join(", ");
+
+    anyhow!(
+        "Key constraint ({}) conflicts with existing key ({})",
+        user_keys,
+        existing_keys
+    )
 }
 
 /// Returns only those `CatalogItem`s that don't have any other user

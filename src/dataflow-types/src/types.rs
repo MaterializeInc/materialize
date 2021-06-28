@@ -395,8 +395,8 @@ impl SourceDataEncoding {
 }
 
 impl DataEncoding {
-    /// Computes the [`RelationDesc`] for the relation specified by the this
-    /// data encoding and envelope.s
+    /// Computes the [`RelationDesc`] for the relation specified by this
+    /// data encoding and envelope.
     fn desc(
         &self,
         envelope: &SourceEnvelope,
