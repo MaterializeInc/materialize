@@ -694,6 +694,13 @@ impl SourceConnector {
         }
     }
 
+    pub fn name(&self) -> &'static str {
+        match self {
+            SourceConnector::External { connector, .. } => connector.name(),
+            SourceConnector::Local(_) => "local",
+        }
+    }
+
     /// Returns true iff this connector uses BYO consistency
     pub fn is_byo(&self) -> bool {
         if let SourceConnector::External { consistency, .. } = self {
@@ -994,6 +1001,15 @@ pub struct AvroOcfSinkConnector {
 }
 
 impl SinkConnector {
+    /// Returns the name of the sink connector.
+    pub fn name(&self) -> &'static str {
+        match self {
+            SinkConnector::AvroOcf(_) => "avro-ocf",
+            SinkConnector::Kafka(_) => "kafka",
+            SinkConnector::Tail(_) => "tail",
+        }
+    }
+
     pub fn get_key_desc(&self) -> Option<&RelationDesc> {
         match self {
             SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),

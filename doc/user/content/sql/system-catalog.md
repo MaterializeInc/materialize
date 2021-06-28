@@ -559,13 +559,14 @@ Field         | Type       | Meaning
 
 The `mz_sinks` table contains a row for each sink in the system.
 
-Field          | Type        | Meaning
----------------|-------------|--------
-`id`           | [`text`]    | Materialize's unique ID for the sink.
-`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
-`schema_id`    | [`bigint`]  | The ID of the schema to which the sink belongs.
-`name`         | [`text`]    | The name of the sink.
-`volatility`   | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+Field            | Type        | Meaning
+-----------------|-------------|--------
+`id`             | [`text`]    | Materialize's unique ID for the sink.
+`oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
+`schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
+`name`           | [`text`]    | The name of the sink.
+`connector_type` | [`text`]    | The type of the sink: `avro-ocf` or `kafka`.
+`volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_source_info`
 
@@ -585,13 +586,14 @@ Field          | Type       | Meaning
 
 The `mz_sources` table contains a row for each source in the system.
 
-Field          | Type       | Meaning
----------------|------------|----------
-`id`           | [`text`]   | Materialize's unique ID for the source.
-`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
-`schema_id`    | [`bigint`] | The ID of the schema to which the source belongs.
-`name`         | [`text`]   | The name of the source.
-`volatility`   | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+Field            | Type       | Meaning
+-----------------|------------|----------
+`id`             | [`text`]   | Materialize's unique ID for the source.
+`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
+`schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
+`name`           | [`text`]   | The name of the source.
+`connector_type` | [`text`]   | The type of the source: `avro-ocf`, `file`, `kafka`, `kinesis`, `s3`, `postgres`, or `pubnub`.
+`volatility`     | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_tables`
 
