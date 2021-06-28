@@ -345,6 +345,11 @@ lazy_static! {
             (Uuid, String) => Assignment: CastUuidToString,
 
             // APD
+            // APD to APD casts are not necessary in implicit contexts
+            (APD, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let scale = to_type.unwrap_apd_scale().unwrap();
+                Some(move |e: HirScalarExpr|e.call_unary(UnaryFunc::RescaleAPD(scale)))
+            }),
             (APD, Float32) => Assignment: CastAPDToFloat32,
             (APD, Float64) => Assignment: CastAPDToFloat64,
             (APD, Int32) => Assignment: CastAPDToInt32,
@@ -364,6 +369,21 @@ fn get_cast(
 ) -> Option<Cast> {
     use CastContext::*;
 
+    if match (from, to) {
+        // APD values are only rescaled if:
+        // - CastContext is either Assignment or Explicit
+        // - `to` has a specified scale that differs from `from`'s
+        (
+            ScalarType::APD { scale: from_scale },
+            ScalarType::APD {
+                scale: to_scale @ Some(..),
+            },
+        ) if ccx != Implicit => from_scale == to_scale,
+        _ => from == to,
+    } {
+        return Some(Box::new(|expr| expr));
+    }
+
     // Determines if types are equal irrespective of any custom types.
     fn structural_equality(l: &ScalarType, r: &ScalarType) -> bool {
         use ScalarType::*;
@@ -382,25 +402,7 @@ fn get_cast(
         }
     }
 
-    if from == to {
-        return if let ScalarType::APD {
-            scale: Some(ref scale),
-        } = to
-        {
-            // All APD variations should be treated as equal to one another
-            // except in the case where we want to cast an APD to another APD with a
-            // specified scale (e.g. during an insert).
-            let scale = *scale;
-            Some(Box::new(move |e: HirScalarExpr| {
-                e.call_unary(UnaryFunc::RescaleAPD(scale))
-            }))
-        } else {
-            Some(Box::new(|expr| expr))
-        };
-    }
-
-    // If types structurally equivalent, we only need to change `from`'s OID.
-    if structural_equality(from, to) {
+    if (from.is_custom_type() || to.is_custom_type()) && structural_equality(from, to) {
         // CastInPlace allowed if going between custom and anonymous or if cast
         // explicitly requested.
         if from.is_custom_type() ^ to.is_custom_type() || ccx == CastContext::Explicit {
