@@ -149,6 +149,24 @@ kafka-topics --topic tsbs --create --bootstrap-server localhost:9092
   | LOG_DIR=/tmp kafka-avro-console-producer --topic tsbs --bootstrap-server localhost:9092 --property value.schema.file=/tmp/tsbs.schema
 ```
 
+
+Alternative:
+```shell
+./bin/tsbs_generate_data \
+  --format influx \
+  --scale 10000 \
+  --timestamp-start \
+  2021-06-24T00:00:00Z \
+  --timestamp-end 2021-06-25T0:00:00Z \
+  --log-interval 10s \
+  --use-case cpu-only \
+  --seed 123 | gzip > /tmp/tsbs.influx
+</tmp/tsbs.influx gunzip | (cd ~/dev/repos/materialize/demo/tsbs && pipenv run python influx2avro_append.py) | gzip > /tmp/tsbs.avro
+</tmp/tsbs.avro gunzip |  LOG_DIR=/tmp kafka-avro-console-producer --topic tsbs --bootstrap-server localhost:9092 --property value.schema.file=/tmp/tsbs.schema
+```
+10k devices, 10s log interval, 1 day -> 86.4M rows
+
+
 ```sql
 DROP VIEW IF EXISTS tsbs_avg;
 DROP SOURCE IF EXISTS tsbs;
