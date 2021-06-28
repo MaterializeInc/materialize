@@ -68,6 +68,11 @@ SELECT ('1.2e-20'::apd)::text
 0.000000000000000000012
 
 query T
+SELECT '-0.0000001'::apd(10,2)::text
+----
+0
+
+query T
 SELECT ('    1.2'::apd)::text
 ----
 1.2
