@@ -5,4 +5,3 @@ pyyaml==5.4
 semver==2.9.1
 toml==0.10.0
 typing-extensions==3.7.4.2
-boto3==1.17.46
