@@ -699,34 +699,34 @@ where
         allow_aggregates: false,
         allow_subqueries: true,
     };
-    let source_types = ecx
-        .relation_type
-        .column_types
-        .iter()
-        .map(|typ| &typ.scalar_type);
     let mut map_exprs = vec![];
     let mut project_key = vec![];
-    for (i, (typ, target_typ)) in source_types.zip_eq(target_types).enumerate() {
-        if typ != target_typ {
-            let expr = HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: i,
-            });
-            match typeconv::plan_cast("relation cast", ecx, ccx, expr, target_typ) {
-                Ok(expr) => {
+    for (i, target_typ) in target_types.into_iter().enumerate() {
+        let expr = HirScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: i,
+        });
+        // We plan every cast and check the evaluated expressions rather than
+        // checking the types directly because of some complex casting rules
+        // between types not expressed in `ScalarType` equality.
+        match typeconv::plan_cast("relation cast", ecx, ccx, expr.clone(), target_typ) {
+            Ok(cast_expr) => {
+                if expr == cast_expr {
+                    // Cast between types was unnecessary
+                    project_key.push(i);
+                } else {
+                    // Cast between types required
                     project_key.push(ecx.relation_type.arity() + map_exprs.len());
-                    map_exprs.push(expr);
-                }
-                Err(_) => {
-                    return Err(CastRelationError {
-                        column: i,
-                        source_type: typ.clone(),
-                        target_type: target_typ.clone(),
-                    });
+                    map_exprs.push(cast_expr);
                 }
             }
-        } else {
-            project_key.push(i);
+            Err(_) => {
+                return Err(CastRelationError {
+                    column: i,
+                    source_type: ecx.scalar_type(&expr),
+                    target_type: target_typ.clone(),
+                });
+            }
         }
     }
     Ok(expr.map(map_exprs).project(project_key))

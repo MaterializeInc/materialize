@@ -1153,9 +1153,8 @@ fn coerce_args_to_types(
             .expect("function selection verifies that polymorphic types successfully resolved")
     };
 
-    let do_convert = |arg, ty: &ScalarType| {
-        let arg = typeconv::plan_coerce(ecx, arg, ty)?;
-        typeconv::plan_cast(spec, ecx, CastContext::Implicit, arg, ty)
+    let do_convert = |arg: CoercibleScalarExpr, ty: &ScalarType| {
+        arg.cast_to(&spec.to_string(), ecx, CastContext::Implicit, ty)
     };
 
     let mut exprs = Vec::new();
