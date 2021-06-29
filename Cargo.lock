@@ -329,7 +329,7 @@ dependencies = [
 name = "build-info"
 version = "0.0.0"
 dependencies = [
- "semver 0.11.0",
+ "semver",
 ]
 
 [[package]]
@@ -691,6 +691,16 @@ name = "crypto-mac"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4857fd85a0c34b3c3297875b747c1e02e06b6a0ea32dd892d8192b9ce0813ea6"
+dependencies = [
+ "generic-array",
+ "subtle",
+]
+
+[[package]]
+name = "crypto-mac"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25fab6889090c8133f3deb8f73ba3c65a7f456f66436fc012a1b1e272b1e103e"
 dependencies = [
  "generic-array",
  "subtle",
@@ -1145,7 +1155,7 @@ dependencies = [
  "encoding",
  "enum-iterator",
  "hex",
- "hmac",
+ "hmac 0.11.0",
  "itertools",
  "lowertest",
  "md-5",
@@ -1589,7 +1599,17 @@ version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1441c6b1e930e2817404b5046f1f989899143a12bf92de603b69f4e0aee1e15"
 dependencies = [
- "crypto-mac",
+ "crypto-mac 0.10.0",
+ "digest",
+]
+
+[[package]]
+name = "hmac"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a2a2320eb7ec0ebe8da8f744d7812d9fc4cb4d09344ac01898dbcb6a20ae69b"
+dependencies = [
+ "crypto-mac 0.11.0",
  "digest",
 ]
 
@@ -2876,7 +2896,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "fallible-iterator",
- "hmac",
+ "hmac 0.10.1",
  "md-5",
  "memchr",
  "rand",
@@ -3191,7 +3211,7 @@ version = "0.1.0"
 source = "git+https://github.com/MaterializeInc/pubnub-rust#f299ef9971e292853ac95882ef8047f1f589790b"
 dependencies = [
  "base64",
- "hmac",
+ "hmac 0.10.1",
  "sha2",
  "uritemplate-next",
 ]
@@ -3549,7 +3569,7 @@ dependencies = [
  "digest",
  "futures",
  "hex",
- "hmac",
+ "hmac 0.10.1",
  "http",
  "hyper",
  "log",
