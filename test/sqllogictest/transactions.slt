@@ -360,4 +360,4 @@ simple conn=t1
 SELECT * FROM v1;
 COMMIT;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.public.v1" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.v"
+db error: ERROR: transactions can only reference nearby relations; "materialize.public.v1" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.v", "materialize.public.v_primary_idx"
