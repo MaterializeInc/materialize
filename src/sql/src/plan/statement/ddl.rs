@@ -581,8 +581,6 @@ pub fn plan_create_source(
             publication,
             slot,
         } => {
-            scx.require_experimental_mode("Postgres Sources")?;
-
             let slot_name = slot
                 .as_ref()
                 .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
