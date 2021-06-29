@@ -88,7 +88,6 @@ steps:
           composition: testdrive
           run: ci
 
-
   - id: testdrive-proxy
     label: ":squid: testdrive proxy"
     depends_on: build
@@ -110,6 +109,26 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           run: ci-proxy
+
+  - id: pgtest
+    label: "pgtest"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/pgtest]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: pgtest
+          run: ci
+
+  - id: coordtest
+    label: "coordtest"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/coordtest]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: coordtest
+          run: ci
 
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"
@@ -349,6 +368,8 @@ steps:
       - cargo-test
       - miri-test
       - testdrive
+      - pgtest
+      - coordtest
       - kafka-ssl
       - kafka-krb5
       - sqllogictest-fast
