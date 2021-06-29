@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.41"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-env_logger = "0.8.3"
+env_logger = "0.8.4"
 futures = "0.3.14"
 futures-channel = "0.3.15"
 hex = "0.4.3"
