@@ -166,6 +166,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::inline_let::InlineLet),
+                Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
