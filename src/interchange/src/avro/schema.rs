@@ -21,7 +21,7 @@ use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use ore::retry::Retry;
-use repr::adt::apd::APD_DATUM_MAX_PRECISION;
+use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 
 use super::{cdc_v2, is_null, EnvelopeType};
@@ -249,13 +249,13 @@ fn validate_schema_2(
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {
-            if *precision > APD_DATUM_MAX_PRECISION {
+            if *precision > NUMERIC_DATUM_MAX_PRECISION {
                 bail!(
                     "decimals with precision greater than {} are not supported",
-                    APD_DATUM_MAX_PRECISION
+                    NUMERIC_DATUM_MAX_PRECISION
                 )
             }
-            ScalarType::APD {
+            ScalarType::Numeric {
                 scale: Some(u8::try_from(*scale).unwrap()),
             }
         }

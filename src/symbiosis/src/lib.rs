@@ -35,7 +35,7 @@ use tokio_postgres::types::FromSql;
 use uuid::Uuid;
 
 use pgrepr::Jsonb;
-use repr::adt::apd::{self, APD_DATUM_MAX_PRECISION};
+use repr::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION};
 use repr::{Datum, RelationDesc, RelationType, Row};
 use sql::ast::{
     ColumnOption, CreateSchemaStatement, CreateTableStatement, DataType, DeleteStatement,
@@ -444,16 +444,16 @@ fn push_column(
             "pg_catalog.numeric" => {
                 let (_, desired_scale) = sql::plan::unwrap_numeric_typ_mod(
                     typ_mod,
-                    APD_DATUM_MAX_PRECISION as u8,
+                    NUMERIC_DATUM_MAX_PRECISION as u8,
                     "numeric",
                 )?;
-                match get_column_inner::<pgrepr::Apd>(postgres_row, i, nullable)? {
+                match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
                     None => row.push(Datum::Null),
                     Some(mut d) => {
                         if let Some(scale) = desired_scale {
-                            apd::rescale(&mut d.0 .0, scale)?;
+                            numeric::rescale(&mut d.0 .0, scale)?;
                         }
-                        row.push(Datum::APD(d.0));
+                        row.push(Datum::Numeric(d.0));
                     }
                 }
             }

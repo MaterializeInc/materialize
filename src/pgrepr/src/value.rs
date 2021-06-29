@@ -20,17 +20,17 @@ use repr::ColumnType;
 use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
-use repr::adt::apd::{self as adt_apd};
 use repr::adt::array::ArrayDimension;
 use repr::adt::jsonb::JsonbRef;
+use repr::adt::numeric::{self as adt_numeric};
 use repr::strconv::{self, Nestable};
 use repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::{Apd, Format, Interval, Jsonb, Type};
+use crate::{Format, Interval, Jsonb, Numeric, Type};
 
-pub mod apd;
 pub mod interval;
 pub mod jsonb;
+pub mod numeric;
 pub mod record;
 
 /// A PostgreSQL datum.
@@ -66,7 +66,7 @@ pub enum Value {
     /// A map of string keys and homogeneous values.
     Map(BTreeMap<String, Option<Value>>),
     /// An arbitrary precision number.
-    Apd(Apd),
+    Numeric(Numeric),
     /// A sequence of heterogeneous values.
     Record(Vec<Option<Value>>),
     /// A time.
@@ -96,11 +96,11 @@ impl Value {
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
-            (Datum::APD(mut d), ScalarType::APD { scale }) => {
+            (Datum::Numeric(mut d), ScalarType::Numeric { scale }) => {
                 if let Some(scale) = scale {
-                    adt_apd::rescale(&mut d.0, *scale).unwrap();
+                    adt_numeric::rescale(&mut d.0, *scale).unwrap();
                 }
-                Some(Value::Apd(Apd(d)))
+                Some(Value::Numeric(Numeric(d)))
             }
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
@@ -225,10 +225,10 @@ impl Value {
             Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
             Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
-            Value::Apd(n) => (
-                Datum::APD(n.0),
-                ScalarType::APD {
-                    scale: Some(adt_apd::get_scale(&n.0 .0)),
+            Value::Numeric(n) => (
+                Datum::Numeric(n.0),
+                ScalarType::Numeric {
+                    scale: Some(adt_numeric::get_scale(&n.0 .0)),
                 },
             ),
         }
@@ -284,7 +284,7 @@ impl Value {
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
-            Value::Apd(d) => strconv::format_apd(buf, &d.0),
+            Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
         }
     }
 
@@ -348,7 +348,7 @@ impl Value {
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
-            Value::Apd(a) => a.to_sql(&PgType::NUMERIC, buf),
+            Value::Numeric(a) => a.to_sql(&PgType::NUMERIC, buf),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -396,7 +396,7 @@ impl Value {
                 matches!(**value_type, Type::Map { .. }),
                 |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
             )?),
-            Type::Numeric => Value::Apd(Apd(strconv::parse_apd(raw)?)),
+            Type::Numeric => Value::Numeric(Numeric(strconv::parse_numeric(raw)?)),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into())
             }
@@ -424,7 +424,7 @@ impl Value {
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Value::decode_text(ty, raw), // just using the text encoding for now
             Type::Map { .. } => Value::decode_text(ty, raw), // just using the text encoding for now
-            Type::Numeric => Apd::from_sql(ty.inner(), raw).map(Value::Apd),
+            Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
@@ -481,7 +481,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 custom_oid: None,
             }
         }
-        Type::Numeric => ScalarType::APD { scale: None },
+        Type::Numeric => ScalarType::Numeric { scale: None },
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
         Type::Time => ScalarType::Time,

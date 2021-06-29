@@ -24,8 +24,8 @@ use mz_avro::{
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
-use repr::adt::apd;
 use repr::adt::jsonb::JsonbPacker;
+use repr::adt::numeric;
 use repr::{Datum, Row};
 
 use super::envelope_debezium::DebeziumSourceCoordinates;
@@ -473,13 +473,15 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             ))
         })?;
 
-        let n = apd::twos_complement_be_to_apd(&mut buf, scale)
+        let n = numeric::twos_complement_be_to_numeric(&mut buf, scale)
             .map_err(|e| DecodeError::Custom(e.to_string()))?;
 
-        if n.is_special() || apd::get_precision(&n) > apd::APD_DATUM_MAX_PRECISION as u32 {
+        if n.is_special()
+            || numeric::get_precision(&n) > numeric::NUMERIC_DATUM_MAX_PRECISION as u32
+        {
             return Err(AvroError::Decode(DecodeError::Custom(format!(
-                "Error decoding apd: exceeds maximum precision {}",
-                apd::APD_DATUM_MAX_PRECISION
+                "Error decoding numeric: exceeds maximum precision {}",
+                numeric::NUMERIC_DATUM_MAX_PRECISION
             ))));
         }
 

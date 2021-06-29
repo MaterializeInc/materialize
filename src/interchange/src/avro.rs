@@ -52,7 +52,7 @@ mod tests {
     use std::fs::File;
 
     use mz_avro::types::{DecimalValue, Value};
-    use repr::adt::apd;
+    use repr::adt::numeric;
     use repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
 
     use super::*;
@@ -92,6 +92,7 @@ mod tests {
     /// documentation:
     /// https://avro.apache.org/docs/current/spec.html#schemas
     fn test_diff_pair_to_avro_primitive_types() -> anyhow::Result<()> {
+        use numeric::Numeric;
         // Data to be used later in assertions.
         let date = NaiveDate::from_ymd(2020, 1, 8);
         let date_time = NaiveDateTime::new(date, NaiveTime::from_hms(1, 1, 1));
@@ -127,8 +128,8 @@ mod tests {
                 Value::Timestamp(date_time),
             ),
             (
-                ScalarType::APD { scale: Some(1) },
-                Datum::from(apd::Apd::from(1)),
+                ScalarType::Numeric { scale: Some(1) },
+                Datum::from(Numeric::from(1)),
                 Value::Decimal(DecimalValue {
                     unscaled: bytes.clone(),
                     precision: 39,
@@ -136,8 +137,8 @@ mod tests {
                 }),
             ),
             (
-                ScalarType::APD { scale: None },
-                Datum::from(apd::Apd::from(1)),
+                ScalarType::Numeric { scale: None },
+                Datum::from(Numeric::from(1)),
                 Value::Decimal(DecimalValue {
                     // equivalent to 1E39
                     unscaled: vec![

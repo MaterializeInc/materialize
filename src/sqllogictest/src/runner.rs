@@ -50,8 +50,8 @@ use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
-use pgrepr::{Apd, Interval, Jsonb, Value};
-use repr::adt::apd;
+use pgrepr::{Interval, Jsonb, Numeric, Value};
+use repr::adt::numeric;
 use repr::ColumnName;
 use sql::ast::Statement;
 
@@ -308,7 +308,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
-            PgType::NUMERIC => Self(Value::Apd(Apd::from_sql(ty, raw)?)),
+            PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
             PgType::TEXT => Self(Value::Text(types::text_from_sql(raw)?.to_string())),
             PgType::TIME => Self(Value::Time(NaiveTime::from_sql(ty, raw)?)),
@@ -431,11 +431,11 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         // This is so wrong, but sqlite needs it.
         (Type::Integer, Value::Text(_)) => "0".to_string(),
         (Type::Integer, Value::Bool(b)) => i8::from(b).to_string(),
-        (Type::Integer, Value::Apd(d)) => {
+        (Type::Integer, Value::Numeric(d)) => {
             let mut d = d.0 .0.clone();
-            let mut cx = apd::cx_datum();
+            let mut cx = numeric::cx_datum();
             cx.round(&mut d);
-            apd::munge_apd(&mut d).unwrap();
+            numeric::munge_numeric(&mut d).unwrap();
             d.to_standard_notation_string()
         }
 
@@ -449,13 +449,13 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Mode::Standard => format!("{:.3}", f),
             Mode::Cockroach => format!("{}", f),
         },
-        (Type::Real, Value::Apd(d)) => match mode {
+        (Type::Real, Value::Numeric(d)) => match mode {
             Mode::Standard => {
                 let mut d = d.0 .0.clone();
                 if d.exponent() < -3 {
-                    apd::rescale(&mut d, 3).unwrap();
+                    numeric::rescale(&mut d, 3).unwrap();
                 }
-                apd::munge_apd(&mut d).unwrap();
+                numeric::munge_numeric(&mut d).unwrap();
                 d.to_standard_notation_string()
             }
             Mode::Cockroach => d.0 .0.to_standard_notation_string(),
@@ -480,7 +480,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Ok(s) => s.to_string(),
             Err(_) => format!("{:?}", b),
         },
-        (Type::Text, Value::Apd(d)) => d.0 .0.to_standard_notation_string(),
+        (Type::Text, Value::Numeric(d)) => d.0 .0.to_standard_notation_string(),
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {

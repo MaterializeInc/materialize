@@ -100,7 +100,7 @@ impl TypeCategory {
             | ScalarType::Int32
             | ScalarType::Int64
             | ScalarType::Oid
-            | ScalarType::APD { .. } => Self::Numeric,
+            | ScalarType::Numeric { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
@@ -1183,7 +1183,7 @@ lazy_static! {
             "abs" => Scalar {
                 params!(Int32) => UnaryFunc::AbsInt32, 1397;
                 params!(Int64) => UnaryFunc::AbsInt64, 1396;
-                params!(APD { scale: None }) => UnaryFunc::AbsAPD, 1398;
+                params!(Numeric { scale: None }) => UnaryFunc::AbsNumeric, 1398;
                 params!(Float32) => UnaryFunc::AbsFloat32, 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64, 1395;
             },
@@ -1224,7 +1224,7 @@ lazy_static! {
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID;
                 params!(Float64) => UnaryFunc::CeilFloat64, 2308;
-                params!(APD { scale: None }) => UnaryFunc::CeilAPD, 1711;
+                params!(Numeric { scale: None }) => UnaryFunc::CeilNumeric, 1711;
             },
             "char_length" => Scalar {
                 params!(String) => UnaryFunc::CharLength, 1381;
@@ -1299,12 +1299,12 @@ lazy_static! {
             },
             "exp" => Scalar {
                 params!(Float64) => UnaryFunc::Exp, 1347;
-                params!(APD { scale: None }) => UnaryFunc::ExpAPD, 1732;
+                params!(Numeric { scale: None }) => UnaryFunc::ExpNumeric, 1732;
             },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
                 params!(Float64) => UnaryFunc::FloorFloat64, 2309;
-                params!(APD { scale: None }) => UnaryFunc::FloorAPD, 1712;
+                params!(Numeric { scale: None }) => UnaryFunc::FloorNumeric, 1712;
             },
             "format_type" => Scalar {
                 params!(Oid, Int32) => sql_op!(
@@ -1363,16 +1363,16 @@ lazy_static! {
             },
             "ln" => Scalar {
                 params!(Float64) => UnaryFunc::Ln, 1341;
-                params!(APD { scale: None }) => UnaryFunc::LnAPD, 1734;
+                params!(Numeric { scale: None }) => UnaryFunc::LnNumeric, 1734;
             },
             "log10" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1194;
-                params!(APD { scale: None }) => UnaryFunc::Log10APD, 1481;
+                params!(Numeric { scale: None }) => UnaryFunc::Log10Numeric, 1481;
             },
             "log" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1340;
-                params!(APD { scale: None }) => UnaryFunc::Log10APD, 1741;
-                params!(APD { scale: None },APD { scale: None }) => BinaryFunc::LogAPD, 1736;
+                params!(Numeric { scale: None }) => UnaryFunc::Log10Numeric, 1741;
+                params!(Numeric { scale: None },Numeric { scale: None }) => BinaryFunc::LogNumeric, 1736;
             },
             "lower" => Scalar {
                 params!(String) => UnaryFunc::Lower, 870;
@@ -1389,7 +1389,7 @@ lazy_static! {
                 params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp, 3461;
             },
             "mod" => Scalar {
-                params!(APD { scale: None }, APD { scale: None }) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
                 params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 941;
                 params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947;
             },
@@ -1466,7 +1466,7 @@ lazy_static! {
             },
             "power" => Scalar {
                 params!(Float64, Float64) => BinaryFunc::Power, 1368;
-                params!(APD { scale: None }, APD { scale: None }) => BinaryFunc::PowerAPD, 2169;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::PowerNumeric, 2169;
             },
             "repeat" => Scalar {
                 params!(String, Int32) => BinaryFunc::RepeatString, 1622;
@@ -1484,8 +1484,8 @@ lazy_static! {
             "round" => Scalar {
                 params!(Float32) => UnaryFunc::RoundFloat32, oid::FUNC_ROUND_F32_OID;
                 params!(Float64) => UnaryFunc::RoundFloat64, 1342;
-                params!(APD { scale: None }) => UnaryFunc::RoundAPD, 1708;
-                params!(APD { scale: None }, Int32) => BinaryFunc::RoundAPD, 1707;
+                params!(Numeric { scale: None }) => UnaryFunc::RoundNumeric, 1708;
+                params!(Numeric { scale: None }, Int32) => BinaryFunc::RoundNumeric, 1707;
             },
             "rtrim" => Scalar {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
@@ -1528,7 +1528,7 @@ lazy_static! {
             },
             "sqrt" => Scalar {
                 params!(Float64) => UnaryFunc::SqrtFloat64, 1344;
-                params!(APD { scale: None }) => UnaryFunc::SqrtAPD, 1730;
+                params!(Numeric { scale: None }) => UnaryFunc::SqrtNumeric, 1730;
             },
             "tan" => Scalar {
                 params!(Float64) => UnaryFunc::Tan, 1606;
@@ -1633,7 +1633,7 @@ lazy_static! {
                 params!(Date) => AggregateFunc::MaxDate, 2122;
                 params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126;
                 params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127;
-                params!(APD{scale: None}) => AggregateFunc::MaxApd, oid::FUNC_MAX_APD_OID;
+                params!(Numeric{scale: None}) => AggregateFunc::MaxNumeric, oid::FUNC_MAX_NUMERIC_OID;
             },
             "min" => Aggregate {
                 params!(Bool) => AggregateFunc::MinBool, oid::FUNC_MIN_BOOL_OID;
@@ -1645,7 +1645,7 @@ lazy_static! {
                 params!(Date) => AggregateFunc::MinDate, 2138;
                 params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
-                params!(APD{scale: None}) => AggregateFunc::MinApd, oid::FUNC_MIN_APD_OID;
+                params!(Numeric{scale: None}) => AggregateFunc::MinNumeric, oid::FUNC_MIN_NUMERIC_OID;
             },
             "json_agg" => Aggregate {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175;
@@ -1686,7 +1686,7 @@ lazy_static! {
                 params!(Int64) => AggregateFunc::SumInt64, 2107;
                 params!(Float32) => AggregateFunc::SumFloat32, 2110;
                 params!(Float64) => AggregateFunc::SumFloat64, 2111;
-                params!(APD { scale: None }) => AggregateFunc::SumAPD, 2114;
+                params!(Numeric { scale: None }) => AggregateFunc::SumNumeric, 2114;
                 params!(Interval) => Operation::unary(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
@@ -1910,7 +1910,7 @@ lazy_static! {
                 params!(Int32) => Operation::unary(|ecx, e| {
                       typeconv::plan_cast(
                           "internal.avg_promotion", ecx, CastContext::Explicit,
-                          e, &ScalarType::APD {scale: None},
+                          e, &ScalarType::Numeric {scale: None},
                       )
                 }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
             },
@@ -2067,20 +2067,20 @@ lazy_static! {
                 params!(Interval, Time) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
-                params!(APD { scale: None }, APD { scale: None }) => AddAPD, 1758;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => AddNumeric, 1758;
             },
             "-" => Scalar {
                 params!(Int32) => UnaryFunc::NegInt32, 558;
                 params!(Int64) => UnaryFunc::NegInt64, 484;
                 params!(Float32) => UnaryFunc::NegFloat32, 584;
                 params!(Float64) => UnaryFunc::NegFloat64, 585;
-                params!(APD{scale: None}) => UnaryFunc::NegAPD, 17510;
+                params!(Numeric{scale: None}) => UnaryFunc::NegNumeric, 17510;
                 params!(Interval) => UnaryFunc::NegInterval, 1336;
                 params!(Int32, Int32) => SubInt32, 555;
                 params!(Int64, Int64) => SubInt64, 685;
                 params!(Float32, Float32) => SubFloat32, 587;
                 params!(Float64, Float64) => SubFloat64, 592;
-                params!(APD{scale: None}, APD{scale: None}) => SubAPD, 17590;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => SubNumeric, 17590;
                 params!(Interval, Interval) => SubInterval, 1338;
                 params!(Timestamp, Timestamp) => SubTimestamp, 2067;
                 params!(TimestampTz, TimestampTz) => SubTimestampTz, 1328;
@@ -2104,7 +2104,7 @@ lazy_static! {
                 params!(Float64, Interval) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
                 }, 1584;
-                params!(APD { scale: None }, APD { scale: None }) => MulAPD, 1760;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => MulNumeric, 1760;
             },
             "/" => Scalar {
                 params!(Int32, Int32) => DivInt32, 528;
@@ -2112,14 +2112,14 @@ lazy_static! {
                 params!(Float32, Float32) => DivFloat32, 588;
                 params!(Float64, Float64) => DivFloat64, 593;
                 params!(Interval, Float64) => DivInterval, 1585;
-                params!(APD { scale: None }, APD { scale: None }) => DivAPD, 1761;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => DivNumeric, 1761;
             },
             "%" => Scalar {
                 params!(Int32, Int32) => ModInt32, 530;
                 params!(Int64, Int64) => ModInt64, 439;
                 params!(Float32, Float32) => ModFloat32, oid::OP_MOD_F32_OID;
                 params!(Float64, Float64) => ModFloat64, oid::OP_MOD_F64_OID;
-                params!(APD { scale: None }, APD { scale: None }) => ModAPD, 1762;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => ModNumeric, 1762;
             },
 
             // ILIKE
@@ -2264,7 +2264,7 @@ lazy_static! {
             },
             // COMPARISON OPS
             "<" => Scalar {
-                params!(APD { scale: None }, APD { scale: None }) => BinaryFunc::Lt, 1754;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Lt, 1754;
                 params!(Bool, Bool) => BinaryFunc::Lt, 58;
                 params!(Int32, Int32) => BinaryFunc::Lt, 97;
                 params!(Int64, Int64) => BinaryFunc::Lt, 412;
@@ -2283,7 +2283,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lt, 1072;
             },
             "<=" => Scalar {
-                params!(APD { scale: None }, APD { scale: None }) => BinaryFunc::Lte, 1755;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Lte, 1755;
                 params!(Bool, Bool) => BinaryFunc::Lte, 1694;
                 params!(Int32, Int32) => BinaryFunc::Lte, 523;
                 params!(Int64, Int64) => BinaryFunc::Lte, 414;
@@ -2302,7 +2302,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lte, 1074;
             },
             ">" => Scalar {
-                params!(APD { scale: None }, APD { scale: None }) => BinaryFunc::Gt, 1756;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Gt, 1756;
                 params!(Bool, Bool) => BinaryFunc::Gt, 59;
                 params!(Int32, Int32) => BinaryFunc::Gt, 521;
                 params!(Int64, Int64) => BinaryFunc::Gt, 413;
@@ -2321,7 +2321,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gt, 1073;
             },
             ">=" => Scalar {
-                params!(APD { scale: None }, APD { scale: None }) => BinaryFunc::Gte, 1757;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Gte, 1757;
                 params!(Bool, Bool) => BinaryFunc::Gte, 1695;
                 params!(Int32, Int32) => BinaryFunc::Gte, 525;
                 params!(Int64, Int64) => BinaryFunc::Gte, 415;
@@ -2340,7 +2340,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte, 1075;
             },
             "=" => Scalar {
-                params!(APD { scale: None }, APD { scale: None }) => BinaryFunc::Eq, 1752;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Eq, 1752;
                 params!(Bool, Bool) => BinaryFunc::Eq, 91;
                 params!(Int32, Int32) => BinaryFunc::Eq, 96;
                 params!(Int64, Int64) => BinaryFunc::Eq, 410;
@@ -2360,7 +2360,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
             },
             "<>" => Scalar {
-                params!(APD { scale: None }, APD { scale: None }) => BinaryFunc::NotEq, 1753;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::NotEq, 1753;
                 params!(Bool, Bool) => BinaryFunc::NotEq, 85;
                 params!(Int32, Int32) => BinaryFunc::NotEq, 518;
                 params!(Int64, Int64) => BinaryFunc::NotEq, 411;

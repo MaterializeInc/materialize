@@ -21,7 +21,7 @@ false
 reduce
 (
     call_unary is_null
-        (call_unary (cast_int_32_to_a_p_d 127) #0)
+        (call_unary (cast_int_32_to_numeric 127) #0)
 )
 [int32]
 ----
@@ -79,8 +79,8 @@ false
 reduce
 (
     call_unary is_null
-        (call_unary cast_a_p_d_to_int64
-        (call_unary (cast_int_32_to_a_p_d 127) #0))
+        (call_unary cast_numeric_to_int64
+        (call_unary (cast_int_32_to_numeric 127) #0))
 )
 [int32]
 ----
@@ -90,8 +90,8 @@ reduce
 (
     call_unary is_null
         (call_unary cast_int_64_to_float_64
-        (call_unary cast_a_p_d_to_int64
-        (call_unary (cast_int_32_to_a_p_d 127) #0)))
+        (call_unary cast_numeric_to_int64
+        (call_unary (cast_int_32_to_numeric 127) #0)))
 )
 [int32]
 ----
@@ -111,7 +111,7 @@ reduce
 reduce
 (
     call_unary is_null
-    (call_unary (cast_int_32_to_a_p_d 127)
+    (call_unary (cast_int_32_to_numeric 127)
         (call_binary add_int_32 #1 #0))
 )
 [(int32 false) (int32 false)]

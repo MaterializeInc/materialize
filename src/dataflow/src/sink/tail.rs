@@ -23,7 +23,7 @@ use timely::PartialOrder;
 
 use dataflow_types::{SinkAsOf, TailSinkConnector};
 use expr::GlobalId;
-use repr::adt::apd::Apd;
+use repr::adt::numeric::Numeric;
 use repr::{Datum, Diff, Row, Timestamp};
 
 pub fn tail<G>(
@@ -162,7 +162,7 @@ fn update_progress(
 
         // the input frontier might be empty
         upper.map(|upper| {
-            packer.push(Datum::from(Apd::from(upper)));
+            packer.push(Datum::from(Numeric::from(upper)));
             packer.push(Datum::True);
             // Fill in the diff column and all table columns with NULL.
             for _ in 0..empty_columns {

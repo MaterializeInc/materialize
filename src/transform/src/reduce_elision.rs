@@ -75,7 +75,7 @@ impl ReduceElision {
                         AggregateFunc::SumInt64 => a
                             .expr
                             .clone()
-                            .call_unary(UnaryFunc::CastInt64ToAPD(Some(0))),
+                            .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0))),
 
                         // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
                         AggregateFunc::JsonbAgg => MirScalarExpr::CallVariadic {

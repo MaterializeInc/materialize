@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
 use log::{debug, error, info, warn};
-use pgrepr::{Apd, Interval};
+use pgrepr::{Interval, Numeric};
 use postgres::{Client, Row};
 use postgres_types::Type;
 use std::thread::{self, JoinHandle};
@@ -147,7 +147,7 @@ fn decode(row: &Row) -> Result<HashMap<String, String>, String> {
             }),
             Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
             Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
-            Type::NUMERIC => row.get::<_, Option<Apd>>(i).map(|x| x.to_string()),
+            Type::NUMERIC => row.get::<_, Option<Numeric>>(i).map(|x| x.to_string()),
             Type::TIMESTAMP => row
                 .get::<_, Option<chrono::NaiveDateTime>>(i)
                 .map(|x| x.to_string()),

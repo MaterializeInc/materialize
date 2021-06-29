@@ -17,7 +17,7 @@ use itertools::Itertools;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
-use repr::adt::apd::APD_DATUM_MAX_PRECISION;
+use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -821,11 +821,11 @@ pub fn encode_row_description(
                     // while the low order bits store the scale + 4 (!).
                     //
                     // https://github.com/postgres/postgres/blob/e435c1e7d/src/backend/utils/adt/numeric.c#L6364-L6367
-                    ScalarType::APD { scale } => match scale {
+                    ScalarType::Numeric { scale } => match scale {
                         // -1 represents default typemod, which allows values of differing scales
                         None => -1i32,
                         Some(scale) => {
-                            ((i32::try_from(APD_DATUM_MAX_PRECISION).unwrap() << 16)
+                            ((i32::try_from(NUMERIC_DATUM_MAX_PRECISION).unwrap() << 16)
                                 | i32::from(*scale))
                                 + 4
                         }

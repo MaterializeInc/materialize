@@ -154,7 +154,7 @@ EXPLAIN PLAN FOR SELECT a, sum(c) from agg_pk group by a
 ----
 %0 =
 | Get materialize.public.agg_pk (u5)
-| Map i64toapd(#2)
+| Map i64tonumeric(#2)
 | Project (#0, #3)
 
 EOF

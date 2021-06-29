@@ -18,39 +18,39 @@ use anyhow::bail;
 use dec::{Context, Decimal};
 use lazy_static::lazy_static;
 
-/// The maximum number of digits expressable in an APD.
-pub const APD_DATUM_WIDTH: usize = 13;
-pub const APD_DATUM_MAX_PRECISION: usize = APD_DATUM_WIDTH * 3;
-pub type Apd = Decimal<APD_DATUM_WIDTH>;
+/// The maximum number of digits expressable in a numeric.
+pub const NUMERIC_DATUM_WIDTH: usize = 13;
+pub const NUMERIC_DATUM_MAX_PRECISION: usize = NUMERIC_DATUM_WIDTH * 3;
+pub type Numeric = Decimal<NUMERIC_DATUM_WIDTH>;
 
-pub const APD_AGG_WIDTH: usize = 27;
-pub const APD_AGG_MAX_PRECISION: usize = APD_AGG_WIDTH * 3;
-pub type ApdAgg = Decimal<APD_AGG_WIDTH>;
+pub const NUMERIC_AGG_WIDTH: usize = 27;
+pub const NUMERIC_AGG_MAX_PRECISION: usize = NUMERIC_AGG_WIDTH * 3;
+pub type NumericAgg = Decimal<NUMERIC_AGG_WIDTH>;
 
 lazy_static! {
-    static ref CX_DATUM: Context<Apd> = {
-        let mut cx = Context::<Apd>::default();
-        cx.set_max_exponent(isize::try_from(APD_DATUM_MAX_PRECISION - 1).unwrap())
+    static ref CX_DATUM: Context<Numeric> = {
+        let mut cx = Context::<Numeric>::default();
+        cx.set_max_exponent(isize::try_from(NUMERIC_DATUM_MAX_PRECISION - 1).unwrap())
             .unwrap();
-        cx.set_min_exponent(-(isize::try_from(APD_DATUM_MAX_PRECISION).unwrap()))
-            .unwrap();
-        cx
-    };
-    static ref CX_AGG: Context<ApdAgg> = {
-        let mut cx = Context::<ApdAgg>::default();
-        cx.set_max_exponent(isize::try_from(APD_AGG_MAX_PRECISION - 1).unwrap())
-            .unwrap();
-        cx.set_min_exponent(-(isize::try_from(APD_AGG_MAX_PRECISION).unwrap()))
+        cx.set_min_exponent(-(isize::try_from(NUMERIC_DATUM_MAX_PRECISION).unwrap()))
             .unwrap();
         cx
     };
-    static ref U128_SPLITTER_DATUM: Apd = {
-        let mut cx = Apd::context();
+    static ref CX_AGG: Context<NumericAgg> = {
+        let mut cx = Context::<NumericAgg>::default();
+        cx.set_max_exponent(isize::try_from(NUMERIC_AGG_MAX_PRECISION - 1).unwrap())
+            .unwrap();
+        cx.set_min_exponent(-(isize::try_from(NUMERIC_AGG_MAX_PRECISION).unwrap()))
+            .unwrap();
+        cx
+    };
+    static ref U128_SPLITTER_DATUM: Numeric = {
+        let mut cx = Numeric::context();
         // 1 << 128
         cx.parse("340282366920938463463374607431768211456").unwrap()
     };
-    static ref U128_SPLITTER_AGG: ApdAgg = {
-        let mut cx = ApdAgg::context();
+    static ref U128_SPLITTER_AGG: NumericAgg = {
+        let mut cx = NumericAgg::context();
         // 1 << 128
         cx.parse("340282366920938463463374607431768211456").unwrap()
     };
@@ -69,33 +69,33 @@ pub trait Dec<const N: usize> {
     fn u128_splitter() -> &'static Decimal<N>;
 }
 
-impl Dec<APD_DATUM_WIDTH> for Apd {
+impl Dec<NUMERIC_DATUM_WIDTH> for Numeric {
     const TWOS_COMPLEMENT_BYTE_WIDTH: usize = 17;
-    fn context() -> Context<Apd> {
+    fn context() -> Context<Numeric> {
         CX_DATUM.clone()
     }
-    fn u128_splitter() -> &'static Apd {
+    fn u128_splitter() -> &'static Numeric {
         &U128_SPLITTER_DATUM
     }
 }
 
-impl Dec<APD_AGG_WIDTH> for ApdAgg {
+impl Dec<NUMERIC_AGG_WIDTH> for NumericAgg {
     const TWOS_COMPLEMENT_BYTE_WIDTH: usize = 33;
-    fn context() -> Context<ApdAgg> {
+    fn context() -> Context<NumericAgg> {
         CX_AGG.clone()
     }
-    fn u128_splitter() -> &'static ApdAgg {
+    fn u128_splitter() -> &'static NumericAgg {
         &U128_SPLITTER_AGG
     }
 }
 
-/// Returns a new context appropriate for operating on APD datums.
-pub fn cx_datum() -> Context<Apd> {
+/// Returns a new context appropriate for operating on numeric datums.
+pub fn cx_datum() -> Context<Numeric> {
     CX_DATUM.clone()
 }
 
-/// Returns a new context appropriate for operating on APD aggregates.
-pub fn cx_agg() -> Context<ApdAgg> {
+/// Returns a new context appropriate for operating on numeric aggregates.
+pub fn cx_agg() -> Context<NumericAgg> {
     CX_AGG.clone()
 }
 
@@ -107,7 +107,7 @@ fn twos_complement_be_to_u128(input: &[u8]) -> u128 {
 }
 
 /// Using negative binary numbers can require more digits of precision than
-/// [`Apd`] offers, so we need to have the option to swap bytes' signs at the
+/// [`Numeric`] offers, so we need to have the option to swap bytes' signs at the
 /// byte- rather than the library-level.
 fn negate_twos_complement_le<'a, I>(b: I)
 where
@@ -128,60 +128,64 @@ where
     }
 }
 
-/// Converts an [`Apd`] into its big endian two's complement representation.
-pub fn apd_to_twos_complement_be(mut apd: Apd) -> [u8; Apd::TWOS_COMPLEMENT_BYTE_WIDTH] {
-    let mut buf = [0; Apd::TWOS_COMPLEMENT_BYTE_WIDTH];
+/// Converts an [`Numeric`] into its big endian two's complement representation.
+pub fn numeric_to_twos_complement_be(
+    mut numeric: Numeric,
+) -> [u8; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH] {
+    let mut buf = [0; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
     // Avro doesn't specify how to handle NaN/infinity, so we simply treat them
     // as zeroes so as to avoid erroring (encoding values is meant to be
     // infallible) and retain downstream associativity/commutativity.
-    if apd.is_special() {
+    if numeric.is_special() {
         return buf;
     }
 
-    let mut cx = Apd::context();
+    let mut cx = Numeric::context();
 
-    // Ensure `apd` is a canonical coefficient.
-    if apd.exponent() < 0 {
-        let s = Apd::from(-apd.exponent());
-        cx.scaleb(&mut apd, &s);
+    // Ensure `numeric` is a canonical coefficient.
+    if numeric.exponent() < 0 {
+        let s = Numeric::from(-numeric.exponent());
+        cx.scaleb(&mut numeric, &s);
     }
 
-    apd_to_twos_complement_inner::<Apd, APD_DATUM_WIDTH>(apd, &mut cx, &mut buf);
+    numeric_to_twos_complement_inner::<Numeric, NUMERIC_DATUM_WIDTH>(numeric, &mut cx, &mut buf);
     buf
 }
 
-/// Converts an [`Apd`] into a big endian two's complement representation where
-/// the encoded value has [`APD_AGG_MAX_PRECISION`] digits and a scale of
-/// [`APD_DATUM_MAX_PRECISION`].
+/// Converts an [`Numeric`] into a big endian two's complement representation where
+/// the encoded value has [`NUMERIC_AGG_MAX_PRECISION`] digits and a scale of
+/// [`NUMERIC_DATUM_MAX_PRECISION`].
 ///
 /// This representation is appropriate to use in
-/// contexts requiring two's complement representation but `Apd` values' scale
+/// contexts requiring two's complement representation but `Numeric` values' scale
 /// isn't known, e.g. when working with columns with an explicitly defined
 /// scale.
-pub fn apd_to_twos_complement_wide(apd: Apd) -> [u8; ApdAgg::TWOS_COMPLEMENT_BYTE_WIDTH] {
-    let mut buf = [0; ApdAgg::TWOS_COMPLEMENT_BYTE_WIDTH];
+pub fn numeric_to_twos_complement_wide(
+    numeric: Numeric,
+) -> [u8; NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH] {
+    let mut buf = [0; NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH];
     // Avro doesn't specify how to handle NaN/infinity, so we simply treat them
     // as zeroes so as to avoid erroring (encoding values is meant to be
     // infallible) and retain downstream associativity/commutativity.
-    if apd.is_special() {
+    if numeric.is_special() {
         return buf;
     }
-    let mut cx = ApdAgg::context();
-    let mut d = cx.to_width(apd);
-    let mut scaler = ApdAgg::from(APD_DATUM_MAX_PRECISION);
+    let mut cx = NumericAgg::context();
+    let mut d = cx.to_width(numeric);
+    let mut scaler = NumericAgg::from(NUMERIC_DATUM_MAX_PRECISION);
     cx.neg(&mut scaler);
-    // Shape `d` so that its exponent is -APD_DATUM_MAX_PRECISION
+    // Shape `d` so that its exponent is -NUMERIC_DATUM_MAX_PRECISION
     cx.rescale(&mut d, &scaler);
     // Adjust `d` so it is a canonical coefficient, i.e. its exact value can be
     // recovered by setting its exponent to -39.
     cx.abs(&mut scaler);
     cx.scaleb(&mut d, &scaler);
 
-    apd_to_twos_complement_inner::<ApdAgg, APD_AGG_WIDTH>(d, &mut cx, &mut buf);
+    numeric_to_twos_complement_inner::<NumericAgg, NUMERIC_AGG_WIDTH>(d, &mut cx, &mut buf);
     buf
 }
 
-fn apd_to_twos_complement_inner<D: Dec<N>, const N: usize>(
+fn numeric_to_twos_complement_inner<D: Dec<N>, const N: usize>(
     mut d: Decimal<N>,
     cx: &mut Context<Decimal<N>>,
     buf: &mut [u8],
@@ -229,29 +233,34 @@ fn apd_to_twos_complement_inner<D: Dec<N>, const N: usize>(
     buf.reverse();
 }
 
-pub fn twos_complement_be_to_apd(input: &mut [u8], scale: u8) -> Result<Apd, anyhow::Error> {
+pub fn twos_complement_be_to_numeric(
+    input: &mut [u8],
+    scale: u8,
+) -> Result<Numeric, anyhow::Error> {
     let mut cx = cx_datum();
     if input.len() <= 17 {
-        if let Ok(mut n) = twos_complement_be_to_apd_inner::<Apd, APD_DATUM_WIDTH>(input) {
+        if let Ok(mut n) =
+            twos_complement_be_to_numeric_inner::<Numeric, NUMERIC_DATUM_WIDTH>(input)
+        {
             n.set_exponent(-i32::from(scale));
             return Ok(n);
         }
     }
     // If bytes were invalid for narrower representation, try to use wider
     // representation in case e.g. simply has more trailing zeroes.
-    let mut n = twos_complement_be_to_apd_inner::<ApdAgg, APD_AGG_WIDTH>(input)?;
-    // Exponent must be set before converting to `Apd` width, otherwise values can overflow 39 dop.
+    let mut n = twos_complement_be_to_numeric_inner::<NumericAgg, NUMERIC_AGG_WIDTH>(input)?;
+    // Exponent must be set before converting to `Numeric` width, otherwise values can overflow 39 dop.
     n.set_exponent(-i32::from(scale));
     let d = cx.to_width(n);
     if cx.status().inexact() {
-        bail!("Value exceeds maximum APD value")
+        bail!("Value exceeds maximum numeric value")
     }
     Ok(d)
 }
 
 /// Parses a buffer of two's complement digits in big-endian order and converts
 /// them to [`Decimal<N>`].
-pub fn twos_complement_be_to_apd_inner<D: Dec<N>, const N: usize>(
+pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     input: &mut [u8],
 ) -> Result<Decimal<N>, anyhow::Error> {
     let is_neg = if (input[0] & 0x80) != 0 {
@@ -278,7 +287,7 @@ pub fn twos_complement_be_to_apd_inner<D: Dec<N>, const N: usize>(
     }
 
     if cx.status().inexact() {
-        bail!("Value exceeds maximum APD value")
+        bail!("Value exceeds maximum numeric value")
     } else if cx.status().any() {
         bail!("unexpected status {:?}", cx.status());
     }
@@ -294,8 +303,8 @@ fn test_twos_complement_roundtrip() {
         let mut cx = cx_datum();
         let d = cx.parse(s).unwrap();
         let scale = std::cmp::min(d.exponent(), 0).abs();
-        let mut b = apd_to_twos_complement_be(d.clone());
-        let x = twos_complement_be_to_apd(&mut b, u8::try_from(scale).unwrap()).unwrap();
+        let mut b = numeric_to_twos_complement_be(d.clone());
+        let x = twos_complement_be_to_numeric(&mut b, u8::try_from(scale).unwrap()).unwrap();
         assert_eq!(d, x);
     }
     inner("0");
@@ -327,29 +336,29 @@ fn test_twos_complement_roundtrip() {
 fn test_twos_comp_apd_primitive() {
     fn inner_inner<P>(i: P, i_be_bytes: &mut [u8])
     where
-        P: Into<Apd> + TryFrom<Apd> + Eq + PartialEq + std::fmt::Debug + Copy,
+        P: Into<Numeric> + TryFrom<Numeric> + Eq + PartialEq + std::fmt::Debug + Copy,
     {
         use std::convert::TryInto;
-        let mut e = [0; Apd::TWOS_COMPLEMENT_BYTE_WIDTH];
-        e[Apd::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(&i_be_bytes);
-        let mut w = [0; ApdAgg::TWOS_COMPLEMENT_BYTE_WIDTH];
-        w[ApdAgg::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(&i_be_bytes);
+        let mut e = [0; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
+        e[Numeric::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(&i_be_bytes);
+        let mut w = [0; NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH];
+        w[NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(&i_be_bytes);
 
-        let d: Apd = i.into();
+        let d: Numeric = i.into();
 
         // Extend negative sign into most-significant bits
         if d.is_negative() {
-            for i in e[..Apd::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()].iter_mut() {
+            for i in e[..Numeric::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()].iter_mut() {
                 *i = 0xFF;
             }
-            for i in w[..ApdAgg::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()].iter_mut() {
+            for i in w[..NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()].iter_mut() {
                 *i = 0xFF;
             }
         }
 
         // Ensure decimal value's two's complement representation matches an
         // extended version of `to_be_bytes`.
-        let d_be_bytes = apd_to_twos_complement_be(d);
+        let d_be_bytes = numeric_to_twos_complement_be(d);
         assert_eq!(
             e, d_be_bytes,
             "expected repr of {:?}, got {:?}",
@@ -357,24 +366,24 @@ fn test_twos_comp_apd_primitive() {
         );
 
         // Ensure extended version of `to_be_bytes` generates same `i128`.
-        let e_apd = twos_complement_be_to_apd(&mut e, 0).unwrap();
-        let e_p: P = match e_apd.try_into() {
+        let e_numeric = twos_complement_be_to_numeric(&mut e, 0).unwrap();
+        let e_p: P = match e_numeric.try_into() {
             Ok(e_p) => e_p,
             Err(_) => panic!(),
         };
         assert_eq!(i, e_p, "expected val of {:?}, got {:?}", i, e_p);
 
         // Wide representation produces same result.
-        let w_apd = twos_complement_be_to_apd(&mut w, 0).unwrap();
-        let w_p: P = match w_apd.try_into() {
+        let w_numeric = twos_complement_be_to_numeric(&mut w, 0).unwrap();
+        let w_p: P = match w_numeric.try_into() {
             Ok(w_p) => w_p,
             Err(_) => panic!(),
         };
         assert_eq!(i, w_p, "expected val of {:?}, got {:?}", i, e_p);
 
-        // Bytes do not need to be in `Apd`-specific format
-        let p_apd = twos_complement_be_to_apd(i_be_bytes, 0).unwrap();
-        let p_p: P = match p_apd.try_into() {
+        // Bytes do not need to be in `Numeric`-specific format
+        let p_numeric = twos_complement_be_to_numeric(i_be_bytes, 0).unwrap();
+        let p_p: P = match p_numeric.try_into() {
             Ok(p_p) => p_p,
             Err(_) => panic!(),
         };
@@ -401,14 +410,14 @@ fn test_twos_comp_apd_primitive() {
             FromableI128 { i }
         }
     }
-    impl From<FromableI128> for Apd {
-        fn from(n: FromableI128) -> Apd {
-            Apd::try_from(n.i).unwrap()
+    impl From<FromableI128> for Numeric {
+        fn from(n: FromableI128) -> Numeric {
+            Numeric::try_from(n.i).unwrap()
         }
     }
-    impl TryFrom<Apd> for FromableI128 {
+    impl TryFrom<Numeric> for FromableI128 {
         type Error = ();
-        fn try_from(n: Apd) -> Result<FromableI128, Self::Error> {
+        fn try_from(n: Numeric) -> Result<FromableI128, Self::Error> {
             match i128::try_from(n) {
                 Ok(i) => Ok(FromableI128 { i }),
                 Err(_) => Err(()),
@@ -452,18 +461,18 @@ fn test_twos_comp_apd_primitive() {
 }
 
 #[test]
-fn test_twos_complement_to_apd_fail() {
+fn test_twos_complement_to_numeric_fail() {
     fn inner(b: &mut [u8]) {
-        let r = twos_complement_be_to_apd(b, 0);
+        let r = twos_complement_be_to_numeric(b, 0);
         assert!(r.is_err());
     }
     // 17-byte signed digit's max value exceeds 39 digits of precision
-    let mut e = [0xFF; Apd::TWOS_COMPLEMENT_BYTE_WIDTH];
+    let mut e = [0xFF; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
     e[0] -= 0x80;
     inner(&mut e);
 
     // 1 << 17 * 8 exceeds exceeds 39 digits of precision
-    let mut e = [0; Apd::TWOS_COMPLEMENT_BYTE_WIDTH + 1];
+    let mut e = [0; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH + 1];
     e[0] = 1;
     inner(&mut e);
 }
@@ -473,8 +482,8 @@ fn test_wide_twos_complement_roundtrip() {
     fn inner(s: &str) {
         let mut cx = cx_datum();
         let d = cx.parse(s).unwrap();
-        let mut b = apd_to_twos_complement_wide(d.clone());
-        let x = twos_complement_be_to_apd(&mut b, APD_DATUM_MAX_PRECISION as u8).unwrap();
+        let mut b = numeric_to_twos_complement_wide(d.clone());
+        let x = twos_complement_be_to_numeric(&mut b, NUMERIC_DATUM_MAX_PRECISION as u8).unwrap();
         assert_eq!(d, x);
     }
     inner("0");
@@ -517,7 +526,7 @@ pub fn get_precision<const N: usize>(n: &Decimal<N>) -> u32 {
 }
 
 /// Returns `n`'s scale, i.e. the number of digits used after the decimal point.
-pub fn get_scale(n: &Apd) -> u8 {
+pub fn get_scale(n: &Numeric) -> u8 {
     let exp = n.exponent();
     if exp >= 0 {
         0
@@ -526,13 +535,13 @@ pub fn get_scale(n: &Apd) -> u8 {
     }
 }
 
-/// Ensures [`Apd`] values are:
-/// - Within `Apd`'s max precision ([`APD_DATUM_MAX_PRECISION`]), or errors if not.
+/// Ensures [`Numeric`] values are:
+/// - Within `Numeric`'s max precision ([`NUMERIC_DATUM_MAX_PRECISION`]), or errors if not.
 /// - Never possible but invalid representations (i.e. never -Nan or -0).
 ///
-/// Should be called after any operation that can change an [`Apd`]'s scale or
+/// Should be called after any operation that can change an [`Numeric`]'s scale or
 /// generate negative values (except addition and subtraction).
-pub fn munge_apd(n: &mut Apd) -> Result<(), anyhow::Error> {
+pub fn munge_numeric(n: &mut Numeric) -> Result<(), anyhow::Error> {
     rescale_within_max_precision(n)?;
     if (n.is_zero() || n.is_nan()) && n.is_negative() {
         cx_datum().neg(n);
@@ -540,21 +549,21 @@ pub fn munge_apd(n: &mut Apd) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-/// Rescale's `n` to fit within [`Apd`]'s max precision or error if not
+/// Rescale's `n` to fit within [`Numeric`]'s max precision or error if not
 /// possible.
-fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
+fn rescale_within_max_precision(n: &mut Numeric) -> Result<(), anyhow::Error> {
     let current_precision = get_precision(n);
-    if current_precision > APD_DATUM_MAX_PRECISION as u32 {
+    if current_precision > NUMERIC_DATUM_MAX_PRECISION as u32 {
         if n.exponent() < 0 {
-            let precision_diff = current_precision - APD_DATUM_MAX_PRECISION as u32;
+            let precision_diff = current_precision - NUMERIC_DATUM_MAX_PRECISION as u32;
             let current_scale = get_scale(n);
             let scale_diff = current_scale - u8::try_from(precision_diff).unwrap();
             rescale(n, scale_diff)?;
         } else {
             bail!(
-                "APD value {} exceed maximum precision {}",
+                "numeric value {} exceed maximum precision {}",
                 n,
-                APD_DATUM_MAX_PRECISION
+                NUMERIC_DATUM_MAX_PRECISION
             )
         }
     }
@@ -563,19 +572,19 @@ fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
 
 /// Rescale `n` as an `OrderedDecimal` with the described scale, or error if:
 /// - Rescaling exceeds max precision
-/// - `n` requires > [`APD_DATUM_MAX_PRECISION`] - `scale` digits of precision
+/// - `n` requires > [`NUMERIC_DATUM_MAX_PRECISION`] - `scale` digits of precision
 ///   left of the decimal point
-pub fn rescale(n: &mut Apd, scale: u8) -> Result<(), anyhow::Error> {
+pub fn rescale(n: &mut Numeric, scale: u8) -> Result<(), anyhow::Error> {
     let mut cx = cx_datum();
-    cx.rescale(n, &Apd::from(-i32::from(scale)));
-    if cx.status().invalid_operation() || get_precision(n) > APD_DATUM_MAX_PRECISION as u32 {
+    cx.rescale(n, &Numeric::from(-i32::from(scale)));
+    if cx.status().invalid_operation() || get_precision(n) > NUMERIC_DATUM_MAX_PRECISION as u32 {
         bail!(
-            "APD value {} exceed maximum precision {}",
+            "numeric value {} exceed maximum precision {}",
             n,
-            APD_DATUM_MAX_PRECISION
+            NUMERIC_DATUM_MAX_PRECISION
         )
     }
-    munge_apd(n)?;
+    munge_numeric(n)?;
 
     Ok(())
 }

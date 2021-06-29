@@ -17,9 +17,9 @@
 //!
 //! [PostgreSQL ADTs]: https://github.com/postgres/postgres/tree/master/src/backend/utils/adt
 
-pub mod apd;
 pub mod array;
 pub mod datetime;
 pub mod interval;
 pub mod jsonb;
+pub mod numeric;
 pub mod regex;

@@ -80,22 +80,11 @@ lazy_static! {
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
-
-    /// Placeholder for `rust-dec`-backed numeric implementation.
-    pub static ref APD: postgres_types::Type = postgres_types::Type::new(
-        "apd".to_owned(),
-        oid::TYPE_APD_OID,
-        postgres_types::Kind::Simple,
-        "mz_catalog".to_owned(),
-    );
 }
 
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.
     pub fn from_oid(oid: u32) -> Option<Type> {
-        if let oid::TYPE_APD_OID = oid {
-            return Some(Type::Numeric);
-        }
         let ty = postgres_types::Type::from_oid(oid)?;
         match ty {
             postgres_types::Type::BOOL => Some(Type::Bool),
@@ -238,9 +227,8 @@ impl Type {
     /// Provides a [`ScalarType`] from `self`, but without necessarily
     /// associating any meaningful values within the returned type.
     ///
-    /// For example `Type::Numeric` returns `ScalarType::Decimal(0,0)`, meaning
-    /// that its precision and scale need to be associated with values from
-    /// elsewhere.
+    /// For example `Type::Numeric` returns `SScalarType::Numeric { scale: None }`,
+    /// meaning that its scale might need values from elsewhere.
     pub fn to_scalar_type_lossy(&self) -> ScalarType {
         match self {
             Type::Array(t) => ScalarType::Array(Box::new(t.to_scalar_type_lossy())),
@@ -261,7 +249,7 @@ impl Type {
                 value_type: Box::new(value_type.to_scalar_type_lossy()),
                 custom_oid: None,
             },
-            Type::Numeric => ScalarType::APD { scale: None },
+            Type::Numeric => ScalarType::Numeric { scale: None },
             Type::Oid => ScalarType::Oid,
             Type::Record(_) => ScalarType::Record {
                 fields: vec![],
@@ -308,7 +296,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Timestamp => Type::Timestamp,
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
-            ScalarType::APD { .. } => Type::Numeric,
+            ScalarType::Numeric { .. } => Type::Numeric,
         }
     }
 }

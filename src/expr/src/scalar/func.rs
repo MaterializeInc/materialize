@@ -37,11 +37,11 @@ use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use ore::str::StrExt;
 use pgrepr::Type;
-use repr::adt::apd::{self, Apd};
 use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
+use repr::adt::numeric::{self, Numeric};
 use repr::adt::regex::Regex;
 use repr::{strconv, ColumnName, ColumnType, Datum, Row, RowArena, ScalarType};
 
@@ -61,7 +61,9 @@ pub enum NullaryFunc {
 impl NullaryFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
-            NullaryFunc::MzLogicalTimestamp => ScalarType::APD { scale: Some(0) }.nullable(false),
+            NullaryFunc::MzLogicalTimestamp => {
+                ScalarType::Numeric { scale: Some(0) }.nullable(false)
+            }
         }
     }
 }
@@ -120,10 +122,10 @@ fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64().abs())
 }
 
-fn abs_apd<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_apd();
-    apd::cx_datum().abs(&mut a.0);
-    Datum::APD(a)
+fn abs_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_numeric();
+    numeric::cx_datum().abs(&mut a.0);
+    Datum::Numeric(a)
 }
 
 fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -178,11 +180,11 @@ fn cast_int32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i64::from(a.unwrap_int32()))
 }
 
-fn cast_int32_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+fn cast_int32_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_int32();
-    let mut a = Apd::from(a);
+    let mut a = Numeric::from(a);
     if let Some(scale) = scale {
-        if apd::rescale(&mut a, scale).is_err() {
+        if numeric::rescale(&mut a, scale).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         }
     }
@@ -201,11 +203,11 @@ fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn cast_int64_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+fn cast_int64_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_int64();
-    let mut a = Apd::from(a);
+    let mut a = Numeric::from(a);
     if let Some(scale) = scale {
-        if apd::rescale(&mut a, scale).is_err() {
+        if numeric::rescale(&mut a, scale).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         }
     }
@@ -301,37 +303,37 @@ fn cast_float64_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn cast_float32_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+fn cast_float32_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float32();
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain(
-            "casting real to apd".to_owned(),
+            "casting real to numeric".to_owned(),
         ));
     }
-    let mut a = Apd::from(a);
+    let mut a = Numeric::from(a);
     if let Some(scale) = scale {
-        if apd::rescale(&mut a, scale).is_err() {
+        if numeric::rescale(&mut a, scale).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         }
     }
-    apd::munge_apd(&mut a).unwrap();
+    numeric::munge_numeric(&mut a).unwrap();
     Ok(Datum::from(a))
 }
 
-fn cast_float64_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+fn cast_float64_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float64();
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain(
-            "casting double precision to apd".to_owned(),
+            "casting double precision to numeric".to_owned(),
         ));
     }
-    let mut a = Apd::from(a);
+    let mut a = Numeric::from(a);
     if let Some(scale) = scale {
-        if apd::rescale(&mut a, scale).is_err() {
+        if numeric::rescale(&mut a, scale).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         }
     }
-    match apd::munge_apd(&mut a) {
+    match numeric::munge_numeric(&mut a) {
         Ok(_) => Ok(Datum::from(a)),
         Err(_) => Err(EvalError::NumericFieldOverflow),
     }
@@ -343,9 +345,9 @@ fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_apd_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd().0;
-    let mut cx = apd::cx_datum();
+fn cast_numeric_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_numeric().0;
+    let mut cx = numeric::cx_datum();
     cx.round(&mut a);
     match cx.try_into_i32(a) {
         Ok(i) => Ok(Datum::from(i)),
@@ -353,9 +355,9 @@ fn cast_apd_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn cast_apd_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd().0;
-    let mut cx = apd::cx_datum();
+fn cast_numeric_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_numeric().0;
+    let mut cx = numeric::cx_datum();
     cx.round(&mut a);
     match cx.try_into_i64(a) {
         Ok(i) => Ok(Datum::from(i)),
@@ -363,25 +365,25 @@ fn cast_apd_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn cast_apd_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_apd().0;
-    let mut cx = apd::cx_datum();
+fn cast_numeric_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_numeric().0;
+    let mut cx = numeric::cx_datum();
     match cx.try_into_f32(a) {
         Ok(i) => Ok(Datum::from(i)),
         Err(_) => Err(EvalError::Float32OutOfRange),
     }
 }
 
-fn cast_apd_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_apd().0;
-    let mut cx = apd::cx_datum();
+fn cast_numeric_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_numeric().0;
+    let mut cx = numeric::cx_datum();
     let i = cx.try_into_f64(a).unwrap();
     Ok(Datum::from(i))
 }
 
-fn cast_apd_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn cast_numeric_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
-    strconv::format_apd(&mut buf, &a.unwrap_apd());
+    strconv::format_numeric(&mut buf, &a.unwrap_numeric());
     Datum::String(temp_storage.push_string(buf))
 }
 
@@ -424,14 +426,14 @@ fn cast_string_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .err_into()
 }
 
-fn cast_string_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
-    let mut d = strconv::parse_apd(a.unwrap_str())?;
+fn cast_string_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+    let mut d = strconv::parse_numeric(a.unwrap_str())?;
     if let Some(scale) = scale {
-        if apd::rescale(&mut d.0, scale).is_err() {
+        if numeric::rescale(&mut d.0, scale).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         }
     }
-    Ok(Datum::APD(d))
+    Ok(Datum::Numeric(d))
 }
 
 fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -724,13 +726,13 @@ fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn cast_jsonb_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+fn cast_jsonb_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Int64(_) => cast_int64_to_apd(a, scale),
-        Datum::Float64(_) => cast_float64_to_apd(a, scale),
+        Datum::Int64(_) => cast_int64_to_numeric(a, scale),
+        Datum::Float64(_) => cast_float64_to_numeric(a, scale),
         _ => Err(EvalError::InvalidJsonbCast {
             from: jsonb_type(a).into(),
-            to: "apd".into(),
+            to: "numeric".into(),
         }),
     }
 }
@@ -866,14 +868,14 @@ fn ceil_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().ceil())
 }
 
-fn ceil_apd<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_apd();
-    let mut cx = apd::cx_datum();
+fn ceil_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_numeric();
+    let mut cx = numeric::cx_datum();
     cx.set_rounding(Rounding::Ceiling);
     cx.round(&mut a.0);
     // Avoids negative 0.
-    apd::munge_apd(&mut a.0).unwrap();
-    Datum::APD(a)
+    numeric::munge_numeric(&mut a.0).unwrap();
+    Datum::Numeric(a)
 }
 
 fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -884,13 +886,13 @@ fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().floor())
 }
 
-fn floor_apd<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_apd();
-    let mut cx = apd::cx_datum();
+fn floor_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_numeric();
+    let mut cx = numeric::cx_datum();
     cx.set_rounding(Rounding::Floor);
     cx.round(&mut a.0);
-    apd::munge_apd(&mut a.0).unwrap();
-    Datum::APD(a)
+    numeric::munge_numeric(&mut a.0).unwrap();
+    Datum::Numeric(a)
 }
 
 fn round_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -915,16 +917,16 @@ fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(unsafe { rint(a) })
 }
 
-fn round_apd_unary<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_apd();
-    apd::cx_datum().round(&mut a.0);
-    Datum::APD(a)
+fn round_numeric_unary<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_numeric();
+    numeric::cx_datum().round(&mut a.0);
+    Datum::Numeric(a)
 }
 
-fn round_apd_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd().0;
+fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_numeric().0;
     let mut b = b.unwrap_int32();
-    let mut cx = apd::cx_datum();
+    let mut cx = numeric::cx_datum();
     let a_exp = a.exponent();
     if a_exp > 0 && b > 0 || a_exp < 0 && -a_exp < b {
         // This condition indicates:
@@ -936,17 +938,18 @@ fn round_apd_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
         // b equal to the maximum remaining scale the value can support.
         b = std::cmp::min(
             b,
-            (apd::APD_DATUM_MAX_PRECISION as u32
-                - (apd::get_precision(&a) - u32::from(apd::get_scale(&a)))) as i32,
+            (numeric::NUMERIC_DATUM_MAX_PRECISION as u32
+                - (numeric::get_precision(&a) - u32::from(numeric::get_scale(&a))))
+                as i32,
         );
-        cx.rescale(&mut a, &apd::Apd::from(-b));
+        cx.rescale(&mut a, &numeric::Numeric::from(-b));
     } else {
         // To avoid invalid operations, clamp b to be within 1 more than the
         // precision limit.
-        const MAX_P_LIMIT: i32 = 1 + apd::APD_DATUM_MAX_PRECISION as i32;
+        const MAX_P_LIMIT: i32 = 1 + numeric::NUMERIC_DATUM_MAX_PRECISION as i32;
         b = std::cmp::min(MAX_P_LIMIT, b);
         b = std::cmp::max(-MAX_P_LIMIT, b);
-        let mut b = apd::Apd::from(b);
+        let mut b = numeric::Numeric::from(b);
         // Shift by 10^b; this put digit to round to in the one's place.
         cx.scaleb(&mut a, &b);
         cx.round(&mut a);
@@ -961,9 +964,9 @@ fn round_apd_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
         // simpler than handling cases where exponent has gotten set to some
         // value greater than the max precision, but all significant digits
         // were rounded away.
-        Ok(Datum::from(apd::Apd::zero()))
+        Ok(Datum::from(numeric::Numeric::zero()))
     } else {
-        apd::munge_apd(&mut a).unwrap();
+        numeric::munge_numeric(&mut a).unwrap();
         Ok(Datum::from(a))
     }
 }
@@ -1111,10 +1114,10 @@ fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
     new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
 }
 
-fn add_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut cx = apd::cx_datum();
-    let mut a = a.unwrap_apd().0;
-    cx.add(&mut a, &b.unwrap_apd().0);
+fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = numeric::cx_datum();
+    let mut a = a.unwrap_numeric().0;
+    cx.add(&mut a, &b.unwrap_numeric().0);
     if cx.status().overflow() {
         Err(EvalError::FloatOverflow)
     } else {
@@ -1151,10 +1154,10 @@ fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() - b.unwrap_float64())
 }
 
-fn sub_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut cx = apd::cx_datum();
-    let mut a = a.unwrap_apd().0;
-    cx.sub(&mut a, &b.unwrap_apd().0);
+fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = numeric::cx_datum();
+    let mut a = a.unwrap_numeric().0;
+    cx.sub(&mut a, &b.unwrap_numeric().0);
     if cx.status().overflow() {
         Err(EvalError::FloatOverflow)
     } else {
@@ -1223,17 +1226,17 @@ fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
 }
 
-fn mul_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut cx = apd::cx_datum();
-    let mut a = a.unwrap_apd().0;
-    cx.mul(&mut a, &b.unwrap_apd().0);
+fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = numeric::cx_datum();
+    let mut a = a.unwrap_numeric().0;
+    cx.mul(&mut a, &b.unwrap_numeric().0);
     let cx_status = cx.status();
     if cx_status.overflow() {
         Err(EvalError::FloatOverflow)
     } else if cx_status.subnormal() {
         Err(EvalError::FloatUnderflow)
     } else {
-        apd::munge_apd(&mut a).unwrap();
+        numeric::munge_numeric(&mut a).unwrap();
         Ok(Datum::from(a))
     }
 }
@@ -1283,10 +1286,10 @@ fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn div_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut cx = apd::cx_datum();
-    let mut a = a.unwrap_apd().0;
-    let b = b.unwrap_apd().0;
+fn div_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = numeric::cx_datum();
+    let mut a = a.unwrap_numeric().0;
+    let b = b.unwrap_numeric().0;
 
     cx.div(&mut a, &b);
     let cx_status = cx.status();
@@ -1300,7 +1303,7 @@ fn div_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else if cx_status.subnormal() {
         Err(EvalError::FloatUnderflow)
     } else {
-        apd::munge_apd(&mut a).unwrap();
+        numeric::munge_numeric(&mut a).unwrap();
         Ok(Datum::from(a))
     }
 }
@@ -1353,17 +1356,17 @@ fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn mod_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd();
-    let b = b.unwrap_apd();
+fn mod_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_numeric();
+    let b = b.unwrap_numeric();
     if b.0.is_zero() {
         return Err(EvalError::DivisionByZero);
     }
-    let mut cx = apd::cx_datum();
+    let mut cx = numeric::cx_datum();
     // Postgres does _not_ use IEEE 754-style remainder
     cx.rem(&mut a.0, &b.0);
-    apd::munge_apd(&mut a.0).unwrap();
-    Ok(Datum::APD(a))
+    numeric::munge_numeric(&mut a.0).unwrap();
+    Ok(Datum::Numeric(a))
 }
 
 fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1382,11 +1385,11 @@ fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_float64())
 }
 
-fn neg_apd<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_apd();
-    apd::cx_datum().neg(&mut a.0);
-    apd::munge_apd(&mut a.0).unwrap();
-    Datum::APD(a)
+fn neg_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_numeric();
+    numeric::cx_datum().neg(&mut a.0);
+    numeric::munge_numeric(&mut a.0).unwrap();
+    Datum::Numeric(a)
 }
 
 pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1402,15 +1405,15 @@ fn sqrt_float64<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     Ok(Datum::from(x.sqrt()))
 }
 
-fn sqrt_apd<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let mut a = a.unwrap_apd();
+fn sqrt_numeric<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
+    let mut a = a.unwrap_numeric();
     if a.0.is_negative() {
         return Err(EvalError::NegSqrt);
     }
-    let mut cx = apd::cx_datum();
+    let mut cx = numeric::cx_datum();
     cx.sqrt(&mut a.0);
-    apd::munge_apd(&mut a.0).unwrap();
-    Ok(Datum::APD(a))
+    numeric::munge_numeric(&mut a.0).unwrap();
+    Ok(Datum::Numeric(a))
 }
 
 fn cbrt_float64<'a>(a: Datum<'a>) -> Datum {
@@ -1480,7 +1483,7 @@ fn log<'a, 'b, F: Fn(f64) -> f64>(
     Ok(Datum::from(logic(f)))
 }
 
-fn log_guard_apd(val: &Apd, function_name: &str) -> Result<(), EvalError> {
+fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
     if val.is_negative() {
         return Err(EvalError::NegativeOutOfDomain(function_name.to_owned()));
     }
@@ -1495,19 +1498,19 @@ fn log_guard_apd(val: &Apd, function_name: &str) -> Result<(), EvalError> {
 // > ulp (unit in last place) in error in rare cases.
 //
 // See decNumberLn documentation at http://speleotrove.com/decimal/dnnumb.html
-fn log_base_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd().0;
-    log_guard_apd(&a, "log")?;
-    let mut b = b.unwrap_apd().0;
-    log_guard_apd(&b, "log")?;
-    let mut cx = apd::cx_datum();
+fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_numeric().0;
+    log_guard_numeric(&a, "log")?;
+    let mut b = b.unwrap_numeric().0;
+    log_guard_numeric(&b, "log")?;
+    let mut cx = numeric::cx_datum();
     cx.ln(&mut a);
     cx.ln(&mut b);
     cx.div(&mut b, &a);
     if a.is_zero() {
         Err(EvalError::DivisionByZero)
     } else {
-        apd::munge_apd(&mut b).unwrap();
+        numeric::munge_numeric(&mut b).unwrap();
         Ok(Datum::from(b))
     }
 }
@@ -1517,26 +1520,26 @@ fn log_base_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
 // > ulp (unit in last place) in error in rare cases.
 //
 // See decNumberLog10 documentation at http://speleotrove.com/decimal/dnnumb.html
-fn log_apd<'a, 'b, F: Fn(&mut dec::Context<Apd>, &mut Apd)>(
+fn log_numeric<'a, 'b, F: Fn(&mut dec::Context<Numeric>, &mut Numeric)>(
     a: Datum<'a>,
     logic: F,
     name: &'b str,
 ) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd();
-    log_guard_apd(&a.0, name)?;
-    let mut cx = apd::cx_datum();
+    let mut a = a.unwrap_numeric();
+    log_guard_numeric(&a.0, name)?;
+    let mut cx = numeric::cx_datum();
     logic(&mut cx, &mut a.0);
-    apd::munge_apd(&mut a.0).unwrap();
-    Ok(Datum::APD(a))
+    numeric::munge_numeric(&mut a.0).unwrap();
+    Ok(Datum::Numeric(a))
 }
 
 fn exp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(a.unwrap_float64().exp()))
 }
 
-fn exp_apd<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd();
-    let mut cx = apd::cx_datum();
+fn exp_numeric<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_numeric();
+    let mut cx = numeric::cx_datum();
     cx.exp(&mut a.0);
     let cx_status = cx.status();
     if cx_status.overflow() {
@@ -1544,8 +1547,8 @@ fn exp_apd<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else if cx_status.subnormal() {
         Err(EvalError::FloatUnderflow)
     } else {
-        apd::munge_apd(&mut a.0).unwrap();
-        Ok(Datum::APD(a))
+        numeric::munge_numeric(&mut a.0).unwrap();
+        Ok(Datum::Numeric(a))
     }
 }
 
@@ -1565,12 +1568,12 @@ fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(a.powf(b)))
 }
 
-fn power_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_apd().0;
-    let b = b.unwrap_apd().0;
+fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.unwrap_numeric().0;
+    let b = b.unwrap_numeric().0;
     if a.is_zero() {
         if b.is_zero() {
-            return Ok(Datum::from(Apd::from(1)));
+            return Ok(Datum::from(Numeric::from(1)));
         }
         if b.is_negative() {
             return Err(EvalError::Undefined(
@@ -1583,7 +1586,7 @@ fn power_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         // > a negative number raised to a non-integer power yields a complex result
         return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
     }
-    let mut cx = apd::cx_datum();
+    let mut cx = numeric::cx_datum();
     cx.pow(&mut a, &b);
     let cx_status = cx.status();
     if cx_status.overflow() || (cx_status.invalid_operation() && !b.is_negative()) {
@@ -1591,7 +1594,7 @@ fn power_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else if cx_status.subnormal() || cx_status.invalid_operation() {
         Err(EvalError::FloatUnderflow)
     } else {
-        apd::munge_apd(&mut a).unwrap();
+        numeric::munge_numeric(&mut a).unwrap();
         Ok(Datum::from(a))
     }
 }
@@ -1602,12 +1605,12 @@ fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::Null)
 }
 
-fn rescale_apd<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
-    let mut d = a.unwrap_apd();
-    if apd::rescale(&mut d.0, scale).is_err() {
+fn rescale_numeric<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let mut d = a.unwrap_numeric();
+    if numeric::rescale(&mut d.0, scale).is_err() {
         return Err(EvalError::NumericFieldOverflow);
     };
-    Ok(Datum::APD(d))
+    Ok(Datum::Numeric(d))
 }
 
 fn pg_column_size<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2548,7 +2551,7 @@ pub enum BinaryFunc {
     AddDateInterval,
     AddDateTime,
     AddTimeInterval,
-    AddAPD,
+    AddNumeric,
     SubInt32,
     SubInt64,
     SubFloat32,
@@ -2562,25 +2565,25 @@ pub enum BinaryFunc {
     SubDateInterval,
     SubTime,
     SubTimeInterval,
-    SubAPD,
+    SubNumeric,
     MulInt32,
     MulInt64,
     MulFloat32,
     MulFloat64,
-    MulAPD,
+    MulNumeric,
     MulInterval,
     DivInt32,
     DivInt64,
     DivFloat32,
     DivFloat64,
-    DivAPD,
+    DivNumeric,
     DivInterval,
     ModInt32,
     ModInt64,
     ModFloat32,
     ModFloat64,
-    ModAPD,
-    RoundAPD,
+    ModNumeric,
+    RoundNumeric,
     Eq,
     NotEq,
     Lt,
@@ -2641,9 +2644,9 @@ pub enum BinaryFunc {
     MzRenderTypemod,
     Encode,
     Decode,
-    LogAPD,
+    LogNumeric,
     Power,
-    PowerAPD,
+    PowerNumeric,
 }
 
 impl BinaryFunc {
@@ -2677,7 +2680,7 @@ impl BinaryFunc {
             BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
             BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
-            BinaryFunc::AddAPD => eager!(add_apd),
+            BinaryFunc::AddNumeric => eager!(add_numeric),
             BinaryFunc::AddInterval => eager!(add_interval),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
@@ -2692,24 +2695,24 @@ impl BinaryFunc {
             BinaryFunc::SubDateInterval => Ok(eager!(sub_date_interval)),
             BinaryFunc::SubTime => Ok(eager!(sub_time)),
             BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
-            BinaryFunc::SubAPD => eager!(sub_apd),
+            BinaryFunc::SubNumeric => eager!(sub_numeric),
             BinaryFunc::MulInt32 => eager!(mul_int32),
             BinaryFunc::MulInt64 => eager!(mul_int64),
             BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
             BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
-            BinaryFunc::MulAPD => eager!(mul_apd),
+            BinaryFunc::MulNumeric => eager!(mul_numeric),
             BinaryFunc::MulInterval => eager!(mul_interval),
             BinaryFunc::DivInt32 => eager!(div_int32),
             BinaryFunc::DivInt64 => eager!(div_int64),
             BinaryFunc::DivFloat32 => eager!(div_float32),
             BinaryFunc::DivFloat64 => eager!(div_float64),
-            BinaryFunc::DivAPD => eager!(div_apd),
+            BinaryFunc::DivNumeric => eager!(div_numeric),
             BinaryFunc::DivInterval => eager!(div_interval),
             BinaryFunc::ModInt32 => eager!(mod_int32),
             BinaryFunc::ModInt64 => eager!(mod_int64),
             BinaryFunc::ModFloat32 => eager!(mod_float32),
             BinaryFunc::ModFloat64 => eager!(mod_float64),
-            BinaryFunc::ModAPD => eager!(mod_apd),
+            BinaryFunc::ModNumeric => eager!(mod_numeric),
             BinaryFunc::Eq => Ok(eager!(eq)),
             BinaryFunc::NotEq => Ok(eager!(not_eq)),
             BinaryFunc::Lt => Ok(eager!(lt)),
@@ -2780,7 +2783,7 @@ impl BinaryFunc {
             BinaryFunc::MapContainsAllKeys => Ok(eager!(map_contains_all_keys)),
             BinaryFunc::MapContainsAnyKeys => Ok(eager!(map_contains_any_keys)),
             BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
-            BinaryFunc::RoundAPD => eager!(round_apd_binary),
+            BinaryFunc::RoundNumeric => eager!(round_numeric_binary),
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
@@ -2804,9 +2807,9 @@ impl BinaryFunc {
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
-            BinaryFunc::LogAPD => eager!(log_base_apd),
+            BinaryFunc::LogNumeric => eager!(log_base_numeric),
             BinaryFunc::Power => eager!(power),
-            BinaryFunc::PowerAPD => eager!(power_apd),
+            BinaryFunc::PowerNumeric => eager!(power_numeric),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
@@ -2824,8 +2827,8 @@ impl BinaryFunc {
                 | ModFloat32
                 | DivFloat64
                 | ModFloat64
-                | DivAPD
-                | ModAPD
+                | DivNumeric
+                | ModNumeric
         );
         match self {
             And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | ArrayContains => {
@@ -2936,10 +2939,10 @@ impl BinaryFunc {
             }
 
             ListListConcat | ListElementConcat => {
-                input1_type.scalar_type.unscale_any_apd().nullable(true)
+                input1_type.scalar_type.unscale_any_numeric().nullable(true)
             }
 
-            ElementListConcat => input2_type.scalar_type.unscale_any_apd().nullable(true),
+            ElementListConcat => input2_type.scalar_type.unscale_any_numeric().nullable(true),
 
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Position => ScalarType::Int32.nullable(in_nullable),
@@ -2948,8 +2951,9 @@ impl BinaryFunc {
             Power => ScalarType::Float64.nullable(in_nullable),
             RepeatString => input1_type.scalar_type.nullable(in_nullable),
 
-            AddAPD | DivAPD | LogAPD | ModAPD | MulAPD | PowerAPD | RoundAPD | SubAPD => {
-                ScalarType::APD { scale: None }.nullable(in_nullable)
+            AddNumeric | DivNumeric | LogNumeric | ModNumeric | MulNumeric | PowerNumeric
+            | RoundNumeric | SubNumeric => {
+                ScalarType::Numeric { scale: None }.nullable(in_nullable)
             }
         }
     }
@@ -2995,7 +2999,7 @@ impl BinaryFunc {
                 | SubInterval
                 | MulInterval
                 | DivInterval
-                | AddAPD
+                | AddNumeric
                 | SubInt32
                 | SubInt64
                 | SubFloat32
@@ -3008,12 +3012,12 @@ impl BinaryFunc {
                 | SubDateInterval
                 | SubTime
                 | SubTimeInterval
-                | SubAPD
+                | SubNumeric
                 | MulInt32
                 | MulInt64
                 | MulFloat32
                 | MulFloat64
-                | MulAPD
+                | MulNumeric
                 | DivInt32
                 | DivInt64
                 | DivFloat32
@@ -3022,7 +3026,7 @@ impl BinaryFunc {
                 | ModInt64
                 | ModFloat32
                 | ModFloat64
-                | ModAPD
+                | ModNumeric
         )
     }
 
@@ -3044,7 +3048,7 @@ impl BinaryFunc {
             | SubInterval
             | MulInterval
             | DivInterval
-            | AddAPD
+            | AddNumeric
             | SubInt32
             | SubInt64
             | SubFloat32
@@ -3057,22 +3061,22 @@ impl BinaryFunc {
             | SubDateInterval
             | SubTime
             | SubTimeInterval
-            | SubAPD
+            | SubNumeric
             | MulInt32
             | MulInt64
             | MulFloat32
             | MulFloat64
-            | MulAPD
+            | MulNumeric
             | DivInt32
             | DivInt64
             | DivFloat32
             | DivFloat64
-            | DivAPD
+            | DivNumeric
             | ModInt32
             | ModInt64
             | ModFloat32
             | ModFloat64
-            | ModAPD
+            | ModNumeric
             | Eq
             | NotEq
             | Lt
@@ -3118,7 +3122,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
-            | RoundAPD
+            | RoundNumeric
             | ConvertFrom
             | Left
             | Position
@@ -3133,9 +3137,9 @@ impl BinaryFunc {
             | MzRenderTypemod
             | Encode
             | Decode
-            | LogAPD
+            | LogNumeric
             | Power
-            | PowerAPD
+            | PowerNumeric
             | RepeatString => false,
         }
     }
@@ -3163,7 +3167,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddInt64 => f.write_str("+"),
             BinaryFunc::AddFloat32 => f.write_str("+"),
             BinaryFunc::AddFloat64 => f.write_str("+"),
-            BinaryFunc::AddAPD => f.write_str("+"),
+            BinaryFunc::AddNumeric => f.write_str("+"),
             BinaryFunc::AddInterval => f.write_str("+"),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
             BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
@@ -3174,7 +3178,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubInt64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
-            BinaryFunc::SubAPD => f.write_str("-"),
+            BinaryFunc::SubNumeric => f.write_str("-"),
             BinaryFunc::SubInterval => f.write_str("-"),
             BinaryFunc::SubTimestamp => f.write_str("-"),
             BinaryFunc::SubTimestampTz => f.write_str("-"),
@@ -3188,19 +3192,19 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MulInt64 => f.write_str("*"),
             BinaryFunc::MulFloat32 => f.write_str("*"),
             BinaryFunc::MulFloat64 => f.write_str("*"),
-            BinaryFunc::MulAPD => f.write_str("*"),
+            BinaryFunc::MulNumeric => f.write_str("*"),
             BinaryFunc::MulInterval => f.write_str("*"),
             BinaryFunc::DivInt32 => f.write_str("/"),
             BinaryFunc::DivInt64 => f.write_str("/"),
             BinaryFunc::DivFloat32 => f.write_str("/"),
             BinaryFunc::DivFloat64 => f.write_str("/"),
-            BinaryFunc::DivAPD => f.write_str("/"),
+            BinaryFunc::DivNumeric => f.write_str("/"),
             BinaryFunc::DivInterval => f.write_str("/"),
             BinaryFunc::ModInt32 => f.write_str("%"),
             BinaryFunc::ModInt64 => f.write_str("%"),
             BinaryFunc::ModFloat32 => f.write_str("%"),
             BinaryFunc::ModFloat64 => f.write_str("%"),
-            BinaryFunc::ModAPD => f.write_str("%"),
+            BinaryFunc::ModNumeric => f.write_str("%"),
             BinaryFunc::Eq => f.write_str("="),
             BinaryFunc::NotEq => f.write_str("!="),
             BinaryFunc::Lt => f.write_str("<"),
@@ -3247,7 +3251,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
             BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
-            BinaryFunc::RoundAPD => f.write_str("round"),
+            BinaryFunc::RoundNumeric => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
             BinaryFunc::Left => f.write_str("left"),
             BinaryFunc::Position => f.write_str("position"),
@@ -3270,9 +3274,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
-            BinaryFunc::LogAPD => f.write_str("log"),
+            BinaryFunc::LogNumeric => f.write_str("log"),
             BinaryFunc::Power => f.write_str("power"),
-            BinaryFunc::PowerAPD => f.write_str("power_apd"),
+            BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
         }
     }
@@ -3292,16 +3296,16 @@ pub enum UnaryFunc {
     NegInt64,
     NegFloat32,
     NegFloat64,
-    NegAPD,
+    NegNumeric,
     NegInterval,
     SqrtFloat64,
-    SqrtAPD,
+    SqrtNumeric,
     CbrtFloat64,
     AbsInt32,
     AbsInt64,
     AbsFloat32,
     AbsFloat64,
-    AbsAPD,
+    AbsNumeric,
     CastBoolToString,
     CastBoolToStringNonstandard,
     CastBoolToInt32,
@@ -3313,9 +3317,9 @@ pub enum UnaryFunc {
     CastInt32ToString,
     CastOidToInt32,
     CastInt64ToInt32,
-    CastInt32ToAPD(Option<u8>),
+    CastInt32ToNumeric(Option<u8>),
     CastInt64ToBool,
-    CastInt64ToAPD(Option<u8>),
+    CastInt64ToNumeric(Option<u8>),
     CastInt64ToFloat32,
     CastInt64ToFloat64,
     CastInt64ToString,
@@ -3323,17 +3327,17 @@ pub enum UnaryFunc {
     CastFloat32ToInt64,
     CastFloat32ToFloat64,
     CastFloat32ToString,
-    CastFloat32ToAPD(Option<u8>),
-    CastFloat64ToAPD(Option<u8>),
+    CastFloat32ToNumeric(Option<u8>),
+    CastFloat64ToNumeric(Option<u8>),
     CastFloat64ToInt32,
     CastFloat64ToInt64,
     CastFloat64ToFloat32,
     CastFloat64ToString,
-    CastAPDToFloat32,
-    CastAPDToFloat64,
-    CastAPDToInt32,
-    CastAPDToInt64,
-    CastAPDToString,
+    CastNumericToFloat32,
+    CastNumericToFloat64,
+    CastNumericToInt32,
+    CastNumericToInt64,
+    CastNumericToString,
     CastStringToBool,
     CastStringToBytes,
     CastStringToInt32,
@@ -3366,7 +3370,7 @@ pub enum UnaryFunc {
     CastStringToTimestamp,
     CastStringToTimestampTz,
     CastStringToInterval,
-    CastStringToAPD(Option<u8>),
+    CastStringToNumeric(Option<u8>),
     CastStringToUuid,
     CastDateToTimestamp,
     CastDateToTimestampTz,
@@ -3389,7 +3393,7 @@ pub enum UnaryFunc {
     CastJsonbToInt64,
     CastJsonbToFloat32,
     CastJsonbToFloat64,
-    CastJsonbToAPD(Option<u8>),
+    CastJsonbToNumeric(Option<u8>),
     CastJsonbToBool,
     CastUuidToString,
     CastRecordToString {
@@ -3415,10 +3419,10 @@ pub enum UnaryFunc {
     },
     CeilFloat32,
     CeilFloat64,
-    CeilAPD,
+    CeilNumeric,
     FloorFloat32,
     FloorFloat64,
-    FloorAPD,
+    FloorNumeric,
     Ascii,
     BitLengthBytes,
     BitLengthString,
@@ -3445,7 +3449,7 @@ pub enum UnaryFunc {
     JsonbPretty,
     RoundFloat32,
     RoundFloat64,
-    RoundAPD,
+    RoundNumeric,
     TrimWhitespace,
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
@@ -3461,13 +3465,13 @@ pub enum UnaryFunc {
     Tanh,
     Cot,
     Log10,
-    Log10APD,
+    Log10Numeric,
     Ln,
-    LnAPD,
+    LnNumeric,
     Exp,
-    ExpAPD,
+    ExpNumeric,
     Sleep,
-    RescaleAPD(u8),
+    RescaleNumeric(u8),
     PgColumnSize,
     MzRowSize,
 }
@@ -3491,29 +3495,29 @@ impl UnaryFunc {
             UnaryFunc::NegInt64 => Ok(neg_int64(a)),
             UnaryFunc::NegFloat32 => Ok(neg_float32(a)),
             UnaryFunc::NegFloat64 => Ok(neg_float64(a)),
-            UnaryFunc::NegAPD => Ok(neg_apd(a)),
+            UnaryFunc::NegNumeric => Ok(neg_numeric(a)),
             UnaryFunc::NegInterval => Ok(neg_interval(a)),
             UnaryFunc::AbsInt32 => Ok(abs_int32(a)),
             UnaryFunc::AbsInt64 => Ok(abs_int64(a)),
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
-            UnaryFunc::AbsAPD => Ok(abs_apd(a)),
+            UnaryFunc::AbsNumeric => Ok(abs_numeric(a)),
             UnaryFunc::CastBoolToString => Ok(cast_bool_to_string(a)),
             UnaryFunc::CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
-            UnaryFunc::CastFloat32ToAPD(scale) => cast_float32_to_apd(a, *scale),
-            UnaryFunc::CastFloat64ToAPD(scale) => cast_float64_to_apd(a, *scale),
+            UnaryFunc::CastFloat32ToNumeric(scale) => cast_float32_to_numeric(a, *scale),
+            UnaryFunc::CastFloat64ToNumeric(scale) => cast_float64_to_numeric(a, *scale),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
             UnaryFunc::CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
             UnaryFunc::CastInt32ToInt64 => Ok(cast_int32_to_int64(a)),
             UnaryFunc::CastInt32ToOid => Ok(a),
-            UnaryFunc::CastInt32ToAPD(scale) => cast_int32_to_apd(a, *scale),
+            UnaryFunc::CastInt32ToNumeric(scale) => cast_int32_to_numeric(a, *scale),
             UnaryFunc::CastInt32ToString => Ok(cast_int32_to_string(a, temp_storage)),
             UnaryFunc::CastOidToInt32 => Ok(a),
             UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32(a),
             UnaryFunc::CastInt64ToBool => Ok(cast_int64_to_bool(a)),
-            UnaryFunc::CastInt64ToAPD(scale) => cast_int64_to_apd(a, *scale),
+            UnaryFunc::CastInt64ToNumeric(scale) => cast_int64_to_numeric(a, *scale),
             UnaryFunc::CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
             UnaryFunc::CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
             UnaryFunc::CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
@@ -3531,7 +3535,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToInt64 => cast_string_to_int64(a),
             UnaryFunc::CastStringToFloat32 => cast_string_to_float32(a),
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
-            UnaryFunc::CastStringToAPD(scale) => cast_string_to_apd(a, *scale),
+            UnaryFunc::CastStringToNumeric(scale) => cast_string_to_numeric(a, *scale),
             UnaryFunc::CastStringToDate => cast_string_to_date(a),
             UnaryFunc::CastStringToArray { cast_expr, .. } => {
                 cast_string_to_array(a, cast_expr, temp_storage)
@@ -3553,11 +3557,11 @@ impl UnaryFunc {
             UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
             UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
             UnaryFunc::CastDateToString => Ok(cast_date_to_string(a, temp_storage)),
-            UnaryFunc::CastAPDToFloat32 => cast_apd_to_float32(a),
-            UnaryFunc::CastAPDToFloat64 => cast_apd_to_float64(a),
-            UnaryFunc::CastAPDToInt32 => cast_apd_to_int32(a),
-            UnaryFunc::CastAPDToInt64 => cast_apd_to_int64(a),
-            UnaryFunc::CastAPDToString => Ok(cast_apd_to_string(a, temp_storage)),
+            UnaryFunc::CastNumericToFloat32 => cast_numeric_to_float32(a),
+            UnaryFunc::CastNumericToFloat64 => cast_numeric_to_float64(a),
+            UnaryFunc::CastNumericToInt32 => cast_numeric_to_int32(a),
+            UnaryFunc::CastNumericToInt64 => cast_numeric_to_int64(a),
+            UnaryFunc::CastNumericToString => Ok(cast_numeric_to_string(a, temp_storage)),
             UnaryFunc::CastTimeToInterval => cast_time_to_interval(a),
             UnaryFunc::CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
             UnaryFunc::CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
@@ -3575,7 +3579,7 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToInt64 => cast_jsonb_to_int64(a),
             UnaryFunc::CastJsonbToFloat32 => cast_jsonb_to_float32(a),
             UnaryFunc::CastJsonbToFloat64 => cast_jsonb_to_float64(a),
-            UnaryFunc::CastJsonbToAPD(scale) => cast_jsonb_to_apd(a, *scale),
+            UnaryFunc::CastJsonbToNumeric(scale) => cast_jsonb_to_numeric(a, *scale),
             UnaryFunc::CastJsonbToBool => cast_jsonb_to_bool(a),
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             UnaryFunc::CastRecordToString { ty }
@@ -3590,12 +3594,12 @@ impl UnaryFunc {
             UnaryFunc::CastInPlace { .. } => Ok(a),
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
-            UnaryFunc::CeilAPD => Ok(ceil_apd(a)),
+            UnaryFunc::CeilNumeric => Ok(ceil_numeric(a)),
             UnaryFunc::FloorFloat32 => Ok(floor_float32(a)),
             UnaryFunc::FloorFloat64 => Ok(floor_float64(a)),
-            UnaryFunc::FloorAPD => Ok(floor_apd(a)),
+            UnaryFunc::FloorNumeric => Ok(floor_numeric(a)),
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
-            UnaryFunc::SqrtAPD => sqrt_apd(a),
+            UnaryFunc::SqrtNumeric => sqrt_numeric(a),
             UnaryFunc::CbrtFloat64 => Ok(cbrt_float64(a)),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::BitLengthString => bit_length(a.unwrap_str()),
@@ -3632,7 +3636,7 @@ impl UnaryFunc {
             UnaryFunc::JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
-            UnaryFunc::RoundAPD => Ok(round_apd_unary(a)),
+            UnaryFunc::RoundNumeric => Ok(round_numeric_unary(a)),
             UnaryFunc::TrimWhitespace => Ok(trim_whitespace(a)),
             UnaryFunc::TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
             UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
@@ -3648,13 +3652,13 @@ impl UnaryFunc {
             UnaryFunc::Tanh => Ok(tanh(a)),
             UnaryFunc::Cot => cot(a),
             UnaryFunc::Log10 => log(a, f64::log10, "log10"),
-            UnaryFunc::Log10APD => log_apd(a, dec::Context::log10, "log10"),
+            UnaryFunc::Log10Numeric => log_numeric(a, dec::Context::log10, "log10"),
             UnaryFunc::Ln => log(a, f64::ln, "ln"),
-            UnaryFunc::LnAPD => log_apd(a, dec::Context::ln, "ln"),
+            UnaryFunc::LnNumeric => log_numeric(a, dec::Context::ln, "ln"),
             UnaryFunc::Exp => exp(a),
-            UnaryFunc::ExpAPD => exp_apd(a),
+            UnaryFunc::ExpNumeric => exp_numeric(a),
             UnaryFunc::Sleep => sleep(a),
-            UnaryFunc::RescaleAPD(scale) => rescale_apd(a, *scale),
+            UnaryFunc::RescaleNumeric(scale) => rescale_numeric(a, *scale),
             UnaryFunc::PgColumnSize => pg_column_size(a),
             UnaryFunc::MzRowSize => mz_row_size(a),
         }
@@ -3690,7 +3694,7 @@ impl UnaryFunc {
             | CastInt64ToString
             | CastFloat32ToString
             | CastFloat64ToString
-            | CastAPDToString
+            | CastNumericToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -3709,23 +3713,23 @@ impl UnaryFunc {
             | Lower => ScalarType::String.nullable(nullable),
 
             CastStringToFloat32 | CastFloat64ToFloat32 | CastInt32ToFloat32
-            | CastInt64ToFloat32 | CastAPDToFloat32 => ScalarType::Float32.nullable(nullable),
+            | CastInt64ToFloat32 | CastNumericToFloat32 => ScalarType::Float32.nullable(nullable),
 
             CastStringToFloat64 | CastInt32ToFloat64 | CastInt64ToFloat64
-            | CastFloat32ToFloat64 | CastAPDToFloat64 => ScalarType::Float64.nullable(nullable),
+            | CastFloat32ToFloat64 | CastNumericToFloat64 => ScalarType::Float64.nullable(nullable),
 
             CastBoolToInt32 | CastStringToInt32 | CastInt64ToInt32 | CastFloat32ToInt32
-            | CastFloat64ToInt32 | CastAPDToInt32 => ScalarType::Int32.nullable(nullable),
+            | CastFloat64ToInt32 | CastNumericToInt32 => ScalarType::Int32.nullable(nullable),
 
             CastStringToInt64 | CastInt32ToInt64 | CastFloat32ToInt64 | CastFloat64ToInt64
-            | CastAPDToInt64 => ScalarType::Int64.nullable(nullable),
+            | CastNumericToInt64 => ScalarType::Int64.nullable(nullable),
 
-            CastStringToAPD(scale)
-            | CastInt32ToAPD(scale)
-            | CastInt64ToAPD(scale)
-            | CastFloat32ToAPD(scale)
-            | CastFloat64ToAPD(scale)
-            | CastJsonbToAPD(scale) => ScalarType::APD { scale: *scale }.nullable(nullable),
+            CastStringToNumeric(scale)
+            | CastInt32ToNumeric(scale)
+            | CastInt64ToNumeric(scale)
+            | CastFloat32ToNumeric(scale)
+            | CastFloat64ToNumeric(scale)
+            | CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
 
             CastInt32ToOid => ScalarType::Oid.nullable(nullable),
             CastOidToInt32 => ScalarType::Oid.nullable(nullable),
@@ -3763,7 +3767,7 @@ impl UnaryFunc {
             | CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
 
             CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
-                return_ty.unscale_any_apd().nullable(false)
+                return_ty.unscale_any_numeric().nullable(false)
             }
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(nullable),
@@ -3803,15 +3807,17 @@ impl UnaryFunc {
             Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot => ScalarType::Float64.nullable(nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(nullable),
             Sleep => ScalarType::TimestampTz.nullable(nullable),
-            RescaleAPD(scale) => (ScalarType::APD {
+            RescaleNumeric(scale) => (ScalarType::Numeric {
                 scale: Some(*scale),
             })
             .nullable(nullable),
             PgColumnSize => ScalarType::Int32.nullable(nullable),
             MzRowSize => ScalarType::Int32.nullable(nullable),
 
-            AbsAPD | CeilAPD | ExpAPD | FloorAPD | LnAPD | Log10APD | NegAPD | RoundAPD
-            | SqrtAPD => ScalarType::APD { scale: None }.nullable(nullable),
+            AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
+            | NegNumeric | RoundNumeric | SqrtNumeric => {
+                ScalarType::Numeric { scale: None }.nullable(nullable)
+            }
         }
     }
 
@@ -3860,7 +3866,7 @@ impl UnaryFunc {
             | CastInt64ToString
             | CastFloat32ToString
             | CastFloat64ToString
-            | CastAPDToString
+            | CastNumericToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -3878,15 +3884,19 @@ impl UnaryFunc {
             | Upper
             | Lower => false,
             CastStringToFloat32 | CastFloat64ToFloat32 | CastInt32ToFloat32
-            | CastInt64ToFloat32 | CastAPDToFloat32 => false,
+            | CastInt64ToFloat32 | CastNumericToFloat32 => false,
             CastStringToFloat64 | CastInt32ToFloat64 | CastInt64ToFloat64
-            | CastFloat32ToFloat64 | CastAPDToFloat64 => false,
+            | CastFloat32ToFloat64 | CastNumericToFloat64 => false,
             CastBoolToInt32 | CastStringToInt32 | CastInt64ToInt32 | CastFloat32ToInt32
-            | CastFloat64ToInt32 | CastAPDToInt32 => false,
+            | CastFloat64ToInt32 | CastNumericToInt32 => false,
             CastStringToInt64 | CastInt32ToInt64 | CastFloat32ToInt64 | CastFloat64ToInt64
-            | CastAPDToInt64 => false,
-            CastStringToAPD(_) | CastInt32ToAPD(_) | CastInt64ToAPD(_) | CastFloat32ToAPD(_)
-            | CastFloat64ToAPD(_) | CastJsonbToAPD(_) => false,
+            | CastNumericToInt64 => false,
+            CastStringToNumeric(_)
+            | CastInt32ToNumeric(_)
+            | CastInt64ToNumeric(_)
+            | CastFloat32ToNumeric(_)
+            | CastFloat64ToNumeric(_)
+            | CastJsonbToNumeric(_) => false,
             CastInt32ToOid | CastOidToInt32 => false,
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => false,
             CastStringToTime | CastIntervalToTime | TimezoneTime { .. } => false,
@@ -3914,8 +3924,8 @@ impl UnaryFunc {
             Log10 | Ln | Exp | Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot | SqrtFloat64
             | CbrtFloat64 => false,
             PgColumnSize | MzRowSize => false,
-            AbsAPD | CeilAPD | ExpAPD | FloorAPD | LnAPD | Log10APD | NegAPD | RoundAPD
-            | SqrtAPD | RescaleAPD(_) => false,
+            AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
+            | NegNumeric | RoundNumeric | SqrtNumeric | RescaleNumeric(_) => false,
         }
     }
 
@@ -3931,7 +3941,7 @@ impl UnaryFunc {
                 | UnaryFunc::NegInt64
                 | UnaryFunc::NegFloat32
                 | UnaryFunc::NegFloat64
-                | UnaryFunc::NegAPD
+                | UnaryFunc::NegNumeric
                 | UnaryFunc::CastBoolToString
                 | UnaryFunc::CastBoolToStringNonstandard
                 | UnaryFunc::CastInt32ToInt64
@@ -3959,11 +3969,11 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::NegInt64 => f.write_str("-"),
             UnaryFunc::NegFloat32 => f.write_str("-"),
             UnaryFunc::NegFloat64 => f.write_str("-"),
-            UnaryFunc::NegAPD => f.write_str("-"),
+            UnaryFunc::NegNumeric => f.write_str("-"),
             UnaryFunc::NegInterval => f.write_str("-"),
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
-            UnaryFunc::AbsAPD => f.write_str("abs"),
+            UnaryFunc::AbsNumeric => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToString => f.write_str("booltostr"),
@@ -3975,11 +3985,11 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastInt32ToInt64 => f.write_str("i32toi64"),
             UnaryFunc::CastInt32ToOid => f.write_str("i32tooid"),
             UnaryFunc::CastInt32ToString => f.write_str("i32tostr"),
-            UnaryFunc::CastInt32ToAPD(..) => f.write_str("i32toapd"),
+            UnaryFunc::CastInt32ToNumeric(..) => f.write_str("i32tonumeric"),
             UnaryFunc::CastOidToInt32 => f.write_str("oidtoi32"),
             UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
             UnaryFunc::CastInt64ToBool => f.write_str("i64tobool"),
-            UnaryFunc::CastInt64ToAPD(..) => f.write_str("i64toapd"),
+            UnaryFunc::CastInt64ToNumeric(..) => f.write_str("i64tonumeric"),
             UnaryFunc::CastInt64ToFloat32 => f.write_str("i64tof32"),
             UnaryFunc::CastInt64ToFloat64 => f.write_str("i64tof64"),
             UnaryFunc::CastInt64ToString => f.write_str("i64tostr"),
@@ -3987,24 +3997,24 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat32ToFloat64 => f.write_str("f32tof64"),
             UnaryFunc::CastFloat32ToString => f.write_str("f32tostr"),
             UnaryFunc::CastFloat32ToInt32 => f.write_str("f32toi32"),
-            UnaryFunc::CastFloat32ToAPD(_) => f.write_str("f32toapd"),
+            UnaryFunc::CastFloat32ToNumeric(_) => f.write_str("f32tonumeric"),
             UnaryFunc::CastFloat64ToInt32 => f.write_str("f64toi32"),
             UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
             UnaryFunc::CastFloat64ToFloat32 => f.write_str("f64tof32"),
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
-            UnaryFunc::CastFloat64ToAPD(_) => f.write_str("f32toapd"),
-            UnaryFunc::CastAPDToInt32 => f.write_str("apdtoi32"),
-            UnaryFunc::CastAPDToInt64 => f.write_str("apdtoi64"),
-            UnaryFunc::CastAPDToString => f.write_str("numerictostr"),
-            UnaryFunc::CastAPDToFloat32 => f.write_str("apdtof32"),
-            UnaryFunc::CastAPDToFloat64 => f.write_str("apdtof64"),
+            UnaryFunc::CastFloat64ToNumeric(_) => f.write_str("f32tonumeric"),
+            UnaryFunc::CastNumericToInt32 => f.write_str("numerictoi32"),
+            UnaryFunc::CastNumericToInt64 => f.write_str("numerictoi64"),
+            UnaryFunc::CastNumericToString => f.write_str("numerictostr"),
+            UnaryFunc::CastNumericToFloat32 => f.write_str("numerictof32"),
+            UnaryFunc::CastNumericToFloat64 => f.write_str("numerictof64"),
             UnaryFunc::CastStringToBool => f.write_str("strtobool"),
             UnaryFunc::CastStringToBytes => f.write_str("strtobytes"),
             UnaryFunc::CastStringToInt32 => f.write_str("strtoi32"),
             UnaryFunc::CastStringToInt64 => f.write_str("strtoi64"),
             UnaryFunc::CastStringToFloat32 => f.write_str("strtof32"),
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
-            UnaryFunc::CastStringToAPD(_) => f.write_str("strtoapd"),
+            UnaryFunc::CastStringToNumeric(_) => f.write_str("strtonumeric"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
             UnaryFunc::CastStringToArray { .. } => f.write_str("strtoarray"),
             UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
@@ -4036,7 +4046,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastJsonbToFloat32 => f.write_str("jsonbtof32"),
             UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
             UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
-            UnaryFunc::CastJsonbToAPD(_) => f.write_str("jsonbtoapd"),
+            UnaryFunc::CastJsonbToNumeric(_) => f.write_str("jsonbtonumeric"),
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
@@ -4046,12 +4056,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastInPlace { .. } => f.write_str("castinplace"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
-            UnaryFunc::CeilAPD => f.write_str("ceilapd"),
+            UnaryFunc::CeilNumeric => f.write_str("ceilnumeric"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
             UnaryFunc::FloorFloat64 => f.write_str("floorf64"),
-            UnaryFunc::FloorAPD => f.write_str("floorapd"),
+            UnaryFunc::FloorNumeric => f.write_str("floornumeric"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
-            UnaryFunc::SqrtAPD => f.write_str("sqrtapd"),
+            UnaryFunc::SqrtNumeric => f.write_str("sqrtnumeric"),
             UnaryFunc::CbrtFloat64 => f.write_str("cbrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::CharLength => f.write_str("char_length"),
@@ -4076,7 +4086,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
             UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
             UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
-            UnaryFunc::RoundAPD => f.write_str("roundapd"),
+            UnaryFunc::RoundNumeric => f.write_str("roundnumeric"),
             UnaryFunc::TrimWhitespace => f.write_str("btrim"),
             UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
@@ -4092,13 +4102,13 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Tanh => f.write_str("tanh"),
             UnaryFunc::Cot => f.write_str("cot"),
             UnaryFunc::Log10 => f.write_str("log10f64"),
-            UnaryFunc::Log10APD => f.write_str("log10apd"),
+            UnaryFunc::Log10Numeric => f.write_str("log10numeric"),
             UnaryFunc::Ln => f.write_str("lnf64"),
-            UnaryFunc::LnAPD => f.write_str("lnapd"),
-            UnaryFunc::ExpAPD => f.write_str("expapd"),
+            UnaryFunc::LnNumeric => f.write_str("lnnumeric"),
+            UnaryFunc::ExpNumeric => f.write_str("expnumeric"),
             UnaryFunc::Exp => f.write_str("expf64"),
             UnaryFunc::Sleep => f.write_str("mz_sleep"),
-            UnaryFunc::RescaleAPD(..) => f.write_str("rescale_apd"),
+            UnaryFunc::RescaleNumeric(..) => f.write_str("rescale_numeric"),
             UnaryFunc::PgColumnSize => f.write_str("pg_column_size"),
             UnaryFunc::MzRowSize => f.write_str("mz_row_size"),
         }
@@ -4584,13 +4594,13 @@ where
         Int64 => strconv::format_int64(buf, d.unwrap_int64()),
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),
-        APD { scale } => {
-            let mut d = d.unwrap_apd();
+        Numeric { scale } => {
+            let mut d = d.unwrap_numeric();
             if let Some(scale) = scale {
-                apd::rescale(&mut d.0, *scale).unwrap();
+                numeric::rescale(&mut d.0, *scale).unwrap();
             }
 
-            strconv::format_apd(buf, &d)
+            strconv::format_numeric(buf, &d)
         }
         Date => strconv::format_date(buf, d.unwrap_date()),
         Time => strconv::format_time(buf, d.unwrap_time()),

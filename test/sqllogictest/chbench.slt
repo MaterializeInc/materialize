@@ -240,7 +240,7 @@ ORDER BY ol_number
 | | agg count(#7)
 | | agg count(#8)
 | | agg count(true)
-| Map (i64tof64(#1) / i64tof64(if (#3 = 0) then {null} else {#3})), (apdtof64(#2) / i64tof64(if (#4 = 0) then {null} else {#4}))
+| Map (i64tof64(#1) / i64tof64(if (#3 = 0) then {null} else {#3})), (numerictof64(#2) / i64tof64(if (#4 = 0) then {null} else {#4}))
 | Project (#0..#2, #6, #7, #5)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#5)
@@ -873,14 +873,14 @@ ORDER BY ordercount DESC
 | Filter (#26 = "GERMANY")
 | Reduce group=()
 | | agg sum(#14)
-| Map (i64toapd(#0) * 0.005)
+| Map (i64tonumeric(#0) * 0.005)
 | ArrangeBy ()
 
 %8 =
 | Join %3 %7
 | | implementation = Differential %3 %7.()
 | | demand = (#0, #1, #3)
-| Filter (i64toapd(#1) > #3)
+| Filter (i64tonumeric(#1) > #3)
 | Project (#0, #1)
 
 Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
@@ -1560,14 +1560,14 @@ ORDER BY substr(c_state, 1, 1)
 | Reduce group=()
 | | agg sum(#16)
 | | agg count(true)
-| Map (apdtof64(#0) / i64tof64(if (#1 = 0) then {null} else {#1}))
+| Map (numerictof64(#0) / i64tof64(if (#1 = 0) then {null} else {#1}))
 | ArrangeBy ()
 
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
 | | demand = (#0..#2, #9, #16, #24)
-| Filter (apdtof64(#16) > #24)
+| Filter (numerictof64(#16) > #24)
 
 %3 =
 | Get %2 (l0)

@@ -122,18 +122,18 @@ lazy_static! {
             (Int32, Int64) => Implicit: CastInt32ToInt64,
             (Int32, Float32) => Implicit: CastInt32ToFloat32,
             (Int32, Float64) => Implicit: CastInt32ToFloat64,
-            (Int32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToAPD(s)))
+            (Int32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToNumeric(s)))
             }),
             (Int32, String) => Assignment: CastInt32ToString,
 
             // INT64
             (Int64, Bool) => Explicit: CastInt64ToBool,
             (Int64, Int32) => Assignment: CastInt64ToInt32,
-            (Int64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToAPD(s)))
+            (Int64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToNumeric(s)))
             }),
             (Int64, Float32) => Implicit: CastInt64ToFloat32,
             (Int64, Float64) => Implicit: CastInt64ToFloat64,
@@ -147,9 +147,9 @@ lazy_static! {
             (Float32, Int32) => Assignment: CastFloat32ToInt32,
             (Float32, Int64) => Assignment: CastFloat32ToInt64,
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
-            (Float32, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToAPD(s)))
+            (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(s)))
             }),
             (Float32, String) => Assignment: CastFloat32ToString,
 
@@ -157,9 +157,9 @@ lazy_static! {
             (Float64, Int32) => Assignment: CastFloat64ToInt32,
             (Float64, Int64) => Assignment: CastFloat64ToInt64,
             (Float64, Float32) => Assignment: CastFloat64ToFloat32,
-            (Float64, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToAPD(s)))
+            (Float64, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(s)))
             }),
             (Float64, String) => Assignment: CastFloat64ToString,
 
@@ -196,9 +196,9 @@ lazy_static! {
             (String, Oid) => Explicit: CastStringToInt32,
             (String, Float32) => Explicit: CastStringToFloat32,
             (String, Float64) => Explicit: CastStringToFloat64,
-            (String, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToAPD(s)))
+            (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
             }),
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
@@ -276,26 +276,26 @@ lazy_static! {
             (Jsonb, Int64) => Explicit: CastJsonbToInt64,
             (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
-            (Jsonb, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToAPD(s)))
+            (Jsonb, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(s)))
             }),
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
             (Uuid, String) => Assignment: CastUuidToString,
 
-            // APD
-            // APD to APD casts are not necessary in implicit contexts
-            (APD, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let scale = to_type.unwrap_apd_scale().unwrap();
-                Some(move |e: HirScalarExpr|e.call_unary(UnaryFunc::RescaleAPD(scale)))
+            // Numeric
+            // Numeric to Numeric casts are not necessary in implicit contexts
+            (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let scale = to_type.unwrap_numeric_scale().unwrap();
+                Some(move |e: HirScalarExpr|e.call_unary(UnaryFunc::RescaleNumeric(scale)))
             }),
-            (APD, Float32) => Implicit: CastAPDToFloat32,
-            (APD, Float64) => Implicit: CastAPDToFloat64,
-            (APD, Int32) => Assignment: CastAPDToInt32,
-            (APD, Int64) => Assignment: CastAPDToInt64,
-            (APD, String) => Assignment: CastAPDToString
+            (Numeric, Float32) => Implicit: CastNumericToFloat32,
+            (Numeric, Float64) => Implicit: CastNumericToFloat64,
+            (Numeric, Int32) => Assignment: CastNumericToInt32,
+            (Numeric, Int64) => Assignment: CastNumericToInt64,
+            (Numeric, String) => Assignment: CastNumericToString
         }
     };
 }
@@ -315,8 +315,8 @@ fn get_cast(
         // - CastContext is either Assignment or Explicit
         // - `to` has a specified scale that differs from `from`'s
         (
-            ScalarType::APD { scale: from_scale },
-            ScalarType::APD {
+            ScalarType::Numeric { scale: from_scale },
+            ScalarType::Numeric {
                 scale: to_scale @ Some(..),
             },
         ) if ccx != Implicit => from_scale == to_scale,
@@ -397,9 +397,11 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
             .expect("cast known to exist")
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Float32 | APD { .. } => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
-            .expect("cast known to exist")
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Float32 | Numeric { .. } => {
+            plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
+                .expect("cast known to exist")
+                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
+        }
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
@@ -476,7 +478,7 @@ pub fn guess_best_common_type(
             // TypeCategory::Numeric
             ScalarType::Int32 => 1,
             ScalarType::Int64 => 2,
-            ScalarType::APD { scale: None } => 3,
+            ScalarType::Numeric { scale: None } => 3,
             ScalarType::Float32 => 4,
             ScalarType::Float64 => 5,
             // TypeCategory::DateTime
@@ -594,7 +596,7 @@ pub fn plan_hypothetical_cast(
 /// # Errors
 ///
 /// If a cast between the `ScalarExpr`'s base type and the specified type is:
-/// - Not possible, e.g. `Bytes` to `Decimal`
+/// - Not possible, e.g. `Bytes` to `Interval`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
 /// - Not implemented yet
 pub fn plan_cast<D>(

@@ -390,7 +390,7 @@ impl SessionClient {
                 Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Float32(n) => float_to_json(n.into_inner() as f64),
                 Datum::Float64(n) => float_to_json(n.into_inner()),
-                Datum::APD(d) => {
+                Datum::Numeric(d) => {
                     // serde_json requires floats to be finite
                     if d.0.is_infinite() {
                         serde_json::Value::String(d.0.to_string())

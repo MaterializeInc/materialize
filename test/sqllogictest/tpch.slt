@@ -168,7 +168,7 @@ ORDER BY
 | | agg sum(((#5 * (1 - #6)) * (1 + #7)))
 | | agg count(true)
 | | agg sum(#6)
-| Map i64tof64(if (#6 = 0) then {null} else {#6}), (apdtof64(#2) / #8), (apdtof64(#3) / #8), (apdtof64(#7) / #8)
+| Map i64tof64(if (#6 = 0) then {null} else {#6}), (numerictof64(#2) / #8), (numerictof64(#3) / #8), (numerictof64(#7) / #8)
 | Project (#0..#5, #9..#11, #6)
 
 Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0..#9)
@@ -881,7 +881,7 @@ ORDER BY
 | | demand = (#0, #2, #3, #13)
 | Filter (#13 = "GERMANY")
 | Reduce group=(#0)
-| | agg sum((#3 * i32toapd(#2)))
+| | agg sum((#3 * i32tonumeric(#2)))
 
 %4 =
 | Get materialize.public.partsupp (u11)
@@ -904,7 +904,7 @@ ORDER BY
 | | demand = (#2, #3, #13)
 | Filter (#13 = "GERMANY")
 | Reduce group=()
-| | agg sum((#3 * i32toapd(#2)))
+| | agg sum((#3 * i32tonumeric(#2)))
 | Map (#0 * 0.0001)
 | ArrangeBy ()
 
@@ -1306,14 +1306,14 @@ WHERE
 | Reduce group=(#0)
 | | agg sum(#5)
 | | agg count(true)
-| Map (0.2 * (apdtof64(#1) / i64tof64(if (#2 = 0) then {null} else {#2})))
+| Map (0.2 * (numerictof64(#1) / i64tof64(if (#2 = 0) then {null} else {#2})))
 | ArrangeBy (#0)
 
 %6 = Let l1 =
 | Join %2 %5 (= #1 #25)
 | | implementation = Differential %2 %5.(#0)
 | | demand = (#4, #5, #28)
-| Filter (apdtof64(#4) < #28)
+| Filter (numerictof64(#4) < #28)
 | Reduce group=()
 | | agg sum(#5)
 
@@ -1601,7 +1601,7 @@ ORDER BY
 | Join %7 %10 (= #0 #26) (= #11 #25)
 | | implementation = Differential %7 %10.(#0, #1)
 | | demand = (#0, #13, #28)
-| Filter (i32toapd(#13) > #28)
+| Filter (i32tonumeric(#13) > #28)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -1800,14 +1800,14 @@ ORDER BY
 | Reduce group=()
 | | agg sum(#5)
 | | agg count(true)
-| Map (apdtof64(#0) / i64tof64(if (#1 = 0) then {null} else {#1}))
+| Map (numerictof64(#0) / i64tof64(if (#1 = 0) then {null} else {#1}))
 | ArrangeBy ()
 
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
 | | demand = (#0, #4, #5, #10)
-| Filter (apdtof64(#5) > #10)
+| Filter (numerictof64(#5) > #10)
 
 %3 =
 | Get %2 (l0)
@@ -1905,7 +1905,7 @@ ORDER BY
 | |
 | | %3 =
 | | | Get materialize.public.partsupp (u11)
-| | | Filter (select(%4) && (i32toapd(#2) > select(%5)))
+| | | Filter (select(%4) && (i32tonumeric(#2) > select(%5)))
 | | | |
 | | | | %4 =
 | | | | | Get materialize.public.part (u6)

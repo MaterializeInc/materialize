@@ -25,7 +25,7 @@ use dataflow_types::*;
 use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use ore::cast::CastFrom;
-use repr::adt::apd;
+use repr::adt::numeric;
 use repr::{Datum, Row, Timestamp};
 
 use crate::render::context::Context;
@@ -165,7 +165,7 @@ where
                 .map({
                     let mut rp = Row::default();
                     move |((k, v), time, diff)| {
-                        rp.push(Datum::from(apd::Apd::from(time)));
+                        rp.push(Datum::from(numeric::Numeric::from(time)));
                         if emit_progress {
                             rp.push(Datum::False);
                         }

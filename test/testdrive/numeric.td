@@ -7,18 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE TABLE apd_insertions (a APD(39,2));
+> CREATE TABLE numeric_insertions (a numeric(39,2));
 
-> CREATE TABLE apd_deletions (a APD(39,2));
+> CREATE TABLE numeric_deletions (a numeric(39,2));
 
-> CREATE VIEW apd_values AS
-  SELECT a FROM apd_insertions
-    EXCEPT (SELECT a FROM apd_deletions);
+> CREATE VIEW numeric_values AS
+  SELECT a FROM numeric_insertions
+    EXCEPT (SELECT a FROM numeric_deletions);
 
-> INSERT INTO apd_insertions VALUES ('0.0001');
-> INSERT INTO apd_insertions VALUES ('0.009');
+> INSERT INTO numeric_insertions VALUES ('0.0001');
+> INSERT INTO numeric_insertions VALUES ('0.009');
 
-> SELECT a::text, a = '0'::apd AS eq_zero FROM apd_values;
+> SELECT a, a = 0 AS eq_zero FROM numeric_values;
 a    eq_zero
 ------------
 0    true

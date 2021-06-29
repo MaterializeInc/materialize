@@ -258,7 +258,7 @@ pub fn describe_tail(
     let progress = options.progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_named_column(
         "mz_timestamp",
-        ScalarType::APD { scale: Some(0) }.nullable(false),
+        ScalarType::Numeric { scale: Some(0) }.nullable(false),
     );
     if progress {
         desc = desc.with_named_column("mz_progressed", ScalarType::Bool.nullable(false));

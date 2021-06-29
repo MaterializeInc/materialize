@@ -14,7 +14,7 @@ use chrono::TimeZone;
 use proptest::prelude::*;
 use uuid::Uuid;
 
-use repr::adt::apd::Apd as AdtApd;
+use repr::adt::numeric::Numeric as AdtNumeric;
 use repr::adt::{array::ArrayDimension, interval::Interval};
 use repr::{Datum, Row};
 
@@ -34,7 +34,7 @@ enum PropertizedDatum {
     TimestampTz(chrono::DateTime<chrono::Utc>),
 
     Interval(Interval),
-    Apd(AdtApd),
+    Numeric(AdtNumeric),
 
     Bytes(Vec<u8>),
     String(String),
@@ -63,7 +63,7 @@ fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
             .prop_map(PropertizedDatum::Timestamp),
         add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropertizedDatum::TimestampTz),
         arb_interval().prop_map(PropertizedDatum::Interval),
-        arb_apd().prop_map(PropertizedDatum::Apd),
+        arb_numeric().prop_map(PropertizedDatum::Numeric),
         prop::collection::vec(any::<u8>(), 1024).prop_map(PropertizedDatum::Bytes),
         ".*".prop_map(PropertizedDatum::String),
         Just(PropertizedDatum::JsonNull),
@@ -166,9 +166,9 @@ where
         .boxed()
 }
 
-fn arb_apd() -> BoxedStrategy<AdtApd> {
+fn arb_numeric() -> BoxedStrategy<AdtNumeric> {
     any::<i128>()
-        .prop_map(|v| AdtApd::try_from(v).unwrap())
+        .prop_map(|v| AdtNumeric::try_from(v).unwrap())
         .boxed()
 }
 
@@ -187,7 +187,7 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Timestamp(t) => Datum::from(*t),
             TimestampTz(t) => Datum::from(*t),
             Interval(i) => Datum::from(*i),
-            Apd(s) => Datum::from(*s),
+            Numeric(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
             String(s) => Datum::from(s.as_str()),
             Array(PropertizedArray(row, _)) => {
