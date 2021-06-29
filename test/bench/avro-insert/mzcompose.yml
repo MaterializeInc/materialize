@@ -66,11 +66,11 @@ services:
       - MZ_LOG=pgwire=debug,info
       - MZ_DEV=1
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.4
+    image: confluentinc/cp-zookeeper:6.2.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.5.4
+    image: confluentinc/cp-enterprise-kafka:6.2.0
     ports:
       - *kafka-internal
       - *kafka-external
@@ -92,7 +92,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.4
+    image: confluentinc/cp-schema-registry:6.2.0
     ports:
       - *schema-registry
     environment:

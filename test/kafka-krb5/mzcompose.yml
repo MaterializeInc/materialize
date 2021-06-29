@@ -19,7 +19,7 @@ services:
       - ./kdc/krb5.conf:/etc/krb5.conf
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.4
+    image: confluentinc/cp-zookeeper:6.2.0
     depends_on:
       - kdc
     volumes:
@@ -38,7 +38,7 @@ services:
         -Dsun.security.krb5.debug=true
 
   kafka:
-    image: confluentinc/cp-kafka:5.5.4
+    image: confluentinc/cp-kafka:6.2.0
     depends_on:
       - kdc
       - zookeeper
@@ -59,7 +59,7 @@ services:
         -Djava.security.krb5.conf=/etc/krb5.conf
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.4
+    image: confluentinc/cp-schema-registry:6.2.0
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"

@@ -147,11 +147,11 @@ services:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.4
+    image: confluentinc/cp-zookeeper:6.2.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: confluentinc/cp-kafka:5.5.4
+    image: confluentinc/cp-kafka:6.2.0
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
@@ -159,7 +159,7 @@ services:
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     - KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.4
+    image: confluentinc/cp-schema-registry:6.2.0
     environment:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost

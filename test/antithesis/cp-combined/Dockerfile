@@ -9,7 +9,7 @@
 
 FROM ubuntu:bionic-20200403
 
-ENV CONFLUENT_VERSION=5.5.4-1
+ENV CONFLUENT_VERSION=6.2.0-1
 
 RUN apt-get update \
     && apt-get install -y ca-certificates wait-for-it \

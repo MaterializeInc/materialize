@@ -38,14 +38,14 @@ services:
       - MZ_DEV=1
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.4
+    image: confluentinc/cp-zookeeper:6.2.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     cap_add:
       - NET_ADMIN
 
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.5.4
+    image: confluentinc/cp-enterprise-kafka:6.2.0
     ports:
       - *kafka
     depends_on: [zookeeper]
@@ -59,7 +59,7 @@ services:
       - NET_ADMIN
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.4
+    image: confluentinc/cp-schema-registry:6.2.0
     ports:
       - *schema-registry
     environment:
@@ -88,7 +88,7 @@ services:
       - NET_ADMIN
 
   connector:
-    image: confluentinc/cp-enterprise-kafka:5.5.4
+    image: confluentinc/cp-enterprise-kafka:6.2.0
     volumes:
       - ./connector/docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh
     entrypoint:
@@ -97,7 +97,7 @@ services:
       - NET_ADMIN
 
   mysql:
-    image: debezium/example-mysql:1.4
+    image: debezium/example-mysql:1.5
     ports:
       - *mysql
     environment:
@@ -116,7 +116,7 @@ services:
     build: connector-mysql
     depends_on: [schema-registry, control-center]
   control-center:
-    image: confluentinc/cp-enterprise-control-center:5.5.4
+    image: confluentinc/cp-enterprise-control-center:6.2.0
     depends_on: [zookeeper, kafka, connect]
     ports:
       - *control-center

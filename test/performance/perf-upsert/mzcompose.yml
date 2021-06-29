@@ -23,11 +23,11 @@ services:
       - MZ_LOG=dataflow=error,info
       - MZ_DEV=1
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.4
+    image: confluentinc/cp-zookeeper:6.2.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.5.4
+    image: confluentinc/cp-enterprise-kafka:6.2.0
     ports:
       - *kafka
     depends_on: [zookeeper]

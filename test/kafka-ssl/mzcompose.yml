@@ -50,11 +50,11 @@ services:
     environment:
       - MZ_DEV=1
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.4
+    image: confluentinc/cp-zookeeper:6.2.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: confluentinc/cp-kafka:5.5.4
+    image: confluentinc/cp-kafka:6.2.0
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -71,7 +71,7 @@ services:
       - secrets:/etc/kafka/secrets
     depends_on: [zookeeper, test-certs]
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.4
+    image: confluentinc/cp-schema-registry:6.2.0
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: "https://0.0.0.0:8081"

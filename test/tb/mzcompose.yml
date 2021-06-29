@@ -18,7 +18,7 @@ services:
     environment:
       - MZ_DEV=1
   mysql:
-    image: debezium/example-mysql:1.4
+    image: debezium/example-mysql:1.5
     ports: [3306]
     environment:
       - MYSQL_ROOT_PASSWORD=rootpw

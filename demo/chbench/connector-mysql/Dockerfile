@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM confluentinc/cp-enterprise-kafka:5.3.0
+FROM confluentinc/cp-enterprise-kafka:6.2.0
 
 # https://github.com/confluentinc/cp-docker-images/issues/764
 RUN sed -i s,https://s3-us-west-2.amazonaws.com/staging-confluent-packages-5.3.0/deb/5.3,https://packages.confluent.io/deb/5.3, /etc/apt/sources.list
