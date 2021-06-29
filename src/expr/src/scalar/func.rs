@@ -3965,31 +3965,19 @@ impl UnaryFunc {
         use UnaryFunc::*;
         let in_nullable = input_type.nullable;
         match self {
-            IsNull | CastInt32ToBool | CastInt64ToBool => ScalarType::Bool.nullable(false),
+            IsNull => ScalarType::Bool.nullable(false),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(in_nullable),
 
-            IsRegexpMatch(_) => ScalarType::Bool.nullable(in_nullable),
-
-            CastStringToBool => ScalarType::Bool.nullable(true),
-            CastStringToBytes => ScalarType::Bytes.nullable(true),
-            CastStringToInt32 => ScalarType::Int32.nullable(true),
-            CastStringToInt64 => ScalarType::Int64.nullable(true),
-            CastStringToFloat32 => ScalarType::Float32.nullable(true),
-            CastStringToFloat64 => ScalarType::Float64.nullable(true),
-            CastStringToDecimal(scale) => {
-                ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale).nullable(true)
+            IsRegexpMatch(_) | CastInt32ToBool | CastInt64ToBool | CastStringToBool => {
+                ScalarType::Bool.nullable(in_nullable)
             }
-            CastStringToAPD(scale) => ScalarType::APD { scale: *scale }.nullable(true),
-            CastStringToDate => ScalarType::Date.nullable(true),
-            CastStringToTime => ScalarType::Time.nullable(true),
-            CastStringToTimestamp => ScalarType::Timestamp.nullable(true),
-            CastStringToTimestampTz => ScalarType::TimestampTz.nullable(true),
-            CastStringToInterval | CastTimeToInterval => ScalarType::Interval.nullable(true),
-            CastStringToUuid => ScalarType::Uuid.nullable(true),
 
-            CastBoolToInt32 => ScalarType::Int32.nullable(in_nullable),
+            CastStringToBytes => ScalarType::Bytes.nullable(in_nullable),
+            CastStringToInterval | CastTimeToInterval => ScalarType::Interval.nullable(in_nullable),
+            CastStringToUuid => ScalarType::Uuid.nullable(in_nullable),
+            CastStringToJsonb => ScalarType::Jsonb.nullable(in_nullable),
 
             CastBoolToString
             | CastBoolToStringNonstandard
@@ -4005,6 +3993,7 @@ impl UnaryFunc {
             | CastTimestampTzToString
             | CastIntervalToString
             | CastBytesToString
+            | CastUuidToString
             | CastRecordToString { .. }
             | CastArrayToString { .. }
             | CastListToString { .. }
@@ -4015,29 +4004,34 @@ impl UnaryFunc {
             | Upper
             | Lower => ScalarType::String.nullable(in_nullable),
 
-            CastFloat64ToFloat32
+            CastStringToFloat32
+            | CastFloat64ToFloat32
             | CastInt32ToFloat32
             | CastInt64ToFloat32
             | CastSignificandToFloat32
             | CastAPDToFloat32 => ScalarType::Float32.nullable(in_nullable),
 
-            CastInt32ToFloat64
+            CastStringToFloat64
+            | CastInt32ToFloat64
             | CastInt64ToFloat64
             | CastFloat32ToFloat64
             | CastSignificandToFloat64
             | CastAPDToFloat64 => ScalarType::Float64.nullable(in_nullable),
 
-            CastFloat32ToDecimal(s) | CastFloat64ToDecimal(s) => {
+            CastStringToDecimal(s) | CastFloat32ToDecimal(s) | CastFloat64ToDecimal(s) => {
                 ScalarType::Decimal(MAX_DECIMAL_PRECISION, *s).nullable(in_nullable)
             }
 
-            CastInt64ToInt32 | CastDecimalToInt32(_) | CastAPDToInt32 => {
-                ScalarType::Int32.nullable(in_nullable)
-            }
+            CastBoolToInt32
+            | CastStringToInt32
+            | CastInt64ToInt32
+            | CastDecimalToInt32(_)
+            | CastFloat32ToInt32
+            | CastFloat64ToInt32
+            | CastAPDToInt32 => ScalarType::Int32.nullable(in_nullable),
 
-            CastFloat32ToInt32 | CastFloat64ToInt32 => ScalarType::Int32.nullable(true),
-
-            CastInt32ToInt64
+            CastStringToInt64
+            | CastInt32ToInt64
             | CastDecimalToInt64(_)
             | CastFloat32ToInt64
             | CastFloat64ToInt64
@@ -4045,7 +4039,8 @@ impl UnaryFunc {
 
             CastInt32ToDecimal => ScalarType::Decimal(0, 0).nullable(in_nullable),
             CastInt64ToDecimal => ScalarType::Decimal(0, 0).nullable(in_nullable),
-            CastInt32ToAPD(scale)
+            CastStringToAPD(scale)
+            | CastInt32ToAPD(scale)
             | CastInt64ToAPD(scale)
             | CastFloat32ToAPD(scale)
             | CastFloat64ToAPD(scale)
@@ -4054,20 +4049,23 @@ impl UnaryFunc {
             CastInt32ToOid => ScalarType::Oid.nullable(in_nullable),
             CastOidToInt32 => ScalarType::Oid.nullable(in_nullable),
 
-            CastTimestampToDate | CastTimestampTzToDate => ScalarType::Date.nullable(in_nullable),
-
-            CastIntervalToTime | TimezoneTime { .. } => ScalarType::Time.nullable(in_nullable),
-
-            CastDateToTimestamp | CastTimestampTzToTimestamp | TimezoneTimestampTz(_) => {
-                ScalarType::Timestamp.nullable(in_nullable)
+            CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => {
+                ScalarType::Date.nullable(in_nullable)
             }
 
-            CastDateToTimestampTz | CastTimestampToTimestampTz | TimezoneTimestamp(_) => {
-                ScalarType::TimestampTz.nullable(in_nullable)
+            CastStringToTime | CastIntervalToTime | TimezoneTime { .. } => {
+                ScalarType::Time.nullable(in_nullable)
             }
 
-            // can return null for invalid json
-            CastStringToJsonb => ScalarType::Jsonb.nullable(true),
+            CastStringToTimestamp
+            | CastDateToTimestamp
+            | CastTimestampTzToTimestamp
+            | TimezoneTimestampTz(_) => ScalarType::Timestamp.nullable(in_nullable),
+
+            CastStringToTimestampTz
+            | CastDateToTimestampTz
+            | CastTimestampToTimestampTz
+            | TimezoneTimestamp(_) => ScalarType::TimestampTz.nullable(in_nullable),
 
             // converts null to jsonnull
             CastJsonbOrNullToJsonb => ScalarType::Jsonb.nullable(false),
@@ -4083,13 +4081,11 @@ impl UnaryFunc {
             }
             CastJsonbToBool => ScalarType::Bool.nullable(true),
 
-            CastUuidToString => ScalarType::String.nullable(true),
-
             CastList1ToList2 { return_ty, .. }
             | CastStringToArray { return_ty, .. }
             | CastStringToList { return_ty, .. }
             | CastStringToMap { return_ty, .. }
-            | CastInPlace { return_ty } => (return_ty.clone()).nullable(false),
+            | CastInPlace { return_ty } => (return_ty.clone()).nullable(in_nullable),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
@@ -4101,10 +4097,6 @@ impl UnaryFunc {
                 input_type.scalar_type.nullable(in_nullable)
             }
 
-            SqrtFloat64 => ScalarType::Float64.nullable(true),
-
-            CbrtFloat64 => ScalarType::Float64.nullable(true),
-
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
             | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
 
@@ -4112,14 +4104,14 @@ impl UnaryFunc {
                 ScalarType::Float64.nullable(in_nullable)
             }
 
-            DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(true),
-            DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(true),
+            DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(in_nullable),
+            DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(in_nullable),
 
             ToTimestamp => ScalarType::TimestampTz.nullable(true),
 
             JsonbArrayLength => ScalarType::Int64.nullable(true),
             JsonbTypeof => ScalarType::String.nullable(in_nullable),
-            JsonbStripNulls => ScalarType::Jsonb.nullable(true),
+            JsonbStripNulls => ScalarType::Jsonb.nullable(in_nullable),
             JsonbPretty => ScalarType::String.nullable(in_nullable),
 
             RecordGet(i) => match input_type.scalar_type {
@@ -4131,24 +4123,19 @@ impl UnaryFunc {
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
-            ListLength => ScalarType::Int64.nullable(true),
+            ListLength => ScalarType::Int64.nullable(in_nullable),
 
             RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
 
-            Cos => ScalarType::Float64.nullable(in_nullable),
-            Cosh => ScalarType::Float64.nullable(in_nullable),
-            Sin => ScalarType::Float64.nullable(in_nullable),
-            Sinh => ScalarType::Float64.nullable(in_nullable),
-            Tan => ScalarType::Float64.nullable(in_nullable),
-            Tanh => ScalarType::Float64.nullable(in_nullable),
-            Cot => ScalarType::Float64.nullable(in_nullable),
+            SqrtFloat64 | CbrtFloat64 => ScalarType::Float64.nullable(in_nullable),
+            Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot => ScalarType::Float64.nullable(in_nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
             Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
             Sleep => ScalarType::TimestampTz.nullable(true),
             RescaleAPD(scale) => ScalarType::APD {
                 scale: Some(*scale),
             }
-            .nullable(true),
+            .nullable(in_nullable),
             PgColumnSize => ScalarType::Int32.nullable(in_nullable),
             MzRowSize => ScalarType::Int32.nullable(in_nullable),
 
@@ -4160,6 +4147,26 @@ impl UnaryFunc {
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         !matches!(self, UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb)
+    }
+
+    /// Whether the function might return NULL even if none of its inputs are
+    /// NULL.
+    pub fn introduces_nulls(&self) -> bool {
+        matches!(
+            self,
+            UnaryFunc::CastJsonbToString
+                | UnaryFunc::CastJsonbToInt32
+                | UnaryFunc::CastJsonbToInt64
+                | UnaryFunc::CastJsonbToFloat32
+                | UnaryFunc::CastJsonbToFloat64
+                | UnaryFunc::CastJsonbToDecimal(_)
+                | UnaryFunc::CastJsonbToBool
+                | UnaryFunc::JsonbArrayLength
+                | UnaryFunc::RegexpMatch(_)
+                | UnaryFunc::RecordGet(_)
+                | UnaryFunc::Sleep
+                | UnaryFunc::ToTimestamp
+        )
     }
 
     /// True iff for x != y, we are assured f(x) != f(y).
@@ -5524,5 +5531,46 @@ mod test {
 
     fn ym(year: i32, month: u32) -> NaiveDateTime {
         NaiveDate::from_ymd(year, month, 1).and_hms(9, 9, 9)
+    }
+
+    // Tests that `UnaryFunc::introduces_nulls` answers consistent with
+    // `UnaryFunc::output_type` and `UnaryFunc::propagates_nulls`.
+    // Currently, only unit variants of UnaryFunc are tested because those are
+    // the easiest to construct in bulk.
+    #[test]
+    fn unary_func_introduces_nulls() {
+        // Dummy columns to test the nullability of `UnaryFunc::output_type`.
+        // It is ok that we're feeding these dummy columns into functions that
+        // may not even support this `ScalarType` as an input because we only
+        // care about input and output nullabilities.
+        let dummy_col_nullable_type = ScalarType::Bool.nullable(true);
+        let dummy_col_nonnullable_type = ScalarType::Bool.nullable(false);
+        for (variant, (_, f_types)) in UnaryFunc::mz_enum_reflect() {
+            if f_types.is_empty() {
+                let unary_unit_variant: UnaryFunc =
+                    serde_json::from_str(&format!("\"{}\"", variant)).unwrap();
+                let output_on_nullable_input = unary_unit_variant
+                    .output_type(dummy_col_nullable_type.clone())
+                    .nullable;
+                let output_on_nonnullable_input = unary_unit_variant
+                    .output_type(dummy_col_nonnullable_type.clone())
+                    .nullable;
+                if unary_unit_variant.introduces_nulls() {
+                    // The output type should always be nullable no matter the
+                    // input type.
+                    assert!(output_on_nullable_input, "failure on {}", variant);
+                    assert!(output_on_nonnullable_input, "failure on {}", variant)
+                } else {
+                    // The output type will be nonnullable if the input type is
+                    // nonnullable. If the input type is nullable, the output
+                    // type is equal to whether the func propagates nulls.
+                    assert!(!output_on_nonnullable_input, "failure on {}", variant);
+                    assert_eq!(
+                        output_on_nullable_input,
+                        unary_unit_variant.propagates_nulls()
+                    );
+                }
+            }
+        }
     }
 }
