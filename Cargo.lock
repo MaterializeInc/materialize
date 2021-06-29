@@ -36,9 +36,14 @@ checksum = "ee2a4ec343196209d6594e19543ae87a39f96d5534d7174822a3ad825dd6ed7e"
 
 [[package]]
 name = "ahash"
-version = "0.4.6"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6789e291be47ace86a60303502173d84af8327e3627ecf334356ee0f87a164c"
+checksum = "43bb833f0bf979d8475d38fbf09ed3b8a55e1885fe93ad3f93239fc6a4f17b98"
+dependencies = [
+ "getrandom",
+ "once_cell",
+ "version_check",
+]
 
 [[package]]
 name = "aho-corasick"
@@ -1522,18 +1527,18 @@ checksum = "d36fab90f82edc3c747f9d438e06cf0a491055896f2a279638bb5beed6c40177"
 
 [[package]]
 name = "hashbrown"
-version = "0.9.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
+checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
 dependencies = [
  "ahash",
 ]
 
 [[package]]
 name = "hashlink"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d99cf782f0dc4372d26846bec3de7804ceb5df083c2d4462c0b8d2330e894fa8"
+checksum = "7249a3129cbc1ffccd74857f81464a323a152173cdb134e0fd81bc803b29facf"
 dependencies = [
  "hashbrown",
 ]
@@ -1796,9 +1801,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.6.2"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824845a0bf897a9042383849b02c1bc219c2383772efcd5c6f9766fa4b81aef3"
+checksum = "bc633605454125dec4b66843673f01c7df2b89479b32e0ed634e43a91cff62a5"
 dependencies = [
  "autocfg",
  "hashbrown",
@@ -2020,9 +2025,9 @@ checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.22.1"
+version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19cb1effde5f834799ac5e5ef0e40d45027cd74f271b1de786ba8abb30e2164d"
+checksum = "290b64917f8b0cb885d9de0f9959fe1f775d7fa12f1da2db9001c1c8ab60f89d"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2865,7 +2870,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#24c9d9e19b9298c2d27c6e844eccf4169e1bf8bd"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -2878,7 +2883,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#24c9d9e19b9298c2d27c6e844eccf4169e1bf8bd"
 dependencies = [
  "futures",
  "openssl",
@@ -2890,13 +2895,13 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#24c9d9e19b9298c2d27c6e844eccf4169e1bf8bd"
 dependencies = [
  "base64",
  "byteorder",
  "bytes",
  "fallible-iterator",
- "hmac 0.10.1",
+ "hmac 0.11.0",
  "md-5",
  "memchr",
  "rand",
@@ -2907,7 +2912,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#24c9d9e19b9298c2d27c6e844eccf4169e1bf8bd"
 dependencies = [
  "bytes",
  "chrono",
@@ -3170,7 +3175,7 @@ dependencies = [
 [[package]]
 name = "pubnub-core"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#f299ef9971e292853ac95882ef8047f1f589790b"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#3e3b90e3173550bf670186ba35625b1851991c28"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -3188,7 +3193,7 @@ dependencies = [
 [[package]]
 name = "pubnub-hyper"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#f299ef9971e292853ac95882ef8047f1f589790b"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#3e3b90e3173550bf670186ba35625b1851991c28"
 dependencies = [
  "async-trait",
  "derive_builder",
@@ -3208,10 +3213,10 @@ dependencies = [
 [[package]]
 name = "pubnub-util"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#f299ef9971e292853ac95882ef8047f1f589790b"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#3e3b90e3173550bf670186ba35625b1851991c28"
 dependencies = [
  "base64",
- "hmac 0.10.1",
+ "hmac 0.11.0",
  "sha2",
  "uritemplate-next",
 ]
@@ -3612,9 +3617,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.25.1"
+version = "0.25.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbc783b7ddae608338003bac1fa00b6786a75a9675fbd8e87243ecfdea3f6ed2"
+checksum = "57adcf67c8faaf96f3248c2a7b419a0dbc52ebe36ba83dd57fe83827c1ea4eb3"
 dependencies = [
  "bitflags",
  "fallible-iterator",
@@ -4526,7 +4531,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#a32cb0e5904f9daec54c8bbeaf1e9261e8f9dc37"
+source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#24c9d9e19b9298c2d27c6e844eccf4169e1bf8bd"
 dependencies = [
  "async-trait",
  "byteorder",
