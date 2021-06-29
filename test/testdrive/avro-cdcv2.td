@@ -118,3 +118,29 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
 {"array":[{"data":{"id":5,"price":{"int":10}},"time":6,"diff":-1}]}
 
 > SELECT * FROM data_schema_inline
+
+# Inject "junk" with a previous timestamp, which could simulate a materialized
+# that restarted and emits previously emitted data at a compacted timestamp
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"array":[{"data":{"id":5,"price":{"int":10}},"time":9,"diff":1}]}
+{"array":[{"data":{"id":5,"price":{"int":12}},"time":9,"diff":1}]}
+{"array":[{"data":{"id":5,"price":{"int":12}},"time":9,"diff":-1}]}
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
+{"com.materialize.cdc.progress":{"lower":[0],"upper":[10],"counts":[{"time":9,"count":3}]}}
+
+> SELECT * FROM data_schema_inline
+
+# and now, new data again
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=4
+{"array":[{"data":{"id":6,"price":{"int":10}},"time":10,"diff":1}]}
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=5
+{"com.materialize.cdc.progress":{"lower":[10],"upper":[15],"counts":[{"time":10,"count":1}]}}
+
+> SELECT * FROM data_schema_inline
+id price
+--------
+6 10
