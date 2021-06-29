@@ -57,8 +57,8 @@ pub async fn report_loop(config: Config) {
             // We assume users running development builds are sophisticated, and
             // may be intentionally not running the latest release, so downgrade
             // the message from warn to info level.
-            let level = match BUILD_INFO.semver_version().pre.as_slice() {
-                [semver::Identifier::AlphaNumeric(s)] if s == "dev" => Level::Info,
+            let level = match BUILD_INFO.semver_version().pre.as_str() {
+                "dev" => Level::Info,
                 _ => Level::Warn,
             };
             log!(
