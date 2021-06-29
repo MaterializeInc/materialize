@@ -1953,6 +1953,7 @@ impl Catalog {
                     _ => Unknown,
                 },
                 SourceConnector::Local(_) => Volatile,
+                SourceConnector::New(_) => Unknown,
             },
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one

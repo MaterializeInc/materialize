@@ -307,7 +307,7 @@ fn analyze_type(ty: &syn::Type) -> Result<Type> {
                         // accessible here. We probably want our own local definition of
                         // this type, but for now, just hardcode it as a primitive.
                         "bool" | "usize" | "u64" | "char" | "String" | "PathBuf"
-                        | "DateTimeField" => match segment.arguments {
+                        | "DateTimeField" | "SomeSource" => match segment.arguments {
                             syn::PathArguments::None => Ok(Type::Primitive),
                             _ => bail!(
                                 "Primitive type had unexpected arguments: {}",

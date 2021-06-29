@@ -36,6 +36,8 @@ use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
 use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
 
+use sources::SomeSource;
+
 use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
@@ -314,6 +316,12 @@ pub struct Table {
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Raw>>,
     pub temporary: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum SourceKind {
+    Old(SourceConnector),
+    New(SomeSource),
 }
 
 #[derive(Clone, Debug)]

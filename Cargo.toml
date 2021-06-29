@@ -35,6 +35,7 @@ members = [
     "src/protoc",
     "src/repr",
     "src/repr-test-util",
+    "src/sources",
     "src/sql",
     "src/sqllogictest",
     "src/sql-parser",

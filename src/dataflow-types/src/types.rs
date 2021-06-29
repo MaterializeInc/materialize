@@ -35,6 +35,7 @@ use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
 use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType, Timestamp};
+use sources::SomeSource;
 
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -669,6 +670,7 @@ pub enum SourceConnector {
         timeline: Timeline,
     },
     Local(Timeline),
+    New(SomeSource),
 }
 
 impl SourceConnector {
@@ -698,6 +700,7 @@ impl SourceConnector {
         match self {
             SourceConnector::External { connector, .. } => connector.name(),
             SourceConnector::Local(_) => "local",
+            SourceConnector::New(_) => "ticktock", // FIXME
         }
     }
 
@@ -718,6 +721,7 @@ impl SourceConnector {
         match self {
             SourceConnector::External { timeline, .. } => timeline.clone(),
             SourceConnector::Local(timeline) => timeline.clone(),
+            SourceConnector::New(_) => Timeline::EpochMilliseconds,
         }
     }
 }

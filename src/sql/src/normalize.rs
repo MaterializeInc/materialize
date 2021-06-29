@@ -257,8 +257,7 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector: _,
-            with_options: _,
+            source: _,
             format: _,
             key_envelope: _,
             envelope: _,
