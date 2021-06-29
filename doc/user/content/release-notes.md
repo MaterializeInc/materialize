@@ -49,11 +49,11 @@ Wrap your release notes at the 80 character mark.
 - Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
   `--experimental`)
 
-{{% version-header v0.8.1 %}}
-
 - **Breaking change.** `HOST` keyword when creating
   [postgres sources](/sql/create-source/postgres/#syntax) has been renamed to
   `CONNECTION`.
+
+{{% version-header v0.8.1 %}}
 
 - Add [timelines](/sql/timelines) to all sources to prevent
   joining data whose time is not comparable. This only affects new
