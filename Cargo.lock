@@ -338,12 +338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "build_const"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39092a32794787acd8525ee150305ff051b0aa6cc2abaf193924f5ab05425f39"
-
-[[package]]
 name = "bumpalo"
 version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -590,15 +584,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dec1028182c380cc45a2e2c5ec841134f2dfd0f8f5f0a5bcd68004f81b5efdf4"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "crc"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d663548de7f5cca343f1e0a48d14dcfb0e9eb4e079ec58883b7251539fa10aeb"
-dependencies = [
- "build_const",
 ]
 
 [[package]]
@@ -2326,7 +2311,7 @@ dependencies = [
  "avro-derive",
  "byteorder",
  "chrono",
- "crc",
+ "crc32fast",
  "digest",
  "enum-kinds",
  "flate2",
