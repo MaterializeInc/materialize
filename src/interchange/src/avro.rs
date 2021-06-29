@@ -53,7 +53,6 @@ mod tests {
 
     use mz_avro::types::{DecimalValue, Value};
     use repr::adt::apd;
-    use repr::adt::decimal::Significand;
     use repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
 
     use super::*;
@@ -129,18 +128,9 @@ mod tests {
                 Value::Timestamp(date_time),
             ),
             (
-                ScalarType::Decimal(1, 1),
-                Datum::Decimal(Significand::new(1i128)),
-                Value::Decimal(DecimalValue {
-                    unscaled: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                    precision: 1,
-                    scale: 1,
-                }),
-            ),
-            (
                 ScalarType::APD { scale: Some(1) },
                 Datum::APD(OrderedDecimal(apd::Apd::from(1))),
-                Value::Apd(DecimalValue {
+                Value::Decimal(DecimalValue {
                     unscaled: bytes.clone(),
                     precision: 39,
                     scale: 1,
@@ -149,7 +139,7 @@ mod tests {
             (
                 ScalarType::APD { scale: None },
                 Datum::APD(OrderedDecimal(apd::Apd::from(1))),
-                Value::Apd(DecimalValue {
+                Value::Decimal(DecimalValue {
                     // equivalent to 1E39
                     unscaled: vec![
                         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 240, 80, 254, 147, 137,

@@ -193,9 +193,9 @@ lazy_static! {
     static ref VALID_LOGICAL_TYPES: Vec<(&'static str, Value)> = vec![
         // Decimal logical type
         (r#"{"type": "fixed", "logicalType": "decimal", "name": "TestDecimal", "precision": 1, "size": 2, "scale": 1}"#,
-         Value::Apd(DecimalValue { unscaled: vec![0, 0], precision: 1, scale: 1})),
+         Value::Decimal(DecimalValue { unscaled: vec![0, 0], precision: 1, scale: 1})),
         (r#"{"type": "bytes", "logicalType": "decimal", "precision": 4, "scale": 2}"#,
-         Value::Apd(DecimalValue { unscaled: vec![0], precision: 4, scale: 2})),
+         Value::Decimal(DecimalValue { unscaled: vec![0], precision: 4, scale: 2})),
         // Date logical type
         (r#"{"type": "int", "logicalType": "date"}"#, Value::Date(NaiveDate::from_ymd(2020, 7, 13))),
         // Time millis logical type

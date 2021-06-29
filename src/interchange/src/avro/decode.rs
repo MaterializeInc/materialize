@@ -26,7 +26,6 @@ use mz_avro::{
     ValueOrReader,
 };
 use repr::adt::apd;
-use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
 use repr::{Datum, Row};
 
@@ -247,7 +246,7 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
         Ok(())
     }
     define_unexpected! {
-        record, union_branch, array, map, enum_variant, scalar, decimal, apd, bytes, json, uuid, fixed
+        record, union_branch, array, map, enum_variant, scalar, decimal, bytes, json, uuid, fixed
     }
 }
 
@@ -280,7 +279,7 @@ impl<'a> AvroDecode for OptionalRecordDecoder<'a> {
         }
     }
     define_unexpected! {
-        record, array, map, enum_variant, scalar, decimal, apd, bytes, string, json, uuid, fixed
+        record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
     }
 }
 
@@ -306,7 +305,7 @@ impl AvroDecode for RowDecoder {
         Ok(RowWrapper(row))
     }
     define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, apd, bytes, string, json, uuid, fixed
+        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
     }
 }
 
@@ -450,30 +449,9 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         }
         Ok(())
     }
-    #[inline]
-    fn decimal<'b, R: AvroRead>(
-        self,
-        _precision: usize,
-        _scale: usize,
-        r: ValueOrReader<'b, &'b [u8], R>,
-    ) -> Result<Self::Out, AvroError> {
-        let buf = match r {
-            ValueOrReader::Value(val) => val,
-            ValueOrReader::Reader { len, r } => {
-                self.buf.resize_with(len, Default::default);
-                r.read_exact(self.buf)?;
-                &self.buf
-            }
-        };
-        self.packer.push(Datum::Decimal(
-            Significand::from_twos_complement_be(buf)
-                .map_err(|e| DecodeError::Custom(e.to_string()))?,
-        ));
-        Ok(())
-    }
 
     #[inline]
-    fn apd<'b, R: AvroRead>(
+    fn decimal<'b, R: AvroRead>(
         self,
         _precision: usize,
         scale: usize,
@@ -491,7 +469,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
 
         let scale = u8::try_from(scale).map_err(|_| {
             DecodeError::Custom(format!(
-                "Error decoding apd: scale must fit within u8, but got scale {}",
+                "Error decoding decimal: scale must fit within u8, but got scale {}",
                 scale,
             ))
         })?;

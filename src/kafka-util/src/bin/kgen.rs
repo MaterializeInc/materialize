@@ -109,7 +109,7 @@ impl<'a> RandomAvroGenerator<'a> {
             } => {
                 let f = self.decimals.get_mut(&p).unwrap();
                 let unscaled = f();
-                Value::Apd(DecimalValue {
+                Value::Decimal(DecimalValue {
                     unscaled,
                     precision: *precision,
                     scale: *scale,

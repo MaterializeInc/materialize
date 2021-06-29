@@ -134,8 +134,6 @@ pub enum Value {
     /// The value of the decimal can be computed as follows:
     /// <em>unscaled</em> × 10<sup>-<em>scale</em></sup>.
     Decimal(DecimalValue),
-    /// A parallel numeric type powered by `rust-dec`.
-    Apd(DecimalValue),
     /// A `bytes` Avro value.
     Bytes(Vec<u8>),
     /// A `string` Avro value.
@@ -394,18 +392,6 @@ impl Value {
                     fixed_size: _,
                 },
             ) => vp == *sp && vs == *ss,
-            (
-                &Value::Apd(DecimalValue {
-                    precision: vp,
-                    scale: vs,
-                    ..
-                }),
-                SchemaPiece::Decimal {
-                    precision: sp,
-                    scale: ss,
-                    fixed_size: _,
-                },
-            ) => vp == *sp && vs == *ss,
             (&Value::Bytes(_), SchemaPiece::Bytes) => true,
             (&Value::String(_), SchemaPiece::String) => true,
             (&Value::Fixed(n, _), SchemaPiece::Fixed { size }) => n == *size,
@@ -638,7 +624,7 @@ mod tests {
 
     #[test]
     fn validate_decimal() {
-        assert!(Value::Apd(DecimalValue {
+        assert!(Value::Decimal(DecimalValue {
             unscaled: vec![7],
             precision: 12,
             scale: 5
@@ -658,7 +644,7 @@ mod tests {
             .top_node()
         ));
 
-        assert!(!Value::Apd(DecimalValue {
+        assert!(!Value::Decimal(DecimalValue {
             unscaled: vec![7],
             precision: 13,
             scale: 5

@@ -319,7 +319,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                             APD_DATUM_MAX_PRECISION,
                         ),
                     };
-                    Value::Apd(DecimalValue {
+                    Value::Decimal(DecimalValue {
                         unscaled,
                         precision,
                         scale,
