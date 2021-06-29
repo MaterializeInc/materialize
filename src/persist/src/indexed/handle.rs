@@ -14,10 +14,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::error::Error;
+use crate::indexed::encoding::Id;
 use crate::indexed::{Indexed, IndexedSnapshot};
 use crate::persister::{Meta, Write};
 use crate::storage::{Blob, Buffer};
-use crate::Id;
 
 /// An implementation of [Write] in terms of an [Indexed].
 pub struct StreamWriteHandle<U: Buffer, L: Blob> {

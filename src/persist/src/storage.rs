@@ -18,7 +18,7 @@ use abomonation_derive::Abomonation;
 use crate::error::Error;
 use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
 use crate::indexed::Indexed;
-use crate::{Id, Token};
+use crate::Token;
 
 /// A "sequence number", uniquely associated with an entry in a Buffer.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
@@ -74,7 +74,7 @@ pub trait Blob {
 /// An implementation of a persister for multiplexed streams of (Key, Value,
 /// Time, Diff) updates.
 pub struct Persister<U: Buffer, L: Blob> {
-    registered: HashSet<Id>,
+    registered: HashSet<String>,
     indexed: Arc<Mutex<Indexed<U, L>>>,
 }
 
@@ -97,16 +97,13 @@ impl<U: Buffer, L: Blob> Persister<U, L> {
     /// first. TODO: Is this restriction necessary/helpful?
     pub fn create_or_load(
         &mut self,
-        id: Id,
+        id: &str,
     ) -> Result<Token<StreamWriteHandle<U, L>, StreamMetaHandle<U, L>>, Error> {
-        if self.registered.contains(&id) {
+        if self.registered.contains(id) {
             return Err(format!("internal error: {:?} already registered", id).into());
         }
-        self.registered.insert(id);
-        {
-            let mut guard = self.indexed.lock()?;
-            guard.register(id);
-        }
+        self.registered.insert(id.to_owned());
+        let id = self.indexed.lock()?.register(id);
         let write = StreamWriteHandle::new(id, self.indexed.clone());
         let meta = StreamMetaHandle::new(id, self.indexed.clone());
         Ok(Token { write, meta })
@@ -115,7 +112,10 @@ impl<U: Buffer, L: Blob> Persister<U, L> {
     /// Remove the persisted stream.
     ///
     /// TODO: Should this live on Meta?
-    pub fn destroy(&mut self, _id: Id) -> Result<(), Error> {
+    pub fn destroy(&mut self, _id: &str) -> Result<(), Error> {
+        // TODO: When we implement this, we'll almost certainly want to put both
+        // the external string stream name and internal u64 stream id into a
+        // graveyard, so they're not accidentally reused.
         unimplemented!()
     }
 }

@@ -10,6 +10,7 @@
 //! Data structures stored in Blobs and Buffers in serialized form.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 use abomonation_derive::Abomonation;
@@ -20,6 +21,11 @@ use timely::PartialOrder;
 use crate::error::Error;
 use crate::storage::SeqNo;
 
+/// An internally unique id for a persisted stream. External users identify
+/// streams with a string, which is then mapped internally to this.
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Abomonation)]
+pub struct Id(pub u64);
+
 /// The structure serialized and stored as an entry in a
 /// [crate::storage::Buffer].
 ///
@@ -28,7 +34,7 @@ use crate::storage::SeqNo;
 #[derive(Debug, Abomonation)]
 pub struct BufferEntry {
     /// Id of the stream this batch belongs to.
-    pub id: u64,
+    pub id: Id,
     /// The updates themselves.
     pub updates: Vec<((String, String), u64, isize)>,
 }
@@ -41,18 +47,24 @@ pub struct BufferEntry {
 pub struct BlobMeta {
     /// The most recently assigned key name.
     pub last_file_id: u128,
+    /// The next internal stream id to assign.
+    pub next_stream_id: Id,
+    /// Internal stream id indexed by external stream name.
+    ///
+    /// Invariant: Each stream name and stream id are in here at most once.
+    pub id_mapping: Vec<(String, Id)>,
     /// BlobFutures indexed by stream id.
     ///
-    /// A stream id should be in here at most once. This would be more naturally
-    /// be modeled as a map from Id to BlobFutureMeta, but that doesn't work
-    /// with Abomonation.
-    pub futures: Vec<(u64, BlobFutureMeta)>,
+    /// Invariant: Each stream id is in here at most once. This would be more
+    /// naturally be modeled as a map from Id to BlobFutureMeta, but that
+    /// doesn't work with Abomonation.
+    pub futures: Vec<(Id, BlobFutureMeta)>,
     /// BlobFutures indexed by stream id.
     ///
-    /// A stream id should be in here at most once. This would be more naturally
-    /// be modeled as a map from Id to BlobTraceMeta, but that doesn't work with
-    /// Abomonation.
-    pub traces: Vec<(u64, BlobTraceMeta)>,
+    /// Invariant: Each stream id is in here at most once. This would be more
+    /// naturally be modeled as a map from Id to BlobTraceMeta, but that doesn't
+    /// work with Abomonation.
+    pub traces: Vec<(Id, BlobTraceMeta)>,
 }
 
 /// The metadata necessary to reconstruct a BlobFuture.
@@ -96,7 +108,7 @@ pub struct BlobTraceMeta {
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobFutureBatch {
     /// Id of the stream this batch belongs to.
-    pub id: u64,
+    pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
     /// The updates themselves.
@@ -122,7 +134,7 @@ pub struct BlobFutureBatch {
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobTraceBatch {
     /// Id of the trace this batch belongs to.
-    pub id: u64,
+    pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
     /// The updates themselves.
@@ -146,6 +158,8 @@ impl Default for BlobMeta {
     fn default() -> Self {
         BlobMeta {
             last_file_id: Self::now_millis(),
+            next_stream_id: Id(0),
+            id_mapping: Vec::new(),
             futures: Vec::new(),
             traces: Vec::new(),
         }
@@ -156,6 +170,25 @@ impl BlobMeta {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
+        let mut ids = HashSet::new();
+        let mut names = HashSet::new();
+        for (name, id) in self.id_mapping.iter() {
+            if id >= &self.next_stream_id {
+                return Err(format!(
+                    "contained stream id {:?} >= next_stream_id: {:?}",
+                    id, self.next_stream_id
+                )
+                .into());
+            }
+            if names.contains(name) {
+                return Err(format!("duplicate external stream name: {}", name).into());
+            }
+            names.insert(name.clone());
+            if ids.contains(id) {
+                return Err(format!("duplicate internal stream id: {:?}", id).into());
+            }
+            ids.insert(*id);
+        }
         for (_, f) in self.futures.iter() {
             f.validate()?;
         }
@@ -363,14 +396,14 @@ mod tests {
     fn buffer_entry_validate() {
         // Normal case
         let b = BufferEntry {
-            id: 0,
+            id: Id(0),
             updates: vec![update_with_key(0, "0")],
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
         let b = BufferEntry {
-            id: 0,
+            id: Id(0),
             updates: vec![],
         };
         assert_eq!(b.validate(), Err("updates is empty".into()));
@@ -380,7 +413,7 @@ mod tests {
     fn future_batch_validate() {
         // Normal case
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(0, 0), update_with_ts(1, 1)],
         };
@@ -388,7 +421,7 @@ mod tests {
 
         // Empty
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![],
         };
@@ -396,7 +429,7 @@ mod tests {
 
         // Invalid desc
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(2, 0),
             updates: vec![],
         };
@@ -409,7 +442,7 @@ mod tests {
 
         // Empty desc
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(0, 0),
             updates: vec![],
         };
@@ -422,7 +455,7 @@ mod tests {
 
         // Not sorted by time
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(0, 1), update_with_ts(1, 0)],
         };
@@ -435,7 +468,7 @@ mod tests {
 
         // Not consolidated
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(0, 0), update_with_ts(1, 0)],
         };
@@ -446,7 +479,7 @@ mod tests {
 
         // Update "before" desc
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(1, 2),
             updates: vec![update_with_ts(0, 0)],
         };
@@ -459,7 +492,7 @@ mod tests {
 
         // Update "after" desc
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(2, 2)],
         };
@@ -472,7 +505,7 @@ mod tests {
 
         // Invalid update
         let b = BlobFutureBatch {
-            id: 0,
+            id: Id(0),
             desc: seqno_desc(0, 1),
             updates: vec![(SeqNo(0), ("0".into(), "0".into()), 0, 0)],
         };
@@ -488,7 +521,7 @@ mod tests {
     fn trace_batch_validate() {
         // Normal case
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "0"), update_with_key(1, "1")],
         };
@@ -496,7 +529,7 @@ mod tests {
 
         // Empty
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![],
         };
@@ -504,7 +537,7 @@ mod tests {
 
         // Invalid desc
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(2, 0),
             updates: vec![],
         };
@@ -517,7 +550,7 @@ mod tests {
 
         // Empty desc
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(0, 0),
             updates: vec![],
         };
@@ -530,7 +563,7 @@ mod tests {
 
         // Not sorted by key
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "1"), update_with_key(1, "0")],
         };
@@ -543,7 +576,7 @@ mod tests {
 
         // Not consolidated
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "0"), update_with_key(0, "0")],
         };
@@ -554,7 +587,7 @@ mod tests {
 
         // Update "before" desc
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(1, 2),
             updates: vec![update_with_key(0, "0")],
         };
@@ -562,7 +595,7 @@ mod tests {
 
         // Update "after" desc
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(1, 2),
             updates: vec![update_with_key(2, "0")],
         };
@@ -570,7 +603,7 @@ mod tests {
 
         // Invalid update
         let b = BlobTraceBatch {
-            id: 0,
+            id: Id(0),
             desc: u64_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
@@ -642,6 +675,64 @@ mod tests {
             b.validate(),
             Err(Error::from(
                 "invalid batch sequence: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(2)] }, since: Antichain { elements: [SeqNo(0)] } } followed by Description { lower: Antichain { elements: [SeqNo(1)] }, upper: Antichain { elements: [SeqNo(3)] }, since: Antichain { elements: [SeqNo(0)] } }"
+            ))
+        );
+    }
+
+    #[test]
+    fn blob_meta_validate() {
+        // Empty
+        let b = BlobMeta::default();
+        assert_eq!(b.validate(), Ok(()));
+
+        // Normal case
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(2),
+            id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
+            futures: vec![],
+            traces: vec![],
+        };
+        assert_eq!(b.validate(), Ok(()));
+
+        // Duplicate external stream id
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(2),
+            id_mapping: vec![("1".into(), Id(0)), ("1".into(), Id(1))],
+            futures: vec![],
+            traces: vec![],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("duplicate external stream name: 1"))
+        );
+
+        // Duplicate internal stream id
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(2),
+            id_mapping: vec![("0".into(), Id(1)), ("1".into(), Id(1))],
+            futures: vec![],
+            traces: vec![],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("duplicate internal stream id: Id(1)"))
+        );
+
+        // Invalid next_stream_id
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
+            futures: vec![],
+            traces: vec![],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "contained stream id Id(1) >= next_stream_id: Id(1)"
             ))
         );
     }
