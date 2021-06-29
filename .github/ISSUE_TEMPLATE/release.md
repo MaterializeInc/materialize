@@ -220,8 +220,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
     ```shell
     docker run --rm -i ubuntu:bionic <<EOF
     apt-get update && apt-get install -y gpg ca-certificates
-    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
-    sh -c 'echo "deb http://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list'
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
+    echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list
     apt-get update && apt-get install -y materialized
     materialized --version
     EOF
