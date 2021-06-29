@@ -4584,7 +4584,6 @@ where
         Int64 => strconv::format_int64(buf, d.unwrap_int64()),
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),
-        Decimal(..) => unreachable!(),
         APD { scale } => {
             let mut d = d.unwrap_apd();
             if let Some(scale) = scale {

@@ -292,7 +292,6 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
                 ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
                 ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
-                ScalarType::Decimal(..) => unreachable!(),
                 ScalarType::APD { scale } => {
                     let mut d = datum.unwrap_apd().0;
                     let (unscaled, precision, scale) = match scale {
@@ -487,12 +486,6 @@ fn build_row_schema_field<F: FnMut() -> String>(
         ScalarType::Int64 => json!("long"),
         ScalarType::Float32 => json!("float"),
         ScalarType::Float64 => json!("double"),
-        ScalarType::Decimal(p, s) => json!({
-            "type": "bytes",
-            "logicalType": "decimal",
-            "precision": p,
-            "scale": s,
-        }),
         ScalarType::Date => json!({
             "type": "int",
             "logicalType": "date",

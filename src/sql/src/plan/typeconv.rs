@@ -397,7 +397,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
             .expect("cast known to exist")
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Float32 | Decimal(..) => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
+        Float32 | APD { .. } => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
             .expect("cast known to exist")
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
         Record { fields, .. } => {
@@ -419,31 +419,6 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         }
         _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
     }
-}
-
-// Tracks order of preferences for implicit casts for each [`TypeCategory`] that
-// contains multiple types, but does so irrespective of [`TypeCategory`].
-//
-// We could make this deterministic, but it offers no real benefit because the
-// information it provides is used in fallible functions anyway, so a bad guess
-// just gets caught elsewhere.
-fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
-    types.iter().max_by_key(|scalar_type| match scalar_type {
-        // Strings can be cast to any type, so should be given lowest priority.
-        ScalarType::String => 0,
-        // [`TypeCategory::Numeric`]
-        ScalarType::Int32 => 1,
-        ScalarType::Int64 => 2,
-        ScalarType::Decimal(_, _) => 3,
-        ScalarType::APD { scale: None } => 4,
-        ScalarType::Float32 => 5,
-        ScalarType::Float64 => 6,
-        // [`TypeCategory::DateTime`]
-        ScalarType::Date => 7,
-        ScalarType::Timestamp => 8,
-        ScalarType::TimestampTz => 9,
-        _ => 10,
-    })
 }
 
 /// Guesses the most-common type among a set of [`ScalarType`]s that all members
@@ -487,21 +462,30 @@ pub fn guess_best_common_type(
         return Some(known_types[0].clone());
     }
 
-    // Determine best cast type among known types.
-    match guess_compatible_cast_type(&known_types) {
-        Some(ScalarType::Decimal(_, _)) => {
-            // Determine best decimal scale (i.e. largest).
-            let mut max_s = 0;
-            for t in known_types {
-                if let ScalarType::Decimal(_, s) = t {
-                    max_s = std::cmp::max(s, max_s);
-                }
-            }
-            Some(ScalarType::Decimal(38, max_s))
-        }
-        Some(btt) => Some(btt.clone()),
-        None => None,
-    }
+    // Tracks order of preferences for implicit casts for each [`TypeCategory`] that
+    // contains multiple types, but does so irrespective of [`TypeCategory`].
+    //
+    // We could make this deterministic, but it offers no real benefit because the
+    // information it provides is used in fallible functions anyway, so a bad guess
+    // just gets caught elsewhere.
+    known_types
+        .iter()
+        .max_by_key(|scalar_type| match scalar_type {
+            // Strings can be cast to any type, so should be given lowest priority.
+            ScalarType::String => 0,
+            // TypeCategory::Numeric
+            ScalarType::Int32 => 1,
+            ScalarType::Int64 => 2,
+            ScalarType::APD { scale: None } => 3,
+            ScalarType::Float32 => 4,
+            ScalarType::Float64 => 5,
+            // TypeCategory::DateTime
+            ScalarType::Date => 6,
+            ScalarType::Timestamp => 7,
+            ScalarType::TimestampTz => 8,
+            _ => 9,
+        })
+        .cloned()
 }
 
 pub fn plan_coerce<'a>(

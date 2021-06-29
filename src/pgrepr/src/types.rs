@@ -284,7 +284,6 @@ impl From<&ScalarType> for Type {
             ScalarType::Bool => Type::Bool,
             ScalarType::Bytes => Type::Bytea,
             ScalarType::Date => Type::Date,
-            ScalarType::Decimal(_, _) => Type::Numeric,
             ScalarType::Float64 => Type::Float8,
             ScalarType::Float32 => Type::Float4,
             ScalarType::Int32 => Type::Int4,

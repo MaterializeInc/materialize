@@ -71,7 +71,7 @@ impl ReduceElision {
                             a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64)
                         }
 
-                        // SumInt64 takes Int64s as input, but outputs Decimals.
+                        // SumInt64 takes Int64s as input, but outputs numerics.
                         AggregateFunc::SumInt64 => a
                             .expr
                             .clone()

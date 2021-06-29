@@ -56,7 +56,7 @@ fn validate_proto_field<'a>(
                 FieldType::Float => ScalarType::Float32,
                 FieldType::Double => ScalarType::Float64,
                 FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
-                    ScalarType::Decimal(38, 0)
+                    ScalarType::APD { scale: Some(0) }
                 } // is that right
                 FieldType::String => ScalarType::String,
                 FieldType::Bytes => ScalarType::Bytes,
@@ -527,10 +527,10 @@ mod tests {
                 | (FieldType::SFixed64, FieldLabel::Optional, ScalarType::Int64)
                 | (FieldType::Float, FieldLabel::Optional, ScalarType::Float32)
                 | (FieldType::Double, FieldLabel::Optional, ScalarType::Float64)
-                | (FieldType::UInt32, FieldLabel::Optional, ScalarType::Decimal(38, 0))
-                | (FieldType::Fixed32, FieldLabel::Optional, ScalarType::Decimal(38,0))
-                | (FieldType::UInt64, FieldLabel::Optional, ScalarType::Decimal(38, 0))
-                | (FieldType::Fixed64, FieldLabel::Optional, ScalarType::Decimal(38,0))
+                | (FieldType::UInt32, FieldLabel::Optional, ScalarType::APD {scale: Some(0)})
+                | (FieldType::Fixed32, FieldLabel::Optional, ScalarType::APD {scale: Some(0)})
+                | (FieldType::UInt64, FieldLabel::Optional, ScalarType::APD {scale: Some(0)})
+                | (FieldType::Fixed64, FieldLabel::Optional, ScalarType::APD {scale: Some(0)})
                 | (FieldType::String, FieldLabel::Optional, &ScalarType::String)
                 | (FieldType::Bytes, FieldLabel::Optional, ScalarType::Bytes)
                 | (FieldType::Message(_), FieldLabel::Optional, ScalarType::Jsonb) => (),

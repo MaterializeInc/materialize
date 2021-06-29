@@ -28,7 +28,6 @@ use std::iter;
 use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use dec::OrderedDecimal;
 use expr::LocalId;
 use itertools::Itertools;
 use ore::str::StrExt;
@@ -44,7 +43,6 @@ use sql_parser::ast::{
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
 use repr::adt::apd::{self, APD_DATUM_MAX_PRECISION};
-use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
     Timestamp,
@@ -2967,24 +2965,18 @@ fn plan_case<'a>(
 fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
-            let OrderedDecimal(d) = strconv::parse_apd(s.as_str())?;
+            let d = strconv::parse_apd(s.as_str())?;
             if !s.contains(&['E', '.'][..]) {
                 // Maybe representable as an int?
-                if let Ok(n) = d.try_into() {
+                if let Ok(n) = d.0.try_into() {
                     (Datum::Int32(n), ScalarType::Int32)
-                } else if let Ok(n) = d.try_into() {
+                } else if let Ok(n) = d.0.try_into() {
                     (Datum::Int64(n), ScalarType::Int64)
                 } else {
-                    (
-                        Datum::APD(OrderedDecimal(d)),
-                        ScalarType::APD { scale: None },
-                    )
+                    (Datum::APD(d), ScalarType::APD { scale: None })
                 }
             } else {
-                (
-                    Datum::APD(OrderedDecimal(d)),
-                    ScalarType::APD { scale: None },
-                )
+                (Datum::APD(d), ScalarType::APD { scale: None })
             }
         }
         Value::HexString(_) => unsupported!(3114, "hex string literals"),
@@ -3092,11 +3084,6 @@ pub fn scalar_type_from_sql(
                     ScalarType::APD { .. } => {
                         let (_, scale) =
                             unwrap_numeric_typ_mod(typ_mod, APD_DATUM_MAX_PRECISION as u8, "apd")?;
-                        ScalarType::APD { scale }
-                    }
-                    ScalarType::Decimal(..) => {
-                        let (_precision, scale) =
-                            unwrap_numeric_typ_mod(typ_mod, MAX_DECIMAL_PRECISION, "numeric")?;
                         ScalarType::APD { scale }
                     }
                     ScalarType::String => {

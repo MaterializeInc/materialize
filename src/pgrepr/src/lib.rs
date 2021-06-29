@@ -30,6 +30,5 @@ pub use types::{Type, APD, LIST, MAP};
 pub use value::apd::Apd;
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
-pub use value::numeric::Numeric;
 pub use value::record::Record;
 pub use value::{null_datum, values_from_row, Value};

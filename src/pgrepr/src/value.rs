@@ -22,17 +22,15 @@ use uuid::Uuid;
 use ore::fmt::FormatBuffer;
 use repr::adt::apd::{self as adt_apd};
 use repr::adt::array::ArrayDimension;
-use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{self, Nestable};
 use repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::{Apd, Format, Interval, Jsonb, Numeric, Type};
+use crate::{Apd, Format, Interval, Jsonb, Type};
 
 pub mod apd;
 pub mod interval;
 pub mod jsonb;
-pub mod numeric;
 pub mod record;
 
 /// A PostgreSQL datum.
@@ -68,7 +66,7 @@ pub enum Value {
     /// A map of string keys and homogeneous values.
     Map(BTreeMap<String, Option<Value>>),
     /// An arbitrary precision number.
-    Numeric(Numeric),
+    Apd(Apd),
     /// A sequence of heterogeneous values.
     Record(Vec<Option<Value>>),
     /// A time.
@@ -81,8 +79,6 @@ pub enum Value {
     Text(String),
     /// A universally unique identifier.
     Uuid(Uuid),
-    /// Refactored numeric using `rust-dec`.
-    Apd(Apd),
 }
 
 impl Value {
@@ -154,10 +150,6 @@ impl Value {
 
     /// Converts a Materialize datum and type from this value.
     ///
-    /// The conversion happens in the obvious manner, except that a
-    /// `Value::Numeric`'s scale will be recorded in the returned scalar type,
-    /// not the datum.
-    ///
     /// To construct a null datum, see the [`null_datum`] function.
     pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, ScalarType) {
         match self {
@@ -222,10 +214,6 @@ impl Value {
                     },
                 )
             }
-            Value::Numeric(d) => (
-                Datum::from(d.0.significand()),
-                ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.0.scale()),
-            ),
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
@@ -287,7 +275,6 @@ impl Value {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
             }),
-            Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
@@ -343,7 +330,6 @@ impl Value {
                 self.encode_text(buf);
                 Ok(postgres_types::IsNull::No)
             }
-            Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
                 buf.put_i32(nfields);

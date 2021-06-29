@@ -426,7 +426,6 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
 
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
-        (Type::Integer, Value::Numeric(d)) => format!("{:.0}", d),
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
@@ -450,10 +449,6 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Mode::Standard => format!("{:.3}", f),
             Mode::Cockroach => format!("{}", f),
         },
-        (Type::Real, Value::Numeric(d)) => match mode {
-            Mode::Standard => format!("{:.3}", d),
-            Mode::Cockroach => format!("{}", d),
-        },
         (Type::Real, Value::Apd(d)) => match mode {
             Mode::Standard => {
                 let mut d = d.0 .0.clone();
@@ -474,7 +469,6 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             }
         }
         (Type::Text, Value::Bool(b)) => b.to_string(),
-        (Type::Text, Value::Numeric(d)) => format!("{:.0}", d),
         (Type::Text, Value::Float4(f)) => format!("{:.3}", f),
         (Type::Text, Value::Float8(f)) => format!("{:.3}", f),
         // Bytes are printed as text iff they are valid UTF-8. This

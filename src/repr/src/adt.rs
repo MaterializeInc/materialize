@@ -20,7 +20,6 @@
 pub mod apd;
 pub mod array;
 pub mod datetime;
-pub mod decimal;
 pub mod interval;
 pub mod jsonb;
 pub mod regex;

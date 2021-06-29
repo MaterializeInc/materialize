@@ -47,7 +47,6 @@ use ore::str::StrExt;
 use crate::adt::apd::{self, Apd, APD_DATUM_MAX_PRECISION};
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
-use crate::adt::decimal::Decimal;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 
@@ -423,20 +422,6 @@ where
 {
     write!(buf, "{}", iv);
     Nestable::MayNeedEscaping
-}
-
-pub fn parse_decimal(s: &str) -> Result<Decimal, ParseError> {
-    s.trim()
-        .parse()
-        .map_err(|e| ParseError::invalid_input_syntax("numeric", s).with_details(e))
-}
-
-pub fn format_decimal<F>(buf: &mut F, d: &Decimal) -> Nestable
-where
-    F: FormatBuffer,
-{
-    write!(buf, "{}", d);
-    Nestable::Yes
 }
 
 pub fn parse_apd(s: &str) -> Result<OrderedDecimal<Apd>, ParseError> {

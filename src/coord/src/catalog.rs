@@ -2188,11 +2188,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     // qualified object name to refer to type.
                     self.get_item_by_oid(&pgrepr_type.oid()).name().to_string()
                 };
-                if let ScalarType::Decimal(p, s) = typ {
-                    format!("{}({},{})", res, p, s)
-                } else {
-                    res
-                }
+                res
             }
         }
     }
