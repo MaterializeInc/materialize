@@ -34,7 +34,7 @@ use crate::mux::Mux;
 mod http;
 mod mux;
 mod server_metrics;
-mod version_check;
+mod telemetry;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -83,6 +83,8 @@ pub struct Config {
 
     // === Performance tuning options. ===
     pub logging: Option<LoggingConfig>,
+    /// The frequency at which to update introspection.
+    pub introspection_frequency: Duration,
     /// The historical window in which distinctions are maintained for
     /// arrangements.
     ///
@@ -108,6 +110,8 @@ pub struct Config {
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
     pub cache: Option<CacheConfig>,
+
+    // === Mode switches. ===
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
@@ -115,10 +119,8 @@ pub struct Config {
     pub experimental_mode: bool,
     /// Whether to run in safe mode.
     pub safe_mode: bool,
-    /// An optional telemetry endpoint. Use None to disable telemetry.
-    pub telemetry_url: Option<String>,
-    /// The frequency at which to update introspection
-    pub introspection_frequency: Duration,
+    /// Telemetry configuration.
+    pub telemetry: Option<TelemetryConfig>,
 }
 
 /// Configures TLS encryption for connections.
@@ -151,6 +153,15 @@ pub enum TlsMode {
         /// The path to a TLS certificate authority.
         ca: PathBuf,
     },
+}
+
+/// Telemetry configuration.
+#[derive(Debug, Clone)]
+pub struct TelemetryConfig {
+    /// The domain hosting the telemetry server.
+    pub domain: String,
+    /// The interval at which to report telemetry data.
+    pub interval: Duration,
 }
 
 /// Start a `materialized` server.
@@ -229,22 +240,20 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
     tokio::spawn({
-        let start_time = coord_handle.start_instant();
+        let mut mux = Mux::new();
+        mux.add_handler(pgwire::Server::new(pgwire::Config {
+            tls: pgwire_tls,
+            coord_client: coord_client.clone(),
+        }));
+        mux.add_handler(http::Server::new(http::Config {
+            tls: http_tls,
+            coord_client: coord_client.clone(),
+            start_time: coord_handle.start_instant(),
+        }));
         async move {
             // TODO(benesch): replace with `listener.incoming()` if that is
             // restored when the `Stream` trait stabilizes.
             let mut incoming = TcpListenerStream::new(listener);
-
-            let mut mux = Mux::new();
-            mux.add_handler(pgwire::Server::new(pgwire::Config {
-                tls: pgwire_tls,
-                coord_client: coord_client.clone(),
-            }));
-            mux.add_handler(http::Server::new(http::Config {
-                tls: http_tls,
-                coord_client,
-                start_time,
-            }));
             mux.serve(incoming.by_ref().take_until(drain_tripwire))
                 .await;
         }
@@ -261,15 +270,15 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     });
 
-    // Start a task that checks for the latest version and prints a warning if
-    // it finds a different version than currently running.
-    if let Some(telemetry_url) = config.telemetry_url {
-        tokio::spawn(version_check::check_version_loop(
-            telemetry_url,
-            coord_handle.cluster_id(),
-            coord_handle.session_id(),
-            coord_handle.start_instant(),
-        ));
+    // Start telemetry reporting loop.
+    if let Some(telemetry) = config.telemetry {
+        let config = telemetry::Config {
+            domain: telemetry.domain,
+            interval: telemetry.interval,
+            cluster_id: coord_handle.cluster_id(),
+            coord_client,
+        };
+        tokio::spawn(async move { telemetry::report_loop(config).await });
     }
 
     Ok(Server {
