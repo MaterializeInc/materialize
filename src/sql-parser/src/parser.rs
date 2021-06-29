@@ -25,6 +25,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use log::{debug, warn};
+use serde::Deserialize;
 
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
@@ -33,6 +34,10 @@ use repr::adt::datetime::DateTimeField;
 use crate::ast::*;
 use crate::keywords::*;
 use crate::lexer::{self, Token};
+
+mod de;
+
+use sources::{SomeSource, SomeSql, Source};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -64,6 +69,12 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
     } else {
         Ok(expr)
     }
+}
+
+pub fn parse_serde<'a, C: Deserialize<'a>>(sql: &'a str) -> C {
+    let tokens = lexer::lex(sql).unwrap();
+    let mut parser = Parser::new(sql, tokens);
+    C::deserialize(&mut parser).unwrap()
 }
 
 /// Parses a SQL string containing zero or more SQL columns.
@@ -131,7 +142,7 @@ impl ParserError {
 }
 
 /// SQL Parser
-struct Parser<'a> {
+pub struct Parser<'a> {
     sql: &'a str,
     tokens: Vec<(Token, usize)>,
     /// The index of the first unprocessed token in `self.tokens`
@@ -1612,8 +1623,10 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
-        let connector = self.parse_connector()?;
-        let with_options = self.parse_opt_with_sql_options()?;
+
+        let sql = SomeSql::deserialize(&mut *self).unwrap();
+        let source = SourceType::New(SomeSource::from_sql(sql).unwrap());
+
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
         let mut format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
@@ -1654,8 +1667,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
-            connector,
-            with_options,
+            source,
             format,
             key_envelope,
             envelope,
@@ -2854,6 +2866,14 @@ impl<'a> Parser<'a> {
             Some(id) => Ok(id),
             None => self.expected(self.peek_pos(), "identifier", self.peek_token()),
         }
+    }
+
+    /// Peek a simple one-word identifier (possibly quoted, possibly a keyword)
+    fn peek_identifier(&mut self) -> Option<Ident> {
+        let index = self.index;
+        let result = self.consume_identifier();
+        self.index = index;
+        result
     }
 
     fn consume_identifier(&mut self) -> Option<Ident> {

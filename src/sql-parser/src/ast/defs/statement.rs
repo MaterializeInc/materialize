@@ -20,6 +20,8 @@
 
 use std::fmt;
 
+use sources::SomeSource;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, Connector, CreateSourceFormat, CreateSourceKeyEnvelope, DataType, Envelope,
@@ -349,13 +351,18 @@ impl AstDisplay for CreateSchemaStatement {
 }
 impl_display!(CreateSchemaStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SourceType<T: AstInfo> {
+    New(SomeSource),
+    Old(Connector, Vec<SqlOption<T>>),
+}
+
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: Connector,
-    pub with_options: Vec<SqlOption<T>>,
+    pub source: SourceType<T>,
     pub format: CreateSourceFormat<T>,
     pub key_envelope: CreateSourceKeyEnvelope,
     pub envelope: Envelope,
@@ -390,12 +397,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str(") ")
         }
         f.write_str("FROM ");
-        f.write_node(&self.connector);
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
+        // f.write_node(&self.connector);
+        // if !self.with_options.is_empty() {
+        //     f.write_str(" WITH (");
+        //     f.write_node(&display::comma_separated(&self.with_options));
+        //     f.write_str(")");
+        // }
         f.write_node(&self.format);
         f.write_node(&self.key_envelope);
         match self.envelope {
