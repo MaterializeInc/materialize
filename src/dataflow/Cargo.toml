@@ -41,11 +41,11 @@ rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
 regex = "1.5.4"
 repr = { path = "../repr" }
-rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_sqs = { git = "https://github.com/rusoto/rusoto.git" }
+rusoto_core = "0.47.0"
+rusoto_credential = "0.47.0"
+rusoto_kinesis = "0.47.0"
+rusoto_s3 = "0.47.0"
+rusoto_sqs = "0.47.0"
 serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.64"
 tempfile = "3.2.0"
