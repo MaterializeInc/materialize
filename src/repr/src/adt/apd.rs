@@ -166,6 +166,7 @@ pub fn rescale(n: &mut Apd, scale: u8) -> Result<(), anyhow::Error> {
             APD_DATUM_MAX_PRECISION
         )
     }
+    munge_apd(n)?;
 
     Ok(())
 }
