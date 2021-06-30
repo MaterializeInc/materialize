@@ -186,7 +186,7 @@ impl<'a> DataflowBuilder<'a> {
                 }
             }
         });
-        dataflow.add_view_to_build(*view_id, view.clone());
+        dataflow.insert_view(*view_id, view.clone());
     }
 
     /// Builds a dataflow description for the index with the specified ID.
@@ -202,7 +202,6 @@ impl<'a> DataflowBuilder<'a> {
         let on_id = index.on;
         let keys = index.keys.clone();
         self.import_into_dataflow(&on_id, &mut dataflow);
-        dataflow.add_index_to_build(id, on_id.clone(), on_type.clone(), keys.clone());
         dataflow.export_index(id, on_id, on_type, keys);
         dataflow
     }

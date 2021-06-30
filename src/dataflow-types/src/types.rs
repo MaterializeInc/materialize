@@ -140,8 +140,8 @@ impl DataflowDesc {
             .insert(id, (source_description, orig_id));
     }
 
-    /// Binds `expr` to `id` in the dataflow.
-    pub fn add_view_to_build(&mut self, id: GlobalId, expr: OptimizedMirRelationExpr) {
+    /// Binds to `id` the relation expression `expr`.
+    pub fn insert_view(&mut self, id: GlobalId, expr: OptimizedMirRelationExpr) {
         for get_id in expr.global_uses() {
             self.record_depends_on(id, get_id);
         }
@@ -149,26 +149,6 @@ impl DataflowDesc {
             id,
             relation_expr: expr,
         });
-    }
-
-    /// Binds to `id` an `ArrangeBy` expression on `on_id` with `keys`.
-    ///
-    /// This is a wrapper around `add_view_to_build`, which forms the appropriate
-    /// expression for the caller.
-    pub fn add_index_to_build(
-        &mut self,
-        id: GlobalId,
-        on_id: GlobalId,
-        on_type: RelationType,
-        keys: Vec<MirScalarExpr>,
-    ) {
-        self.add_view_to_build(
-            id,
-            OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::ArrangeBy {
-                input: Box::new(MirRelationExpr::global_get(on_id, on_type)),
-                keys: vec![keys],
-            }),
-        );
     }
 
     /// Exports as `id` an index on `on_id`.
@@ -179,6 +159,15 @@ impl DataflowDesc {
         on_type: RelationType,
         keys: Vec<MirScalarExpr>,
     ) {
+        // We first create a "view" named `id` that ensures that the
+        // data are correctly arranged and available for export.
+        self.insert_view(
+            id,
+            OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::ArrangeBy {
+                input: Box::new(MirRelationExpr::global_get(on_id, on_type.clone())),
+                keys: vec![keys.clone()],
+            }),
+        );
         self.index_exports
             .push((id, IndexDesc { on_id, keys }, on_type));
     }
