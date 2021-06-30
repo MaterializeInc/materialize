@@ -46,6 +46,7 @@ pub struct PartitionStats {
     ls_offset: i64,
     app_offset: i64,
     consumer_lag: i64,
+    initial_high_offset: Option<i64>,
 }
 
 impl PartitionStats {
@@ -69,6 +70,7 @@ impl PartitionStats {
             ls_offset: -self.ls_offset,
             app_offset: -self.app_offset,
             consumer_lag: -self.consumer_lag,
+            initial_high_offset: -self.initial_high_offset.unwrap_or(0),
         }
     }
     /// Update the value for this partition, returning a MaterializedEvent that represents the
@@ -80,6 +82,14 @@ impl PartitionStats {
         partition_id: String,
         stats: &rdkafka::statistics::Partition,
     ) -> MaterializedEvent {
+        let reported_initial_high_offset =
+            if self.initial_high_offset.is_none() && stats.hi_offset > 0 {
+                self.initial_high_offset = Some(stats.hi_offset);
+                stats.hi_offset
+            } else {
+                0
+            };
+
         let event = MaterializedEvent::KafkaConsumerPartition {
             consumer_name,
             source_id,
@@ -93,6 +103,7 @@ impl PartitionStats {
             ls_offset: stats.ls_offset - self.ls_offset,
             app_offset: stats.app_offset - self.app_offset,
             consumer_lag: stats.consumer_lag - self.consumer_lag,
+            initial_high_offset: reported_initial_high_offset,
         };
 
         self.rxmsgs = stats.rxmsgs;

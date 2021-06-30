@@ -53,6 +53,11 @@ Wrap your release notes at the 80 character mark.
   [postgres sources](/sql/create-source/postgres/#syntax) has been renamed to
   `CONNECTION`.
 
+- Record the initial high watermark offset on the broker for Kafka sources. This
+  enables clients to observe the progress of initial data loading. The table
+  `mz_kafka_consumer_partitions` has an additional column `initial_high_offset`
+  containing the first reported `hi_offset` from the broker for each partition.
+
 {{% version-header v0.8.1 %}}
 
 - Add [timelines](/sql/timelines) to all sources to prevent

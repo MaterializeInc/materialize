@@ -101,6 +101,8 @@ pub enum MaterializedEvent {
         app_offset: i64,
         /// How many messages remain until our consumer reaches the (hi|lo) watermark
         consumer_lag: i64,
+        /// Initial partiation's high watermark offset on the broker (hi_offset)
+        initial_high_offset: i64,
     },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
@@ -295,6 +297,7 @@ pub fn construct<A: Allocate>(
                                 ls_offset,
                                 app_offset,
                                 consumer_lag,
+                                initial_high_offset,
                             } => {
                                 kafka_consumer_info_session.give((
                                     (consumer_name, source_id, partition_id),
@@ -309,6 +312,7 @@ pub fn construct<A: Allocate>(
                                         ls_offset,
                                         app_offset,
                                         consumer_lag,
+                                        initial_high_offset,
                                     ],
                                 ));
                             }
@@ -410,6 +414,7 @@ pub fn construct<A: Allocate>(
                     Datum::Int64(diff_vector[6]),
                     Datum::Int64(diff_vector[7]),
                     Datum::Int64(diff_vector[8]),
+                    Datum::Int64(diff_vector[9]),
                 ])
             }
         });

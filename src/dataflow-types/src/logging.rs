@@ -203,6 +203,7 @@ impl LogVariant {
                 .with_named_column("ls_offset", ScalarType::Int64.nullable(false))
                 .with_named_column("app_offset", ScalarType::Int64.nullable(false))
                 .with_named_column("consumer_lag", ScalarType::Int64.nullable(false))
+                .with_named_column("initial_high_offset", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
