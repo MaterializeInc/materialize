@@ -8,6 +8,8 @@ aliases:
   - /sql/create-source/postgresql
 ---
 
+{{< beta />}}
+
 {{< version-added v0.8.0 />}}
 
 {{% create-source/intro %}}
