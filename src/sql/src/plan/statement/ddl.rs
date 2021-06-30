@@ -38,7 +38,6 @@ use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
-use ore::iter::IteratorExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::{CreateSourceFormat, KeyConstraint};

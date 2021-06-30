@@ -18,7 +18,7 @@ coord = { path = "../coord" }
 flate2 = "1.0.20"
 futures = "0.3.15"
 interchange = { path = "../interchange" }
-itertools = "0.9.0"
+itertools = "0.10.1"
 kafka-util = { path = "../kafka-util" }
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
