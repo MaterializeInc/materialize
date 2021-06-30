@@ -69,9 +69,6 @@ pub struct Update {
 pub struct BuildDesc {
     pub id: GlobalId,
     pub relation_expr: OptimizedMirRelationExpr,
-    /// If building a view, the types of columns of the built view
-    /// None if building an index
-    pub typ: Option<RelationType>,
 }
 
 /// A description of a dataflow to construct and results to surface.
@@ -145,22 +142,21 @@ impl DataflowDesc {
             .insert(id, (source_description, orig_id));
     }
 
-    pub fn add_view_to_build(
-        &mut self,
-        id: GlobalId,
-        expr: OptimizedMirRelationExpr,
-        typ: RelationType,
-    ) {
+    /// Binds `expr` to `id` in the dataflow.
+    pub fn add_view_to_build(&mut self, id: GlobalId, expr: OptimizedMirRelationExpr) {
         for get_id in expr.global_uses() {
             self.add_dependency(id, get_id);
         }
         self.objects_to_build.push(BuildDesc {
             id,
             relation_expr: expr,
-            typ: Some(typ),
         });
     }
 
+    /// Binds to `id` an `ArrangeBy` expression on `on_id` with `keys`.
+    ///
+    /// This is a wrapper around `add_view_to_build`, which forms the appropriate
+    /// expression for the caller.
     pub fn add_index_to_build(
         &mut self,
         id: GlobalId,
@@ -168,16 +164,13 @@ impl DataflowDesc {
         on_type: RelationType,
         keys: Vec<MirScalarExpr>,
     ) {
-        self.objects_to_build.push(BuildDesc {
+        self.add_view_to_build(
             id,
-            relation_expr: OptimizedMirRelationExpr::declare_optimized(
-                MirRelationExpr::ArrangeBy {
-                    input: Box::new(MirRelationExpr::global_get(on_id, on_type)),
-                    keys: vec![keys],
-                },
-            ),
-            typ: None,
-        });
+            OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::ArrangeBy {
+                input: Box::new(MirRelationExpr::global_get(on_id, on_type)),
+                keys: vec![keys],
+            }),
+        );
     }
 
     pub fn add_index_export(

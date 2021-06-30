@@ -186,7 +186,7 @@ impl<'a> DataflowBuilder<'a> {
                 }
             }
         });
-        dataflow.add_view_to_build(*view_id, view.clone(), view.typ());
+        dataflow.add_view_to_build(*view_id, view.clone());
     }
 
     /// Builds a dataflow description for the index with the specified ID.
