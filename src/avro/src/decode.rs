@@ -1206,7 +1206,7 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, AvroError> {
         // The &[u8] parameter here (and elsewhere in this function) is arbitrary, but we have to put in something in order for the function
         // to type-check
         Value::Decimal(val) => d.decimal::<&[u8]>(val.precision, val.scale, V(&val.unscaled)),
-        Value::APD(..) => unreachable!(),
+        Value::Apd(..) => unreachable!(),
         Value::Bytes(val) => d.bytes::<&[u8]>(V(val)),
         Value::String(val) => d.string::<&[u8]>(V(val)),
         Value::Fixed(_len, val) => d.fixed::<&[u8]>(V(val)),
