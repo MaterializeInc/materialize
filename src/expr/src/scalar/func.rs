@@ -1798,7 +1798,6 @@ fn rescale_apd<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     if apd::rescale(&mut d.0, scale).is_err() {
         return Err(EvalError::NumericFieldOverflow);
     };
-    apd::munge_apd(&mut d.0).unwrap();
     Ok(Datum::APD(d))
 }
 
