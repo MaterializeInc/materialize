@@ -9,6 +9,10 @@ publish = false
 name = "writer"
 harness = false
 
+[[bench]]
+name = "snapshot"
+harness = false
+
 # NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.
 [dependencies]
