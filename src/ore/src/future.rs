@@ -349,7 +349,7 @@ where
 
 /// Merges streams together, yielding items as they become available.
 ///
-/// Like [`stream::select_all`], except that ready items from earlier streams
+/// Like [`stream::select_all()`], except that ready items from earlier streams
 /// are preferred to later streams. For example, all ready items from the first
 /// stream in `streams` will be yielded before moving on to the second stream in
 /// `streams. This can cause starvation, so use with care.

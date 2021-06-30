@@ -16,7 +16,7 @@ ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
 flate2 = "1.0.20"
-futures = "0.3.14"
+futures = "0.3.15"
 interchange = { path = "../interchange" }
 itertools = "0.9.0"
 kafka-util = { path = "../kafka-util" }
@@ -33,12 +33,12 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.5.4"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.4", features = ["native-tls-vendored"] }
-rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_sqs = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
+rusoto_core = "0.47.0"
+rusoto_credential = "0.47.0"
+rusoto_kinesis = "0.47.0"
+rusoto_s3 = "0.47.0"
+rusoto_sqs = "0.47.0"
+rusoto_sts = "0.47.0"
 serde = "1.0.126"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
 serde_json = "1.0.64"

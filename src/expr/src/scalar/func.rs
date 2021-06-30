@@ -4647,32 +4647,32 @@ pub fn hmac_inner<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let bytes = match typ {
         "md5" => {
-            let mut mac = Hmac::<Md5>::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Md5>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
             mac.finalize().into_bytes().to_vec()
         }
         "sha1" => {
-            let mut mac = Hmac::<Sha1>::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha1>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
             mac.finalize().into_bytes().to_vec()
         }
         "sha224" => {
-            let mut mac = Hmac::<Sha224>::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha224>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
             mac.finalize().into_bytes().to_vec()
         }
         "sha256" => {
-            let mut mac = Hmac::<Sha256>::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
             mac.finalize().into_bytes().to_vec()
         }
         "sha384" => {
-            let mut mac = Hmac::<Sha384>::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha384>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
             mac.finalize().into_bytes().to_vec()
         }
         "sha512" => {
-            let mut mac = Hmac::<Sha512>::new_varkey(key).expect("HMAC can take key of any size");
+            let mut mac = Hmac::<Sha512>::new_from_slice(key).expect("HMAC accepts any key size");
             mac.update(to_digest);
             mac.finalize().into_bytes().to_vec()
         }
