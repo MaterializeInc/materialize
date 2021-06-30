@@ -60,7 +60,7 @@ impl<'a> DataflowBuilder<'a> {
                 .get_by_id(id)
                 .desc()
                 .expect("indexes can only be built on items with descs");
-            dataflow.add_index_import(*index_id, index_desc, desc.typ().clone(), *id);
+            dataflow.import_index(*index_id, index_desc, desc.typ().clone(), *id);
         } else {
             // This is only needed in the case of a source with a transformation, but we generate it now to
             // get around borrow checker issues.
@@ -71,7 +71,7 @@ impl<'a> DataflowBuilder<'a> {
             let entry = self.catalog.get_by_id(id);
             match entry.item() {
                 CatalogItem::Table(table) => {
-                    dataflow.add_source_import(
+                    dataflow.import_source(
                         entry.name().to_string(),
                         *id,
                         SourceConnector::Local(table.timeline()),
@@ -111,7 +111,7 @@ impl<'a> DataflowBuilder<'a> {
                     let connector = connector.unwrap_or_else(|| source.connector.clone());
 
                     if source.optimized_expr.0.is_trivial_source() {
-                        dataflow.add_source_import(
+                        dataflow.import_source(
                             entry.name().to_string(),
                             *id,
                             connector,
@@ -122,7 +122,7 @@ impl<'a> DataflowBuilder<'a> {
                         // From the dataflow layer's perspective, the source transformation is just a view (across which it should be able to do whole-dataflow optimizations).
                         // Install it as such (giving the source a global transient ID by which the view/transformation can refer to it)
                         let bare_source_id = GlobalId::Transient(transient_id);
-                        dataflow.add_source_import(
+                        dataflow.import_source(
                             entry.name().to_string(),
                             bare_source_id,
                             connector,
@@ -180,7 +180,7 @@ impl<'a> DataflowBuilder<'a> {
                         // to the collection to arrange it ourselves.
                         let indexes = &self.catalog.indexes()[on_id];
                         if let Some((id, _)) = indexes.iter().find(|(_id, keys)| keys == key_set) {
-                            dataflow.add_index_import(*id, index_desc, typ.clone(), *view_id);
+                            dataflow.import_index(*id, index_desc, typ.clone(), *view_id);
                         }
                     }
                 }
@@ -203,7 +203,7 @@ impl<'a> DataflowBuilder<'a> {
         let keys = index.keys.clone();
         self.import_into_dataflow(&on_id, &mut dataflow);
         dataflow.add_index_to_build(id, on_id.clone(), on_type.clone(), keys.clone());
-        dataflow.add_index_export(id, on_id, on_type, keys);
+        dataflow.export_index(id, on_id, on_type, keys);
         dataflow
     }
 
@@ -222,7 +222,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.set_as_of(as_of.frontier.clone());
         self.import_into_dataflow(&from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, from, from_type, connector, envelope, as_of);
+        dataflow.export_sink(id, from, from_type, connector, envelope, as_of);
         dataflow
     }
 }

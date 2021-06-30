@@ -74,10 +74,13 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default)]
 pub struct DataflowDesc {
+    /// Sources made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, (SourceDesc, GlobalId)>,
+    /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
-    /// Objects must be built in the specific order as the Vec
+    /// Objects must be built in the specific order, as there may be
+    /// dependencies of later objects on prior identifiers.
     pub objects_to_build: Vec<BuildDesc>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view)
@@ -98,6 +101,7 @@ pub struct DataflowDesc {
 }
 
 impl DataflowDesc {
+    /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         DataflowDesc {
             debug_name: name,
@@ -105,7 +109,8 @@ impl DataflowDesc {
         }
     }
 
-    pub fn add_index_import(
+    /// Imports an index and makes it available as `id`.
+    pub fn import_index(
         &mut self,
         id: GlobalId,
         index: IndexDesc,
@@ -113,18 +118,11 @@ impl DataflowDesc {
         requesting_view: GlobalId,
     ) {
         self.index_imports.insert(id, (index, typ));
-        self.add_dependency(requesting_view, id);
+        self.record_depends_on(requesting_view, id);
     }
 
-    /// Records a dependency of `view_id` on `depended_upon`.
-    fn add_dependency(&mut self, view_id: GlobalId, depended_upon: GlobalId) {
-        self.dependent_objects
-            .entry(view_id)
-            .or_insert_with(Vec::new)
-            .push(depended_upon);
-    }
-
-    pub fn add_source_import(
+    /// Imports a source and makes it available as `id`.
+    pub fn import_source(
         &mut self,
         name: String,
         id: GlobalId,
@@ -145,7 +143,7 @@ impl DataflowDesc {
     /// Binds `expr` to `id` in the dataflow.
     pub fn add_view_to_build(&mut self, id: GlobalId, expr: OptimizedMirRelationExpr) {
         for get_id in expr.global_uses() {
-            self.add_dependency(id, get_id);
+            self.record_depends_on(id, get_id);
         }
         self.objects_to_build.push(BuildDesc {
             id,
@@ -173,7 +171,8 @@ impl DataflowDesc {
         );
     }
 
-    pub fn add_index_export(
+    /// Exports as `id` an index on `on_id`.
+    pub fn export_index(
         &mut self,
         id: GlobalId,
         on_id: GlobalId,
@@ -184,7 +183,8 @@ impl DataflowDesc {
             .push((id, IndexDesc { on_id, keys }, on_type));
     }
 
-    pub fn add_sink_export(
+    /// Exports as `id` a sink on `from_id`.
+    pub fn export_sink(
         &mut self,
         id: GlobalId,
         from_id: GlobalId,
@@ -207,6 +207,17 @@ impl DataflowDesc {
                 as_of,
             },
         ));
+    }
+
+    /// Records a dependency of `view_id` on `depended_upon`.
+    // TODO(#7267): This information should ideally be automatically extracted
+    // from the imported sources and indexes, rather than relying on the caller
+    // to correctly specify them.
+    fn record_depends_on(&mut self, view_id: GlobalId, depended_upon: GlobalId) {
+        self.dependent_objects
+            .entry(view_id)
+            .or_insert_with(Vec::new)
+            .push(depended_upon);
     }
 
     /// Returns true iff the id is already imported.
