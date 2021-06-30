@@ -53,6 +53,8 @@ def main() -> None:
         latest_version = next(t for t in git.get_version_tags() if t.prerelease is None)
         if version == latest_version:
             deps.push_tagged("latest")
+    else:
+        deps.push_tagged("unstable")
 
     print("--- Uploading binary tarball")
     mz_path = Path("materialized")
