@@ -25,22 +25,6 @@ pub mod persister;
 pub mod storage;
 
 // TODO
-// - The concurrency story. I imagine this working something like the following:
-//   - Writes from all streams are funnelled to a single thread which
-//     essentially runs in a loop, writing and fsync-ing a batch of updates (via
-//     an impl of Buffer). When it finishes persisting a batch, it grabs
-//     whatever has buffered since it started and uses that as the next batch.
-//     If there's ever no work to do, it sleeps until the next write arrives in
-//     the buffer.
-//   - Another thread loops and periodically moves data from the Buffer into the
-//     Indexed structure. Periodically, this thread will get notifications that
-//     a timestamp has been "sealed" on some stream, which unblocks moving data
-//     from the "Future" part of Indexed into the "Trace" part. Similarly, it
-//     will periodically get a notification that the Trace can be compacted.
-//   - We also need to be able to read from Indexed, TBD how the concurrency
-//     part of this should work.
-//   - Also TBD is who controls the two threads described above. Presumably one
-//     of regular rust threads, tokio, or timely.
 // - Should we hard-code the Key, Val, Time, Diff types everywhere or introduce
 //   them as type parameters? Materialize will only be using one combination of
 //   them (two with `()` vals?) but the generality might make things easier to
@@ -71,10 +55,6 @@ pub mod storage;
 // Testing edge cases:
 // - Failure while draining from buffer into future.
 // - Equality edge cases around all the various timestamp/frontier checks.
-
-/// A unique id for a persisted stream.
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub struct Id(pub u64);
 
 /// An exclusivity token needed to construct persistence [operators].
 ///

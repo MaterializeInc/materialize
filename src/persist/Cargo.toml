@@ -14,10 +14,12 @@ harness = false
 [dependencies]
 abomonation = "0.7"
 abomonation_derive = "0.5"
+crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+log = "0.4.13"
 ore = { path = "../ore", default-features = false }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tempfile = "3.2.0"
 
 [dev-dependencies]
 criterion = "0.3.0"
+tempfile = "3.2.0"

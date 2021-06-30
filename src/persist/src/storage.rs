@@ -9,14 +9,13 @@
 
 //! Abstractions over files, cloud storage, etc used in persistence.
 
-use std::collections::HashSet;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
 
 use abomonation_derive::Abomonation;
 
 use crate::error::Error;
 use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
+use crate::indexed::runtime::{self, RuntimeClient};
 use crate::indexed::Indexed;
 use crate::Token;
 
@@ -73,20 +72,24 @@ pub trait Blob {
 
 /// An implementation of a persister for multiplexed streams of (Key, Value,
 /// Time, Diff) updates.
-pub struct Persister<U: Buffer, L: Blob> {
-    registered: HashSet<String>,
-    indexed: Arc<Mutex<Indexed<U, L>>>,
+#[derive(Clone)]
+pub struct Persister {
+    runtime: RuntimeClient,
 }
 
-impl<U: Buffer, L: Blob> Persister<U, L> {
+impl Persister {
     /// Returns a [Persister] initialized with previous data, if any.
-    pub fn new(buf: U, blob: L) -> Result<Self, Error> {
-        Ok(Persister {
-            registered: HashSet::new(),
-            indexed: Arc::new(Mutex::new(Indexed::new(buf, blob)?)),
-        })
+    pub fn new<U: Buffer + Send + 'static, L: Blob + Send + 'static>(
+        buf: U,
+        blob: L,
+    ) -> Result<Self, Error> {
+        let indexed = Indexed::new(buf, blob)?;
+        let runtime = runtime::start(indexed);
+        Ok(Persister { runtime })
     }
+}
 
+impl Persister {
     /// Returns a token used to construct a persisted stream operator.
     ///
     /// If data was written by a previous [Persister] for this id, it's loaded and
@@ -98,14 +101,10 @@ impl<U: Buffer, L: Blob> Persister<U, L> {
     pub fn create_or_load(
         &mut self,
         id: &str,
-    ) -> Result<Token<StreamWriteHandle<U, L>, StreamMetaHandle<U, L>>, Error> {
-        if self.registered.contains(id) {
-            return Err(format!("internal error: {:?} already registered", id).into());
-        }
-        self.registered.insert(id.to_owned());
-        let id = self.indexed.lock()?.register(id);
-        let write = StreamWriteHandle::new(id, self.indexed.clone());
-        let meta = StreamMetaHandle::new(id, self.indexed.clone());
+    ) -> Result<Token<StreamWriteHandle, StreamMetaHandle>, Error> {
+        let id = self.runtime.register(id)?;
+        let write = StreamWriteHandle::new(id, self.runtime.clone());
+        let meta = StreamMetaHandle::new(id, self.runtime.clone());
         Ok(Token { write, meta })
     }
 
