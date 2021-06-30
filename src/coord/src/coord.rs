@@ -2361,8 +2361,7 @@ impl Coordinator {
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
                 self.dataflow_builder()
                     .import_view_into_dataflow(&view_id, &source, &mut dataflow);
-                dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
-                dataflow.add_index_export(index_id, view_id, typ, key);
+                dataflow.export_index(index_id, view_id, typ, key);
                 self.ship_dataflow(dataflow).await;
             }
 
