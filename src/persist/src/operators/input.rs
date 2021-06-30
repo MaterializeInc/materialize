@@ -16,15 +16,16 @@ use timely::dataflow::operators::{ActivateCapability, Concat, ToStream, Unordere
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 
-use crate::persister::{Meta, Snapshot, Write};
+use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
+use crate::persister::Snapshot;
 use crate::Token;
 
 /// A persistent equivalent of [UnorderedInput].
 pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>> {
     /// A persistent equivalent of [UnorderedInput::new_unordered_input].
-    fn new_persistent_unordered_input<W: Write + 'static, M: Meta>(
+    fn new_persistent_unordered_input(
         &mut self,
-        token: Token<W, M>,
+        token: Token<StreamWriteHandle, StreamMetaHandle>,
     ) -> (
         (PersistentUnorderedHandle, ActivateCapability<G::Timestamp>),
         Stream<G, (String, u64, isize)>,
@@ -35,9 +36,9 @@ impl<G> PersistentUnorderedInput<G> for G
 where
     G: Scope<Timestamp = u64>,
 {
-    fn new_persistent_unordered_input<W: Write + 'static, M: Meta>(
+    fn new_persistent_unordered_input(
         &mut self,
-        token: Token<W, M>,
+        token: Token<StreamWriteHandle, StreamMetaHandle>,
     ) -> (
         (PersistentUnorderedHandle, ActivateCapability<G::Timestamp>),
         Stream<G, (String, u64, isize)>,
@@ -67,7 +68,7 @@ where
 
 /// A persistent equivalent of [UnorderedHandle].
 pub struct PersistentUnorderedHandle {
-    write: Box<dyn Write>,
+    write: Box<StreamWriteHandle>,
     handle: UnorderedHandle<u64, (String, u64, isize)>,
 }
 
@@ -86,7 +87,7 @@ impl PersistentUnorderedHandle {
 
 /// A persistent equivalent of [UnorderedHandle::session]'s return type.
 pub struct PersistentUnorderedSession<'b> {
-    write: &'b mut Box<dyn Write>,
+    write: &'b mut Box<StreamWriteHandle>,
     session: ActivateOnDrop<
         AutoflushSession<
             'b,

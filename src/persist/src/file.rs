@@ -9,7 +9,6 @@
 
 //! File backed implementations for testing and benchmarking.
 
-use std::convert::TryInto;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write as StdWrite};
 use std::ops::Range;
@@ -19,118 +18,7 @@ use std::sync::{Arc, Mutex};
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::mem::MemSnapshot;
-use crate::persister::{Meta, Write};
 use crate::storage::{Blob, Buffer, SeqNo};
-
-/// A naive implementation of [Write] and [Meta] backed by a file.
-#[derive(Clone, Debug)]
-pub struct FileStream {
-    dataz: Arc<Mutex<File>>,
-    buf: Vec<u8>,
-}
-
-impl FileStream {
-    /// Create a new FileStream with data stored at the specified path,
-    ///
-    /// If the file was previously created as a FileStream, new data is appended.
-    pub fn new<P: AsRef<Path>>(name: P) -> Result<Self, Error> {
-        let file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .create(true)
-            .read(true)
-            .open(name)?;
-        Ok(FileStream {
-            dataz: Arc::new(Mutex::new(file)),
-            buf: Vec::new(),
-        })
-    }
-}
-
-impl Write for FileStream {
-    fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error> {
-        self.buf.clear();
-        for ((key, val), ts, diff) in updates.iter() {
-            let key_bytes = key.as_bytes();
-            let key_bytes_len = u64::cast_from(key_bytes.len());
-            let val_bytes = val.as_bytes();
-            let val_bytes_len = u64::cast_from(val_bytes.len());
-
-            self.buf.extend(&key_bytes_len.to_le_bytes());
-            self.buf.extend(key_bytes);
-            self.buf.extend(&val_bytes_len.to_le_bytes());
-            self.buf.extend(val_bytes);
-            self.buf.extend(&ts.to_le_bytes());
-            self.buf.extend(&(i64::cast_from(*diff)).to_le_bytes());
-        }
-
-        self.buf.shrink_to_fit();
-
-        let mut guard = self.dataz.lock()?;
-        guard.write_all(&self.buf)?;
-        // TODO: we will eventually want to change the interface to let us batch up
-        // calls to `sync_all`.
-        guard.sync_all()?;
-        Ok(())
-    }
-
-    fn seal(&mut self, _upper: u64) -> Result<(), Error> {
-        // No-op for now.
-        Ok(())
-    }
-}
-
-impl Meta for FileStream {
-    type Snapshot = MemSnapshot;
-
-    fn snapshot(&self) -> Result<Self::Snapshot, Error> {
-        let mut bytes = Vec::new();
-        let mut dataz = Vec::new();
-
-        {
-            let mut guard = self.dataz.lock()?;
-            guard.seek(SeekFrom::Start(0))?;
-            guard.read_to_end(&mut bytes)?;
-        }
-
-        let mut bytes = &bytes[..];
-        let mut buf = [0u8; 8];
-        while !bytes.is_empty() {
-            // Decode key
-            bytes.read_exact(&mut buf)?;
-            let key_len = u64::from_le_bytes(buf);
-            let mut key: Vec<u8> = vec![0u8; key_len.try_into().unwrap()];
-            bytes.read_exact(&mut key[..])?;
-            let key =
-                String::from_utf8(key).map_err(|e| format!("key not valid utf-8: {:?}", e))?;
-
-            // Decode val
-            bytes.read_exact(&mut buf)?;
-            let val_len = u64::from_le_bytes(buf);
-            let mut val = vec![0u8; val_len.try_into().unwrap()];
-            bytes.read_exact(&mut val[..])?;
-            let val =
-                String::from_utf8(val).map_err(|e| format!("val not valid utf-8: {:?}", e))?;
-
-            // Decode time
-            bytes.read_exact(&mut buf)?;
-            let ts = u64::from_le_bytes(buf);
-
-            // Decode diff
-            bytes.read_exact(&mut buf)?;
-            let diff = i64::from_le_bytes(buf);
-
-            dataz.push(((key, val), ts, isize::cast_from(diff)));
-        }
-        Ok(MemSnapshot::new(dataz))
-    }
-
-    fn allow_compaction(&mut self, _ts: u64) -> Result<(), Error> {
-        // No-op for now.
-        Ok(())
-    }
-}
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileBuffer].
@@ -432,31 +320,9 @@ impl Blob for FileBlob {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::NamedTempFile;
-
-    use crate::persister::Snapshot;
     use crate::storage::tests::{blob_impl_test, buffer_impl_test};
 
     use super::*;
-
-    #[test]
-    fn test_file_stream() -> Result<(), Error> {
-        let data = vec![
-            (("key1".to_string(), "val1".to_string()), 1, 1),
-            (("key2".to_string(), "val2".to_string()), 1, 1),
-        ];
-
-        // Create a directory that will automatically be dropped after the test finishes.
-        let temp_dir = tempfile::tempdir()?;
-        let file_path = NamedTempFile::new_in(&temp_dir)?.into_temp_path();
-        let mut file_stream = FileStream::new(file_path)?;
-        file_stream.write_sync(&data)?;
-        let mut snapshot = file_stream.snapshot()?;
-        let snapshot_data = snapshot.read_to_end();
-        assert_eq!(snapshot_data, data);
-
-        Ok(())
-    }
 
     #[test]
     fn file_blob() -> Result<(), Error> {

@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::persister::{Meta, Snapshot, Write};
 use crate::storage::{Blob, Buffer, Persister, SeqNo};
 
 struct MemBufferCore {
@@ -284,67 +283,6 @@ impl MemRegistry {
         let buffer = MemBuffer::open(buffer, lock_info)?;
         let blob = MemBlob::open(blob, lock_info)?;
         Persister::new(buffer, blob)
-    }
-}
-
-/// An in-memory implementation of [Write] and [Meta].
-#[derive(Clone, Debug)]
-pub struct MemStream {
-    dataz: Arc<Mutex<Vec<((String, String), u64, isize)>>>,
-}
-
-impl MemStream {
-    /// Create a new MemStream.
-    pub fn new() -> Self {
-        MemStream {
-            dataz: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-}
-
-impl Write for MemStream {
-    fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error> {
-        self.dataz.lock()?.extend_from_slice(&updates);
-        Ok(())
-    }
-
-    fn seal(&mut self, _upper: u64) -> Result<(), Error> {
-        // No-op for now.
-        Ok(())
-    }
-}
-
-impl Meta for MemStream {
-    type Snapshot = MemSnapshot;
-
-    fn snapshot(&self) -> Result<Self::Snapshot, Error> {
-        let dataz = self.dataz.lock()?.clone();
-        Ok(MemSnapshot { dataz })
-    }
-
-    fn allow_compaction(&mut self, _ts: u64) -> Result<(), Error> {
-        // No-op for now.
-        Ok(())
-    }
-}
-
-/// An in-memory implementation of [Snapshot].
-#[derive(Debug)]
-pub struct MemSnapshot {
-    dataz: Vec<((String, String), u64, isize)>,
-}
-
-impl MemSnapshot {
-    /// Create a new MemSnapshot.
-    pub fn new(dataz: Vec<((String, String), u64, isize)>) -> Self {
-        MemSnapshot { dataz }
-    }
-}
-
-impl Snapshot for MemSnapshot {
-    fn read<E: Extend<((String, String), u64, isize)>>(&mut self, buf: &mut E) -> bool {
-        buf.extend(self.dataz.drain(..));
-        false
     }
 }
 

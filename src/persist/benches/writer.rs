@@ -10,42 +10,35 @@
 //! Benchmarks for different persistent Write implementations.
 
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use tempfile::NamedTempFile;
 
-use persist::file::FileStream;
-use persist::mem::MemStream;
-use persist::persister::Write;
+use persist::file::FileBuffer;
+use persist::mem::MemBuffer;
+use persist::storage::Buffer;
 
-fn bench_write_sync<W: Write + Clone>(
-    writer: &W,
-    data: &[((String, String), u64, isize)],
-    b: &mut Bencher,
-) {
-    b.iter_with_setup(
-        || writer.clone(),
-        |mut writer| writer.write_sync(&data).expect("failed to write data"),
-    )
+fn bench_write_sync<U: Buffer>(writer: &mut U, data: Vec<u8>, b: &mut Bencher) {
+    b.iter(move || {
+        writer
+            .write_sync(data.clone())
+            .expect("failed to write data")
+    })
 }
 
 pub fn bench_writes(c: &mut Criterion) {
-    let data = vec![
-        (("key1".to_string(), "val1".to_string()), 1, 1),
-        (("key2".to_string(), "val2".to_string()), 1, 1),
-    ];
+    let data = "entry0".as_bytes().to_vec();
 
-    let mem_stream = MemStream::new();
+    let mut mem_buffer =
+        MemBuffer::new("mem_buffer_bench").expect("creating a MemBuffer cannot fail");
     c.bench_function("mem_write_sync", |b| {
-        bench_write_sync(&mem_stream, &data, b)
+        bench_write_sync(&mut mem_buffer, data.clone(), b)
     });
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let file_path = NamedTempFile::new_in(&temp_dir)
-        .expect("failed to create temp file")
-        .into_temp_path();
-    let file_stream = FileStream::new(file_path).expect("failed to create file stream");
+    let file_buffer_dir = temp_dir.path().join("file_buffer_bench");
+    let mut file_buffer = FileBuffer::new(file_buffer_dir, b"file_buffer_bench")
+        .expect("creating a FileBuffer cannot fail");
     c.bench_function("file_write_sync", |b| {
-        bench_write_sync(&file_stream, &data, b)
+        bench_write_sync(&mut file_buffer, data.clone(), b)
     });
 }
 
