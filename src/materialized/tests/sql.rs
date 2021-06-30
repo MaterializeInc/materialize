@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use log::info;
+use postgres::Row;
 use tempfile::NamedTempFile;
 
 use util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
@@ -261,12 +262,35 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     for i in 1..=3 {
         let data = format!("line {}", i);
         client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
-        match client_reads.query("FETCH ALL c1", &[])?.as_slice() {
-            [data_row, progress_row] => {
-                assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
-                assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
-                assert_eq!(data_row.get::<_, String>("data"), data);
 
+        // We have to try several times. It might be that the FETCH gets
+        // a batch that only contains continuous progress statements, without
+        // any data. We retry until we get the batch that has the data, and
+        // then verify that it also has a progress statement.
+        loop {
+            let rows = client_reads.query("FETCH ALL c1", &[])?;
+
+            let rows = rows.iter();
+
+            // find the data row in the sea of progress rows
+
+            // remove progress statements that occured before our data
+            let mut rows = rows.skip_while(|row| row.try_get::<_, String>("data").is_err());
+
+            // this must be the data row
+            let data_row = rows.next();
+
+            let data_row = match data_row {
+                Some(data_row) => data_row,
+                None => continue, //retry
+            };
+
+            assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
+            assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
+            assert_eq!(data_row.get::<_, String>("data"), data);
+
+            let mut num_progress_rows = 0;
+            for progress_row in rows {
                 assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
                 assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
                 assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
@@ -274,28 +298,115 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
                 let data_ts: MzTimestamp = data_row.get("mz_timestamp");
                 let progress_ts: MzTimestamp = progress_row.get("mz_timestamp");
                 assert!(data_ts < progress_ts);
+
+                num_progress_rows += 1;
             }
-            _ => panic!("wrong number of rows returned"),
+
+            assert!(num_progress_rows > 0);
+
+            // success! break out of the loop
+            break;
         }
     }
 
-    // Test that tailing non-nullable columns with progress information
-    // turn sthem into nullable columns. See #6304.
-    {
-        client_writes.batch_execute("CREATE TABLE t2 (data text NOT NULL)")?;
-        client_writes.batch_execute("INSERT INTO t2 VALUES ('data')")?;
-        client_reads.batch_execute(
-            "COMMIT; BEGIN;
+    Ok(())
+}
+
+// Verifies that tailing non-nullable columns with progress information
+// turns them into nullable columns. See #6304.
+#[test]
+fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t2 (data text NOT NULL)")?;
+    client_writes.batch_execute("INSERT INTO t2 VALUES ('data')")?;
+    client_reads.batch_execute(
+        "COMMIT; BEGIN;
             DECLARE c2 CURSOR FOR TAIL t2 WITH (PROGRESS);",
-        )?;
-        let data_row = client_reads.query_one("FETCH 1 c2", &[])?;
-        assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
-        assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
-        assert_eq!(data_row.get::<_, String>("data"), "data");
-        let progress_row = client_reads.query_one("FETCH 1 c2", &[])?;
-        assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
-        assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
-        assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
+    )?;
+    let data_row = client_reads.query_one("FETCH 1 c2", &[])?;
+    assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
+    assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
+    assert_eq!(data_row.get::<_, String>("data"), "data");
+    let progress_row = client_reads.query_one("FETCH 1 c2", &[])?;
+    assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
+    assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
+    assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
+
+    Ok(())
+}
+
+/// Verifies that we get continuous progress messages as soon as at least one
+/// data message was produced.
+#[test]
+fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
+    client_reads.batch_execute(
+        "COMMIT; BEGIN;
+         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+    )?;
+
+    client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&"hello".to_owned()])?;
+
+    let mut last_ts = MzTimestamp(u64::MIN);
+    let mut verify_rows = move |rows: Vec<Row>| -> (usize, usize) {
+        let mut num_data_rows = 0;
+        let mut num_progress_rows = 0;
+
+        for row in rows {
+            let diff = row.get::<_, Option<i64>>("mz_diff");
+            match diff {
+                Some(diff) => {
+                    num_data_rows += 1;
+
+                    assert_eq!(diff, 1);
+                    assert_eq!(row.get::<_, bool>("mz_progressed"), false);
+                    let data = row.get::<_, Option<String>>("data");
+                    assert!(data.is_some());
+                }
+                None => {
+                    num_progress_rows += 1;
+
+                    assert_eq!(row.get::<_, bool>("mz_progressed"), true);
+                    assert_eq!(row.get::<_, Option<String>>("data"), None);
+                }
+            }
+
+            let ts: MzTimestamp = row.get("mz_timestamp");
+            assert!(last_ts < ts);
+            last_ts = ts;
+        }
+
+        (num_data_rows, num_progress_rows)
+    };
+
+    // this will fetch away the initial batch that contains our data message
+    // plus some progress messages
+    let rows = client_reads.query("FETCH ALL c1", &[])?;
+    let (num_data_rows, num_progress_rows) = verify_rows(rows);
+    assert_eq!(num_data_rows, 1);
+    assert!(num_progress_rows > 0);
+
+    // Try and read some progress messages. The normal update interval is
+    // 1s, so only wait for two updates. Otherwise this would run for too long.
+    for _i in 1..=2 {
+        let rows = client_reads.query("FETCH ALL c1", &[])?;
+
+        let (num_data_rows, num_progress_rows) = verify_rows(rows);
+        assert_eq!(num_data_rows, 0);
+        assert!(num_progress_rows > 0);
     }
 
     Ok(())
