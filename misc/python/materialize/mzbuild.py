@@ -679,7 +679,7 @@ class DependencySet:
         """Like push, but use the specified tag instead of the image's spec."""
         for dep in self:
             name = dep.image.docker_name(tag)
-            if dep.publish and not is_docker_image_pushed(name):
+            if dep.publish:
                 spawn.runv(["docker", "tag", dep.spec(), name])
                 spawn.runv(["docker", "push", name])
 
