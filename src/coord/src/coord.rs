@@ -1460,6 +1460,16 @@ impl Coordinator {
             // Allow dataflow to cancel any pending peeks.
             self.broadcast(dataflow::Command::CancelPeek { conn_id });
 
+            // Cancel pending writes. There is at most one pending write per session.
+            if let Some(idx) = self
+                .serialized_writes
+                .iter()
+                .position(|ready| ready.session.conn_id() == conn_id)
+            {
+                let ready = self.serialized_writes.remove(idx).unwrap();
+                ready.tx.send(Ok(ExecuteResponse::Cancelled), ready.session);
+            }
+
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
         }

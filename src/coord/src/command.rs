@@ -158,6 +158,8 @@ pub enum ExecuteResponse {
     AlteredObject(ObjectType),
     // The index was altered.
     AlteredIndexLogicalCompaction,
+    // The query was cancelled.
+    Cancelled,
     /// The requested cursor was closed.
     ClosedCursor,
     CopyTo {
