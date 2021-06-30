@@ -9,6 +9,6 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:11.4
+FROM postgres:10
 COPY --chown=postgres --from=certs /secrets/* /share/secrets/
 COPY setup-postgres.sh /docker-entrypoint-initdb.d/setup-postgres.sh

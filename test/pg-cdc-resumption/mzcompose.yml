@@ -199,7 +199,7 @@ services:
     - MZ_LOG
 
   postgres:
-    image: postgres:11.4
+    image: postgres:10
     ports:
       - 5432
     command: postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20
