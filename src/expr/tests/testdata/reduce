@@ -1,0 +1,284 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# IsNull around a single UnaryFunc.
+
+reduce
+(
+    call_unary is_null
+        (call_unary is_null #0)
+)
+[int32]
+----
+false
+
+reduce
+(
+    call_unary is_null
+        (call_unary (cast_int_32_to_a_p_d 127) #0)
+)
+[int32]
+----
+isnull(#0)
+
+reduce
+(
+    call_unary is_null
+        (call_unary cast_jsonb_to_int32 #0)
+)
+[jsonb]
+----
+isnull(jsonbtoi32(#0))
+
+# IsNull around a single BinaryFunc.
+
+reduce
+(call_unary is_null (call_binary add_int_32 #1 #0)) [(int32 false) (int32 false)]
+----
+(isnull(#0) || isnull(#1))
+
+reduce
+(call_unary is_null (call_binary and #1 #0)) [(bool false) (bool false)]
+----
+isnull((#0 && #1))
+
+reduce
+(call_unary is_null
+    (call_binary (jsonb_get_int64 false) #1 #0))
+[(jsonb false) (int64 false)]
+----
+isnull((#1 -> #0))
+
+# IsNull around multiple functions
+
+reduce
+(
+    call_unary is_null
+        (call_unary is_null
+            (call_unary cast_jsonb_to_int32 #0))
+)
+[jsonb]
+----
+false
+
+reduce
+(
+    call_unary is_null
+        (call_unary not (call_unary is_null #0))
+)
+[int32]
+----
+false
+
+reduce
+(
+    call_unary is_null
+        (call_unary cast_a_p_d_to_int64
+        (call_unary (cast_int_32_to_a_p_d 127) #0))
+)
+[int32]
+----
+isnull(#0)
+
+reduce
+(
+    call_unary is_null
+        (call_unary cast_int_64_to_float_64
+        (call_unary cast_a_p_d_to_int64
+        (call_unary (cast_int_32_to_a_p_d 127) #0)))
+)
+[int32]
+----
+isnull(#0)
+
+reduce
+(
+    call_unary is_null
+        (call_binary add_int_32 #1
+            (call_binary mul_int_32 #2 #0))
+)
+[int32 int32 int32]
+----
+(isnull(#1) || (isnull(#0) || isnull(#2)))
+
+# Null-propagating UnaryFunc around BinaryFunc
+reduce
+(
+    call_unary is_null
+    (call_unary (cast_int_32_to_a_p_d 127)
+        (call_binary add_int_32 #1 #0))
+)
+[(int32 false) (int32 false)]
+----
+(isnull(#0) || isnull(#1))
+
+# Non-null-propagating UnaryFunc around BinaryFunc
+reduce
+(
+    call_unary is_null
+        (call_unary is_null (call_binary add_int_32 #1 #0))
+)
+[(int32 false) (int32 false)]
+----
+false
+
+# Null-propagating BinaryFunc around UnaryFuncs
+reduce
+(
+    call_unary is_null
+    (call_binary lt (call_unary is_null #1) (call_unary cast_string_to_bool #0))
+)
+[string bool]
+----
+isnull(#0)
+
+# Non-null-propagating BinaryFunc around UnaryFuncs
+reduce
+(
+    call_unary is_null
+        (call_binary or
+            (call_unary is_null #1)
+            (call_unary cast_string_to_bool #0))
+)
+[string bool]
+----
+isnull((isnull(#1) || strtobool(#0)))
+
+# outer is_null needs to be resolved in a second round.
+
+reduce
+(
+    call_unary is_null
+        (call_binary or
+            (call_unary is_null (call_unary is_null #1))
+            (call_unary cast_string_to_bool #0))
+)
+[string bool]
+----
+isnull(#0)
+
+# Constant folding
+
+reduce
+(
+    call_unary is_null
+        (call_binary add_int_32 #1
+            (call_binary mul_int_32 null #0))
+)
+[int32 int32]
+----
+true
+
+reduce
+(
+    call_unary is_null
+        (call_binary and
+            (call_unary is_null (call_unary is_null #1))
+            (call_unary cast_string_to_bool #0))
+)
+[string bool]
+----
+false
+
+# Not/demorgans propagation
+
+reduce
+(call_unary not
+    (call_unary is_null (call_binary add_int_32 #1 #0))
+)
+[(int32 false) (int32 false)]
+----
+(!(isnull(#0)) && !(isnull(#1)))
+
+canonicalize
+[(call_unary not
+    (call_unary is_null (call_binary add_int_32 #1 #0))
+)]
+[(int32 false) (int32 false)]
+----
+----
+!(isnull(#0))
+!(isnull(#1))
+----
+----
+
+reduce
+(
+    call_unary not
+        (
+            call_binary and
+                (call_binary gt #1 #0)
+                (call_binary lt #1 #2)
+        )
+)
+[(int32 false) (int32 false) (int32 false)]
+----
+((#1 <= #0) || (#1 >= #2))
+
+reduce
+(
+    call_unary not
+        (
+            call_binary and
+                (call_unary not #0)
+                (call_binary lt #1 (call_unary not #2))
+        )
+)
+[(bool) (int32 false) (int32 false)]
+----
+(#0 || (#1 >= !(#2)))
+
+reduce
+(
+    call_unary not
+        (
+            call_binary and
+                (call_unary not #0)
+                (call_binary or #1 (call_unary not #2))
+        )
+)
+[bool bool bool]
+----
+(#0 || (#2 && !(#1)))
+
+# undistribute and/or
+
+reduce
+(call_binary or
+    (call_binary and
+        (call_unary not #1) #0)
+        (call_binary and (call_unary not #1) #2))
+[bool bool bool]
+----
+(!(#1) && (#0 || #2))
+
+reduce
+(call_unary not
+    (call_binary or
+        (call_binary and #1 #0)
+        (call_binary and #1 #2)))
+[bool bool bool]
+----
+(!(#1) || (!(#0) && !(#2)))
+
+reduce
+(call_unary not (call_binary and (call_binary or #1 #0)
+        (call_binary or #1 #2)))
+[bool bool bool]
+----
+(!(#1) && (!(#0) || !(#2)))
+
+reduce
+(call_binary and
+    (call_unary is_null (call_binary add_int32 #1 (call_unary cast_int64_to_int32 #0)))
+    (call_unary is_null (call_binary add_int32 #2 #0))
+)
+[int64 int32 int32]
+----
+(isnull(#0) || (isnull(#1) && isnull(#2)))
