@@ -19,7 +19,9 @@ In Materialize, `now()` doesn't represent the system time, as it does in most sy
 
 ## Temporal filters
 
-You can use `mz_logical_timestamp()` to define temporal filters for materialized view, or computations for fixed windows of time. For more information, see [Temporal Filters: Enabling Windowed Queries in Materialize](https://materialize.com/temporal-filters/).
+You can use `mz_logical_timestamp()` to define temporal filters for materialized view, or computations for fixed windows of time.
+
+For more information, see [Temporal Filters: Enabling Windowed Queries in Materialize](https://materialize.com/temporal-filters/).
 
 ## Example
 
