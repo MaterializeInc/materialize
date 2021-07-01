@@ -24,13 +24,13 @@ Write:
 You can put commas between fields and elements; they will essentially be treated
 as whitespace.
 
-As an convenience, a unit enum (resp. a struct with only one argument) can
+As a convenience, a unit enum (resp. a struct with only one argument) can
 alternatively be written as `variant_in_snake_case` (resp. `field1`).
 
-The convenience cannot be used if you have a struct whose only argument is an
+The convenience cannot be used if you have a struct whose only argument is a
 non-unit enum (resp. a struct with multiple arguments). In this case, you
 should use two sets of parentheses, e.g.
-`((variant_in_snake_case field1 .. fieldn))` (resp. `((field1 .. fieldn))`). to
+`((variant_in_snake_case field1 .. fieldn))` (resp. `((field1 .. fieldn))`) to
 make it clear that the multiple arguments belong to the inner enum/struct and
 not the outer struct.
 
