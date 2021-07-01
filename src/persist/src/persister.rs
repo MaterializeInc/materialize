@@ -22,6 +22,7 @@ pub trait Snapshot {
     fn read_to_end(&mut self) -> Vec<((String, String), u64, isize)> {
         let mut buf = Vec::new();
         while self.read(&mut buf) {}
+        buf.sort();
         buf
     }
 }

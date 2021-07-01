@@ -29,6 +29,7 @@ struct FileBufferCore {
 
 /// A naive implementation of [Buffer] backed by files.
 pub struct FileBuffer {
+    base_dir: Option<PathBuf>,
     dataz: Arc<Mutex<FileBufferCore>>,
     seqno: Range<SeqNo>,
     buf: Vec<u8>,
@@ -115,9 +116,11 @@ impl FileBuffer {
 
             if len > 0 {
                 let mut buf = [0u8; 8];
-                buffer_file.seek(SeekFrom::End(8))?;
+                buffer_file.seek(SeekFrom::End(-8))?;
                 buffer_file.read_exact(&mut buf)?;
-                SeqNo(u64::from_le_bytes(buf))
+                // NB: seqno_end is exclusive, so we have to add one to the
+                // seqno of the most recent write to reconstruct it.
+                SeqNo(u64::from_le_bytes(buf) + 1)
             } else {
                 SeqNo(0)
             }
@@ -132,6 +135,7 @@ impl FileBuffer {
         }
 
         Ok(FileBuffer {
+            base_dir: Some(base_dir.to_owned()),
             dataz: Arc::new(Mutex::new(FileBufferCore {
                 dataz: buffer_file,
                 metadata: metadata_file,
@@ -152,10 +156,18 @@ impl FileBuffer {
     fn metadata_path(base_dir: &Path) -> PathBuf {
         base_dir.join(Self::METADATA_PATH)
     }
+
+    fn ensure_open(&self) -> Result<PathBuf, Error> {
+        self.base_dir
+            .clone()
+            .ok_or_else(|| return Error::from("FileBuffer unexpectedly closed"))
+    }
 }
 
 impl Buffer for FileBuffer {
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
+        self.ensure_open()?;
+
         let write_seqno = self.seqno.end;
         self.seqno = self.seqno.start..SeqNo(write_seqno.0 + 1);
         // Write length prefixed data, and then the sequence number.
@@ -178,6 +190,7 @@ impl Buffer for FileBuffer {
     where
         F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
     {
+        self.ensure_open()?;
         let mut bytes = Vec::new();
 
         {
@@ -223,6 +236,7 @@ impl Buffer for FileBuffer {
     ///
     /// TODO: actually reclaim disk space as part of truncating.
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
+        self.ensure_open()?;
         // TODO: Test the edge cases here.
         if upper <= self.seqno.start || upper > self.seqno.end {
             return Err(format!(
@@ -243,11 +257,23 @@ impl Buffer for FileBuffer {
 
         Ok(())
     }
+
+    fn close(&mut self) -> Result<(), Error> {
+        if let Ok(base_dir) = self.ensure_open() {
+            let lockfile_path = Self::lockfile_path(&base_dir);
+            fs::remove_file(lockfile_path)?;
+            self.base_dir = None;
+            Ok(())
+        } else {
+            // Already closed. Close implementations must be idempotent.
+            Ok(())
+        }
+    }
 }
 
 /// Implementation of [Blob] backed by files.
 pub struct FileBlob {
-    base_dir: PathBuf,
+    base_dir: Option<PathBuf>,
 }
 
 impl FileBlob {
@@ -276,7 +302,7 @@ impl FileBlob {
             lockfile.sync_all()?;
         }
         Ok(FileBlob {
-            base_dir: base_dir.to_path_buf(),
+            base_dir: Some(base_dir.to_path_buf()),
         })
     }
 
@@ -284,14 +310,17 @@ impl FileBlob {
         base_dir.join(Self::LOCKFILE_PATH)
     }
 
-    fn blob_path(&self, key: &str) -> PathBuf {
-        self.base_dir.join(key)
+    fn blob_path(&self, key: &str) -> Result<PathBuf, Error> {
+        self.base_dir
+            .as_ref()
+            .map(|base_dir| base_dir.join(key))
+            .ok_or_else(|| return Error::from("FileBlob unexpectedly closed"))
     }
 }
 
 impl Blob for FileBlob {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        let file_path = self.blob_path(key);
+        let file_path = self.blob_path(key)?;
         let mut file = match File::open(file_path) {
             Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -303,7 +332,7 @@ impl Blob for FileBlob {
     }
 
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
-        let file_path = self.blob_path(key);
+        let file_path = self.blob_path(key)?;
         let mut file = if allow_overwrite {
             File::create(file_path)?
         } else {
@@ -315,6 +344,18 @@ impl Blob for FileBlob {
         file.write_all(&value[..])?;
         file.sync_all()?;
         Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), Error> {
+        if let Some(base_dir) = self.base_dir.as_ref() {
+            let lockfile_path = Self::lockfile_path(&base_dir);
+            fs::remove_file(lockfile_path)?;
+            self.base_dir = None;
+            Ok(())
+        } else {
+            // Already closed. Close implementations must be idempotent.
+            Ok(())
+        }
     }
 }
 
@@ -328,7 +369,7 @@ mod tests {
     fn file_blob() -> Result<(), Error> {
         let temp_dir = tempfile::tempdir()?;
         blob_impl_test(move |idx| {
-            let instance_dir = temp_dir.path().join(format!("{}", idx));
+            let instance_dir = temp_dir.path().join(idx);
             FileBlob::new(instance_dir, &"file_blob_test".as_bytes())
         })
     }
@@ -337,7 +378,7 @@ mod tests {
     fn file_buffer() -> Result<(), Error> {
         let temp_dir = tempfile::tempdir()?;
         buffer_impl_test(move |idx| {
-            let instance_dir = temp_dir.path().join(format!("{}", idx));
+            let instance_dir = temp_dir.path().join(idx);
             FileBuffer::new(instance_dir, &"file_buffer_test".as_bytes())
         })
     }

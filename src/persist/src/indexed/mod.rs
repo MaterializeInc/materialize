@@ -108,6 +108,19 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         Ok(indexed)
     }
 
+    /// Releases exclusive-writer locks and causes all future commands to error.
+    ///
+    /// This method is idempotent.
+    pub fn close(&mut self) -> Result<(), Error> {
+        // Be careful to attempt to close both buf and blob even if one of the
+        // closes fails.
+        let buf_res = self.buf.close();
+        let blob_res = self.blob.close();
+        buf_res?;
+        blob_res?;
+        Ok(())
+    }
+
     fn new_blob_key(&mut self) -> String {
         // TODO: Use meaningful file names? Something like id+desc might be
         // useful when debugging.

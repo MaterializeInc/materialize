@@ -52,6 +52,12 @@ pub trait Buffer {
     /// Removes all entries with a SeqNo strictly less than the given upper
     /// bound.
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error>;
+
+    /// Synchronously closes the buffer, releasing exclusive-writer locks and
+    /// causing all future commands to error.
+    ///
+    /// Implementations must be idempotent.
+    fn close(&mut self) -> Result<(), Error>;
 }
 
 /// An abstraction over a `bytes key`->`bytes value` store.
@@ -68,6 +74,12 @@ pub trait Blob {
 
     /// Inserts a key-value pair into the map.
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
+
+    /// Synchronously closes the buffer, releasing exclusive-writer locks and
+    /// causing all future commands to error.
+    ///
+    /// Implementations must be idempotent.
+    fn close(&mut self) -> Result<(), Error>;
 }
 
 /// An implementation of a persister for multiplexed streams of (Key, Value,
@@ -86,6 +98,14 @@ impl Persister {
         let indexed = Indexed::new(buf, blob)?;
         let runtime = runtime::start(indexed);
         Ok(Persister { runtime })
+    }
+
+    /// Synchronously closes the runtime, releasing exclusive-writer locks and
+    /// causing all future commands to error.
+    ///
+    /// This method is idempotent.
+    pub fn stop(&mut self) -> Result<(), Error> {
+        self.runtime.stop()
     }
 }
 
@@ -137,25 +157,27 @@ pub mod tests {
         Ok(entries)
     }
 
-    pub fn buffer_impl_test<U: Buffer, F: FnMut(usize) -> Result<U, Error>>(
+    pub fn buffer_impl_test<U: Buffer, F: FnMut(&str) -> Result<U, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
         let entries = vec![
             "entry0".as_bytes().to_vec(),
             "entry1".as_bytes().to_vec(),
             "entry2".as_bytes().to_vec(),
+            "entry3".as_bytes().to_vec(),
+            "entry4".as_bytes().to_vec(),
         ];
         let sub_entries =
             |r: RangeInclusive<usize>| -> Vec<Vec<u8>> { entries[r].iter().cloned().collect() };
 
-        let mut buf0 = new_fn(0)?;
+        let mut buf0 = new_fn("0")?;
 
         // We can create a second buffer writing to a different place.
-        let _ = new_fn(1)?;
+        let _ = new_fn("1")?;
 
         // But the buffer impl prevents us from opening the same place for
         // writing twice.
-        assert!(new_fn(0).is_err());
+        assert!(new_fn("0").is_err());
 
         // Empty writer is empty.
         assert!(slurp(&buf0)?.is_empty());
@@ -184,24 +206,43 @@ pub mod tests {
         buf0.truncate(SeqNo(3))?;
         assert!(slurp(&buf0)?.is_empty());
 
+        // Cannot reuse a buffer once it is closed.
+        assert_eq!(buf0.close(), Ok(()));
+        assert!(buf0.write_sync(entries[1].clone()).is_err());
+        assert!(slurp(&buf0).is_err());
+        assert!(buf0.truncate(SeqNo(4)).is_err());
+
+        // Close must be idempotent.
+        assert_eq!(buf0.close(), Ok(()));
+
+        // But we can reopen it and use it.
+        let mut buf0 = new_fn("0")?;
+        assert_eq!(buf0.write_sync(entries[3].clone())?, SeqNo(3));
+        assert_eq!(slurp(&buf0)?, sub_entries(3..=3));
+        assert_eq!(buf0.close(), Ok(()));
+        let mut buf0 = new_fn("0")?;
+        assert_eq!(buf0.write_sync(entries[4].clone())?, SeqNo(4));
+        assert_eq!(slurp(&buf0)?, sub_entries(3..=4));
+        assert_eq!(buf0.close(), Ok(()));
+
         Ok(())
     }
 
-    pub fn blob_impl_test<L: Blob, F: FnMut(usize) -> Result<L, Error>>(
+    pub fn blob_impl_test<L: Blob, F: FnMut(&str) -> Result<L, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
         // let sub_entries =
         //     |r: RangeInclusive<usize>| -> Vec<Vec<u8>> { entries[r].iter().cloned().collect() };
 
-        let mut blob0 = new_fn(0)?;
+        let mut blob0 = new_fn("0")?;
 
         // We can create a second blob writing to a different place.
-        let _ = new_fn(1)?;
+        let _ = new_fn("1")?;
 
         // But the blob impl prevents us from opening the same place for
         // writing twice.
-        assert!(new_fn(0).is_err());
+        assert!(new_fn("0").is_err());
 
         // Empty key is empty.
         assert_eq!(blob0.get("k0")?, None);
@@ -214,6 +255,18 @@ pub mod tests {
         assert!(blob0.set("k0", values[1].clone(), false).is_err());
         assert_eq!(blob0.get("k0")?, Some(values[0].clone()));
         blob0.set("k0", values[1].clone(), true)?;
+        assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
+
+        // Cannot reuse a blob once it is closed.
+        assert_eq!(blob0.close(), Ok(()));
+        assert!(blob0.get("k0").is_err());
+        assert!(blob0.set("k1", values[0].clone(), true).is_err());
+
+        // Close must be idempotent.
+        assert_eq!(blob0.close(), Ok(()));
+
+        // But we can reopen it and use it.
+        let blob0 = new_fn("0")?;
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
 
         Ok(())

@@ -44,8 +44,6 @@ impl MemBufferCore {
     }
 
     fn close(&mut self) -> Result<(), Error> {
-        self.ensure_open()?;
-
         self.lock = None;
         Ok(())
     }
@@ -124,11 +122,6 @@ impl MemBuffer {
         core.lock()?.open(lock_info)?;
         Ok(Self { core })
     }
-
-    /// Close a pre-existing MemBuffer
-    fn close(&mut self) -> Result<(), Error> {
-        self.core.lock()?.close()
-    }
 }
 
 impl Drop for MemBuffer {
@@ -151,6 +144,10 @@ impl Buffer for MemBuffer {
 
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
         self.core.lock()?.truncate(upper)
+    }
+
+    fn close(&mut self) -> Result<(), Error> {
+        self.core.lock()?.close()
     }
 }
 
@@ -178,8 +175,6 @@ impl MemBlobCore {
     }
 
     fn close(&mut self) -> Result<(), Error> {
-        self.ensure_open()?;
-
         self.lock = None;
         Ok(())
     }
@@ -230,11 +225,6 @@ impl MemBlob {
         core.lock()?.open(lock_info)?;
         Ok(Self { core })
     }
-
-    /// Close a pre-existing MemBlob
-    fn close(&mut self) -> Result<(), Error> {
-        self.core.lock()?.close()
-    }
 }
 
 impl Drop for MemBlob {
@@ -251,12 +241,16 @@ impl Blob for MemBlob {
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
         self.core.lock()?.set(key, value, allow_overwrite)
     }
+
+    fn close(&mut self) -> Result<(), Error> {
+        self.core.lock()?.close()
+    }
 }
 
 /// An in-memory representation of a set of [Buffer]s and [Blob]s that can be reused
 /// across dataflows
 pub struct MemRegistry {
-    by_path: HashMap<usize, (Arc<Mutex<MemBufferCore>>, Arc<Mutex<MemBlobCore>>)>,
+    by_path: HashMap<String, (Arc<Mutex<MemBufferCore>>, Arc<Mutex<MemBlobCore>>)>,
 }
 
 impl MemRegistry {
@@ -267,54 +261,56 @@ impl MemRegistry {
         }
     }
 
-    /// Opens the in-memory [Persister] associated with `path` or creates one if
-    /// none exists.
-    pub fn open(&mut self, path: usize, lock_info: &str) -> Result<Persister, Error> {
-        let (buffer, blob) = if let Some((buffer, blob)) = self.by_path.get(&path) {
-            (buffer.clone(), blob.clone())
+    fn buffer(&mut self, path: &str, lock_info: &str) -> Result<MemBuffer, Error> {
+        let buffer = if let Some((buffer, _)) = self.by_path.get(path) {
+            buffer.clone()
         } else {
             let buffer = Arc::new(Mutex::new(MemBufferCore::new()));
             let blob = Arc::new(Mutex::new(MemBlobCore::new()));
-
-            self.by_path.insert(path, (buffer.clone(), blob.clone()));
-            (buffer, blob)
+            self.by_path
+                .insert(path.to_string(), (buffer.clone(), blob));
+            buffer
         };
+        MemBuffer::open(buffer, lock_info)
+    }
 
-        let buffer = MemBuffer::open(buffer, lock_info)?;
-        let blob = MemBlob::open(blob, lock_info)?;
+    fn blob(&mut self, path: &str, lock_info: &str) -> Result<MemBlob, Error> {
+        let blob = if let Some((_, blob)) = self.by_path.get(path) {
+            blob.clone()
+        } else {
+            let buffer = Arc::new(Mutex::new(MemBufferCore::new()));
+            let blob = Arc::new(Mutex::new(MemBlobCore::new()));
+            self.by_path
+                .insert(path.to_string(), (buffer, blob.clone()));
+            blob
+        };
+        MemBlob::open(blob, lock_info)
+    }
+
+    /// Opens the in-memory [Persister] associated with `path` or creates one if
+    /// none exists.
+    pub fn open(&mut self, path: &str, lock_info: &str) -> Result<Persister, Error> {
+        let buffer = self.buffer(path, lock_info)?;
+        let blob = self.blob(path, lock_info)?;
         Persister::new(buffer, blob)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use crate::storage::tests::{blob_impl_test, buffer_impl_test};
 
     use super::*;
 
     #[test]
     fn mem_buffer() -> Result<(), Error> {
-        let mut registered = HashSet::new();
-        buffer_impl_test(move |idx| {
-            if registered.contains(&idx) {
-                return Err(Error::from(format!("LOCKED: memory buffer {}", idx)));
-            }
-            registered.insert(idx);
-            MemBuffer::new("buffer_impl_test")
-        })
+        let mut registry = MemRegistry::new();
+        buffer_impl_test(move |path| registry.buffer(path, "buffer_impl_test"))
     }
 
     #[test]
     fn mem_blob() -> Result<(), Error> {
-        let mut registered = HashSet::new();
-        blob_impl_test(move |idx| {
-            if registered.contains(&idx) {
-                return Err(Error::from(format!("LOCKED: memory buffer {}", idx)));
-            }
-            registered.insert(idx);
-            MemBlob::new("blob_impl_test")
-        })
+        let mut registry = MemRegistry::new();
+        blob_impl_test(move |path| registry.blob(path, "blob_impl_test"))
     }
 }
