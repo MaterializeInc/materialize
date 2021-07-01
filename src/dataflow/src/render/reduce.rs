@@ -224,7 +224,7 @@ pub struct BucketedPlan {
 /// additional reduce operator whenever we have multiple reduce aggregates
 /// to combine and present results in the appropriate order. If we
 /// were only asked to compute a single aggregation, we can skip
-/// that step and return the arragement provided by computing the aggregation
+/// that step and return the arrangement provided by computing the aggregation
 /// directly.
 #[derive(Clone, Debug)]
 pub enum BasicPlan {
@@ -411,7 +411,7 @@ impl ReducePlan {
 
                     // Distribute buckets in powers of 16, so that we can strike
                     // a balance between how many inputs each layer gets from
-                    // the preceeding layer, while also limiting the number of
+                    // the preceding layer, while also limiting the number of
                     // layers.
                     while current < limit {
                         buckets.push(current as u64);
@@ -650,7 +650,7 @@ where
 ///
 /// This computes the same thing as a join on the group key followed by shuffling
 /// the values into the correct order. This implementation assumes that all input
-/// arrangements present values in a way thats respects the desired output order,
+/// arrangements present values in a way that respects the desired output order,
 /// so we can do a linear merge to form the output.
 fn build_collation<G>(
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
@@ -736,11 +736,22 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
-        |key, _input, output| {
-            output.push((key.clone(), 1));
+    let negated_result = collection.reduce_named("DistinctBy", {
+        |key, input, output| {
+            output.push((key.clone(), -1));
+            output.extend(
+                input
+                    .iter()
+                    .map(|(values, count)| ((*values).clone(), *count)),
+            );
         }
-    })
+    });
+    use differential_dataflow::operators::arrange::ArrangeByKey;
+    negated_result
+        .negate()
+        .concat(&collection)
+        .consolidate()
+        .arrange_by_key_named("DistinctBy")
 }
 
 /// Build the dataflow to compute and arrange multiple non-accumulable,
