@@ -14,26 +14,6 @@ build override=true
 None
 
 build override=true
-unit
-----
-Some(Unit)
-
-build override=true
-(single_unnamed_field -1.1)
-----
-Some(SingleUnnamedField(TestStruct1(-1.1)))
-
-build override=true
-(unit)
-----
-Some(Unit)
-
-build
-(single_unnamed_field (-1.1))
-----
-Some(SingleUnnamedField(TestStruct1(-1.1)))
-
-build
 (multi_named_fields null false)
 ----
 Some(MultiNamedFields { bar: None, baz: false })
@@ -47,6 +27,61 @@ build override=true
 (multi_named_fields "realm")
 ----
 Some(MultiNamedFields { bar: Some("realm"), baz: false })
+
+build override=true
+unit
+----
+Some(Unit)
+
+build override=true
+(unit)
+----
+Some(Unit)
+
+build override=true
+(single_unnamed_field -1.1)
+----
+Some(SingleUnnamedField(SingleUnnamedArg(-1.1)))
+
+build override=true
+(single_unnamed_field (-1.1))
+----
+Some(SingleUnnamedField(SingleUnnamedArg(-1.1)))
+
+build override=true
+(single_unnamed_field 2.2)
+----
+Some(SingleUnnamedField(SingleUnnamedArg(2.2)))
+
+build override=true
+(single_unnamed_field (2.2))
+----
+Some(SingleUnnamedField(SingleUnnamedArg(2.2)))
+
+build override=true
+(multi_unnamed_fields_2 false unit)
+----
+Some(MultiUnnamedFields2(OptionalArg(false, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, ""))
+
+build override=true
+(multi_unnamed_fields_2 (false) (unit))
+----
+Some(MultiUnnamedFields2(OptionalArg(false, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, ""))
+
+build override=true
+(multi_unnamed_fields_2 true unit "baz")
+----
+Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, "baz"))
+
+build override=true
+(multi_unnamed_fields_2 true (unit) "baz")
+----
+Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, "baz"))
+
+build override=true
+(multi_unnamed_fields_2 true (unit "baz"))
+----
+Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "baz" }, ""))
 
 # Override tests.
 
@@ -65,12 +100,12 @@ build override=true
     ([true false null] [[[100 true] [200 false]][]])
     (single_named_field [0 10 42]))
 ----
-Some(MultiUnnamedFields(TestStruct2([(4, [("world", 6), ("this", 3)], 5), (3, [], 1)], "hello"), TestStruct3 { fizz: [Some(true), Some(false), None], bizz: [[(TestStruct1(100.0), true), (TestStruct1(200.0), false)], []] }, SingleNamedField { foo: [1, 11, 43] }))
+Some(MultiUnnamedFields(MultiUnnamedArg([(4, [("world", 6), ("this", 3)], 5), (3, [], 1)], "hello"), MultiNamedArg { fizz: [Some(true), Some(false), None], bizz: [[(SingleUnnamedArg(100.0), true), (SingleUnnamedArg(200.0), false)], []] }, SingleNamedField { foo: [1, 11, 43] }))
 
 build override=true
 (single_unnamed_field +1.1)
 ----
-Some(SingleUnnamedField(TestStruct1(1.1)))
+Some(SingleUnnamedField(SingleUnnamedArg(1.1)))
 
 # Test our alternate syntax for passing in enum/struct information
 # for overriding
@@ -82,4 +117,4 @@ build override=true
          (multi_unnamed_fields "again" ([false false false] []) unit)
         ))
 ----
-Some(MultiUnnamedFields(TestStruct2([(2, [("\"goodbye\"", 2)], 2)], "\"goodbye\""), TestStruct3 { fizz: [Some(true), Some(false), None], bizz: [[(TestStruct1(100.0), true), (TestStruct1(200.0), false)], []] }, MultiUnnamedFields(TestStruct2([(3, [("", 3)], 3)], ""), TestStruct3 { fizz: [], bizz: [[(TestStruct1(-1.0), true)]] }, MultiUnnamedFields(TestStruct2([], "again"), TestStruct3 { fizz: [Some(false), Some(false), Some(false)], bizz: [] }, Unit))))
+Some(MultiUnnamedFields(MultiUnnamedArg([(2, [("\"goodbye\"", 2)], 2)], "\"goodbye\""), MultiNamedArg { fizz: [Some(true), Some(false), None], bizz: [[(SingleUnnamedArg(100.0), true), (SingleUnnamedArg(200.0), false)], []] }, MultiUnnamedFields(MultiUnnamedArg([(3, [("", 3)], 3)], ""), MultiNamedArg { fizz: [], bizz: [[(SingleUnnamedArg(-1.0), true)]] }, MultiUnnamedFields(MultiUnnamedArg([], "again"), MultiNamedArg { fizz: [Some(false), Some(false), Some(false)], bizz: [] }, Unit))))
