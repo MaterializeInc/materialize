@@ -24,7 +24,7 @@ enum Cmd {
     Write(Id, Vec<((String, String), u64, isize)>, CmdResponse<()>),
     Seal(Id, u64, CmdResponse<()>),
     Snapshot(Id, CmdResponse<IndexedSnapshot>),
-    Stop,
+    Stop(CmdResponse<()>),
 }
 
 /// Starts the runtime in a [std::thread].
@@ -120,7 +120,10 @@ impl RuntimeCore {
             // thread has exited. The thread only exits if we send it a
             // Cmd::Stop (or it panics).
             match cmd {
-                Cmd::Stop => {} // Already stopped: no-op.
+                Cmd::Stop(res) => {
+                    // Already stopped: no-op.
+                    res.send(Ok(()))
+                }
                 Cmd::Register(_, res) => {
                     res.send(Err(Error::from("register cmd sent to stopped runtime")))
                 }
@@ -139,7 +142,9 @@ impl RuntimeCore {
 
     fn stop(&self) -> Result<(), Error> {
         if let Some(handle) = self.handle.lock()?.take() {
-            self.send(Cmd::Stop);
+            let (tx, rx) = mpsc::channel();
+            self.send(Cmd::Stop(tx.into()));
+            rx.recv().map_err(|_| Error::RuntimeShutdown)??;
             if let Err(_) = handle.join() {
                 // If the thread panic'd, then by definition it has been
                 // stopped, so we can return an Ok. This is surprising, though,
@@ -237,7 +242,10 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
             }
         };
         match cmd {
-            Cmd::Stop => return false,
+            Cmd::Stop(res) => {
+                res.send(self.indexed.close());
+                return false;
+            }
             Cmd::Register(id, res) => {
                 let r = self.indexed.register(&id);
                 res.send(Ok(r));
@@ -265,7 +273,7 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
 mod tests {
     use std::sync::mpsc;
 
-    use crate::mem::{MemBlob, MemBuffer};
+    use crate::mem::{MemBlob, MemBuffer, MemRegistry};
     use crate::persister::Snapshot;
 
     use super::*;
@@ -316,9 +324,44 @@ mod tests {
         let mut client2 = client1.clone();
         drop(client1);
         block_on(|res| client2.write(id, &data, res))?;
-        let mut snap = block_on(|res| client2.snapshot(Id(0), res))?;
+        let mut snap = block_on(|res| client2.snapshot(id, res))?;
         assert_eq!(snap.read_to_end(), data);
         client2.stop()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn restart() -> Result<(), Error> {
+        let data = vec![
+            (("key1".to_string(), "val1".to_string()), 1, 1),
+            (("key2".to_string(), "val2".to_string()), 1, 1),
+        ];
+
+        let mut registry = MemRegistry::new();
+
+        // Shutdown happens if we explicitly call stop, unlocking the buffer and
+        // blob and allowing them to be reused in the next Indexed.
+        let mut persister = registry.open("path", "restart-1")?;
+        let (mut write, _) = persister.create_or_load("0")?.into_inner();
+        write.write_sync(&data[0..1])?;
+        assert_eq!(persister.stop(), Ok(()));
+
+        // Shutdown happens if all handles are dropped, even if we don't call
+        // stop.
+        let mut persister = registry.open("path", "restart-2")?;
+        let (mut write, _) = persister.create_or_load("0")?.into_inner();
+        write.write_sync(&data[1..2])?;
+        drop(write);
+        drop(persister);
+
+        // We can read back what we previously wrote.
+        {
+            let mut persister = registry.open("path", "restart-1")?;
+            let (_, meta) = persister.create_or_load("0")?.into_inner();
+            let mut snap = meta.snapshot()?;
+            assert_eq!(snap.read_to_end(), data);
+        }
 
         Ok(())
     }

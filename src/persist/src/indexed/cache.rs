@@ -60,6 +60,14 @@ impl<L: Blob> BlobCache<L> {
         }
     }
 
+    /// Synchronously closes the cache, releasing exclusive-writer locks and
+    /// causing all future commands to error.
+    ///
+    /// This method is idempotent.
+    pub fn close(&mut self) -> Result<(), Error> {
+        self.blob.lock()?.close()
+    }
+
     /// Returns the batch for the given key, blocking to fetch if it's not
     /// already in the cache.
     pub fn get_future_batch(&self, key: &str) -> Result<Arc<BlobFutureBatch>, Error> {
