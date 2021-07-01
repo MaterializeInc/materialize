@@ -18,15 +18,26 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
-    struct TestStruct1(Box<f64>);
+    struct SingleUnnamedArg(Box<f64>);
 
     #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
-    struct TestStruct2(Vec<(usize, Vec<(String, usize)>, usize)>, String);
+    struct OptionalArg(bool, #[serde(default)] (f64, usize));
 
     #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
-    struct TestStruct3 {
+    struct MultiUnnamedArg(Vec<(usize, Vec<(String, usize)>, usize)>, String);
+
+    #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
+    struct MultiNamedArg {
         fizz: Vec<Option<bool>>,
-        bizz: Vec<Vec<(TestStruct1, bool)>>,
+        #[serde(default)]
+        bizz: Vec<Vec<(SingleUnnamedArg, bool)>>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
+    struct FirstArgEnum {
+        test_enum: Box<TestEnum>,
+        #[serde(default)]
+        second_arg: String,
     }
 
     #[derive(Debug, Deserialize, Serialize, MzEnumReflect)]
@@ -40,15 +51,22 @@ mod tests {
             #[serde(default)]
             baz: bool,
         },
-        SingleUnnamedField(TestStruct1),
-        MultiUnnamedFields(TestStruct2, TestStruct3, Box<TestEnum>),
+        SingleUnnamedField(SingleUnnamedArg),
+        MultiUnnamedFields(MultiUnnamedArg, MultiNamedArg, Box<TestEnum>),
+        MultiUnnamedFields2(OptionalArg, FirstArgEnum, #[serde(default)] String),
         Unit,
     }
 
     gen_reflect_info_func!(
         produce_rti,
         [TestEnum],
-        [TestStruct1, TestStruct2, TestStruct3]
+        [
+            SingleUnnamedArg,
+            OptionalArg,
+            MultiUnnamedArg,
+            MultiNamedArg,
+            FirstArgEnum
+        ]
     );
 
     lazy_static! {
@@ -62,12 +80,12 @@ mod tests {
         /// This increments all numbers of type "usize" by one.
         /// If a positive f64 has been specified with +<the number>,
         /// ignore the +.
-        /// Define an alternate syntax for `TestStruct2`:
+        /// Define an alternate syntax for `MultiUnnamedArg`:
         /// * (<usize1> "string") creates
-        ///   `TestStruct2([(<usize1>, [("string", <usize1>)], <usize1>)], "string")`
-        /// * "string" creates `TestStruct2([], "string")`
+        ///   `MultiUnnamedArg([(<usize1>, [("string", <usize1>)], <usize1>)], "string")`
+        /// * "string" creates `MultiUnnamedArg([], "string")`
         /// * "<usize1>" creates
-        ///   `TestStruct2([(<usize1>, [("", <usize1>)], <usize1>)], "")
+        ///   `MultiUnnamedArg([(<usize1>, [("", <usize1>)], <usize1>)], "")
         fn override_syntax<I>(
             &mut self,
             first_arg: TokenTree,
@@ -78,7 +96,7 @@ mod tests {
         where
             I: Iterator<Item = TokenTree>,
         {
-            if type_name == "TestStruct2" {
+            if type_name == "MultiUnnamedArg" {
                 if let TokenTree::Literal(literal) = first_arg.clone() {
                     let litval = literal.to_string();
                     if litval.starts_with('"') {
@@ -93,7 +111,7 @@ mod tests {
                                 Some(TokenTree::Literal(literal)) => literal.to_string(),
                                 unexpected => {
                                     return Err(format!(
-                                        "unexpected second argument for TestStruct2 {:?}",
+                                        "unexpected second argument for MultiUnnamedArg {:?}",
                                         unexpected
                                     ))
                                 }
@@ -102,7 +120,7 @@ mod tests {
                             "".to_string()
                         };
                         return Ok(Some(
-                            serde_json::to_string(&TestStruct2(
+                            serde_json::to_string(&MultiUnnamedArg(
                                 vec![(usize_lit, vec![(str_lit.clone(), usize_lit)], usize_lit)],
                                 str_lit,
                             ))

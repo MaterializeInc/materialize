@@ -201,7 +201,8 @@ where
                         } else {
                             Err(format!(
                                 "Object specified with brackets {:?} has unsupported type {}",
-                                inner_iter, type_name
+                                inner_iter.collect::<Vec<_>>(),
+                                type_name
                             ))
                         }
                     }
@@ -398,27 +399,25 @@ where
         // into a common inner method that takes
         // `(first_token_of_spec, rest_of_tokens_comprising_spec)`
         match first_arg {
-            TokenTree::Group(group) => {
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Parenthesis => {
                 let mut inner_iter = group.stream().into_iter();
-                match group.delimiter() {
-                    Delimiter::Parenthesis => match inner_iter.next() {
-                        // the spec is the inner `TokenStream`
-                        Some(first_arg) => parse_as_enum_or_struct_inner(
-                            first_arg,
-                            &mut inner_iter,
-                            type_name,
-                            rti,
-                            ctx,
-                        ),
-                        None => Ok(None),
-                    },
-                    _ => Ok(None),
+                match inner_iter.next() {
+                    // the spec is the inner `TokenStream`
+                    Some(first_arg) => parse_as_enum_or_struct_inner(
+                        first_arg,
+                        &mut inner_iter,
+                        type_name,
+                        rti,
+                        ctx,
+                    ),
+                    None => Ok(None),
                 }
             }
             TokenTree::Punct(punct) => {
-                // The spec is all consecutive puncts + the first non-punct
-                // symbol. This allows for specifying structs with the first
-                // argument being something like -1.1.
+                // The spec is that all consecutive puncts + the first
+                // non-punct symbol count as one argument. This allows for
+                // specifying structs with the first argument being something
+                // like -1.1.
                 let mut consecutive_punct = Vec::new();
                 while let Some(token) = rest_of_stream.next() {
                     consecutive_punct.push(token);
@@ -438,8 +437,9 @@ where
                 )
             }
             other => {
-                // The entire enum/struct is specified by the Ident/Literal,
-                // so feed in (the_ident_literal, nothing)
+                // The entire enum/struct is specified by the
+                // Ident/Literal/Vec,
+                // so feed in (the_thing, nothing)
                 parse_as_enum_or_struct_inner(other, &mut std::iter::empty(), type_name, rti, ctx)
             }
         }
@@ -463,6 +463,7 @@ where
         Ok(Some(result))
     } else if let Some((f_names, f_types)) = rti.struct_dict.get(type_name).map(|r| r.clone()) {
         Ok(Some(to_json_fields(
+            type_name,
             &mut (&mut std::iter::once(first_arg)).chain(rest_of_stream),
             f_names,
             f_types,
@@ -525,7 +526,14 @@ where
         // The JSON for a unit enum is just `"variant"`.
         Ok(format!("\"{}\"", variant_camel_case))
     } else {
-        let fields = to_json_fields(rest_of_stream, f_names, f_types, rti, ctx)?;
+        let fields = to_json_fields(
+            &variant_camel_case,
+            rest_of_stream,
+            f_names,
+            f_types,
+            rti,
+            ctx,
+        )?;
         Ok(format!("{{\"{}\":{}}}", variant_camel_case, fields))
     }
 }
@@ -536,6 +544,7 @@ where
 /// `f_names` is empty.
 /// `f_types` contains the types of the fields.
 fn to_json_fields<I, C>(
+    debug_name: &str,
     stream_iter: &mut I,
     f_names: Vec<&'static str>,
     f_types: Vec<&'static str>,
@@ -575,9 +584,9 @@ where
         if f_types.len() == 1 {
             Ok(format!(
                 "{}",
-                f_values.pop().ok_or_else(|| {
-                    "Cannot use default value for enum with unnamed single field".to_string()
-                })?
+                f_values
+                    .pop()
+                    .ok_or_else(|| { format!("Cannot use default value for {}", debug_name) })?
             ))
         } else {
             Ok(format!("[{}]", separated(",", f_values.into_iter())))

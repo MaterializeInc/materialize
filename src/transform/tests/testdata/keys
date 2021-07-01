@@ -11,7 +11,7 @@
 # and report on key information in plans
 
 cat
-(defsource x [int32 int64 int32] [[0] [1]])
+(defsource x ([int32 int64 int32] [[0] [1]]))
 ----
 ok
 
@@ -20,10 +20,10 @@ build format=types
 ----
 %0 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 | Map 4145
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: false, scalar_type: Int64 })
+| | types = (Int32?, Int64?, Int32?, Int64)
 | | keys = ((#0), (#1))
 
 # Run tests where a transform occuring depends on the input keys.
@@ -36,10 +36,10 @@ opt format=types
 ----
 %0 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 | Project (#0..#2, #0..#2)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 steps format=types
@@ -48,18 +48,18 @@ steps format=types
 ----
 %0 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 %1 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 %2 =
 | Join %0 %1 (= #0 #3) (= #2 #5)
 | | implementation = Unimplemented
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 ====
@@ -68,10 +68,10 @@ No change: TopKElision, NonNullRequirements
 Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants] }], limit: 100 }:
 %0 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 | Project (#0..#2, #0..#2)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 ====
@@ -80,10 +80,10 @@ No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowled
 Final:
 %0 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 | Project (#0..#2, #0..#2)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 ====
@@ -96,25 +96,25 @@ opt format=types
 ----
 %0 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 | ArrangeBy (#2)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 %1 =
 | Get x (u0)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?)
 | | keys = ((#0), (#1))
 
 %2 =
 | Join %0 %1 (= #2 #5)
 | | implementation = Differential %1 %0.(#2)
 | | demand = (#0..#4)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ()
 | Project (#0..#4, #2)
-| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
 | | keys = ()
 ----
 ----
