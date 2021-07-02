@@ -1052,6 +1052,38 @@ impl SinkConnector {
             SinkConnector::Tail(_) => "tail",
         }
     }
+
+    /// Returns `true` if this sink requires sources to block timestamp binding
+    /// compaction until all sinks that depend on a given source have finished
+    /// writing out that timestamp.
+    ///
+    /// To achieve that, each sink will hold a `AntichainToken` for all of
+    /// the sources it depends on, and will advance all of its source
+    /// dependencies' compaction frontiers as it completes writes.
+    ///
+    /// Sinks that do need to hold back compaction need to insert an
+    /// [`Antichain`] into `RenderState.sink_write_frontiers` that they update
+    /// in order to advance the frontier that holds back upstream compaction
+    /// of timestamp bindings.
+    ///
+    /// See also [`transitive_source_dependencies`](SinkConnector::transitive_source_dependencies).
+    pub fn requires_source_compaction_holdback(&self) -> bool {
+        match self {
+            SinkConnector::Kafka(k) => k.exactly_once,
+            SinkConnector::AvroOcf(_) => false,
+            SinkConnector::Tail(_) => false,
+        }
+    }
+
+    /// Returns the [`GlobalIds`](GlobalId) of the transitive sources of this
+    /// sink.
+    pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
+        match self {
+            SinkConnector::Kafka(k) => &k.transitive_source_dependencies,
+            SinkConnector::AvroOcf(_) => &[],
+            SinkConnector::Tail(_) => &[],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
