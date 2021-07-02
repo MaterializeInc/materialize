@@ -56,6 +56,30 @@ impl<G> SinkRender<G> for KafkaSinkConnector
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    fn uses_keys(&self) -> bool {
+        true
+    }
+
+    fn get_key_desc(&self) -> Option<&RelationDesc> {
+        self.key_desc_and_indices
+            .as_ref()
+            .map(|(desc, _indices)| desc)
+    }
+
+    fn get_key_indices(&self) -> Option<&[usize]> {
+        self.key_desc_and_indices
+            .as_ref()
+            .map(|(_desc, indices)| indices.as_slice())
+    }
+
+    fn get_relation_key_indices(&self) -> Option<&[usize]> {
+        self.relation_key_indices.as_deref()
+    }
+
+    fn get_value_desc(&self) -> &RelationDesc {
+        &self.value_desc
+    }
+
     fn render_continuous_sink(
         &self,
         render_state: &mut RenderState,
@@ -112,8 +136,10 @@ where
             sinked_collection,
             sink_id,
             self.clone(),
-            sink.key_desc.clone(),
-            sink.value_desc.clone(),
+            self.key_desc_and_indices
+                .clone()
+                .map(|(desc, _indices)| desc),
+            self.value_desc.clone(),
             sink.as_of.clone(),
             source_ts_histories,
             shared_frontier.clone(),

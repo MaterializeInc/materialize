@@ -187,15 +187,11 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
         envelope: Option<SinkEnvelope>,
         as_of: SinkAsOf,
     ) {
-        let key_desc = connector.get_key_desc().cloned();
-        let value_desc = connector.get_value_desc().clone();
         self.sink_exports.push((
             id,
             SinkDesc {
                 from: from_id,
                 from_desc,
-                key_desc,
-                value_desc,
                 connector,
                 envelope,
                 as_of,
@@ -626,8 +622,6 @@ pub struct SourceDesc {
 pub struct SinkDesc {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
-    pub value_desc: RelationDesc,
-    pub key_desc: Option<RelationDesc>,
     pub connector: SinkConnector,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf,
@@ -1056,49 +1050,6 @@ impl SinkConnector {
             SinkConnector::AvroOcf(_) => "avro-ocf",
             SinkConnector::Kafka(_) => "kafka",
             SinkConnector::Tail(_) => "tail",
-        }
-    }
-
-    pub fn uses_keys(&self) -> bool {
-        match self {
-            SinkConnector::Kafka(_) => true,
-            SinkConnector::Tail(_) => false,
-            SinkConnector::AvroOcf(_) => false,
-        }
-    }
-
-    pub fn get_key_desc(&self) -> Option<&RelationDesc> {
-        match self {
-            SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
-        }
-    }
-
-    pub fn get_key_indices(&self) -> Option<&[usize]> {
-        match self {
-            SinkConnector::Kafka(k) => k
-                .key_desc_and_indices
-                .as_ref()
-                .map(|(_desc, indices)| indices.as_slice()),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
-        }
-    }
-
-    pub fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        match self {
-            SinkConnector::Kafka(k) => k.relation_key_indices.as_deref(),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
-        }
-    }
-
-    pub fn get_value_desc(&self) -> &RelationDesc {
-        match self {
-            SinkConnector::Kafka(k) => &k.value_desc,
-            SinkConnector::Tail(t) => &t.value_desc,
-            SinkConnector::AvroOcf(a) => &a.value_desc,
         }
     }
 }

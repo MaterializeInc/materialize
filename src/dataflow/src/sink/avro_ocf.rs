@@ -31,10 +31,30 @@ impl<G> SinkRender<G> for AvroOcfSinkConnector
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    fn uses_keys(&self) -> bool {
+        false
+    }
+
+    fn get_key_desc(&self) -> Option<&RelationDesc> {
+        None
+    }
+
+    fn get_key_indices(&self) -> Option<&[usize]> {
+        None
+    }
+
+    fn get_relation_key_indices(&self) -> Option<&[usize]> {
+        None
+    }
+
+    fn get_value_desc(&self) -> &RelationDesc {
+        &self.value_desc
+    }
+
     fn render_continuous_sink(
         &self,
         _render_state: &mut RenderState,
-        sink: &SinkDesc,
+        _sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
     ) -> Option<Box<dyn Any>>
@@ -45,7 +65,7 @@ where
             sinked_collection,
             sink_id,
             self.clone(),
-            sink.value_desc.clone(),
+            self.value_desc.clone(),
         );
 
         // no sink token

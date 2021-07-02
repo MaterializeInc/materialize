@@ -22,7 +22,7 @@ use timely::dataflow::Scope;
 use dataflow_types::*;
 use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use repr::{Datum, Diff, Row, Timestamp};
+use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
@@ -40,6 +40,8 @@ where
         sink_id: GlobalId,
         sink: &SinkDesc,
     ) {
+        let sink_render = get_sink_render_for(&sink.connector);
+
         // put together tokens that belong to the export
         let mut needed_source_tokens = Vec::new();
         let mut needed_additional_tokens = Vec::new();
@@ -58,12 +60,11 @@ where
             .expect("Sink source collection not loaded")
             .as_collection();
 
-        let collection = apply_sink_envelope(sink, collection);
+        let collection = apply_sink_envelope(sink, &sink_render, collection);
 
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
 
-        let sink_render = get_sink_render_for(&sink.connector);
         let sink_token =
             sink_render.render_continuous_sink(render_state, sink, sink_id, collection);
 
@@ -84,20 +85,19 @@ where
 
 fn apply_sink_envelope<'a, G>(
     sink: &SinkDesc,
+    sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<Child<'a, G, G::Timestamp>, Row, Diff>,
 ) -> Collection<Child<'a, G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     // Some connectors support keys - extract them.
-    let keyed = if sink.connector.uses_keys() {
-        let user_key_indices = sink
-            .connector
+    let keyed = if sink_render.uses_keys() {
+        let user_key_indices = sink_render
             .get_key_indices()
             .map(|key_indices| key_indices.to_vec());
 
-        let relation_key_indices = sink
-            .connector
+        let relation_key_indices = sink_render
             .get_relation_key_indices()
             .map(|key_indices| key_indices.to_vec());
 
@@ -153,7 +153,7 @@ where
 
             // if there is no user-specified key, remove the synthetic
             // distribution key again
-            let user_key_indices = sink.connector.get_key_indices();
+            let user_key_indices = sink_render.get_key_indices();
             let combined = if user_key_indices.is_some() {
                 combined
             } else {
@@ -193,6 +193,16 @@ pub trait SinkRender<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    fn uses_keys(&self) -> bool;
+
+    fn get_key_desc(&self) -> Option<&RelationDesc>;
+
+    fn get_key_indices(&self) -> Option<&[usize]>;
+
+    fn get_relation_key_indices(&self) -> Option<&[usize]>;
+
+    fn get_value_desc(&self) -> &RelationDesc;
+
     fn render_continuous_sink(
         &self,
         render_state: &mut RenderState,
