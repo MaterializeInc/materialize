@@ -99,7 +99,7 @@ If you stop or delete Materialize without first dropping the Postgres source, th
   ALTER TABLE table_name ALTER COLUMN column_name
   SET STORAGE PLAIN;
   ```
-- Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is re-created.
+- Tables replicated into Materialize should not be truncated. If a table is truncated, the source will need to be re-created to produce any data. Truncated sources will have different behavior in Materialize based on the upstream Postgres version. Sources replicated from Postgres 10 will still be accessible, but will not reflect the correct state of the truncated table. Sources replicated from Postgres versions > 10 will become inaccesssible.
 
 ### Supported Postgres versions
 
