@@ -448,10 +448,16 @@ impl ReducePlan {
     /// The output will be an arrangements that looks the same as if
     /// we just had a single reduce operator computing everything together, and
     /// this arrangement can also be re-used.
-    fn render<G>(self, collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+    fn render<G, T>(
+        self,
+        collection: Collection<G, (Row, Row)>,
+        err_input: Collection<G, DataflowError>,
+        key_arity: usize,
+    ) -> CollectionBundle<G, Row, T>
     where
         G: Scope,
-        G::Timestamp: Lattice,
+        G::Timestamp: Lattice + Refines<T>,
+        T: Timestamp + Lattice,
     {
         // Convenience wrapper to render the right kind of hierarchical plan.
         let build_hierarchical = |collection: Collection<G, (Row, Row)>,
@@ -470,7 +476,7 @@ impl ReducePlan {
                 BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
             };
 
-        match self {
+        let arrangement = match self {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => build_distinct(collection),
@@ -504,7 +510,11 @@ impl ReducePlan {
                 // Now we need to collate them together.
                 build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
             }
-        }
+        };
+        CollectionBundle::from_columns(
+            0..key_arity,
+            ArrangementFlavor::Local(arrangement, err_input.arrange()),
+        )
     }
 }
 
@@ -636,12 +646,8 @@ where
         let ok_input = ok.as_collection();
         err_input = err.as_collection().concat(&err_input);
 
-        // First, let's plan out what we are going to do with this reduce
-        let arrangement = reduce_plan.render(ok_input);
-        CollectionBundle::from_columns(
-            0..key_arity,
-            ArrangementFlavor::Local(arrangement, err_input.arrange()),
-        )
+        // Render the reduce plan
+        reduce_plan.render(ok_input, err_input, key_arity)
     }
 }
 
