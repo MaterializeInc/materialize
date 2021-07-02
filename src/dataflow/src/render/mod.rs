@@ -132,7 +132,7 @@ mod context;
 mod flat_map;
 mod join;
 mod reduce;
-mod sinks;
+pub mod sinks;
 mod sources;
 mod threshold;
 mod top_k;

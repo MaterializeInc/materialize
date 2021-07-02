@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::fs::OpenOptions;
 
 use differential_dataflow::{Collection, Hashable};
@@ -17,12 +18,42 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::Scope;
 
-use dataflow_types::AvroOcfSinkConnector;
+use dataflow_types::{AvroOcfSinkConnector, SinkDesc};
 use expr::GlobalId;
 use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
-use repr::{RelationDesc, Row, Timestamp};
+use repr::{Diff, RelationDesc, Row, Timestamp};
+use timely::dataflow::scopes::Child;
 
-pub fn avro_ocf<G>(
+use crate::render::sinks::SinkRender;
+use crate::render::RenderState;
+
+impl<G> SinkRender<G> for AvroOcfSinkConnector
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn render_continuous_sink(
+        &self,
+        _render_state: &mut RenderState,
+        sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        avro_ocf(
+            sinked_collection,
+            sink_id,
+            self.clone(),
+            sink.value_desc.clone(),
+        );
+
+        // no sink token
+        None
+    }
+}
+
+fn avro_ocf<G>(
     collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
     connector: AvroOcfSinkConnector,

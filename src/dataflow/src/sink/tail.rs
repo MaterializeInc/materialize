@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
+
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
@@ -22,13 +24,37 @@ use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
-use dataflow_types::{SinkAsOf, TailSinkConnector};
+use dataflow_types::{SinkAsOf, SinkDesc, TailSinkConnector};
 use expr::GlobalId;
 use ore::cast::CastFrom;
 use repr::adt::numeric::{self, Numeric};
 use repr::{Datum, Diff, Row, Timestamp};
 
-pub fn tail<G>(
+use crate::render::sinks::SinkRender;
+use crate::render::RenderState;
+
+impl<G> SinkRender<G> for TailSinkConnector
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn render_continuous_sink(
+        &self,
+        _render_state: &mut RenderState,
+        sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        tail(sinked_collection, sink_id, self.clone(), sink.as_of.clone());
+
+        // no sink token
+        None
+    }
+}
+
+fn tail<G>(
     sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
     connector: TailSinkConnector,

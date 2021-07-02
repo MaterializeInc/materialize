@@ -15,21 +15,17 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::dataflow::operators::Map;
+use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
 
 use dataflow_types::*;
 use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use ore::cast::CastFrom;
 use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
-use crate::sink;
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
@@ -193,7 +189,7 @@ where
     collection
 }
 
-trait SinkRender<G>
+pub trait SinkRender<G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -216,129 +212,5 @@ where
         SinkConnector::Kafka(connector) => Box::new(connector.clone()),
         SinkConnector::AvroOcf(connector) => Box::new(connector.clone()),
         SinkConnector::Tail(connector) => Box::new(connector.clone()),
-    }
-}
-
-impl<G> SinkRender<G> for KafkaSinkConnector
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    fn render_continuous_sink(
-        &self,
-        render_state: &mut RenderState,
-        sink: &SinkDesc,
-        sink_id: GlobalId,
-        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
-    ) -> Option<Box<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
-        // consistent/exactly-once Kafka sinks need the timestamp in the row
-        let sinked_collection = if self.consistency.is_some() {
-            sinked_collection
-                .inner
-                .map(|((k, v), t, diff)| {
-                    let v = v.map(|mut v| {
-                        let t = t.to_string();
-                        v.push_list_with(|rp| {
-                            rp.push(Datum::String(&t));
-                        });
-                        v
-                    });
-                    ((k, v), t, diff)
-                })
-                .as_collection()
-        } else {
-            sinked_collection
-        };
-
-        // Extract handles to the relevant source timestamp histories the sink
-        // needs to hear from before it can write data out to Kafka.
-        let mut source_ts_histories = Vec::new();
-
-        for id in &self.transitive_source_dependencies {
-            if let Some(history) = render_state.ts_histories.get(id) {
-                let mut history_bindings = history.clone();
-                // We don't want these to block compaction
-                // ever.
-                history_bindings.set_compaction_frontier(Antichain::new().borrow());
-                source_ts_histories.push(history_bindings);
-            }
-        }
-
-        // TODO: this is a brittle way to indicate the worker that will write to the sink
-        // because it relies on us continuing to hash on the sink_id, with the same hash
-        // function, and for the Exchange pact to continue to distribute by modulo number
-        // of workers.
-        let peers = sinked_collection.inner.scope().peers();
-        let worker_index = sinked_collection.inner.scope().index();
-        let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
-        let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(0)));
-
-        let token = sink::kafka(
-            sinked_collection,
-            sink_id,
-            self.clone(),
-            sink.key_desc.clone(),
-            sink.value_desc.clone(),
-            sink.as_of.clone(),
-            source_ts_histories,
-            shared_frontier.clone(),
-        );
-
-        if active_write_worker {
-            render_state
-                .sink_write_frontiers
-                .insert(sink_id, shared_frontier);
-        }
-
-        Some(token)
-    }
-}
-
-impl<G> SinkRender<G> for AvroOcfSinkConnector
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    fn render_continuous_sink(
-        &self,
-        _render_state: &mut RenderState,
-        sink: &SinkDesc,
-        sink_id: GlobalId,
-        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
-    ) -> Option<Box<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
-        sink::avro_ocf(
-            sinked_collection,
-            sink_id,
-            self.clone(),
-            sink.value_desc.clone(),
-        );
-
-        // no sink token
-        None
-    }
-}
-
-impl<G> SinkRender<G> for TailSinkConnector
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    fn render_continuous_sink(
-        &self,
-        _render_state: &mut RenderState,
-        sink: &SinkDesc,
-        sink_id: GlobalId,
-        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
-    ) -> Option<Box<dyn Any>>
-    where
-        G: Scope<Timestamp = Timestamp>,
-    {
-        sink::tail(sinked_collection, sink_id, self.clone(), sink.as_of.clone());
-
-        // no sink token
-        None
     }
 }
