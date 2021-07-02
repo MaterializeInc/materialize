@@ -13,6 +13,6 @@ repr = { path = "../repr" }
 
 [dev-dependencies]
 anyhow = "1.0.41"
-datadriven = "0.5.0"
+datadriven = "0.6.0"
 lazy_static = "1.4.0"
 expr_test_util = {path = "../expr-test-util"}

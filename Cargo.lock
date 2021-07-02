@@ -552,6 +552,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "coordtest"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "coord",
+ "datadriven",
+ "dataflow",
+ "dataflow-types",
+ "expr",
+ "futures",
+ "ore",
+ "repr",
+ "serde_json",
+ "sql-parser",
+ "structopt",
+ "tempfile",
+ "timely",
+ "tokio",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -745,11 +766,12 @@ dependencies = [
 
 [[package]]
 name = "datadriven"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3746c0c397dd30632405eef04cd5e92693e03279e8189d1922dbf227bcbe66a8"
+checksum = "5c496e3277b660041bd6a2c0618593e99c3ba450b30d5f8d89035f78c87b4106"
 dependencies = [
  "anyhow",
+ "futures",
 ]
 
 [[package]]
@@ -2103,6 +2125,7 @@ dependencies = [
  "clap",
  "compile-time-run",
  "coord",
+ "coordtest",
  "crossbeam-channel",
  "datadriven",
  "dataflow",
