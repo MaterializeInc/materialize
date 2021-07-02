@@ -56,16 +56,5 @@ services:
     mzbuild: postgres
     ports:
       - 5432
-    environment:
-      - POSTGRES_PASSWORD=postgres
-    volumes:
-      - ./pg_hba.conf:/share/conf/pg_hba.conf
-    command: >
-      postgres
-        -c wal_level=logical
-        -c max_wal_senders=20
-        -c max_replication_slots=20
-        -c ssl=on
-        -c hba_file=/share/conf/pg_hba.conf
 volumes:
   secrets:
