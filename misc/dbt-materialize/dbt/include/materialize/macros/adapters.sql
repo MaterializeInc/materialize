@@ -28,6 +28,10 @@
   );
 {%- endmacro %}
 
+{% macro materialize__create_arbitrary_object(sql) -%}
+    {{ sql }}
+{%- endmacro %}
+
 {% macro materialize__create_schema(relation) -%}
   {% if relation.database -%}
     {{ adapter.verify_database(relation.database) }}

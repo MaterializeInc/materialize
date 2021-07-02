@@ -15,6 +15,7 @@
 
 {% macro mz_drop_index(name, default=False, if_exists=True, cascade=False) -%}
   {# todo@jldlaughlin: figure out docs and hooks! #}
+
   {% set dropstmt %}
     DROP INDEX
     {% if if_exists %}

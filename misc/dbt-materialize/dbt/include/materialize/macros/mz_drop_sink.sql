@@ -13,37 +13,16 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro mz_create_index(obj_name, name=None, default=False, col_refs=None, with_options=None) -%}
+{% macro mz_drop_sink(name, if_exists=True) -%}
   {# todo@jldlaughlin: figure out docs and hooks! #}
 
-  {% set createstmt %}
-    CREATE
-    {% if default %}
-      DEFAULT INDEX
-    {% else %}
-      INDEX
-        {% if name %}
-            {{ name }}
-        {% endif %}
+  {% set dropstmt %}
+    DROP SINK
+    {% if if_exists %}
+        IF EXISTS
     {% endif %}
-    ON {{ obj_name }}
-    {% if col_refs %}
-      (
-        {% for col in col_refs %}
-          {{ col }}{{ ", " if not loop.last else "" }}
-        {% endfor %}
-      )
-    {% endif %}
-    {% if with_options %}
-      WITH
-      (
-        {% for option in with_options %}
-          {{ option }}{{ ", " if not loop.last else "" }}
-        {% endfor %}
-      )
-    {% endif %}
+    {{ name }}
   {% endset %}
 
-  {% do run_query(createstmt) %}
-
+  {% do run_query(dropstmt) %}
 {% endmacro %}

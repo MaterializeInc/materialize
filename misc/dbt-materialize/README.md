@@ -47,10 +47,12 @@ via dbt, use the following Materialize-specific macros:
 Macro | Purpose
 ------|----------
 mz_generate_name(identifier) | Generates a fully-qualified name (including the database and schema) given an object name.
-mz_create_source(sql) | Given some [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/) sql statement, creates the source in the Materialize instance.
+mz_create_source(sql) | Given a [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/) SQL statement, creates the source in the Materialize instance.
 mz_drop_source(name, if_exists, cascade) | [Drops the named source](https://materialize.com/docs/sql/drop-source/) in Materialize.
 mz_create_index(obj_name, default, idx_name, col_refs, with_options) | [Creates an index](https://materialize.com/docs/sql/create-index/) in Materialize.
 mz_drop_index(name, default, if_exists, cascade) | [Drops an index](https://materialize.com/docs/sql/drop-index/) in Materialize.
+mz_create_sink(name) | Given a [`CREATE SINK`](https://materialize.com/docs/sql/create-sink/) SQL statement, creates a sink in the Materialize instance.
+mz_drop_sink(name, if_exists) | [Drops a sink](https://materialize.com/docs/sql/drop-sink/) in Materialize.
 
 ### Additional macro details
 
