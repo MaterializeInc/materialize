@@ -476,13 +476,13 @@ impl ReducePlan {
                 BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
             };
 
-        let arrangement = match self {
+        let arrangement_or_bundle: ArrangementOrBundle<G, T> = match self {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
-            ReducePlan::Distinct => build_distinct(collection),
-            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true),
-            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true),
-            ReducePlan::Basic(expr) => build_basic(collection, expr, true),
+            ReducePlan::Distinct => build_distinct(collection).into(),
+            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true).into(),
+            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true).into(),
+            ReducePlan::Basic(expr) => build_basic(collection, expr, true).into(),
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
             ReducePlan::Collation(expr) => {
@@ -508,13 +508,63 @@ impl ReducePlan {
                     ));
                 }
                 // Now we need to collate them together.
-                build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
+                build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
             }
         };
-        CollectionBundle::from_columns(
-            0..key_arity,
-            ArrangementFlavor::Local(arrangement, err_input.arrange()),
-        )
+        arrangement_or_bundle.to_bundle(key_arity, err_input)
+    }
+}
+
+enum ArrangementOrBundle<G, T>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    Arrangement(Arrangement<G, Row>),
+    CollectionBundle(CollectionBundle<G, Row, T>),
+}
+
+impl<G, T> ArrangementOrBundle<G, T>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    fn to_bundle(
+        self,
+        key_arity: usize,
+        err_input: Collection<G, DataflowError>,
+    ) -> CollectionBundle<G, Row, T> {
+        match self {
+            ArrangementOrBundle::Arrangement(arrangement) => CollectionBundle::from_columns(
+                0..key_arity,
+                ArrangementFlavor::Local(arrangement, err_input.arrange()),
+            ),
+            ArrangementOrBundle::CollectionBundle(b) => b,
+        }
+    }
+}
+
+impl<G, T> From<Arrangement<G, Row>> for ArrangementOrBundle<G, T>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    fn from(arrangement: Arrangement<G, Row>) -> Self {
+        ArrangementOrBundle::Arrangement(arrangement)
+    }
+}
+
+impl<G, T> From<CollectionBundle<G, Row, T>> for ArrangementOrBundle<G, T>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    fn from(bundle: CollectionBundle<G, Row, T>) -> Self {
+        ArrangementOrBundle::CollectionBundle(bundle)
     }
 }
 
