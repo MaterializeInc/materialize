@@ -7,15 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::rc::Rc;
-
+use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::trace::cursor::Cursor;
-use differential_dataflow::trace::implementations::ord::OrdValBatch;
 use differential_dataflow::trace::BatchReader;
+use differential_dataflow::Collection;
+
 use itertools::Itertools;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::Scope;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
@@ -23,17 +24,28 @@ use timely::PartialOrder;
 
 use dataflow_types::{SinkAsOf, TailSinkConnector};
 use expr::GlobalId;
-use repr::adt::numeric::Numeric;
+use ore::cast::CastFrom;
+use repr::adt::numeric::{self, Numeric};
 use repr::{Datum, Diff, Row, Timestamp};
 
 pub fn tail<G>(
-    stream: Stream<G, Rc<OrdValBatch<GlobalId, Row, Timestamp, Diff>>>,
+    sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
     connector: TailSinkConnector,
     as_of: SinkAsOf,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
+    // make sure all data is routed to one worker by keying on the sink id
+    let batches = sinked_collection
+        .map(move |(k, v)| {
+            assert!(k.is_none(), "tail does not support keys");
+            let v = v.expect("tail must have values");
+            (id, v)
+        })
+        .arrange_by_key()
+        .stream;
+
     let mut errored = false;
     let mut packer = Row::default();
     let mut received_data = false;
@@ -41,7 +53,7 @@ pub fn tail<G>(
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
 
-    stream.sink(Pipeline, &format!("tail-{}", id), move |input| {
+    batches.sink(Pipeline, &format!("tail-{}", id), move |input| {
         input.for_each(|_, batches| {
             if errored {
                 // TODO(benesch): we should actually drop the sink if the
@@ -56,18 +68,26 @@ pub fn tail<G>(
                     while cursor.val_valid(&batch) {
                         let row = cursor.val(&batch);
                         cursor.map_times(&batch, |time, diff| {
-                            assert!(*diff >= 0, "negative multiplicities sinked in tail");
-                            let diff = *diff as usize;
+                            let diff = *diff;
                             let should_emit = if as_of.strict {
                                 as_of.frontier.less_than(time)
                             } else {
                                 as_of.frontier.less_equal(time)
                             };
                             if should_emit {
-                                for _ in 0..diff {
-                                    // Add the unpacked timestamp so we can sort by them later.
-                                    results.push((*time, row.clone()));
+                                packer.push(Datum::from(numeric::Numeric::from(*time)));
+                                if connector.emit_progress {
+                                    packer.push(Datum::False);
                                 }
+
+                                packer.push(Datum::Int64(i64::cast_from(diff)));
+
+                                packer.extend_by_row(&row);
+
+                                let row = packer.finish_and_reuse();
+
+                                // Add the unpacked timestamp so we can sort by them later.
+                                results.push((*time, row));
                             }
                         });
                         cursor.step_val(&batch);

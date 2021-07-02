@@ -15,7 +15,6 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-use differential_dataflow::operators::Consolidate;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
@@ -26,7 +25,6 @@ use dataflow_types::*;
 use expr::GlobalId;
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use ore::cast::CastFrom;
-use repr::adt::numeric;
 use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::render::context::Context;
@@ -275,37 +273,7 @@ fn render_tail_sink<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let emit_progress = connector.emit_progress;
-
-    let sinked_collection = sinked_collection
-        .consolidate()
-        .inner
-        .map({
-            let mut rp = Row::default();
-            move |((k, v), time, diff)| {
-                rp.push(Datum::from(numeric::Numeric::from(time)));
-                if emit_progress {
-                    rp.push(Datum::False);
-                }
-                rp.push(Datum::Int64(i64::cast_from(diff)));
-                // this is slightly awkward, we know that the value exists
-                // because without an envelope the value is always Some(Row)
-                rp.extend_by_row(&v.expect("missing value"));
-                let v = rp.finish_and_reuse();
-                ((k, Some(v)), time, 1)
-            }
-        })
-        .as_collection();
-
-    let batches = sinked_collection
-        .map(move |(k, v)| {
-            assert!(k.is_none(), "tail does not support keys");
-            let v = v.expect("tail must have values");
-            (sink_id, v)
-        })
-        .arrange_by_key()
-        .stream;
-    sink::tail(batches, sink_id, connector, sink.as_of.clone());
+    sink::tail(sinked_collection, sink_id, connector, sink.as_of.clone());
 
     // no sink token
     None
