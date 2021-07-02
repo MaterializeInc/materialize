@@ -1,20 +1,12 @@
 ---
-title: "Idioms"
-description: "Recommended SQL idioms."
-weight: 12
+title: "Top K by Group"
+description: "Find the top- or bottom-K elements in a group."
+weight: 20
 menu:
   main:
-    parent: sql
+    parent: guides
+disable_toc: true
 ---
-
-Some common transformations are surprisingly difficult to express in SQL. This
-page documents our recommended idioms for several of these hard-to-express
-transformations.
-
-These idioms are known to the Materialize optimizer, so using them result in
-much better performance than using idioms from other RDBMSes.
-
-## Top-K by group
 
 Suppose you want to group rows in a table by some key, then filter out all but
 the first _k_ elements within each group according to some ordering. In other

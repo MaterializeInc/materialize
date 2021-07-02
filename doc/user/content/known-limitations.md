@@ -27,7 +27,7 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 ### Functions
 
-- Materialize does not support [window functions](https://www.postgresql.org/docs/current/tutorial-window.html). In some cases, you may be able to achieve the desired results with [temporal filters](https://materialize.com/temporal-filters/) or the [TOP K by group](../sql/idioms#top-k-by-group) idiom instead. {{% gh 213 %}}
+- Materialize does not support [window functions](https://www.postgresql.org/docs/current/tutorial-window.html). In some cases, you may be able to achieve the desired results with [temporal filters](https://materialize.com/temporal-filters/) or the [TOP K by group](/guides/top-k/) idiom instead. {{% gh 213 %}}
 
 ### Common table expressions (CTEs)
 

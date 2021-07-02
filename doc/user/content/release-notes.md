@@ -760,7 +760,7 @@ Wrap your release notes at the 80 character mark.
 
   - Add support for [`LATERAL` subqueries](/sql/join#lateral-subqueries) in
     joins. `LATERAL` subqueries can be used to express [Top-K by group
-    queries](/sql/idioms/#top-k-by-group)
+    queries](/guides/top-k/)
 
   - Add the [regular expression matching operators](/sql/functions/#string) `~`,
     `~*`, `!~`, and `!~*`, which report whether a string does or does not match
