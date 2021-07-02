@@ -9,6 +9,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::reduce::ReduceCore;
+use differential_dataflow::operators::Consolidate;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
@@ -37,38 +38,38 @@ where
             all_columns.push(expr::MirScalarExpr::Column(column));
         }
         input = input.ensure_arrangements(Some(all_columns.clone()));
-        match input
+        let (oks, negatives, errs) = match input
             .arrangement(&all_columns)
             .expect("Arrangement ensured to exist")
         {
-            ArrangementFlavor::Local(oks, errs) => {
-                let oks = oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-                    "Threshold",
-                    move |_k, s, t| {
-                        for (record, count) in s.iter() {
-                            if *count > 0 {
-                                t.push(((*record).clone(), *count));
-                            }
+            ArrangementFlavor::Local(oks, errs) => (
+                oks.as_collection(|k, _| k.clone()),
+                oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Threshold", move |_k, s, t| {
+                    for (record, count) in s.iter() {
+                        if *count < 0 {
+                            t.push(((*record).clone(), *count));
                         }
-                    },
-                );
-                CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
-            }
-            ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-                    "Threshold",
-                    move |_k, s, t| {
-                        for (record, count) in s.iter() {
-                            if *count > 0 {
-                                t.push(((*record).clone(), *count));
-                            }
+                    }
+                }),
+                errs.as_collection(|k, _| k.clone()),
+            ),
+            ArrangementFlavor::Trace(_, oks, errs) => (
+                oks.as_collection(|k, _| k.clone()),
+                oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Threshold", move |_k, s, t| {
+                    for (record, count) in s.iter() {
+                        if *count < 0 {
+                            t.push(((*record).clone(), *count));
                         }
-                    },
-                );
-                use differential_dataflow::operators::arrange::ArrangeBySelf;
-                let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
-                CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
-            }
-        }
+                    }
+                }),
+                errs.as_collection(|k, _| k.clone()),
+            ),
+        };
+        let oks = negatives
+            .as_collection(|k, _| k.clone())
+            .negate()
+            .concat(&oks)
+            .consolidate();
+        CollectionBundle::from_collections(oks, errs)
     }
 }
