@@ -178,7 +178,8 @@ from
 where
     mse.id = aebi.id and
     mse.elapsed_ns > 2 * aebi.avg_ns and
-    mse.id = dod.id
+    mse.id = dod.id and
+    mse.worker = dod.worker
 order by ratio desc;
 ```
 
