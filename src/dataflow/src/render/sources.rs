@@ -415,6 +415,10 @@ where
                     _ => collection,
                 };
 
+                // Force a shuffling of data in case sources are not uniformly distributed.
+                use differential_dataflow::operators::Consolidate;
+                collection = collection.consolidate();
+
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
                 // to demonstrate the intended use.
