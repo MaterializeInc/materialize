@@ -414,7 +414,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         Some(materialized::TelemetryConfig {
             domain: args
                 .telemetry_domain
-                .unwrap_or_else(|| "telemetry.materialize.com".into()),
+                .unwrap_or_else(|| "cloud.materialize.com".into()),
             interval: args
                 .telemetry_interval
                 .unwrap_or_else(|| Duration::from_secs(3600)),

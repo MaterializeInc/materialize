@@ -112,7 +112,7 @@ async fn report_one(config: &Config) -> Result<semver::Version, anyhow::Error> {
                 .await?;
             let response = http_util::reqwest_client()?
                 .post(format!(
-                    "https://{}/api/v1/version/{}",
+                    "https://{}/api/telemetry/{}",
                     config.domain, config.cluster_id
                 ))
                 .timeout(Duration::from_secs(10))
