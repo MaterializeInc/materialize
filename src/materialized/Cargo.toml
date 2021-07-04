@@ -46,7 +46,7 @@ hex = "0.4.3"
 http-util = { path = "../http-util" }
 hyper = { version = "0.14.9", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
-include_dir = "0.6.0"
+include_dir = "0.6.1"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
