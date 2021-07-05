@@ -115,7 +115,7 @@ query T colnames
 SELECT pg_typeof(sum(b)) FROM t_bigint
 ----
 pg_typeof
-numeric(38,0)
+numeric
 
 # Tests to make sure reduce elision works correctly
 
@@ -154,7 +154,7 @@ EXPLAIN PLAN FOR SELECT a, sum(c) from agg_pk group by a
 ----
 %0 =
 | Get materialize.public.agg_pk (u5)
-| Map i64todec(#2)
+| Map i64toapd(#2)
 | Project (#0, #3)
 
 EOF

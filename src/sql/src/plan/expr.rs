@@ -470,9 +470,7 @@ impl AggregateFunc {
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => {
-                ScalarType::Decimal(repr::adt::decimal::MAX_DECIMAL_PRECISION, 0)
-            }
+            AggregateFunc::SumInt64 => ScalarType::APD { scale: Some(0) },
             _ => input_type.scalar_type,
         };
         // max/min/sum return null on empty sets

@@ -2072,7 +2072,7 @@ lazy_static! {
                 params!(Int32) => Operation::unary(|ecx, e| {
                       typeconv::plan_cast(
                           "internal.avg_promotion", ecx, CastContext::Explicit,
-                          e, &ScalarType::Decimal(10, 0),
+                          e, &ScalarType::APD {scale: None},
                       )
                 }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
             },

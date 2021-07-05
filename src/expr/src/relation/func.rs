@@ -585,7 +585,7 @@ impl AggregateFunc {
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
+            AggregateFunc::SumInt64 => ScalarType::APD { scale: Some(0) },
             _ => input_type.scalar_type,
         };
         // Count never produces null, and other aggregations only produce
