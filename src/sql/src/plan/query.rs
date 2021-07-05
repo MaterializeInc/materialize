@@ -43,7 +43,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::apd::APD_DATUM_MAX_PRECISION;
+use repr::adt::apd::{self, APD_DATUM_MAX_PRECISION};
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
@@ -765,6 +765,9 @@ pub fn eval_as_of<'a>(
     let evaled = ex.eval(&[], temp_storage)?;
 
     Ok(match ex.typ(desc.typ()).scalar_type {
+        ScalarType::APD { .. } => apd::cx_datum()
+            .try_into_i128(evaled.unwrap_apd().0)?
+            .try_into()?,
         ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
         ScalarType::Decimal(_, _) => {
             bail!("decimal with fractional component is not a valid timestamp")
