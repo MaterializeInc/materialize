@@ -1068,7 +1068,8 @@ pub mod plan {
     use std::convert::TryFrom;
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc};
-    use repr::{adt::decimal::Significand, Datum, Row, RowArena, ScalarType};
+    use repr::adt::apd::Apd;
+    use repr::{Datum, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug)]
@@ -1249,8 +1250,8 @@ pub mod plan {
 
                     // We'll need to use this a fair bit.
                     let decimal_one = MirScalarExpr::literal_ok(
-                        Datum::Decimal(Significand::new(1)),
-                        ScalarType::Decimal(38, 0),
+                        Datum::from(Apd::from(1)),
+                        ScalarType::APD { scale: None },
                     );
 
                     // MzLogicalTimestamp <OP> <EXPR2> for several supported operators.
@@ -1258,19 +1259,16 @@ pub mod plan {
                         BinaryFunc::Eq => {
                             // Lower bound of expr, upper bound of expr+1
                             lower_bounds.push((*expr2).clone());
-                            upper_bounds
-                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddDecimal));
+                            upper_bounds.push(expr2.call_binary(decimal_one, BinaryFunc::AddAPD));
                         }
                         BinaryFunc::Lt => {
                             upper_bounds.push(*expr2);
                         }
                         BinaryFunc::Lte => {
-                            upper_bounds
-                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddDecimal));
+                            upper_bounds.push(expr2.call_binary(decimal_one, BinaryFunc::AddAPD));
                         }
                         BinaryFunc::Gt => {
-                            lower_bounds
-                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddDecimal));
+                            lower_bounds.push(expr2.call_binary(decimal_one, BinaryFunc::AddAPD));
                         }
                         BinaryFunc::Gte => {
                             lower_bounds.push(*expr2);
@@ -1358,9 +1356,10 @@ pub mod plan {
                             .into_iter()
                             .chain(None.into_iter());
                     }
-                    Ok(Datum::Decimal(s)) => {
-                        if lower_bound_i128 < s.as_i128() {
-                            lower_bound_i128 = s.as_i128();
+                    Ok(Datum::APD(d)) => {
+                        let v = i128::try_from(d.0).unwrap();
+                        if lower_bound_i128 < v {
+                            lower_bound_i128 = v;
                         }
                     }
                     Ok(Datum::Null) => {
@@ -1380,10 +1379,11 @@ pub mod plan {
                             .into_iter()
                             .chain(None.into_iter());
                     }
-                    Ok(Datum::Decimal(s)) => {
+                    Ok(Datum::APD(d)) => {
                         // Replace `upper_bound` if it is none
-                        if upper_bound_i128.is_none() || upper_bound_i128 > Some(s.as_i128()) {
-                            upper_bound_i128 = Some(s.as_i128());
+                        let v = i128::try_from(d.0).unwrap();
+                        if upper_bound_i128.is_none() || upper_bound_i128 > Some(v) {
+                            upper_bound_i128 = Some(v);
                         }
                     }
                     Ok(Datum::Null) => {

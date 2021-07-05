@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
@@ -499,13 +500,19 @@ impl From<f64> for Datum<'static> {
 
 impl From<i128> for Datum<'static> {
     fn from(d: i128) -> Datum<'static> {
-        Datum::Decimal(Significand::new(d))
+        Datum::APD(OrderedDecimal(Apd::try_from(d).unwrap()))
     }
 }
 
 impl From<Significand> for Datum<'static> {
     fn from(d: Significand) -> Datum<'static> {
         Datum::Decimal(d)
+    }
+}
+
+impl From<Apd> for Datum<'static> {
+    fn from(d: Apd) -> Datum<'static> {
+        Datum::APD(OrderedDecimal(d))
     }
 }
 

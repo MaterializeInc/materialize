@@ -202,6 +202,7 @@ impl<'a> FromSql<'a> for Apd {
         if d.is_infinite() || cx.status().any() {
             return Err(format!("Unable to take bytes to APD value; rendered {}", d).into());
         }
+
         Ok(Apd(OrderedDecimal(d_datum)))
     }
 

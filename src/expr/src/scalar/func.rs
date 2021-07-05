@@ -62,7 +62,7 @@ pub enum NullaryFunc {
 impl NullaryFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
-            NullaryFunc::MzLogicalTimestamp => ScalarType::Decimal(38, 0).nullable(false),
+            NullaryFunc::MzLogicalTimestamp => ScalarType::APD { scale: Some(0) }.nullable(false),
         }
     }
 }
