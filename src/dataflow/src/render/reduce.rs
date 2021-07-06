@@ -124,6 +124,10 @@ pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
     Distinct,
+    /// Plan for not computing any aggregations, just determining the set of
+    /// distinct keys.
+    #[allow(dead_code)]
+    DistinctNegated,
     /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),
     /// Plan for computing only hierarchical aggregations.
@@ -331,7 +335,7 @@ impl ReducePlan {
                     assert!(collation.basic.is_none());
                     collation.basic = Some(e);
                 }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
+                ReducePlan::Distinct | ReducePlan::DistinctNegated | ReducePlan::Collation(_) => {
                     panic!("Inner reduce plan was unsupported type!")
                 }
             }
@@ -476,10 +480,11 @@ impl ReducePlan {
                 BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
             };
 
-        let arrangement_or_bundle: ArrangementOrBundle<G, T> = match self {
+        let arrangement_or_bundle: ArrangementOrCollection<G> = match self {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
-            ReducePlan::Distinct => build_distinct(collection, err_input.clone()).into(),
+            ReducePlan::Distinct => build_distinct(collection).into(),
+            ReducePlan::DistinctNegated => build_distinct_retractions(collection).into(),
             ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true).into(),
             ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true).into(),
             ReducePlan::Basic(expr) => build_basic(collection, expr, true).into(),
@@ -515,56 +520,66 @@ impl ReducePlan {
     }
 }
 
-enum ArrangementOrBundle<G, T>
+/// A type wrapping either an arrangement or a single collection.
+enum ArrangementOrCollection<G>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice,
 {
+    /// Wrap an arrangement
     Arrangement(Arrangement<G, Row>),
-    CollectionBundle(CollectionBundle<G, Row, T>),
+    /// Wrap a collection
+    Collection(Collection<G, Row>),
 }
 
-impl<G, T> ArrangementOrBundle<G, T>
+impl<G> ArrangementOrCollection<G>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice,
 {
-    fn to_bundle(
+    /// Convert to a [CollectionBundle] by either supplying the arrangement or construction from
+    /// collections.
+    ///
+    /// * `key_arity` - The number of columns in the key. Only used for arrangement variants.
+    /// * `err_input` - A collection containing the error stream.
+    fn to_bundle<T>(
         self,
         key_arity: usize,
         err_input: Collection<G, DataflowError>,
-    ) -> CollectionBundle<G, Row, T> {
+    ) -> CollectionBundle<G, Row, T>
+    where
+        G::Timestamp: Lattice + Refines<T>,
+        T: Timestamp + Lattice,
+    {
         match self {
-            ArrangementOrBundle::Arrangement(arrangement) => CollectionBundle::from_columns(
+            ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
                 0..key_arity,
                 ArrangementFlavor::Local(arrangement, err_input.arrange()),
             ),
-            ArrangementOrBundle::CollectionBundle(b) => b,
+            ArrangementOrCollection::Collection(oks) => {
+                CollectionBundle::from_collections(oks, err_input)
+            }
         }
     }
 }
 
-impl<G, T> From<Arrangement<G, Row>> for ArrangementOrBundle<G, T>
+impl<G> From<Arrangement<G, Row>> for ArrangementOrCollection<G>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice,
 {
     fn from(arrangement: Arrangement<G, Row>) -> Self {
-        ArrangementOrBundle::Arrangement(arrangement)
+        ArrangementOrCollection::Arrangement(arrangement)
     }
 }
 
-impl<G, T> From<CollectionBundle<G, Row, T>> for ArrangementOrBundle<G, T>
+impl<G> From<Collection<G, Row>> for ArrangementOrCollection<G>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice,
 {
-    fn from(bundle: CollectionBundle<G, Row, T>) -> Self {
-        ArrangementOrBundle::CollectionBundle(bundle)
+    fn from(collection: Collection<G, Row>) -> Self {
+        ArrangementOrCollection::Collection(collection)
     }
 }
 
@@ -787,16 +802,28 @@ where
 }
 
 /// Build the dataflow to compute the set of distinct keys.
-fn build_distinct<G, T>(
-    collection: Collection<G, (Row, Row)>,
-    err_input: Collection<G, DataflowError>,
-) -> CollectionBundle<G, Row, T>
+fn build_distinct<G>(collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
+        |key, _input, output| {
+            output.push((key.clone(), 1));
+        }
+    })
+}
+
+/// Build the dataflow to compute the set of distinct keys.
+///
+/// This implementation maintains the rows that don't appear in the output.
+fn build_distinct_retractions<G, T>(collection: Collection<G, (Row, Row)>) -> Collection<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    let negated_result = collection.reduce_named("DistinctBy", {
+    let negated_result = collection.reduce_named("DistinctBy Retractions", {
         |key, input, output| {
             output.push((key.clone(), -1));
             output.extend(
@@ -807,14 +834,13 @@ where
         }
     });
     use timely::dataflow::operators::Map;
-    let oks = negated_result
+    negated_result
         .negate()
         .concat(&collection)
         .consolidate()
         .inner
         .map(|((k, _), time, count)| (k, time, count))
-        .as_collection();
-    CollectionBundle::from_collections(oks, err_input)
+        .as_collection()
 }
 
 /// Build the dataflow to compute and arrange multiple non-accumulable,
