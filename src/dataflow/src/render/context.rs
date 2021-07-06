@@ -414,7 +414,7 @@ where
                 }
                 let (oks, errs) = self.as_collection();
                 use crate::operator::CollectionExt;
-                let (oks_keyed, errs_keyed) = oks.map_fallible(move |row| {
+                let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
                     let datums = row.unpack();
                     let temp_storage = RowArena::new();
                     let key_row =

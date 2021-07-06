@@ -1246,7 +1246,10 @@ where
         }
     });
 
-    (stream.map_fallible(|r| r), Some(capability))
+    (
+        stream.map_fallible("SimpleSourceErrorDemux", |r| r),
+        Some(capability),
+    )
 }
 
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
@@ -1488,7 +1491,7 @@ where
         }
     });
 
-    let (ok_stream, err_stream) = stream.map_fallible(move |r| {
+    let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", move |r| {
         r.map_err(|e| SourceError::new(sql_name.clone(), SourceErrorDetails::FileIO(e)))
     });
 

@@ -217,7 +217,7 @@ where
                     // If there is no starting arrangement, then we can run filters
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters
-                    let (j, errs) = joined.flat_map_fallible({
+                    let (j, errs) = joined.flat_map_fallible("LinearJoinInitialization", {
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
                         move |row| {
@@ -259,7 +259,7 @@ where
         // and projections that could not be applied (e.g. column repetition).
         if let JoinedFlavor::Collection(mut joined) = joined {
             if let Some(closure) = linear_plan.final_closure {
-                let (updates, errs) = joined.flat_map_fallible({
+                let (updates, errs) = joined.flat_map_fallible("LinearJoinFinalization", {
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
                     move |row| {
@@ -301,7 +301,7 @@ where
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let (keyed, errs) = stream.map_fallible({
+            let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
