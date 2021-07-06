@@ -41,6 +41,8 @@ def launch(
     ami: str,
     tags: Dict[str, str],
     name: Optional[str] = None,
+    subnet_id: Optional[str] = None,
+    size_gb: int,
 ) -> Any:
     """Launch and configure an ec2 instance with the given properties."""
 
@@ -69,6 +71,23 @@ def launch(
                 "Tags": [{"Key": k, "Value": v} for (k, v) in tags.items()],
             }
         ],
+        NetworkInterfaces=[
+            {
+                "AssociatePublicIpAddress": True,
+                "DeviceIndex": 0,
+                "Groups": ["sg-0277f804cbd93973b"],
+                "SubnetId": subnet_id,
+            }
+        ],
+        BlockDeviceMappings=[
+            {
+                "DeviceName": "/dev/sda1",
+                "Ebs": {
+                    "VolumeSize": size_gb,
+                    "VolumeType": "gp3",
+                },
+            }
+        ],
     )[0]
     for remaining in ui.timeout_loop(60, 5):
         SPEAKER(f"Waiting for instance to be ready: {remaining}s remaining")
@@ -80,6 +99,10 @@ def launch(
         raise RuntimeError(
             "Instance did not become ready in a reasonable amount of time"
         )
+
+    if subnet_id:
+        ni = ec2.create_network_interface(SubnetId=subnet_id)
+        ni.attach(DeviceIndex=1, InstanceId=i.id)
 
     done = False
     for remaining in ui.timeout_loop(180, 5):
@@ -115,7 +138,7 @@ def mkrepo(i: Any) -> None:
         i.public_ip_address,
     )
     ssh.runv(
-        ["git", "-C", "/home/ubuntu/materialize", "checkout", "head_rev"],
+        ["git", "-C", "/home/ubuntu/materialize", "checkout", head_rev],
         "ubuntu",
         i.public_ip_address,
     )
