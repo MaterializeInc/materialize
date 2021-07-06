@@ -331,17 +331,18 @@ where
 
                         // Apply what `closure` we are able to, and record any errors.
                         if let Some(initial_closure) = initial_closure {
-                            let (stream, errs) = update_stream.flat_map_fallible({
-                                let mut datums = DatumVec::new();
-                                move |row| {
-                                    let temp_storage = RowArena::new();
-                                    let mut datums_local = datums.borrow_with(&row);
-                                    // TODO(mcsherry): re-use `row` allocation.
-                                    initial_closure
-                                        .apply(&mut datums_local, &temp_storage)
-                                        .transpose()
-                                }
-                            });
+                            let (stream, errs) =
+                                update_stream.flat_map_fallible("DeltaJoinInitialization", {
+                                    let mut datums = DatumVec::new();
+                                    move |row| {
+                                        let temp_storage = RowArena::new();
+                                        let mut datums_local = datums.borrow_with(&row);
+                                        // TODO(mcsherry): re-use `row` allocation.
+                                        initial_closure
+                                            .apply(&mut datums_local, &temp_storage)
+                                            .transpose()
+                                    }
+                                });
                             update_stream = stream;
                             region_errs.push(errs.map(DataflowError::from));
                         }
@@ -436,19 +437,20 @@ where
                     // For example, we may have expressions not pushed down (e.g. literals)
                     // and projections that could not be applied (e.g. column repetition).
                     if let Some(final_closure) = final_closure {
-                        let (updates, errors) = update_stream.flat_map_fallible({
-                            // Reuseable allocation for unpacking.
-                            let mut datums = DatumVec::new();
-                            move |row| {
-                                let temp_storage = RowArena::new();
-                                let mut datums_local = datums.borrow_with(&row);
-                                // TODO(mcsherry): re-use `row` allocation.
-                                final_closure
-                                    .apply(&mut datums_local, &temp_storage)
-                                    .map_err(DataflowError::from)
-                                    .transpose()
-                            }
-                        });
+                        let (updates, errors) =
+                            update_stream.flat_map_fallible("DeltaJoinFinalization", {
+                                // Reuseable allocation for unpacking.
+                                let mut datums = DatumVec::new();
+                                move |row| {
+                                    let temp_storage = RowArena::new();
+                                    let mut datums_local = datums.borrow_with(&row);
+                                    // TODO(mcsherry): re-use `row` allocation.
+                                    final_closure
+                                        .apply(&mut datums_local, &temp_storage)
+                                        .map_err(DataflowError::from)
+                                        .transpose()
+                                }
+                            });
 
                         update_stream = updates;
                         region_errs.push(errors);
@@ -509,7 +511,7 @@ where
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let (updates, errs) = updates.map_fallible({
+    let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
         let mut row_packer = Row::default();

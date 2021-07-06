@@ -65,17 +65,20 @@ where
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
-    fn map_fallible<D2, E, L>(&self, logic: L) -> (Stream<G, D2>, Stream<G, E>)
+    fn map_fallible<D2, E, L>(&self, name: &str, mut logic: L) -> (Stream<G, D2>, Stream<G, E>)
     where
         D2: Data,
         E: Data,
-        L: FnMut(D1) -> Result<D2, E> + 'static;
+        L: FnMut(D1) -> Result<D2, E> + 'static,
+    {
+        self.flat_map_fallible(name, move |record| Some(logic(record)))
+    }
 
     /// Like [`timely::dataflow::operators::map::Map::flat_map`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
     /// successful applications of `logic`, while the second returned stream
     /// will contain the failed applications.
-    fn flat_map_fallible<D2, E, I, L>(&self, logic: L) -> (Stream<G, D2>, Stream<G, E>)
+    fn flat_map_fallible<D2, E, I, L>(&self, name: &str, logic: L) -> (Stream<G, D2>, Stream<G, E>)
     where
         D2: Data,
         E: Data,
@@ -88,10 +91,17 @@ where
     /// stream will contain the errors for elements where `logic` failed.
     /// Elements for which `logic` returned `Ok(false)` are not present in
     /// either stream.
-    fn filter_fallible<E, L>(&self, logic: L) -> (Stream<G, D1>, Stream<G, E>)
+    fn filter_fallible<E, L>(&self, name: &str, mut logic: L) -> (Stream<G, D1>, Stream<G, E>)
     where
         E: Data,
-        L: FnMut(&D1) -> Result<bool, E> + 'static;
+        L: FnMut(&D1) -> Result<bool, E> + 'static,
+    {
+        self.flat_map_fallible(name, move |record| match logic(&record) {
+            Ok(false) => None,
+            Ok(true) => Some(Ok(record)),
+            Err(err) => Some(Err(err)),
+        })
+    }
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
@@ -111,11 +121,18 @@ where
     /// returned collection will contain successful applications of `logic`,
     /// while the second returned collection will contain the failed
     /// applications.
-    fn map_fallible<D2, E, L>(&self, logic: L) -> (Collection<G, D2, R>, Collection<G, E, R>)
+    fn map_fallible<D2, E, L>(
+        &self,
+        name: &str,
+        mut logic: L,
+    ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
         D2: Data,
         E: Data,
-        L: FnMut(D1) -> Result<D2, E> + 'static;
+        L: FnMut(D1) -> Result<D2, E> + 'static,
+    {
+        self.flat_map_fallible(name, move |record| Some(logic(record)))
+    }
 
     /// Like [`Collection::flat_map`], but `logic` is allowed to fail. The first
     /// returned collection will contain the successful applications of `logic`,
@@ -123,6 +140,7 @@ where
     /// applications.
     fn flat_map_fallible<D2, E, I, L>(
         &self,
+        name: &str,
         logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
@@ -136,10 +154,22 @@ where
     /// `Ok(true)`, and the second returned collection will contain the errors
     /// for elements where `logic` failed. Elements for which `logic` returned
     /// `Ok(false)` are not present in either collection.
-    fn filter_fallible<E, L>(&self, logic: L) -> (Collection<G, D1, R>, Collection<G, E, R>)
+    fn filter_fallible<E, L>(
+        &self,
+        name: &str,
+        mut logic: L,
+    ) -> (Collection<G, D1, R>, Collection<G, E, R>)
     where
+        D1: Data,
         E: Data,
-        L: FnMut(&D1) -> Result<bool, E> + 'static;
+        L: FnMut(&D1) -> Result<bool, E> + 'static,
+    {
+        self.flat_map_fallible(name, move |record| match logic(&record) {
+            Ok(false) => None,
+            Ok(true) => Some(Ok(record)),
+            Err(err) => Some(Err(err)),
+        })
+    }
 
     /// Like [`Collection::flat_map`], but the first element
     /// returned from `logic` is allowed to represent a failure. The first
@@ -149,6 +179,7 @@ where
     /// second element returned from `logic`.
     fn explode_fallible<D2, E, R2, I, L>(
         &self,
+        name: &str,
         logic: L,
     ) -> (
         Collection<G, D2, <R2 as Mul<R>>::Output>,
@@ -212,31 +243,11 @@ where
         (ok_stream, err_stream)
     }
 
-    fn map_fallible<D2, E, L>(&self, mut logic: L) -> (Stream<G, D2>, Stream<G, E>)
-    where
-        D2: Data,
-        E: Data,
-        L: FnMut(D1) -> Result<D2, E> + 'static,
-    {
-        let mut storage = Vec::new();
-        self.unary_fallible(Pipeline, "MapFallible", move |_, _| {
-            Box::new(move |input, ok_output, err_output| {
-                input.for_each(|time, data| {
-                    let mut ok_session = ok_output.session(&time);
-                    let mut err_session = err_output.session(&time);
-                    data.swap(&mut storage);
-                    for d1 in storage.drain(..) {
-                        match logic(d1) {
-                            Ok(d2) => ok_session.give(d2),
-                            Err(e) => err_session.give(e),
-                        }
-                    }
-                })
-            })
-        })
-    }
-
-    fn flat_map_fallible<D2, E, I, L>(&self, mut logic: L) -> (Stream<G, D2>, Stream<G, E>)
+    fn flat_map_fallible<D2, E, I, L>(
+        &self,
+        name: &str,
+        mut logic: L,
+    ) -> (Stream<G, D2>, Stream<G, E>)
     where
         D2: Data,
         E: Data,
@@ -244,7 +255,7 @@ where
         L: FnMut(D1) -> I + 'static,
     {
         let mut storage = Vec::new();
-        self.unary_fallible(Pipeline, "FlatMapFallible", move |_, _| {
+        self.unary_fallible(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session(&time);
@@ -261,32 +272,6 @@ where
         })
     }
 
-    fn filter_fallible<E, L>(&self, mut logic: L) -> (Stream<G, D1>, Stream<G, E>)
-    where
-        E: Data,
-        L: FnMut(&D1) -> Result<bool, E> + 'static,
-    {
-        let mut storage = Vec::new();
-        self.unary_fallible(Pipeline, "FilterFallible", move |_, _| {
-            Box::new(move |input, ok_output, err_output| {
-                input.for_each(|time, data| {
-                    let mut ok_session = ok_output.session(&time);
-                    let mut err_session = err_output.session(&time);
-                    data.swap(&mut storage);
-                    storage.retain(|d1| match logic(d1) {
-                        Ok(retain) => retain,
-                        Err(e) => {
-                            err_session.give(e);
-                            false
-                        }
-                    });
-                    if !storage.is_empty() {
-                        ok_session.give_vec(&mut storage);
-                    }
-                })
-            })
-        })
-    }
     fn pass_through(
         &self,
         name: &str,
@@ -325,21 +310,9 @@ where
         operator::empty(scope).as_collection()
     }
 
-    fn map_fallible<D2, E, L>(&self, mut logic: L) -> (Collection<G, D2, R>, Collection<G, E, R>)
-    where
-        D2: Data,
-        E: Data,
-        L: FnMut(D1) -> Result<D2, E> + 'static,
-    {
-        let (ok_stream, err_stream) = self.inner.map_fallible(move |(d1, t, r)| match logic(d1) {
-            Ok(d2) => Ok((d2, t, r)),
-            Err(e) => Err((e, t, r)),
-        });
-        (ok_stream.as_collection(), err_stream.as_collection())
-    }
-
     fn flat_map_fallible<D2, E, I, L>(
         &self,
+        name: &str,
         mut logic: L,
     ) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
@@ -348,7 +321,7 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static,
     {
-        let (ok_stream, err_stream) = self.inner.flat_map_fallible(move |(d1, t, r)| {
+        let (ok_stream, err_stream) = self.inner.flat_map_fallible(name, move |(d1, t, r)| {
             logic(d1).into_iter().map(move |res| match res {
                 Ok(d2) => Ok((d2, t.clone(), r.clone())),
                 Err(e) => Err((e, t.clone(), r.clone())),
@@ -357,21 +330,9 @@ where
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 
-    fn filter_fallible<E, L>(&self, mut logic: L) -> (Collection<G, D1, R>, Collection<G, E, R>)
-    where
-        E: Data,
-        L: FnMut(&D1) -> Result<bool, E> + 'static,
-    {
-        let (ok_stream, err_stream) =
-            self.inner
-                .filter_fallible(move |(d1, t, r)| match logic(d1) {
-                    Ok(retain) => Ok(retain),
-                    Err(e) => Err((e, t.clone(), r.clone())),
-                });
-        (ok_stream.as_collection(), err_stream.as_collection())
-    }
     fn explode_fallible<D2, E, R2, I, L>(
         &self,
+        name: &str,
         mut logic: L,
     ) -> (
         Collection<G, D2, <R2 as Mul<R>>::Output>,
@@ -385,7 +346,7 @@ where
         I: IntoIterator<Item = (Result<D2, E>, R2)>,
         L: FnMut(D1) -> I + 'static,
     {
-        let (ok_stream, err_stream) = self.inner.flat_map_fallible(move |(d1, t, r)| {
+        let (ok_stream, err_stream) = self.inner.flat_map_fallible(name, move |(d1, t, r)| {
             logic(d1).into_iter().map(move |res| match res {
                 (Ok(d2), r2) => Ok((d2, t.clone(), r2 * r.clone())),
                 (Err(e), r2) => Err((e, t.clone(), r2 * r.clone())),

@@ -436,35 +436,39 @@ where
                         .collect::<Vec<_>>();
 
                     // Apply predicates and insert dummy values into undemanded columns.
-                    let (collection2, errors) = collection.inner.flat_map_fallible({
-                        let mut datums = crate::render::datum_vec::DatumVec::new();
-                        let predicates = std::mem::take(&mut operators.predicates);
-                        // The predicates may be temporal, which requires the nuance
-                        // of an explicit plan capable of evaluating the predicates.
-                        let filter_plan = expr::MapFilterProject::new(source_type.arity())
-                            .filter(predicates)
-                            .into_plan()
-                            .unwrap_or_else(|e| panic!("{}", e));
-                        move |(input_row, time, diff)| {
-                            let arena = repr::RowArena::new();
-                            let mut datums_local = datums.borrow_with(&input_row);
-                            let times_diffs =
-                                filter_plan.evaluate(&mut datums_local, &arena, time, diff);
-                            // Name the iterator, to capture total size and datums.
-                            let iterator = position_or.iter().map(|pos_or| match pos_or {
-                                Some(index) => datums_local[*index],
-                                None => Datum::Dummy,
+                    let (collection2, errors) =
+                        collection
+                            .inner
+                            .flat_map_fallible("SourceLinearOperators", {
+                                let mut datums = crate::render::datum_vec::DatumVec::new();
+                                let predicates = std::mem::take(&mut operators.predicates);
+                                // The predicates may be temporal, which requires the nuance
+                                // of an explicit plan capable of evaluating the predicates.
+                                let filter_plan = expr::MapFilterProject::new(source_type.arity())
+                                    .filter(predicates)
+                                    .into_plan()
+                                    .unwrap_or_else(|e| panic!("{}", e));
+                                move |(input_row, time, diff)| {
+                                    let arena = repr::RowArena::new();
+                                    let mut datums_local = datums.borrow_with(&input_row);
+                                    let times_diffs =
+                                        filter_plan.evaluate(&mut datums_local, &arena, time, diff);
+                                    // Name the iterator, to capture total size and datums.
+                                    let iterator = position_or.iter().map(|pos_or| match pos_or {
+                                        Some(index) => datums_local[*index],
+                                        None => Datum::Dummy,
+                                    });
+                                    let total_size = repr::datums_size(iterator.clone());
+                                    let mut output_row = Row::with_capacity(total_size);
+                                    output_row.extend(iterator);
+                                    // Each produced (time, diff) results in a copy of `output_row` in the output.
+                                    // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
+                                    times_diffs.map(move |time_diff| {
+                                        time_diff
+                                            .map_err(|(e, t, d)| (DataflowError::from(e), t, d))
+                                    })
+                                }
                             });
-                            let total_size = repr::datums_size(iterator.clone());
-                            let mut output_row = Row::with_capacity(total_size);
-                            output_row.extend(iterator);
-                            // Each produced (time, diff) results in a copy of `output_row` in the output.
-                            // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
-                            times_diffs.map(move |time_diff| {
-                                time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
-                            })
-                        }
-                    });
 
                     collection = collection2.as_collection();
                     error_collections.push(errors.as_collection());
