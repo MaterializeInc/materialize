@@ -163,6 +163,30 @@ where
     ),
 }
 
+impl<S: Scope, V: Data, T: Lattice> ArrangementFlavor<S, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Presents `self` as a stream of updates.
+    ///
+    /// This method presents the contents as they are, without further computation.
+    /// For some cases, the [CollectionBundle] provides the same or more specific functions,
+    /// specifically [CollectionBundle::as_collection_core].
+    pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
+        match self {
+            ArrangementFlavor::Local(oks, errs) => (
+                oks.as_collection(|_k, v| v.clone()),
+                errs.as_collection(|k, _v| k.clone()),
+            ),
+            ArrangementFlavor::Trace(_, oks, errs) => (
+                oks.as_collection(|_k, v| v.clone()),
+                errs.as_collection(|k, _v| k.clone()),
+            ),
+        }
+    }
+}
+
 /// A bundle of the various ways a collection can be represented.
 ///
 /// This type maintains the invariant that it does contain at least one valid
@@ -227,21 +251,11 @@ where
         if let Some(collection) = &self.collection {
             collection.clone()
         } else {
-            let arranged = self
-                .arranged
+            self.arranged
                 .values()
                 .next()
-                .expect("Invariant violated: CollectionBundle contains no collection.");
-            match arranged {
-                ArrangementFlavor::Local(oks, errs) => (
-                    oks.as_collection(|_k, v| v.clone()),
-                    errs.as_collection(|k, _v| k.clone()),
-                ),
-                ArrangementFlavor::Trace(_, oks, errs) => (
-                    oks.as_collection(|_k, v| v.clone()),
-                    errs.as_collection(|k, _v| k.clone()),
-                ),
-            }
+                .expect("Invariant violated: CollectionBundle contains no collection.")
+                .as_collection()
         }
     }
 
