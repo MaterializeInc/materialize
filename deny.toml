@@ -9,6 +9,9 @@ skip = [
     # Waiting for clap to upgrade to v0.10.
     { name = "strsim", version = "0.8.0" },
 
+    # Waiting on https://github.com/bheisler/criterion.rs/pull/464.
+    { name = "itertools", version = "0.9.0" },
+
     # Waiting on https://github.com/hyperium/headers/pull/83.
     { name = "time", version = "0.1.44" },
 ]

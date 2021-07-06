@@ -117,8 +117,8 @@ use tokio::sync::mpsc;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id};
+use itertools::Itertools;
 use ore::collections::CollectionExt as _;
-use ore::iter::IteratorExt;
 use ore::now::NowFn;
 use repr::{Row, Timestamp};
 
@@ -199,7 +199,9 @@ pub fn build_dataflow<A: Allocate>(
                     .source_imports
                     .iter()
                     .map(|(id, _src)| id)
-                    .has_duplicates(),
+                    .duplicates()
+                    .next()
+                    .is_some(),
                 "computation of unique IDs assumes a source appears no more than once per dataflow"
             );
 

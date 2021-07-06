@@ -30,7 +30,6 @@ use std::mem;
 use anyhow::{anyhow, bail, ensure, Context};
 use expr::LocalId;
 use itertools::Itertools;
-use ore::iter::IteratorExt;
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
