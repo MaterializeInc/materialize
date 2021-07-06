@@ -479,7 +479,7 @@ impl ReducePlan {
         let arrangement_or_bundle: ArrangementOrBundle<G, T> = match self {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
-            ReducePlan::Distinct => build_distinct(collection).into(),
+            ReducePlan::Distinct => build_distinct(collection, err_input.clone()).into(),
             ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true).into(),
             ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true).into(),
             ReducePlan::Basic(expr) => build_basic(collection, expr, true).into(),
@@ -787,16 +787,34 @@ where
 }
 
 /// Build the dataflow to compute the set of distinct keys.
-fn build_distinct<G>(collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+fn build_distinct<G, T>(
+    collection: Collection<G, (Row, Row)>,
+    err_input: Collection<G, DataflowError>,
+) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
-    G::Timestamp: Lattice,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
 {
-    collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
-        |key, _input, output| {
-            output.push((key.clone(), 1));
+    let negated_result = collection.reduce_named("DistinctBy", {
+        |key, input, output| {
+            output.push((key.clone(), -1));
+            output.extend(
+                input
+                    .iter()
+                    .map(|(values, count)| ((*values).clone(), *count)),
+            );
         }
-    })
+    });
+    use timely::dataflow::operators::Map;
+    let oks = negated_result
+        .negate()
+        .concat(&collection)
+        .consolidate()
+        .inner
+        .map(|((k, _), time, count)| (k, time, count))
+        .as_collection();
+    CollectionBundle::from_collections(oks, err_input)
 }
 
 /// Build the dataflow to compute and arrange multiple non-accumulable,
