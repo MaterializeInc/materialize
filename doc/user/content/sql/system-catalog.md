@@ -270,6 +270,7 @@ Field           | Type       | Meaning
 `ls_offset`     | [`bigint`] | The partition's last stable offset on the broker.
 `app_offset`    | [`bigint`] | The offset of the last message passed to materialized + 1.
 `consumer_lag`  | [`bigint`] | Difference between the `hi_offset` and `app_offset`.
+`initial_high_offset`  | [`bigint`] | The first known partition's high watermark offset on the broker, based on `hi_offset`.
 
 ### `mz_kafka_sinks`
 
