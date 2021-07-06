@@ -14,7 +14,6 @@
 pub mod cache;
 pub mod encoding;
 pub mod future;
-pub mod handle;
 pub mod runtime;
 pub mod trace;
 

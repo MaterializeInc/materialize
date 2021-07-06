@@ -14,10 +14,6 @@ use std::ops::Range;
 use abomonation_derive::Abomonation;
 
 use crate::error::Error;
-use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
-use crate::indexed::runtime::{self, RuntimeClient};
-use crate::indexed::Indexed;
-use crate::{Data, Token};
 
 /// A "sequence number", uniquely associated with an entry in a Buffer.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
@@ -80,67 +76,6 @@ pub trait Blob {
     ///
     /// Implementations must be idempotent.
     fn close(&mut self) -> Result<(), Error>;
-}
-
-/// An implementation of a persister for multiplexed streams of (Key, Value,
-/// Time, Diff) updates.
-#[derive(Clone)]
-pub struct Persister<K, V> {
-    runtime: RuntimeClient<K, V>,
-}
-
-impl<K, V> Persister<K, V>
-where
-    K: Data + Send + Sync + 'static,
-    V: Data + Send + Sync + 'static,
-{
-    /// Returns a [Persister] initialized with previous data, if any.
-    pub fn new<U: Buffer + Send + 'static, L: Blob + Send + 'static>(
-        buf: U,
-        blob: L,
-    ) -> Result<Self, Error> {
-        let indexed = Indexed::new(buf, blob)?;
-        let runtime = runtime::start(indexed);
-        Ok(Persister { runtime })
-    }
-}
-
-impl<K: Data, V: Data> Persister<K, V> {
-    /// Synchronously closes the runtime, releasing exclusive-writer locks and
-    /// causing all future commands to error.
-    ///
-    /// This method is idempotent.
-    pub fn stop(&mut self) -> Result<(), Error> {
-        self.runtime.stop()
-    }
-
-    /// Returns a token used to construct a persisted stream operator.
-    ///
-    /// If data was written by a previous [Persister] for this id, it's loaded and
-    /// replayed into the stream once constructed.
-    ///
-    /// Within a process, this can only be called once per id, even if that id
-    /// has since been destroyed. An `Err` is returned for calls after the
-    /// first. TODO: Is this restriction necessary/helpful?
-    pub fn create_or_load(
-        &mut self,
-        id: &str,
-    ) -> Result<Token<StreamWriteHandle<K, V>, StreamMetaHandle<K, V>>, Error> {
-        let id = self.runtime.register(id)?;
-        let write = StreamWriteHandle::new(id, self.runtime.clone());
-        let meta = StreamMetaHandle::new(id, self.runtime.clone());
-        Ok(Token { write, meta })
-    }
-
-    /// Remove the persisted stream.
-    ///
-    /// TODO: Should this live on Meta?
-    pub fn destroy(&mut self, _id: &str) -> Result<(), Error> {
-        // TODO: When we implement this, we'll almost certainly want to put both
-        // the external string stream name and internal u64 stream id into a
-        // graveyard, so they're not accidentally reused.
-        unimplemented!()
-    }
 }
 
 #[cfg(test)]

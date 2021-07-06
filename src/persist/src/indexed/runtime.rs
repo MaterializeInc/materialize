@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Runtime for concurrent, asynchronous use of [Indexed].
+//! Runtime for concurrent, asynchronous use of [Indexed], and the public API
+//! used by the rest of the crate to connect to it.
 
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -19,6 +20,7 @@ use crate::indexed::encoding::Id;
 use crate::indexed::{Indexed, IndexedSnapshot};
 use crate::storage::{Blob, Buffer};
 use crate::Data;
+use crate::Token;
 
 enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
@@ -36,13 +38,14 @@ enum Cmd<K, V> {
 /// TODO: At the moment, this runs IO and heavy cpu work in a single thread.
 /// Move this work out into whatever async runtime the user likes, via something
 /// like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
-pub fn start<K, V, U, L>(indexed: Indexed<K, V, U, L>) -> RuntimeClient<K, V>
+pub fn start<K, V, U, L>(buf: U, blob: L) -> Result<RuntimeClient<K, V>, Error>
 where
     K: Data + Send + Sync + 'static,
     V: Data + Send + Sync + 'static,
     U: Buffer + Send + 'static,
     L: Blob + Send + 'static,
 {
+    let indexed = Indexed::new(buf, blob)?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
     let handle = thread::spawn(move || {
@@ -52,9 +55,9 @@ where
     });
     let handle = Mutex::new(Some(handle));
     let core = RuntimeCore { handle, tx };
-    RuntimeClient {
+    Ok(RuntimeClient {
         core: Arc::new(core),
-    }
+    })
 }
 
 /// A receiver for the `Result<T, Error>` response of an asynchronous command.
@@ -194,17 +197,27 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// Synchronously registers a new stream for writes and reads.
     ///
     /// This method is idempotent.
-    pub fn register(&self, id: &str) -> Result<Id, Error> {
+    /// Returns a token used to construct a persisted stream operator.
+    ///
+    /// If data was written by a previous [RuntimeClient] for this id, it's loaded and
+    /// replayed into the stream once constructed.
+    pub fn create_or_load(
+        &self,
+        id: &str,
+    ) -> Result<Token<StreamWriteHandle<K, V>, StreamReadHandle<K, V>>, Error> {
         let (tx, rx) = mpsc::channel();
         self.core.send(Cmd::Register(id.to_owned(), tx.into()));
-        rx.recv().map_err(|_| Error::RuntimeShutdown)?
+        let id = rx.recv().map_err(|_| Error::RuntimeShutdown)??;
+        let write = StreamWriteHandle::new(id, self.clone());
+        let meta = StreamReadHandle::new(id, self.clone());
+        Ok(Token { write, meta })
     }
 
     /// Asynchronously persists `(Key, Value, Time, Diff)` updates for the
     /// stream with the given id.
     ///
     /// The id must have previously been registered.
-    pub fn write(&self, id: Id, updates: &[((K, V), u64, isize)], res: CmdResponse<()>) {
+    fn write(&self, id: Id, updates: &[((K, V), u64, isize)], res: CmdResponse<()>) {
         self.core.send(Cmd::Write(id, updates.to_vec(), res))
     }
 
@@ -213,7 +226,7 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// for that id.
     ///
     /// The id must have previously been registered.
-    pub fn seal(&self, id: Id, ts: u64, res: CmdResponse<()>) {
+    fn seal(&self, id: Id, ts: u64, res: CmdResponse<()>) {
         self.core.send(Cmd::Seal(id, ts, res))
     }
 
@@ -223,15 +236,94 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// This snapshot is guaranteed to include any previous writes.
     ///
     /// The id must have previously been registered.
-    pub fn snapshot(&self, id: Id, res: CmdResponse<IndexedSnapshot<K, V>>) {
+    fn snapshot(&self, id: Id, res: CmdResponse<IndexedSnapshot<K, V>>) {
         self.core.send(Cmd::Snapshot(id, res))
     }
 
-    /// Synchronously stops the runtime, causing all future commands to error.
+    /// Synchronously closes the runtime, releasing exclusive-writer locks and
+    /// causing all future commands to error.
     ///
     /// This method is idempotent.
     pub fn stop(&mut self) -> Result<(), Error> {
         self.core.stop()
+    }
+
+    /// Remove the persisted stream.
+    pub fn destroy(&mut self, _id: &str) -> Result<(), Error> {
+        // TODO: When we implement this, we'll almost certainly want to put both
+        // the external string stream name and internal u64 stream id into a
+        // graveyard, so they're not accidentally reused.
+        unimplemented!()
+    }
+}
+
+/// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
+/// [crate::indexed::Indexed] via a [RuntimeClient].
+pub struct StreamWriteHandle<K, V> {
+    id: Id,
+    runtime: RuntimeClient<K, V>,
+}
+
+impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
+    /// Returns a new [StreamWriteHandle] for the given stream.
+    pub fn new(id: Id, runtime: RuntimeClient<K, V>) -> Self {
+        StreamWriteHandle { id, runtime }
+    }
+
+    /// Synchronously writes (Key, Value, Time, Diff) updates.
+    pub fn write_sync(&mut self, updates: &[((K, V), u64, isize)]) -> Result<(), Error> {
+        // TODO: Make write_sync signature non-blocking.
+        let (rx, tx) = mpsc::channel();
+        self.runtime.write(self.id, updates, rx.into());
+        tx.recv().map_err(|_| Error::RuntimeShutdown)?
+    }
+
+    /// Closes the stream at the given timestamp, migrating data strictly less
+    /// than it into the trace.
+    pub fn seal(&mut self, upper: u64) -> Result<(), Error> {
+        // TODO: Make seal signature non-blocking.
+        let (rx, tx) = mpsc::channel();
+        self.runtime.seal(self.id, upper, rx.into());
+        tx.recv().map_err(|_| Error::RuntimeShutdown)?
+    }
+}
+
+/// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
+/// by an [crate::indexed::Indexed] via a [RuntimeClient].
+pub struct StreamReadHandle<K, V> {
+    id: Id,
+    runtime: RuntimeClient<K, V>,
+}
+
+impl<K, V> Clone for StreamReadHandle<K, V> {
+    fn clone(&self) -> Self {
+        StreamReadHandle {
+            id: self.id,
+            runtime: self.runtime.clone(),
+        }
+    }
+}
+
+impl<K: Clone, V: Clone> StreamReadHandle<K, V> {
+    /// Returns a new [StreamReadHandle] for the given stream.
+    pub fn new(id: Id, runtime: RuntimeClient<K, V>) -> Self {
+        StreamReadHandle { id, runtime }
+    }
+
+    /// Returns a consistent snapshot of all previously persisted stream data.
+    pub fn snapshot(&self) -> Result<IndexedSnapshot<K, V>, Error> {
+        // TODO: Make snapshot signature non-blocking.
+        let (rx, tx) = mpsc::channel();
+        self.runtime.snapshot(self.id, rx.into());
+        tx.recv()
+            .map_err(|_| Error::RuntimeShutdown)
+            .and_then(std::convert::identity)
+    }
+
+    /// Unblocks compaction for updates before a time.
+    pub fn allow_compaction(&mut self, _ts: u64) -> Result<(), Error> {
+        // No-op for now.
+        Ok(())
     }
 }
 
@@ -283,18 +375,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
     use crate::mem::{MemBlob, MemBuffer, MemRegistry};
     use crate::persister::SnapshotExt;
 
     use super::*;
-
-    fn block_on<T, F: FnOnce(CmdResponse<T>)>(f: F) -> Result<T, Error> {
-        let (tx, rx) = mpsc::channel();
-        f(tx.into());
-        rx.recv().expect("block_on receiver is not dropped")
-    }
 
     #[test]
     fn runtime() -> Result<(), Error> {
@@ -303,19 +387,19 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let indexed = Indexed::new(MemBuffer::new("runtime")?, MemBlob::new("runtime")?)?;
-        let mut runtime = start(indexed);
+        let buffer = MemBuffer::new("runtime")?;
+        let blob = MemBlob::new("runtime")?;
+        let mut runtime = start(buffer, blob)?;
 
-        let id = runtime.register("0")?;
-        block_on(|res| runtime.write(id, &data, res))?;
-        block_on(|res| runtime.seal(id, 3, res))?;
-        let snap = block_on(|res| runtime.snapshot(id, res))?;
+        let (mut write, meta) = runtime.create_or_load("0")?.into_inner();
+        write.write_sync(&data)?;
+        let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
 
         // Commands sent after stop return an error, but calling stop again is
         // fine.
         runtime.stop()?;
-        assert!(runtime.register("0").is_err());
+        assert!(runtime.create_or_load("0").is_err());
         runtime.stop()?;
 
         Ok(())
@@ -328,15 +412,17 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let indexed = Indexed::new(MemBuffer::new("concurrent")?, MemBlob::new("concurrent")?)?;
-        let client1 = start(indexed);
-        let id = client1.register("0")?;
+        let buffer = MemBuffer::new("concurrent")?;
+        let blob = MemBlob::new("concurrent")?;
+        let client1 = start(buffer, blob)?;
+        let _ = client1.create_or_load("0")?;
 
         // Everything is still running after client1 is dropped.
         let mut client2 = client1.clone();
         drop(client1);
-        block_on(|res| client2.write(id, &data, res))?;
-        let snap = block_on(|res| client2.snapshot(id, res))?;
+        let (mut write, meta) = client2.create_or_load("0")?.into_inner();
+        write.write_sync(&data)?;
+        let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
         client2.stop()?;
 
@@ -361,7 +447,7 @@ mod tests {
 
         // Shutdown happens if all handles are dropped, even if we don't call
         // stop.
-        let mut persister = registry.open("path", "restart-2")?;
+        let persister = registry.open("path", "restart-2")?;
         let (mut write, _) = persister.create_or_load("0")?.into_inner();
         write.write_sync(&data[1..2])?;
         drop(write);
@@ -369,12 +455,10 @@ mod tests {
 
         // We can read back what we previously wrote.
         {
-            let mut persister = registry.open("path", "restart-1")?;
+            let persister = registry.open("path", "restart-1")?;
             let (_, meta) = persister.create_or_load("0")?.into_inner();
             let snap = meta.snapshot()?;
-            let mut actual = snap.read_to_end();
-            actual.sort();
-            assert_eq!(actual, data);
+            assert_eq!(snap.read_to_end(), data);
         }
 
         Ok(())
