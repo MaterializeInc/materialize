@@ -37,6 +37,6 @@ smallvec = { version = "1.5.1", features = ["serde", "union"] }
 uuid = "0.8.2"
 
 [dev-dependencies]
-criterion = "0.3.0"
+criterion = "0.3.4"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 rand = "0.8.4"
