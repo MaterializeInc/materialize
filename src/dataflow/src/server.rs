@@ -552,7 +552,7 @@ where
                         &new_frontier
                     ));
                     if prev_frontier != &new_frontier {
-                        add_progress(*id, &prev_frontier, &new_frontier, &mut progress);
+                        add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                         prev_frontier.clone_from(&new_frontier);
                     }
                 }
