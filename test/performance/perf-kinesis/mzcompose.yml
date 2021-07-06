@@ -27,7 +27,6 @@ services:
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN
-      - AWS_SECURITY_TOKEN
     depends_on: [materialized]
 
   materialized:
@@ -37,6 +36,9 @@ services:
     command: -w ${MZ_WORKERS:-4} --disable-telemetry
     environment:
       - MZ_DEV=1
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
   dashboard:
     mzbuild: dashboard
     environment:
