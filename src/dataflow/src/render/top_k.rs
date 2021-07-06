@@ -23,6 +23,111 @@ use repr::{Diff, Row};
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
+#[derive(Debug)]
+pub enum TopKPlan {
+    MonotonicTop1(MonotonicTop1Plan),
+    MonotonicTopK(MonotonicTopKPlan),
+    Basic(BasicTopKPlan),
+}
+
+impl TopKPlan {
+    pub(crate) fn create_from(
+        group_key: Vec<usize>,
+        order_key: Vec<ColumnOrder>,
+        offset: usize,
+        limit: Option<usize>,
+        arity: usize,
+        monotonic: bool,
+    ) -> Self {
+        if monotonic && offset == 0 && limit == Some(1) {
+            TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                group_key,
+                order_key,
+            })
+        } else if monotonic && offset == 0 {
+            // For monotonic inputs, we are able to retract inputs that can no longer be produced
+            // as outputs. Any inputs beyond `offset + limit` will never again be produced as
+            // outputs, and can be removed. The simplest form of this is when `offset == 0` and
+            // these removeable records are those in the input not produced in the output.
+            // TODO: consider broadening this optimization to `offset > 0` by first filtering
+            // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
+            // of `offset` and `limit`, discarding only the records not produced in the intermediate
+            // stage.
+            TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                group_key,
+                order_key,
+                limit,
+                arity,
+            })
+        } else {
+            // A plan for all other inputs
+            TopKPlan::Basic(BasicTopKPlan {
+                group_key,
+                order_key,
+                offset,
+                limit,
+                arity,
+            })
+        }
+    }
+}
+
+/// A plan for monotonic TopKs with an offset of 0 and a limit of 1.
+///
+/// If the input to a TopK is monotonic (aka append-only aka no retractions) then we
+/// don't have to worry about keeping every row we've seen around forever. Instead,
+/// the reduce can incrementally compute a new answer by looking at just the old TopK
+/// for a key and the incremental data.
+///
+/// This optimization generalizes to any TopK over a monotonic source, but we special
+/// case only TopK with offset=0 and limit=1 (aka Top1) for now. This is because (1)
+/// Top1 can merge in each incremental row in constant space and time while the
+/// generalized solution needs something like a priority queue and (2) we expect Top1
+/// will be a common pattern used to turn a Kafka source's "upsert" semantics into
+/// differential's semantics. (2) is especially interesting because Kafka is
+/// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
+/// Materialize and commonly used by users.
+#[derive(Debug)]
+pub struct MonotonicTop1Plan {
+    /// The columns that form the key for each group.
+    group_key: Vec<usize>,
+    /// Ordering that is used within each group.
+    order_key: Vec<expr::ColumnOrder>,
+}
+
+/// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
+#[derive(Debug)]
+pub struct MonotonicTopKPlan {
+    /// The columns that form the key for each group.
+    group_key: Vec<usize>,
+    /// Ordering that is used within each group.
+    order_key: Vec<expr::ColumnOrder>,
+    /// Optionally, an upper bound on the per-group ordinal position of the
+    /// records to produce from each group.
+    limit: Option<usize>,
+    /// The number of columns in the input and output.
+    arity: usize,
+}
+
+/// A plan for generic TopKs that don't fit any more specific category.
+#[derive(Debug)]
+pub struct BasicTopKPlan {
+    /// The columns that form the key for each group.
+    group_key: Vec<usize>,
+    /// Ordering that is used within each group.
+    order_key: Vec<expr::ColumnOrder>,
+    /// Optionally, an upper bound on the per-group ordinal position of the
+    /// records to produce from each group.
+    limit: Option<usize>,
+    /// A lower bound on the per-group ordinal position of the records to
+    /// produce from each group.
+    ///
+    /// This can be set to zero to have no effect.
+    offset: usize,
+    /// The number of columns in the input and output.
+    arity: usize,
+}
+
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G, Row, repr::Timestamp>
 where
@@ -31,65 +136,48 @@ where
     pub fn render_topk(
         &mut self,
         input: CollectionBundle<G, Row, G::Timestamp>,
-        group_key: Vec<usize>,
-        order_key: Vec<ColumnOrder>,
-        limit: Option<usize>,
-        offset: usize,
-        monotonic: bool,
-        arity: usize,
+        top_k_plan: TopKPlan,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
         let (ok_input, err_input) = input.as_collection();
 
         // We create a new region to compartmentalize the topk logic.
         let ok_result = ok_input.scope().region_named("TopK", |inner| {
             let ok_input = ok_input.enter(inner);
-            let ok_result = if monotonic && offset == 0 && limit == Some(1) {
-                // If the input to a TopK is monotonic (aka append-only aka no retractions) then we
-                // don't have to worry about keeping every row we've seen around forever. Instead,
-                // the reduce can incrementally compute a new answer by looking at just the old TopK
-                // for a key and the incremental data.
-                //
-                // This optimization generalizes to any TopK over a monotonic source, but we special
-                // case only TopK with offset=0 and limit=1 (aka Top1) for now. This is because (1)
-                // Top1 can merge in each incremental row in constant space and time while the
-                // generalized solution needs something like a priority queue and (2) we expect Top1
-                // will be a common pattern used to turn a Kafka source's "upsert" semantics into
-                // differential's semantics. (2) is especially interesting because Kafka is
-                // monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
-                // Materialize and commonly used by users.
-                render_top1_monotonic(ok_input, &group_key[..], &order_key[..])
-            } else if monotonic && offset == 0 {
-                // For monotonic inputs, we are able to retract inputs that can no longer be produced
-                // as outputs. Any inputs beyond `offset + limit` will never again be produced as
-                // outputs, and can be removed. The simplest form of this is when `offset == 0` and
-                // these removeable records are those in the input not produced in the output.
-                // TODO: consider broadening this optimization to `offset > 0` by first filtering
-                // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
-                // of `offset` and `limit`, discarding only the records not produced in the intermediate
-                // stage.
-                use differential_dataflow::operators::iterate::Variable;
-                let delay = std::time::Duration::from_nanos(10_000_000_000);
-                let retractions = Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
-                let thinned = ok_input.concat(&retractions.negate());
-                let result = build_topk(
-                    thinned,
-                    &group_key[..],
-                    &order_key[..],
+            let ok_result = match top_k_plan {
+                TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                    group_key,
+                    order_key,
+                }) => render_top1_monotonic(ok_input, group_key, order_key),
+                TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                    order_key,
+                    group_key,
+                    arity,
+                    limit,
+                }) => {
+                    // For monotonic inputs, we are able to retract inputs that can no longer be produced
+                    // as outputs. Any inputs beyond `offset + limit` will never again be produced as
+                    // outputs, and can be removed. The simplest form of this is when `offset == 0` and
+                    // these removeable records are those in the input not produced in the output.
+                    // TODO: consider broadening this optimization to `offset > 0` by first filtering
+                    // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
+                    // of `offset` and `limit`, discarding only the records not produced in the intermediate
+                    // stage.
+                    use differential_dataflow::operators::iterate::Variable;
+                    let delay = std::time::Duration::from_nanos(10_000_000_000);
+                    let retractions =
+                        Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
+                    let thinned = ok_input.concat(&retractions.negate());
+                    let result = build_topk(thinned, group_key, order_key, 0, limit, arity);
+                    retractions.set(&ok_input.concat(&result.negate()));
+                    result
+                }
+                TopKPlan::Basic(BasicTopKPlan {
+                    group_key,
+                    order_key,
                     offset,
                     limit,
                     arity,
-                );
-                retractions.set(&ok_input.concat(&result.negate()));
-                result
-            } else {
-                build_topk(
-                    ok_input,
-                    &group_key[..],
-                    &order_key[..],
-                    offset,
-                    limit,
-                    arity,
-                )
+                }) => build_topk(ok_input, group_key, order_key, offset, limit, arity),
             };
             // Extract the results from the region.
             ok_result.leave_region()
@@ -100,8 +188,8 @@ where
         /// Constructs a TopK dataflow subgraph.
         fn build_topk<G>(
             collection: Collection<G, Row, Diff>,
-            group_key: &[usize],
-            order_key: &[expr::ColumnOrder],
+            group_key: Vec<usize>,
+            order_key: Vec<expr::ColumnOrder>,
             offset: usize,
             limit: Option<usize>,
             arity: usize,
@@ -110,12 +198,11 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
-            let group_clone = group_key.to_vec();
             let mut collection = collection.map({
                 move |row| {
                     let row_hash = row.hashed();
                     let datums = row.unpack();
-                    let iterator = group_clone.iter().map(|i| datums[*i]);
+                    let iterator = group_key.iter().map(|i| datums[*i]);
                     let total_size = repr::datums_size(iterator.clone());
                     let mut group_row = Row::with_capacity(total_size);
                     group_row.extend(iterator);
@@ -138,7 +225,7 @@ where
                     // final, complete reduction.
                     collection = build_topk_stage(
                         collection,
-                        order_key,
+                        order_key.clone(),
                         1u64 << log_modulus,
                         0,
                         Some(offset + limit),
@@ -164,7 +251,7 @@ where
         // a larger number of arrangements when this optimization does nothing beneficial.
         fn build_topk_stage<G>(
             collection: Collection<G, ((Row, u64), Row), Diff>,
-            order_key: &[expr::ColumnOrder],
+            order_key: Vec<expr::ColumnOrder>,
             modulus: u64,
             offset: usize,
             limit: Option<usize>,
@@ -175,10 +262,9 @@ where
             G::Timestamp: Lattice,
         {
             use differential_dataflow::operators::Reduce;
-            let order_clone = order_key.to_vec();
 
             let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
-            // We only want to arrange parts of the input that are not part of the actal output
+            // We only want to arrange parts of the input that are not part of the actual output
             // such that `input.concat(&negated_output.negate())` yields the correct TopK
             let negated_output = input.reduce_named("TopK", {
                 move |_key, source, target: &mut Vec<(Row, isize)>| {
@@ -198,7 +284,7 @@ where
 
                         // The order in which we should produce rows.
                         let mut indexes = (0..source.len()).collect::<Vec<_>>();
-                        if !order_clone.is_empty() {
+                        if !order_key.is_empty() {
                             // We decode the datums once, into a common buffer for efficiency.
                             // Each row should contain `arity` columns; we should check that.
                             let mut buffer = Vec::with_capacity(arity * source.len());
@@ -212,7 +298,7 @@ where
                             indexes.sort_by(|left, right| {
                                 let left = &buffer[left * width..][..width];
                                 let right = &buffer[right * width..][..width];
-                                expr::compare_columns(&order_clone, left, right, || left.cmp(right))
+                                expr::compare_columns(&order_key, left, right, || left.cmp(right))
                             });
                         }
 
@@ -249,8 +335,8 @@ where
 
         fn render_top1_monotonic<G>(
             collection: Collection<G, Row, Diff>,
-            group_key: &[usize],
-            order_key: &[expr::ColumnOrder],
+            group_key: Vec<usize>,
+            order_key: Vec<expr::ColumnOrder>,
         ) -> Collection<G, Row, Diff>
         where
             G: Scope,
@@ -261,11 +347,10 @@ where
             // reduction.
             use timely::dataflow::operators::Map;
 
-            let group_clone = group_key.to_vec();
             let collection = collection.map({
                 move |row| {
                     let datums = row.unpack();
-                    let iterator = group_clone.iter().map(|i| datums[*i]);
+                    let iterator = group_key.iter().map(|i| datums[*i]);
                     let total_size = repr::datums_size(iterator.clone());
                     let mut group_key = Row::with_capacity(total_size);
                     group_key.extend(iterator);
@@ -278,7 +363,6 @@ where
             //
             // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
             // for the monoid, unclear if it's worth it.
-            let order_clone = order_key.to_vec();
             let partial: Collection<G, Row, monoids::Top1Monoid> = collection
                 .consolidate()
                 .inner
@@ -291,7 +375,7 @@ where
                         time,
                         monoids::Top1Monoid {
                             row,
-                            order_key: order_clone.clone(),
+                            order_key: order_key.clone(),
                         },
                     )
                 })
@@ -332,8 +416,8 @@ pub mod monoids {
 
             // It might be nice to cache this row decoding like the non-monotonic codepath, but we'd
             // have to store the decoded Datums in the same struct as the Row, which gets tricky.
-            let left: Vec<_> = self.row.iter().collect();
-            let right: Vec<_> = other.row.iter().collect();
+            let left: Vec<_> = self.row.unpack();
+            let right: Vec<_> = other.row.unpack();
             expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
         }
     }
@@ -351,7 +435,7 @@ pub mod monoids {
                 return;
             }
 
-            let cmp = (self as &Top1Monoid).cmp(rhs);
+            let cmp = (&*self).cmp(rhs);
             // NB: Reminder that TopK returns the _minimum_ K items.
             if cmp == Ordering::Greater {
                 self.clone_from(&rhs);

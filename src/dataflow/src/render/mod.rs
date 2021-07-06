@@ -472,17 +472,9 @@ where
                 let input = self.render_plan(*input, scope, worker_index);
                 self.render_reduce(input, key_val_plan, plan)
             }
-            Plan::TopK {
-                input,
-                group_key,
-                order_key,
-                limit,
-                offset,
-                monotonic,
-                arity,
-            } => {
+            Plan::TopK { input, top_k_plan } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_topk(input, group_key, order_key, limit, offset, monotonic, arity)
+                self.render_topk(input, top_k_plan)
             }
             Plan::Negate { input } => {
                 let input = self.render_plan(*input, scope, worker_index);
@@ -587,6 +579,7 @@ pub mod plan {
 
     use crate::render::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
     use crate::render::reduce::{KeyValPlan, ReducePlan};
+    use crate::render::top_k::TopKPlan;
     use expr::{
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
         TableFunc,
@@ -702,24 +695,14 @@ pub mod plan {
         TopK {
             /// The input collection.
             input: Box<Plan>,
-            /// The columns that form the key for each group.
-            group_key: Vec<usize>,
-            /// Ordering that is used within each group.
-            order_key: Vec<expr::ColumnOrder>,
-            /// Optionally, an upper bound on the per-group ordinal position of the
-            /// records to produce from each group.
-            limit: Option<usize>,
-            /// A lower bound on the per-group ordinal position of the records to
-            /// produce from each group.
+            /// A plan for performing the Top-K.
             ///
-            /// This can be set to zero to have no effect.
-            offset: usize,
-            /// True if the input collection contains no retractions.
-            monotonic: bool,
-            /// The number of columns in the input and output.
-            arity: usize,
+            /// The implementation of reduction has several different strategies based
+            /// on the properties of the reduction, and the input itself. Please check
+            /// out the documentation for this type for more detail.
+            top_k_plan: TopKPlan,
         },
-        /// Inverts the sign of each update..
+        /// Inverts the sign of each update.
         Negate {
             /// The input collection.
             input: Box<Plan>,
@@ -917,15 +900,15 @@ pub mod plan {
                 } => {
                     let arity = input.arity();
                     let input = Box::new(Self::from_mir(input)?);
-                    Plan::TopK {
-                        input,
-                        group_key: group_key.clone(),
-                        order_key: order_key.clone(),
-                        limit: *limit,
-                        offset: *offset,
-                        monotonic: *monotonic,
+                    let top_k_plan = TopKPlan::create_from(
+                        group_key.clone(),
+                        order_key.clone(),
+                        *offset,
+                        *limit,
                         arity,
-                    }
+                        *monotonic,
+                    );
+                    Plan::TopK { input, top_k_plan }
                 }
                 MirRelationExpr::Negate { input } => {
                     let input = Box::new(Self::from_mir(input)?);
