@@ -20,7 +20,7 @@ use persist::persister::Snapshot;
 use persist::storage::{Blob, Buffer};
 
 fn read_full_snapshot<U: Buffer, L: Blob>(
-    index: &Indexed<U, L>,
+    index: &Indexed<String, String, U, L>,
     id: Id,
     expected_len: usize,
 ) -> Vec<((String, String), u64, isize)> {
@@ -34,7 +34,7 @@ fn read_full_snapshot<U: Buffer, L: Blob>(
 }
 
 fn bench_snapshot<U: Buffer, L: Blob>(
-    index: &Indexed<U, L>,
+    index: &Indexed<String, String, U, L>,
     id: Id,
     expected_len: usize,
     b: &mut Bencher,
@@ -46,7 +46,7 @@ fn bench_indexed_snapshots<U, L, F>(c: &mut Criterion, name: &str, mut new_fn: F
 where
     U: Buffer,
     L: Blob,
-    F: FnMut(usize) -> Result<Indexed<U, L>, Error>,
+    F: FnMut(usize) -> Result<Indexed<String, String, U, L>, Error>,
 {
     let data_len = 100_000;
     let data: Vec<_> = (0..data_len)

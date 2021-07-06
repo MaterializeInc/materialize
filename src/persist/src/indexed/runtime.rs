@@ -18,12 +18,13 @@ use crate::error::Error;
 use crate::indexed::encoding::Id;
 use crate::indexed::{Indexed, IndexedSnapshot};
 use crate::storage::{Blob, Buffer};
+use crate::Data;
 
-enum Cmd {
+enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
-    Write(Id, Vec<((String, String), u64, isize)>, CmdResponse<()>),
+    Write(Id, Vec<((K, V), u64, isize)>, CmdResponse<()>),
     Seal(Id, u64, CmdResponse<()>),
-    Snapshot(Id, CmdResponse<IndexedSnapshot>),
+    Snapshot(Id, CmdResponse<IndexedSnapshot<K, V>>),
     Stop(CmdResponse<()>),
 }
 
@@ -35,9 +36,13 @@ enum Cmd {
 /// TODO: At the moment, this runs IO and heavy cpu work in a single thread.
 /// Move this work out into whatever async runtime the user likes, via something
 /// like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
-pub fn start<U: Buffer + Send + 'static, L: Blob + Send + 'static>(
-    indexed: Indexed<U, L>,
-) -> RuntimeClient {
+pub fn start<K, V, U, L>(indexed: Indexed<K, V, U, L>) -> RuntimeClient<K, V>
+where
+    K: Data + Send + Sync + 'static,
+    V: Data + Send + Sync + 'static,
+    U: Buffer + Send + 'static,
+    L: Blob + Send + 'static,
+{
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
     let handle = thread::spawn(move || {
@@ -107,13 +112,13 @@ impl<T> CmdResponse<T> {
     }
 }
 
-struct RuntimeCore {
+struct RuntimeCore<K, V> {
     handle: Mutex<Option<JoinHandle<()>>>,
-    tx: crossbeam_channel::Sender<Cmd>,
+    tx: crossbeam_channel::Sender<Cmd<K, V>>,
 }
 
-impl RuntimeCore {
-    fn send(&self, cmd: Cmd) {
+impl<K, V> RuntimeCore<K, V> {
+    fn send(&self, cmd: Cmd<K, V>) {
         if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
             // According to the docs, a SendError can only happen if the
             // receiver has hung up, which in this case only happens if the
@@ -157,7 +162,7 @@ impl RuntimeCore {
     }
 }
 
-impl Drop for RuntimeCore {
+impl<K, V> Drop for RuntimeCore<K, V> {
     fn drop(&mut self) {
         if let Err(err) = self.stop() {
             log::error!("dropping persist runtime: {}", err);
@@ -173,12 +178,19 @@ impl Drop for RuntimeCore {
 /// NB: The methods below are executed concurrently. For a some call X to be
 /// guaranteed as "previous" to another call Y, X's response must have been
 /// received before Y's call started.
-#[derive(Clone)]
-pub struct RuntimeClient {
-    core: Arc<RuntimeCore>,
+pub struct RuntimeClient<K, V> {
+    core: Arc<RuntimeCore<K, V>>,
 }
 
-impl RuntimeClient {
+impl<K, V> Clone for RuntimeClient<K, V> {
+    fn clone(&self) -> Self {
+        RuntimeClient {
+            core: self.core.clone(),
+        }
+    }
+}
+
+impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// Synchronously registers a new stream for writes and reads.
     ///
     /// This method is idempotent.
@@ -192,7 +204,7 @@ impl RuntimeClient {
     /// stream with the given id.
     ///
     /// The id must have previously been registered.
-    pub fn write(&self, id: Id, updates: &[((String, String), u64, isize)], res: CmdResponse<()>) {
+    pub fn write(&self, id: Id, updates: &[((K, V), u64, isize)], res: CmdResponse<()>) {
         self.core.send(Cmd::Write(id, updates.to_vec(), res))
     }
 
@@ -211,7 +223,7 @@ impl RuntimeClient {
     /// This snapshot is guaranteed to include any previous writes.
     ///
     /// The id must have previously been registered.
-    pub fn snapshot(&self, id: Id, res: CmdResponse<IndexedSnapshot>) {
+    pub fn snapshot(&self, id: Id, res: CmdResponse<IndexedSnapshot<K, V>>) {
         self.core.send(Cmd::Snapshot(id, res))
     }
 
@@ -223,12 +235,12 @@ impl RuntimeClient {
     }
 }
 
-struct RuntimeImpl<U: Buffer, L: Blob> {
-    indexed: Indexed<U, L>,
-    rx: crossbeam_channel::Receiver<Cmd>,
+struct RuntimeImpl<K, V, U: Buffer, L: Blob> {
+    indexed: Indexed<K, V, U, L>,
+    rx: crossbeam_channel::Receiver<Cmd<K, V>>,
 }
 
-impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
+impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
     /// Synchronously waits for the next command, executes it, and responds.
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
@@ -360,7 +372,9 @@ mod tests {
             let mut persister = registry.open("path", "restart-1")?;
             let (_, meta) = persister.create_or_load("0")?.into_inner();
             let mut snap = meta.snapshot()?;
-            assert_eq!(snap.read_to_end(), data);
+            let mut actual = snap.read_to_end();
+            actual.sort();
+            assert_eq!(actual, data);
         }
 
         Ok(())

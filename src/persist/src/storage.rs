@@ -17,7 +17,7 @@ use crate::error::Error;
 use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
 use crate::indexed::runtime::{self, RuntimeClient};
 use crate::indexed::Indexed;
-use crate::Token;
+use crate::{Data, Token};
 
 /// A "sequence number", uniquely associated with an entry in a Buffer.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
@@ -85,11 +85,15 @@ pub trait Blob {
 /// An implementation of a persister for multiplexed streams of (Key, Value,
 /// Time, Diff) updates.
 #[derive(Clone)]
-pub struct Persister {
-    runtime: RuntimeClient,
+pub struct Persister<K, V> {
+    runtime: RuntimeClient<K, V>,
 }
 
-impl Persister {
+impl<K, V> Persister<K, V>
+where
+    K: Data + Send + Sync + 'static,
+    V: Data + Send + Sync + 'static,
+{
     /// Returns a [Persister] initialized with previous data, if any.
     pub fn new<U: Buffer + Send + 'static, L: Blob + Send + 'static>(
         buf: U,
@@ -99,7 +103,9 @@ impl Persister {
         let runtime = runtime::start(indexed);
         Ok(Persister { runtime })
     }
+}
 
+impl<K: Data, V: Data> Persister<K, V> {
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
@@ -107,9 +113,7 @@ impl Persister {
     pub fn stop(&mut self) -> Result<(), Error> {
         self.runtime.stop()
     }
-}
 
-impl Persister {
     /// Returns a token used to construct a persisted stream operator.
     ///
     /// If data was written by a previous [Persister] for this id, it's loaded and
@@ -121,7 +125,7 @@ impl Persister {
     pub fn create_or_load(
         &mut self,
         id: &str,
-    ) -> Result<Token<StreamWriteHandle, StreamMetaHandle>, Error> {
+    ) -> Result<Token<StreamWriteHandle<K, V>, StreamMetaHandle<K, V>>, Error> {
         let id = self.runtime.register(id)?;
         let write = StreamWriteHandle::new(id, self.runtime.clone());
         let meta = StreamMetaHandle::new(id, self.runtime.clone());
