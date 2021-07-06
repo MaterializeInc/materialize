@@ -96,7 +96,7 @@ prof = { path = "../prof", features = ["jemalloc"] }
 jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "1.0.5"
+assert_cmd = "1.0.7"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coordtest = { path = "../coordtest" }

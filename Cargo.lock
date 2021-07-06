@@ -145,13 +145,13 @@ dependencies = [
 
 [[package]]
 name = "assert_cmd"
-version = "1.0.5"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a88b6bd5df287567ffdf4ddf4d33060048e1068308e5f62d81c6f9824a045a48"
+checksum = "3d20831bd004dda4c7c372c19cdabff369f794a95e955b3f13fe460e3e1ae95f"
 dependencies = [
  "bstr",
  "doc-comment",
- "predicates",
+ "predicates 2.0.0",
  "predicates-core",
  "predicates-tree",
  "wait-timeout",
@@ -948,6 +948,12 @@ dependencies = [
  "serde_derive",
  "timely",
 ]
+
+[[package]]
+name = "difflib"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
 
 [[package]]
 name = "digest"
@@ -2170,7 +2176,7 @@ dependencies = [
  "postgres-openssl",
  "postgres-protocol",
  "postgres_array",
- "predicates",
+ "predicates 1.0.8",
  "prof",
  "prometheus",
  "rand",
@@ -2972,6 +2978,17 @@ dependencies = [
  "normalize-line-endings",
  "predicates-core",
  "regex",
+]
+
+[[package]]
+name = "predicates"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6e46ca79eb4e21e2ec14430340c71250ab69332abf85521c95d3a8bc336aa76"
+dependencies = [
+ "difflib",
+ "itertools 0.10.1",
+ "predicates-core",
 ]
 
 [[package]]
@@ -4332,7 +4349,7 @@ dependencies = [
  "ore",
  "pgrepr",
  "postgres_array",
- "predicates",
+ "predicates 1.0.8",
  "protobuf",
  "protoc",
  "rand",
