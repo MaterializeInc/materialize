@@ -17,7 +17,7 @@ Detail | Info
 **Database** | `materialize`
 **User** | Any valid [role](/sql/create-role) (usually `materialize`)
 **Port** | `6875`
-**SSL** | Available [via TLS](/cli/#tls-encryption)
+**SSL/TLS** | [If enabled](/cli/#tls-encryption)
 
 Materialize instances have a user named `materialize` installed, unless you drop
 this user with [`DROP USER`](/sql/drop-user). You can add additional users with
