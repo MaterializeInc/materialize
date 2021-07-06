@@ -538,15 +538,15 @@ swap: {swap_total}KB total, {swap_used}KB used",
         ncpus_logical = num_cpus::get(),
         ncpus_physical = num_cpus::get_physical(),
         cpu0 = {
-            match &system.get_processors().get(0) {
-                None => "<Failed to get CPU information>".to_string(),
-                Some(cpu0) => format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency()),
+            match &system.processors().get(0) {
+                None => "<unknown>".to_string(),
+                Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
             }
         },
-        memory_total = system.get_total_memory(),
-        memory_used = system.get_used_memory(),
-        swap_total = system.get_total_swap(),
-        swap_used = system.get_used_swap(),
+        memory_total = system.total_memory(),
+        memory_used = system.used_memory(),
+        swap_total = system.total_swap(),
+        swap_used = system.used_swap(),
     );
 
     sys::adjust_rlimits();

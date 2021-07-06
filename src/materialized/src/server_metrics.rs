@@ -51,12 +51,12 @@ lazy_static! {
             &num_cpus::get().to_string(),
             &num_cpus::get_physical().to_string(),
             &{
-                match &system.get_processors().get(0) {
-                    None => "<Failed to get CPU information>".to_string(),
-                    Some(cpu0) => format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency()),
+                match &system.processors().get(0) {
+                    None => "<unknown>".to_string(),
+                    Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
                 }
             },
-            &system.get_total_memory().to_string(),
+            &system.total_memory().to_string(),
         ])
     };
     pub static ref WORKER_COUNT: IntGaugeVec = register_int_gauge_vec!(
