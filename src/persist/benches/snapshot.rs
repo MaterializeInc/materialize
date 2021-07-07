@@ -14,9 +14,8 @@ use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
 use persist::error::Error;
 use persist::file::{FileBlob, FileBuffer};
 use persist::indexed::encoding::Id;
-use persist::indexed::Indexed;
+use persist::indexed::{Indexed, Snapshot};
 use persist::mem::{MemBlob, MemBuffer};
-use persist::persister::Snapshot;
 use persist::storage::{Blob, Buffer};
 
 fn read_full_snapshot<U: Buffer, L: Blob>(

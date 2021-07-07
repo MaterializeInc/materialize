@@ -230,7 +230,7 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
         self.core.send(Cmd::Seal(id, ts, res))
     }
 
-    /// Asynchronously returns a [crate::persister::Snapshot] for the stream
+    /// Asynchronously returns a [crate::indexed::Snapshot] for the stream
     /// with the given id.
     ///
     /// This snapshot is guaranteed to include any previous writes.
@@ -375,8 +375,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
 
 #[cfg(test)]
 mod tests {
+    use crate::indexed::SnapshotExt;
     use crate::mem::{MemBlob, MemBuffer, MemRegistry};
-    use crate::persister::SnapshotExt;
 
     use super::*;
 

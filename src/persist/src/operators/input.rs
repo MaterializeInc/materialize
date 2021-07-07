@@ -18,7 +18,7 @@ use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
-use crate::persister::Snapshot;
+use crate::indexed::Snapshot;
 use crate::Token;
 
 /// A persistent equivalent of [UnorderedInput].
