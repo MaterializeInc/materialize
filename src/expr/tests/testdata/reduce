@@ -282,3 +282,28 @@ reduce
 [int64 int32 int32]
 ----
 (isnull(#0) || (isnull(#1) && isnull(#2)))
+
+reduce
+(call_binary and (call_binary or (call_binary or #0 #1) (call_binary gt #2 2))
+    (call_binary or #0 (call_binary or (call_binary lt #2 3) #1)))
+[bool bool int32]
+----
+(#1 || (#0 || ((#2 > 2) && (#2 < 3))))
+
+# a | (a & b)
+
+reduce
+(call_binary or #0
+    (call_binary and #0 (call_binary lt #2 3)))
+[bool bool int32]
+----
+#0
+
+# a & (a | b)
+
+reduce
+(call_binary and (call_binary or #0 #1)
+    (call_binary or #0 (call_binary or (call_binary lt #2 3) #1)))
+[bool bool int32]
+----
+(#0 || #1)

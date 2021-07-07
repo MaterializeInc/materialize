@@ -326,10 +326,11 @@ impl MirScalarExpr {
             self.visit_mut_pre_post(
                 &mut |e| {
                     match e {
-                        // 1a) push down IsNull expressions
+                        // 1a) Decompose IsNull expressions into a disjunction
+                        // of simpler IsNull subexpressions
                         MirScalarExpr::CallUnary { func, expr } => {
                             if *func == UnaryFunc::IsNull {
-                                if let Some(expr) = expr.simplify_is_null() {
+                                if let Some(expr) = expr.decompose_is_null() {
                                     *e = expr
                                 }
                             }
@@ -661,7 +662,10 @@ impl MirScalarExpr {
                 // 3) As the second to last step, try to undistribute AND/OR
                 e.undistribute_and_or();
                 if let MirScalarExpr::CallBinary { func, expr1, expr2 } = e {
-                    if matches!(*func, BinaryFunc::Eq | BinaryFunc::Or | BinaryFunc::And) {
+                    if matches!(
+                        *func,
+                        BinaryFunc::Eq | BinaryFunc::Or | BinaryFunc::And | BinaryFunc::NotEq
+                    ) {
                         if expr2 < expr1 {
                             // 4) Canonically order elements so that deduplication works better.
                             ::std::mem::swap(expr1, expr2);
@@ -672,15 +676,17 @@ impl MirScalarExpr {
         );
     }
 
-    /// Simplifies the expression inside of an IsNull.
+    /// Decompose an IsNull expression into a disjunction of
+    /// simpler expressions.
     ///
     /// Assumes that `self` is the expression inside of an IsNull.
     /// Returns `Some(expressions)` if the outer IsNull is to be
     /// replaced by some other expression.
-    fn simplify_is_null(&mut self) -> Option<MirScalarExpr> {
-        // (<expr1> <op> <expr2>) IS NULL can often be simplified to
-        // (<expr1> IS NULL) OR (<expr2> IS NULL).
+    fn decompose_is_null(&mut self) -> Option<MirScalarExpr> {
+        // TODO: allow simplification of VariadicFunc and NullaryFunc
         if let MirScalarExpr::CallBinary { func, expr1, expr2 } = self {
+            // (<expr1> <op> <expr2>) IS NULL can often be simplified to
+            // (<expr1> IS NULL) OR (<expr2> IS NULL).
             if func.propagates_nulls() && !func.introduces_nulls() {
                 let expr1 = expr1.take().call_unary(UnaryFunc::IsNull);
                 let expr2 = expr2.take().call_unary(UnaryFunc::IsNull);
@@ -694,7 +700,7 @@ impl MirScalarExpr {
             if !func.introduces_nulls() {
                 if func.propagates_nulls() {
                     *self = inner_expr.take();
-                    return self.simplify_is_null();
+                    return self.decompose_is_null();
                 } else {
                     return Some(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
                 }
@@ -760,28 +766,43 @@ impl MirScalarExpr {
                 // `(a && b) || (a && c)`. Otherwise, we are trying to
                 // undistribute OR`.
                 let undistribute_and = *func == BinaryFunc::Or;
-                let mut operands0 = Vec::new();
-                expr1.harvest_operands(&mut operands0, undistribute_and);
-
                 let mut operands1 = Vec::new();
-                expr2.harvest_operands(&mut operands1, undistribute_and);
+                expr1.harvest_operands(&mut operands1, undistribute_and);
+                let operands1_len = operands1.len();
 
-                let mut intersection = Vec::new();
-                for expr in operands0.into_iter() {
-                    if operands1.contains(&expr) {
-                        intersection.push(expr);
-                    }
-                }
+                let mut operands2 = Vec::new();
+                expr2.harvest_operands(&mut operands2, undistribute_and);
 
-                if !intersection.is_empty() {
+                let mut intersection = operands1
+                    .into_iter()
+                    .filter(|e| operands2.contains(e))
+                    .collect::<Vec<_>>();
+
+                // To construct the undistributed version from
+                // `((a1 && ... && aN) & b) || ((a1 && ... && aN) && c)`, we
+                // 1) remove all copies of operands in the intersection from
+                //    `self` to get `(b || c)`
+                // 2) AND one copy of the operands in the intersection back on
+                //    to get (a1 && ... && aN) && (b || c)
+                // (a1 & ... & aN) | ((a1 & ... & aN) & b) is equal to
+                //    (a1 & ... & aN), so instead we take one of the operands in
+                //    the intersection as `self` and then AND the rest on later.
+                if intersection.len() == operands1_len || intersection.len() == operands2.len() {
+                    *self = intersection.pop().unwrap();
+                } else if !intersection.is_empty() {
                     expr1.suppress_operands(&intersection[..], undistribute_and);
                     expr2.suppress_operands(&intersection[..], undistribute_and);
                 }
 
-                for and_term in intersection.into_iter() {
+                for term in intersection.into_iter() {
+                    let (expr1, expr2) = if term < *self {
+                        (term, self.take())
+                    } else {
+                        (self.take(), term)
+                    };
                     *self = MirScalarExpr::CallBinary {
-                        expr1: Box::new(self.take()),
-                        expr2: Box::new(and_term),
+                        expr1: Box::new(expr1),
+                        expr2: Box::new(expr2),
                         func: if undistribute_and {
                             BinaryFunc::And
                         } else {
