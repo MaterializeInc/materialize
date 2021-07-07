@@ -64,8 +64,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
 use dataflow::{
-    CacheMessage, SequencedCommand, TimestampBindingFeedback, WorkerFeedback,
-    WorkerFeedbackWithMeta,
+    SequencedCommand, TimestampBindingFeedback, WorkerFeedback, WorkerFeedbackWithMeta,
 };
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
@@ -101,7 +100,6 @@ use sql::plan::{
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
-use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState};
 use crate::client::{Client, Handle};
@@ -182,7 +180,6 @@ pub struct Config<'a> {
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
     pub timestamp_frequency: Duration,
-    pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
     pub safe_mode: bool,
@@ -212,9 +209,6 @@ pub struct Coordinator {
     /// Channel to communicate source status updates to the timestamper thread.
     ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
     metric_scraper_tx: Option<std::sync::mpsc::Sender<ScraperMessage>>,
-    /// Channel to communicate source status updates and shutdown notifications to the cacher
-    /// thread.
-    cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -352,16 +346,14 @@ impl Coordinator {
         // insert them first.
         for entry in &entries {
             match entry.item() {
-                //currently catalog item rebuild assumes that sinks and
-                //indexes are always built individually and does not store information
-                //about how it was built. If we start building multiple sinks and/or indexes
-                //using a single dataflow, we have to make sure the rebuild process re-runs
-                //the same multiple-build dataflow.
-                CatalogItem::Source(source) => {
+                // Currently catalog item rebuild assumes that sinks and
+                // indexes are always built individually and does not store information
+                // about how it was built. If we start building multiple sinks and/or indexes
+                // using a single dataflow, we have to make sure the rebuild process re-runs
+                // the same multiple-build dataflow.
+                CatalogItem::Source(_) => {
                     // Inform the timestamper about this source.
                     self.update_timestamper(entry.id(), true).await;
-                    self.maybe_begin_caching(entry.id(), source.connector.caching_enabled())
-                        .await;
                     let frontiers =
                         self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(entry.id(), frontiers);
@@ -1642,13 +1634,12 @@ impl Coordinator {
         }
     }
 
-    async fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>, bool)>) {
-        for (source_id, idx_id, caching_enabled) in metadata {
+    async fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>)>) {
+        for (source_id, idx_id) in metadata {
             // Do everything to instantiate the source at the coordinator and
             // inform the timestamper and dataflow workers of its existence before
             // shipping any dataflows that depend on its existence.
             self.update_timestamper(source_id, true).await;
-            self.maybe_begin_caching(source_id, caching_enabled).await;
             let frontiers =
                 self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
             self.sources.insert(source_id, frontiers);
@@ -1663,7 +1654,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         plans: Vec<CreateSourcePlan>,
-    ) -> Result<(Vec<(GlobalId, Option<GlobalId>, bool)>, Vec<catalog::Op>), CoordError> {
+    ) -> Result<(Vec<(GlobalId, Option<GlobalId>)>, Vec<catalog::Op>), CoordError> {
         let mut metadata = vec![];
         let mut ops = vec![];
         for plan in plans {
@@ -1719,7 +1710,7 @@ impl Coordinator {
             } else {
                 None
             };
-            metadata.push((source_id, index_id, source.connector.caching_enabled()))
+            metadata.push((source_id, index_id))
         }
         Ok((metadata, ops))
     }
@@ -2904,11 +2895,6 @@ impl Coordinator {
             for &id in &sources_to_drop {
                 self.update_timestamper(id, false).await;
                 self.catalog.delete_timestamp_bindings(id)?;
-                if let Some(cache_tx) = &mut self.cache_tx {
-                    cache_tx
-                        .send(CacheMessage::DropSource(id))
-                        .expect("cache receiver should not drop first");
-                }
                 self.sources.remove(&id);
             }
             self.broadcast(SequencedCommand::DropSources(sources_to_drop));
@@ -3172,28 +3158,6 @@ impl Coordinator {
         }
     }
 
-    // Tell the cacher to start caching data for `id` if that source
-    // has caching enabled and Materialize has caching enabled.
-    // This function is a no-op if the cacher has already started caching
-    // this source.
-    async fn maybe_begin_caching(&mut self, id: GlobalId, connector_caching_enabled: bool) {
-        if connector_caching_enabled {
-            if let Some(cache_tx) = &mut self.cache_tx {
-                cache_tx
-                    .send(CacheMessage::AddSource(
-                        self.catalog.config().cluster_id,
-                        id,
-                    ))
-                    .expect("caching receiver should not drop first");
-            } else {
-                log::error!(
-                    "trying to create a cached source ({}) but caching is disabled.",
-                    id
-                );
-            }
-        }
-    }
-
     fn allocate_transient_id(&mut self) -> Result<GlobalId, CoordError> {
         let id = self.transient_id_counter;
         if id == u64::max_value() {
@@ -3280,7 +3244,6 @@ pub async fn serve(
         logging,
         data_directory,
         timestamp_frequency,
-        cache: cache_config,
         logical_compaction_window,
         experimental_mode,
         safe_mode,
@@ -3289,15 +3252,6 @@ pub async fn serve(
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
-    let cache_tx = if let Some(cache_config) = &cache_config {
-        let (cache_tx, cache_rx) = mpsc::unbounded_channel();
-        let mut cacher = Cacher::new(cache_rx, cache_config.clone());
-        tokio::spawn(async move { cacher.run().await });
-        Some(cache_tx)
-    } else {
-        None
-    };
-
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
     let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
@@ -3312,7 +3266,6 @@ pub async fn serve(
         experimental_mode: Some(experimental_mode),
         safe_mode,
         enable_logging: logging.is_some(),
-        cache_directory: cache_config.map(|c| c.path),
         build_info,
         num_workers: workers,
         timestamp_frequency,
@@ -3398,7 +3351,6 @@ pub async fn serve(
                 internal_cmd_tx,
                 ts_tx: ts_tx.clone(),
                 metric_scraper_tx: metric_scraper_tx.clone(),
-                cache_tx,
                 closed_up_to: 1,
                 read_lower_bound: 1,
                 last_op_was_read: false,
@@ -3421,9 +3373,6 @@ pub async fn serve(
                         .collect(),
                     log_logging: config.log_logging,
                 }));
-            }
-            if let Some(cache_tx) = &coord.cache_tx {
-                coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
             }
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -3483,7 +3432,6 @@ pub fn serve_debug(
         enable_logging: true,
         experimental_mode: None,
         safe_mode: false,
-        cache_directory: None,
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
         timestamp_frequency: Duration::from_millis(1),
@@ -3552,7 +3500,6 @@ pub fn serve_debug(
             internal_cmd_tx,
             ts_tx,
             metric_scraper_tx: None,
-            cache_tx: None,
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,

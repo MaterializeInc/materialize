@@ -30,7 +30,6 @@ macro_rules! coord_bail {
     }
 }
 
-mod cache;
 mod client;
 mod command;
 mod coord;
@@ -43,7 +42,6 @@ mod util;
 pub mod catalog;
 pub mod session;
 
-pub use crate::cache::CacheConfig;
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{Cancelled, ExecuteResponse, StartupMessage, StartupResponse};
 pub use crate::coord::{serve, serve_debug, Config, LoggingConfig};

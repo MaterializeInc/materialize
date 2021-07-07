@@ -27,7 +27,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 
 use build_info::BuildInfo;
-use coord::{CacheConfig, LoggingConfig};
+use coord::LoggingConfig;
 
 use crate::mux::Mux;
 
@@ -109,7 +109,6 @@ pub struct Config {
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
-    pub cache: Option<CacheConfig>,
 
     // === Mode switches. ===
     /// An optional symbiosis endpoint. See the
@@ -223,7 +222,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         logging: config.logging,
         data_directory: &config.data_directory,
         timestamp_frequency: config.timestamp_frequency,
-        cache: config.cache,
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,

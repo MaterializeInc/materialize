@@ -116,7 +116,6 @@ services:
     command: >-
       --data-directory=/share/mzdata
       -w1 --experimental
-      --cache-max-pending-records 1
       --disable-telemetry
     ports:
       - 6875

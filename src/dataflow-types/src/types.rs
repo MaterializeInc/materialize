@@ -707,27 +707,11 @@ impl SourceConnector {
         }
     }
 
-    pub fn caching_enabled(&self) -> bool {
-        match self {
-            SourceConnector::External { connector, .. } => connector.caching_enabled(),
-            SourceConnector::Local(_) => false,
-        }
-    }
-
     pub fn timeline(&self) -> Timeline {
         match self {
             SourceConnector::External { timeline, .. } => timeline.clone(),
             SourceConnector::Local(timeline) => timeline.clone(),
         }
-    }
-}
-
-pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
-    match e {
-        ExternalSourceConnector::Kafka(KafkaSourceConnector { cached_files, .. }) => {
-            cached_files.clone().unwrap_or_else(Vec::new)
-        }
-        _ => vec![],
     }
 }
 
@@ -794,14 +778,6 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::S3(_) => None,
             ExternalSourceConnector::Postgres(_) => None,
             ExternalSourceConnector::PubNub(_) => None,
-        }
-    }
-
-    /// Returns whether or not source caching is enabled for this connector
-    pub fn caching_enabled(&self) -> bool {
-        match self {
-            ExternalSourceConnector::Kafka(k) => k.enable_caching,
-            _ => false,
         }
     }
 
@@ -897,11 +873,7 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    pub enable_caching: bool,
     pub cluster_id: Uuid,
-    // This field gets set after the initial construction of this struct, so this is None if it has
-    // not yet been set.
-    pub cached_files: Option<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

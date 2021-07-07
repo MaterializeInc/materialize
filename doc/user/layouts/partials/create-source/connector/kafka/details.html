@@ -18,18 +18,6 @@ The `start_offset` option comes with some quirks to be aware of:
 
 The `kafka_time_offset` option sets `start_offset` for each available partition based on the Kafka timestamp and the source behaves as if `start_offset` was provided directly.
 
-#### Cached Kafka sources
-
-To avoid re-reading data from Kafka on restart, Materialize lets you create
-cached sources, which cache input messages from Kafka topics to files on
-the Materialize instance's local hard drive. For more details on source caching,
-see [Deployment: Source Caching][caching].
-
-[Example][example]
-
-[caching]: /ops/deployment/#source-caching
-[example]: #caching-records-to-local-disk
-
 #### SSL-encrypted Kafka details
 
 Enable connections to SSL-encrypted Kafka clusters using the appropriate

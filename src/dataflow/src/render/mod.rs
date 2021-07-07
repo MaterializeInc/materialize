@@ -113,7 +113,6 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id};
@@ -125,7 +124,7 @@ use repr::{Row, Timestamp};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{CacheMessage, LocalInput};
+use crate::server::LocalInput;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
 
@@ -152,8 +151,6 @@ pub struct RenderState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
-    /// Sender to give data to be cached.
-    pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,

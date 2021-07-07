@@ -12,7 +12,6 @@
 //! Catalog abstraction layer.
 
 use std::fmt;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use std::{error::Error, unimplemented};
 
@@ -177,9 +176,6 @@ pub struct CatalogConfig {
     pub experimental_mode: bool,
     /// Whether the server is running in safe mode.
     pub safe_mode: bool,
-    /// The path in which source caching data is stored, if source caching is
-    /// enabled.
-    pub cache_directory: Option<PathBuf>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// The number of worker in use by the server.
@@ -372,7 +368,6 @@ lazy_static! {
         session_id: Uuid::from_u128(0),
         experimental_mode: false,
         safe_mode: false,
-        cache_directory: None,
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
         timestamp_frequency: Duration::from_secs(1),

@@ -80,41 +80,11 @@ impl<'a> DataflowBuilder<'a> {
                     );
                 }
                 CatalogItem::Source(source) => {
-                    // If Materialize has caching enabled, check to see if the source has any
-                    // already cached data that can be reused, and if so, augment the source
-                    // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) =
-                        self.catalog.config().cache_directory.as_deref()
-                    {
-                        match crate::cache::augment_connector(
-                            source.connector.clone(),
-                            &path,
-                            self.catalog.config().cluster_id,
-                            *id,
-                        ) {
-                            Ok(Some(connector)) => Some(connector),
-                            Ok(None) => None,
-                            Err(e) => {
-                                log::error!("encountered error while trying to reuse cached data for source {}: {}", id.to_string(), e);
-                                log::trace!(
-                                    "continuing without cached data for source {}",
-                                    id.to_string()
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Default back to the regular connector if we didn't get a augmented one.
-                    let connector = connector.unwrap_or_else(|| source.connector.clone());
-
                     if source.optimized_expr.0.is_trivial_source() {
                         dataflow.import_source(
                             entry.name().to_string(),
                             *id,
-                            connector,
+                            source.connector.clone(),
                             source.bare_desc.clone(),
                             *id,
                         );
@@ -125,7 +95,7 @@ impl<'a> DataflowBuilder<'a> {
                         dataflow.import_source(
                             entry.name().to_string(),
                             bare_source_id,
-                            connector,
+                            source.connector.clone(),
                             source.bare_desc.clone(),
                             *id,
                         );

@@ -128,7 +128,6 @@ services:
     command: >-
       --data-directory=/share/mzdata
       -w5 --experimental
-      --cache-max-pending-records 1
       --timestamp-frequency 100ms
       --disable-telemetry
       --retain-prometheus-metrics 1s

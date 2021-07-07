@@ -145,14 +145,6 @@ where
                     (usize::cast_from(src_id.hashed()) % scope.peers()) == scope.index()
                 };
 
-                let caching_tx = if let (true, Some(caching_tx)) =
-                    (connector.caching_enabled(), render_state.caching_tx.clone())
-                {
-                    Some(caching_tx)
-                } else {
-                    None
-                };
-
                 let timestamp_histories = render_state
                     .ts_histories
                     .get(&orig_id)
@@ -172,7 +164,6 @@ where
                     worker_count: scope.peers(),
                     logger: materialized_logging,
                     encoding: encoding.clone(),
-                    caching_tx,
                     now,
                 };
 

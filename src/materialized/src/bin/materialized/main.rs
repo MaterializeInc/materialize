@@ -119,15 +119,6 @@ struct Args {
     #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
 
-    /// Maximum number of source records to buffer in memory before flushing to
-    /// disk.
-    #[structopt(
-        long,
-        env = "MZ_CACHE_MAX_PENDING_RECORDS",
-        value_name = "N",
-        default_value = "1000000"
-    )]
-    cache_max_pending_records: usize,
     /// [ADVANCED] Timely progress tracking mode.
     #[structopt(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
     timely_progress_mode: timely::worker::ProgressMode,
@@ -380,24 +371,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
-    // Configure source caching.
-    let cache = if args.experimental {
-        let cache_directory = data_directory.join("cache");
-        fs::create_dir_all(&cache_directory).with_context(|| {
-            format!(
-                "creating source caching directory: {}",
-                cache_directory.display()
-            )
-        })?;
-
-        Some(coord::CacheConfig {
-            max_pending_records: args.cache_max_pending_records,
-            path: cache_directory,
-        })
-    } else {
-        None
-    };
-
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // custom telemetry domain or interval is provided, enable telemetry as
     // specified. Otherwise (the defaults), enable the production server for
@@ -581,7 +554,6 @@ swap: {swap_total}KB total, {swap_used}KB used",
         logging,
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
-        cache,
         listen_addr: args.listen_addr,
         tls,
         data_directory,
