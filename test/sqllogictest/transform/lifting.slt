@@ -402,7 +402,6 @@ explain select distinct 123 from (select distinct a from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=(#0)
 | Distinct group=()
 | Map 123
 
@@ -478,8 +477,7 @@ explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal fr
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=((#0 + 1))
-| Distinct group=((#0 + 2))
+| Distinct group=(((#0 + 1) + 2))
 
 EOF
 
@@ -498,8 +496,7 @@ explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 a
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=((#0 + 1))
-| Distinct group=((#0 + 2))
+| Distinct group=(((#0 + 1) + 2))
 | Map 123
 
 EOF
