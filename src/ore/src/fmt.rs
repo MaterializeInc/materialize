@@ -24,8 +24,8 @@ use bytes::{BufMut, BytesMut};
 /// A trait for objects that can be infallibly written to.
 ///
 /// Like [`std::fmt::Write`], except that the methods do not return errors.
-/// Implementations are provided for [`String`], [`BytesMut`], and `Vec<u8>`, as
-/// writing to these types cannot fail.
+/// Implementations are provided for [`String`], `bytes::BytesMut`, and
+/// `Vec<u8>`, as writing to these types cannot fail.
 ///
 /// Objects that implement `FormatBuffer` can be passed to the [`write!`] macro:
 ///
