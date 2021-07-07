@@ -34,7 +34,7 @@ named `SCHEMA`:
 
 ```sql
 CREATE SOURCE batches
-KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
 ```
 
@@ -53,7 +53,7 @@ named `SCHEMA`:
 
 ```sql
 CREATE SOURCE batches
-KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 WITH (cache = true)
 FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
 ```
@@ -71,7 +71,7 @@ This creates a source that...
 
 ```sql
 CREATE SOURCE batches
-KAFKA BROKER 'localhost:9092' TOPIC 'billing' WITH (
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing' WITH (
     security_protocol = 'SSL',
     ssl_key_location = '/secrets/materialized.key',
     ssl_certificate_location = '/secrets/materialized.crt',
@@ -93,9 +93,9 @@ This creates a source that...
 
 ```sql
 CREATE SOURCE batches
-  KAFKA BROKER 'localhost:9092' TOPIC 'billing'
-  WITH (start_offset=[0,10,100])
-  FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+WITH (start_offset=[0,10,100])
+FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
 ```
 
 This creates a source that...
