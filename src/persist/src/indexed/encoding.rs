@@ -11,6 +11,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::fmt;
 use std::time::SystemTime;
 
 use abomonation_derive::Abomonation;
@@ -32,11 +33,11 @@ pub struct Id(pub u64);
 /// Invariants:
 /// - The updates field is non-empty.
 #[derive(Debug, Abomonation)]
-pub struct BufferEntry {
+pub struct BufferEntry<K, V> {
     /// Id of the stream this batch belongs to.
     pub id: Id,
     /// The updates themselves.
-    pub updates: Vec<((String, String), u64, isize)>,
+    pub updates: Vec<((K, V), u64, isize)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -106,13 +107,13 @@ pub struct BlobTraceMeta {
 /// - All entries have a non-zero diff.
 /// - The updates field is non-empty.
 #[derive(Clone, Debug, Abomonation)]
-pub struct BlobFutureBatch {
+pub struct BlobFutureBatch<K, V> {
     /// Id of the stream this batch belongs to.
     pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
     /// The updates themselves.
-    pub updates: Vec<(SeqNo, (String, String), u64, isize)>,
+    pub updates: Vec<(SeqNo, (K, V), u64, isize)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -132,16 +133,16 @@ pub struct BlobFutureBatch {
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
 #[derive(Clone, Debug, Abomonation)]
-pub struct BlobTraceBatch {
+pub struct BlobTraceBatch<K, V> {
     /// Id of the trace this batch belongs to.
     pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
     /// The updates themselves.
-    pub updates: Vec<((String, String), u64, isize)>,
+    pub updates: Vec<((K, V), u64, isize)>,
 }
 
-impl BufferEntry {
+impl<K, V> BufferEntry<K, V> {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -252,7 +253,11 @@ impl BlobTraceMeta {
     }
 }
 
-impl BlobFutureBatch {
+impl<K, V> BlobFutureBatch<K, V>
+where
+    K: fmt::Debug + Ord,
+    V: fmt::Debug + Ord,
+{
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -268,7 +273,7 @@ impl BlobFutureBatch {
             return Err("updates is empty".into());
         }
 
-        let mut prev: Option<(&u64, &String, &String)> = None;
+        let mut prev: Option<(&u64, &K, &V)> = None;
         for update in self.updates.iter() {
             let (seqno, (key, val), ts, diff) = update;
             // Check seqno against desc.
@@ -310,7 +315,11 @@ impl BlobFutureBatch {
     }
 }
 
-impl BlobTraceBatch {
+impl<K, V> BlobTraceBatch<K, V>
+where
+    K: fmt::Debug + Ord,
+    V: fmt::Debug + Ord,
+{
     /// Asserts the documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -321,7 +330,7 @@ impl BlobTraceBatch {
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
-        let mut prev: Option<(&String, &String, &u64)> = None;
+        let mut prev: Option<(&K, &V, &u64)> = None;
         for update in self.updates.iter() {
             let ((key, val), ts, diff) = update;
             // Check ts against desc.
@@ -402,7 +411,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b = BufferEntry {
+        let b: BufferEntry<String, String> = BufferEntry {
             id: Id(0),
             updates: vec![],
         };
@@ -420,7 +429,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b = BlobFutureBatch {
+        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![],
@@ -428,7 +437,7 @@ mod tests {
         assert_eq!(b.validate(), Err("updates is empty".into()));
 
         // Invalid desc
-        let b = BlobFutureBatch {
+        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(2, 0),
             updates: vec![],
@@ -441,7 +450,7 @@ mod tests {
         );
 
         // Empty desc
-        let b = BlobFutureBatch {
+        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(0, 0),
             updates: vec![],
@@ -504,7 +513,7 @@ mod tests {
         );
 
         // Invalid update
-        let b = BlobFutureBatch {
+        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(0, 1),
             updates: vec![(SeqNo(0), ("0".into(), "0".into()), 0, 0)],
@@ -528,7 +537,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b = BlobTraceBatch {
+        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
             id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![],
@@ -536,7 +545,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Invalid desc
-        let b = BlobTraceBatch {
+        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
             id: Id(0),
             desc: u64_desc(2, 0),
             updates: vec![],
@@ -549,7 +558,7 @@ mod tests {
         );
 
         // Empty desc
-        let b = BlobTraceBatch {
+        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
             id: Id(0),
             desc: u64_desc(0, 0),
             updates: vec![],
@@ -602,7 +611,7 @@ mod tests {
         assert_eq!(b.validate(), Err(Error::from("timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
 
         // Invalid update
-        let b = BlobTraceBatch {
+        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
             id: Id(0),
             desc: u64_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],

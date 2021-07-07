@@ -19,19 +19,19 @@ use crate::indexed::IndexedSnapshot;
 
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
-pub struct StreamWriteHandle {
+pub struct StreamWriteHandle<K, V> {
     id: Id,
-    runtime: RuntimeClient,
+    runtime: RuntimeClient<K, V>,
 }
 
-impl StreamWriteHandle {
+impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
     /// Returns a new [StreamWriteHandle] for the given stream.
-    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+    pub fn new(id: Id, runtime: RuntimeClient<K, V>) -> Self {
         StreamWriteHandle { id, runtime }
     }
 
     /// Synchronously writes (Key, Value, Time, Diff) updates.
-    pub fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error> {
+    pub fn write_sync(&mut self, updates: &[((K, V), u64, isize)]) -> Result<(), Error> {
         // TODO: Make Write::write_sync signature non-blocking.
         let (rx, tx) = mpsc::channel();
         self.runtime.write(self.id, updates, rx.into());
@@ -50,12 +50,12 @@ impl StreamWriteHandle {
 
 /// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
-pub struct StreamMetaHandle {
+pub struct StreamMetaHandle<K, V> {
     id: Id,
-    runtime: RuntimeClient,
+    runtime: RuntimeClient<K, V>,
 }
 
-impl Clone for StreamMetaHandle {
+impl<K, V> Clone for StreamMetaHandle<K, V> {
     fn clone(&self) -> Self {
         StreamMetaHandle {
             id: self.id,
@@ -64,14 +64,14 @@ impl Clone for StreamMetaHandle {
     }
 }
 
-impl StreamMetaHandle {
+impl<K: Clone, V: Clone> StreamMetaHandle<K, V> {
     /// Returns a new [StreamMetaHandle] for the given stream.
-    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+    pub fn new(id: Id, runtime: RuntimeClient<K, V>) -> Self {
         StreamMetaHandle { id, runtime }
     }
 
     /// Returns a consistent snapshot of all previously persisted stream data.
-    pub fn snapshot(&self) -> Result<IndexedSnapshot, Error> {
+    pub fn snapshot(&self) -> Result<IndexedSnapshot<K, V>, Error> {
         // TODO: Make Meta::snapshot signature non-blocking.
         let (rx, tx) = mpsc::channel();
         self.runtime.snapshot(self.id, rx.into());

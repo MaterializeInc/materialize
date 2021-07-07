@@ -32,6 +32,7 @@ use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::persister::Snapshot;
 use crate::storage::{Blob, Buffer, SeqNo};
+use crate::Data;
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
@@ -67,7 +68,7 @@ use crate::storage::{Blob, Buffer, SeqNo};
 /// that they are no longer needed. This would make them immediately available
 /// for indexed use, instead of the current situation, which is more complicated
 /// to reason about.
-pub struct Indexed<U: Buffer, L: Blob> {
+pub struct Indexed<K, V, U: Buffer, L: Blob> {
     last_file_id: u128,
     next_stream_id: Id,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
@@ -75,12 +76,12 @@ pub struct Indexed<U: Buffer, L: Blob> {
     // which is less rare.
     id_mapping: Vec<(String, Id)>,
     buf: U,
-    blob: BlobCache<L>,
-    futures: HashMap<Id, BlobFuture>,
-    traces: HashMap<Id, BlobTrace>,
+    blob: BlobCache<K, V, L>,
+    futures: HashMap<Id, BlobFuture<K, V>>,
+    traces: HashMap<Id, BlobTrace<K, V>>,
 }
 
-impl<U: Buffer, L: Blob> Indexed<U, L> {
+impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// Returns a new Indexed, initializing each Future and Trace with the
     /// existing data for them in the blob storage, if any.
     pub fn new(buf: U, blob: L) -> Result<Self, Error> {
@@ -165,17 +166,13 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
     /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
     /// with the given id.
-    pub fn write_sync(
-        &mut self,
-        id: Id,
-        updates: &[((String, String), u64, isize)],
-    ) -> Result<(), Error> {
+    pub fn write_sync(&mut self, id: Id, updates: &[((K, V), u64, isize)]) -> Result<(), Error> {
         let sealed_frontier = self.sealed_frontier(id)?;
         for update in updates.iter() {
             if !sealed_frontier.less_equal(&update.1) {
                 return Err(format!(
-                    "update for {:?} with time before sealed frontier {:?}: {:?}",
-                    id, sealed_frontier, update
+                    "update for {:?} with time {} before sealed frontier: {:?}",
+                    id, update.1, sealed_frontier,
                 )
                 .into());
             }
@@ -194,11 +191,10 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
     /// Atomically moves all writes currently in the buffer into the future.
     fn drain_buf(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (String, String), u64, isize)>> =
-            HashMap::new();
+        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = HashMap::new();
         let desc = self.buf.snapshot(|seqno, buf| {
             let mut buf = buf.to_vec();
-            let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry>(&mut buf) }
+            let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry<K, V>>(&mut buf) }
                 .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
             if !remaining.is_empty() {
                 return Err(format!("invalid buffer entry").into());
@@ -213,7 +209,11 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             );
             Ok(())
         })?;
-        for (id, updates) in updates_by_id.drain() {
+        for (id, mut updates) in updates_by_id.drain() {
+            // Future batches are required to be sorted by (ts, k, v).
+            updates.sort_unstable_by(|(_, (k1, v1), t1, _), (_, (k2, v2), t2, _)| {
+                (t1, k1, v1).cmp(&(t2, k2, v2))
+            });
             let batch = BlobFutureBatch {
                 id,
                 desc: Description::new(
@@ -285,6 +285,11 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             while snap.read(&mut updates) {}
         }
 
+        // Trace batches are required to be sorted by (k, v, ts).
+        updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
+            (k1, v1, t1).cmp(&(k2, v2, t2))
+        });
+
         // ...writing that snapshot's data into trace...
         let batch = BlobTraceBatch {
             id: id,
@@ -305,7 +310,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
     /// Appends the given `batch` to the trace for `id`, writing the data at
     /// `key` in the blob storage.
-    fn append_future(&mut self, key: String, batch: BlobFutureBatch) -> Result<(), Error> {
+    fn append_future(&mut self, key: String, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
         let future = self
             .futures
             .get_mut(&batch.id)
@@ -318,7 +323,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
     /// Appends the given `batch` to the trace for `id`, writing the data at
     /// `key` in the blob storage.
-    fn append_trace(&mut self, key: String, batch: BlobTraceBatch) -> Result<(), Error> {
+    fn append_trace(&mut self, key: String, batch: BlobTraceBatch<K, V>) -> Result<(), Error> {
         let trace = self
             .traces
             .get_mut(&batch.id)
@@ -348,7 +353,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     }
 
     /// Returns a [Snapshot] for the given id.
-    pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot, Error> {
+    pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot<K, V>, Error> {
         let future = self
             .futures
             .get(&id)
@@ -366,7 +371,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         let mut buffer = BufferSnapshot(Vec::new());
         {
             self.buf.snapshot(|seqno, buf| {
-                let entry: Abomonated<BufferEntry, Vec<u8>> =
+                let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
                     unsafe { Abomonated::new(buf.to_owned()) }
                         .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
                 if entry.id != id || !buf_lower.less_equal(&seqno) {
@@ -383,10 +388,10 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
 /// A consistent snapshot of the data currently in a [Buffer].
 #[derive(Debug)]
-struct BufferSnapshot(Vec<((String, String), u64, isize)>);
+struct BufferSnapshot<K, V>(Vec<((K, V), u64, isize)>);
 
-impl Snapshot for BufferSnapshot {
-    fn read<E: Extend<((String, String), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+impl<K, V> Snapshot<K, V> for BufferSnapshot<K, V> {
+    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         buf.extend(self.0.drain(..));
         false
     }
@@ -394,10 +399,14 @@ impl Snapshot for BufferSnapshot {
 
 /// A consistent snapshot of all data currently stored for an id.
 #[derive(Debug)]
-pub struct IndexedSnapshot(BufferSnapshot, FutureSnapshot, TraceSnapshot);
+pub struct IndexedSnapshot<K, V>(
+    BufferSnapshot<K, V>,
+    FutureSnapshot<K, V>,
+    TraceSnapshot<K, V>,
+);
 
-impl Snapshot for IndexedSnapshot {
-    fn read<E: Extend<((String, String), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
+    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         self.0.read(buf) || self.1.read(buf) || self.2.read(buf)
     }
 }
@@ -408,22 +417,15 @@ mod tests {
 
     use crate::mem::MemBlob;
     use crate::mem::MemBuffer;
-    use crate::persister::Snapshot;
+    use crate::persister::SnapshotExt;
 
     use super::*;
-
-    fn extract<S: Snapshot>(mut s: S) -> Vec<((String, String), u64, isize)> {
-        let mut buf = Vec::new();
-        while s.read(&mut buf) {}
-        buf.sort();
-        buf
-    }
 
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".into(), "".into()), 1, 1),
-            (("2".into(), "".into()), 2, 1),
+            (("1".to_string(), "".to_string()), 1, 1),
+            (("2".to_string(), "".to_string()), 2, 1),
         ];
 
         let mut i = Indexed::new(
@@ -434,44 +436,71 @@ mod tests {
 
         // Empty things are empty.
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), vec![]);
-        assert_eq!(extract(trace), vec![]);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), vec![]);
+        assert_eq!(trace.read_to_end(), vec![]);
 
         // After a write, all data is in the buffer.
         i.write_sync(id, &updates)?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), updates);
-        assert_eq!(extract(future), vec![]);
-        assert_eq!(extract(trace), vec![]);
+        assert_eq!(buf.read_to_end(), updates);
+        assert_eq!(future.read_to_end(), vec![]);
+        assert_eq!(trace.read_to_end(), vec![]);
 
         // After a step, it's all moved into the future part of the index.
         i.step()?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), updates);
-        assert_eq!(extract(trace), vec![]);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), updates);
+        assert_eq!(trace.read_to_end(), vec![]);
 
         // After a seal, the relevant data has moved into the trace part of the
         // index. Since we haven't sealed all the data, some of it is still in
         // the future.
         i.seal(id, 2)?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), updates[1..]);
-        assert_eq!(extract(trace), updates[..1]);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), updates[1..]);
+        assert_eq!(trace.read_to_end(), updates[..1]);
 
         // All the data has been sealed, so it's now all in the trace.
         i.seal(id, 3)?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), vec![]);
-        assert_eq!(extract(trace), updates);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), vec![]);
+        assert_eq!(trace.read_to_end(), updates);
 
+        Ok(())
+    }
+
+    #[test]
+    fn batch_sorting() -> Result<(), Box<dyn Error>> {
+        let updates = vec![
+            (("1".to_string(), "".to_string()), 2, 1),
+            (("2".to_string(), "".to_string()), 1, 1),
+        ];
+
+        let mut i = Indexed::new(
+            MemBuffer::new("batch_sorting")?,
+            MemBlob::new("batch_sorting")?,
+        )?;
+        let id = i.register("0");
+
+        // Write the data and move it into the future part of the index, which
+        // orders it within each batch by time. It's not, so this will fire a
+        // validations error if the sort code doesn't work.
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Now move it into the trace part of the index, which orders it within
+        // each batch by key. It should currently be ordered by time, which
+        // given the data is not ordered by key, so again this should fire a
+        // validations error if the sort code doesn't work.
+        i.seal(id, 3)?;
         Ok(())
     }
 }

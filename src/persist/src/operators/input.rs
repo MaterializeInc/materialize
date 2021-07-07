@@ -15,33 +15,41 @@ use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::{ActivateCapability, Concat, ToStream, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
+use timely::Data;
 
 use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
 use crate::persister::Snapshot;
 use crate::Token;
 
 /// A persistent equivalent of [UnorderedInput].
-pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>> {
+pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
     /// A persistent equivalent of [UnorderedInput::new_unordered_input].
     fn new_persistent_unordered_input(
         &mut self,
-        token: Token<StreamWriteHandle, StreamMetaHandle>,
+        token: Token<StreamWriteHandle<K, ()>, StreamMetaHandle<K, ()>>,
     ) -> (
-        (PersistentUnorderedHandle, ActivateCapability<G::Timestamp>),
-        Stream<G, (String, u64, isize)>,
+        (
+            PersistentUnorderedHandle<K>,
+            ActivateCapability<G::Timestamp>,
+        ),
+        Stream<G, (K, u64, isize)>,
     );
 }
 
-impl<G> PersistentUnorderedInput<G> for G
+impl<G, K> PersistentUnorderedInput<G, K> for G
 where
     G: Scope<Timestamp = u64>,
+    K: Data,
 {
     fn new_persistent_unordered_input(
         &mut self,
-        token: Token<StreamWriteHandle, StreamMetaHandle>,
+        token: Token<StreamWriteHandle<K, ()>, StreamMetaHandle<K, ()>>,
     ) -> (
-        (PersistentUnorderedHandle, ActivateCapability<G::Timestamp>),
-        Stream<G, (String, u64, isize)>,
+        (
+            PersistentUnorderedHandle<K>,
+            ActivateCapability<G::Timestamp>,
+        ),
+        Stream<G, (K, u64, isize)>,
     ) {
         let ((handle, cap), stream) = self.new_unordered_input();
         let (write, meta) = token.into_inner();
@@ -67,17 +75,17 @@ where
 }
 
 /// A persistent equivalent of [UnorderedHandle].
-pub struct PersistentUnorderedHandle {
-    write: Box<StreamWriteHandle>,
-    handle: UnorderedHandle<u64, (String, u64, isize)>,
+pub struct PersistentUnorderedHandle<K: Data> {
+    write: Box<StreamWriteHandle<K, ()>>,
+    handle: UnorderedHandle<u64, (K, u64, isize)>,
 }
 
-impl PersistentUnorderedHandle {
+impl<K: Data> PersistentUnorderedHandle<K> {
     /// A persistent equivalent of [UnorderedHandle::session].
     pub fn session<'b>(
         &'b mut self,
         cap: ActivateCapability<u64>,
-    ) -> PersistentUnorderedSession<'b> {
+    ) -> PersistentUnorderedSession<'b, K> {
         PersistentUnorderedSession {
             write: &mut self.write,
             session: self.handle.session(cap),
@@ -86,23 +94,23 @@ impl PersistentUnorderedHandle {
 }
 
 /// A persistent equivalent of [UnorderedHandle::session]'s return type.
-pub struct PersistentUnorderedSession<'b> {
-    write: &'b mut Box<StreamWriteHandle>,
+pub struct PersistentUnorderedSession<'b, K: timely::Data> {
+    write: &'b mut Box<StreamWriteHandle<K, ()>>,
     session: ActivateOnDrop<
         AutoflushSession<
             'b,
             u64,
-            (String, u64, isize),
-            Counter<u64, (String, u64, isize), Tee<u64, (String, u64, isize)>>,
+            (K, u64, isize),
+            Counter<u64, (K, u64, isize), Tee<u64, (K, u64, isize)>>,
         >,
     >,
 }
 
-impl<'b> PersistentUnorderedSession<'b> {
+impl<'b, K: timely::Data> PersistentUnorderedSession<'b, K> {
     /// Transmits a single record after synchronously persisting it.
-    pub fn give(&mut self, data: (String, u64, isize)) {
+    pub fn give(&mut self, data: (K, u64, isize)) {
         self.write
-            .write_sync(&[((data.0.clone(), String::new()), data.1, data.2)])
+            .write_sync(&[((data.0.clone(), ()), data.1, data.2)])
             .expect("TODO");
         self.session.give(data);
     }
