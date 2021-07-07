@@ -10,6 +10,7 @@
 CREATE SOURCE source_insertavrotest
 FROM KAFKA BROKER 'kafka:9092'
 TOPIC 'insertavrotest'
+WITH (topic_metadata_refresh_interval_ms = 10)
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE NONE;
 
