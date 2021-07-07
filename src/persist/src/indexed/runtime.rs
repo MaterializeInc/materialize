@@ -286,7 +286,7 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::mem::{MemBlob, MemBuffer, MemRegistry};
-    use crate::persister::Snapshot;
+    use crate::persister::SnapshotExt;
 
     use super::*;
 
@@ -309,7 +309,7 @@ mod tests {
         let id = runtime.register("0")?;
         block_on(|res| runtime.write(id, &data, res))?;
         block_on(|res| runtime.seal(id, 3, res))?;
-        let mut snap = block_on(|res| runtime.snapshot(id, res))?;
+        let snap = block_on(|res| runtime.snapshot(id, res))?;
         assert_eq!(snap.read_to_end(), data);
 
         // Commands sent after stop return an error, but calling stop again is
@@ -336,7 +336,7 @@ mod tests {
         let mut client2 = client1.clone();
         drop(client1);
         block_on(|res| client2.write(id, &data, res))?;
-        let mut snap = block_on(|res| client2.snapshot(id, res))?;
+        let snap = block_on(|res| client2.snapshot(id, res))?;
         assert_eq!(snap.read_to_end(), data);
         client2.stop()?;
 
@@ -371,7 +371,7 @@ mod tests {
         {
             let mut persister = registry.open("path", "restart-1")?;
             let (_, meta) = persister.create_or_load("0")?.into_inner();
-            let mut snap = meta.snapshot()?;
+            let snap = meta.snapshot()?;
             let mut actual = snap.read_to_end();
             actual.sort();
             assert_eq!(actual, data);

@@ -417,22 +417,15 @@ mod tests {
 
     use crate::mem::MemBlob;
     use crate::mem::MemBuffer;
-    use crate::persister::Snapshot;
+    use crate::persister::SnapshotExt;
 
     use super::*;
-
-    fn extract<S: Snapshot<String, String>>(mut s: S) -> Vec<((String, String), u64, isize)> {
-        let mut buf = Vec::new();
-        while s.read(&mut buf) {}
-        buf.sort();
-        buf
-    }
 
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".into(), "".into()), 1, 1),
-            (("2".into(), "".into()), 2, 1),
+            (("1".to_string(), "".to_string()), 1, 1),
+            (("2".to_string(), "".to_string()), 2, 1),
         ];
 
         let mut i = Indexed::new(
@@ -443,43 +436,43 @@ mod tests {
 
         // Empty things are empty.
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), vec![]);
-        assert_eq!(extract(trace), vec![]);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), vec![]);
+        assert_eq!(trace.read_to_end(), vec![]);
 
         // After a write, all data is in the buffer.
         i.write_sync(id, &updates)?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), updates);
-        assert_eq!(extract(future), vec![]);
-        assert_eq!(extract(trace), vec![]);
+        assert_eq!(buf.read_to_end(), updates);
+        assert_eq!(future.read_to_end(), vec![]);
+        assert_eq!(trace.read_to_end(), vec![]);
 
         // After a step, it's all moved into the future part of the index.
         i.step()?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), updates);
-        assert_eq!(extract(trace), vec![]);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), updates);
+        assert_eq!(trace.read_to_end(), vec![]);
 
         // After a seal, the relevant data has moved into the trace part of the
         // index. Since we haven't sealed all the data, some of it is still in
         // the future.
         i.seal(id, 2)?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), updates[1..]);
-        assert_eq!(extract(trace), updates[..1]);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), updates[1..]);
+        assert_eq!(trace.read_to_end(), updates[..1]);
 
         // All the data has been sealed, so it's now all in the trace.
         i.seal(id, 3)?;
-        assert_eq!(extract(i.snapshot(id)?), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
-        assert_eq!(extract(buf), vec![]);
-        assert_eq!(extract(future), vec![]);
-        assert_eq!(extract(trace), updates);
+        assert_eq!(buf.read_to_end(), vec![]);
+        assert_eq!(future.read_to_end(), vec![]);
+        assert_eq!(trace.read_to_end(), updates);
 
         Ok(())
     }

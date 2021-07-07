@@ -16,12 +16,19 @@ pub trait Snapshot<K, V> {
     ///
     /// Returns true if read needs to be called again for more data.
     fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool;
+}
 
+/// Extension methods on `Snapshot<K, V>` for use in tests.
+#[cfg(test)]
+pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
     /// A full read of the data in the snapshot.
-    #[cfg(test)]
-    fn read_to_end(&mut self) -> Vec<((K, V), u64, isize)> {
+    fn read_to_end(mut self) -> Vec<((K, V), u64, isize)> {
         let mut buf = Vec::new();
         while self.read(&mut buf) {}
+        buf.sort();
         buf
     }
 }
+
+#[cfg(test)]
+impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
