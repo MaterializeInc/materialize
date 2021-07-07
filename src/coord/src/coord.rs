@@ -38,7 +38,6 @@
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryInto;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -206,9 +205,8 @@ pub struct Coordinator {
     sources: ArrangementFrontiers<Timestamp>,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
-    /// Instance count: number of times sources have been instantiated in views. This is used
-    /// to associate each new instance of a source with a unique instance id (iid)
-    logging_granularity: Option<u64>,
+    /// Whether base sources are enabled.
+    logging_enabled: bool,
     /// Channel to manange internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Channel to communicate source status updates to the timestamper thread.
@@ -413,7 +411,7 @@ impl Coordinator {
         self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Announce primary and foreign key relationships.
-        if self.logging_granularity.is_some() {
+        if self.logging_enabled {
             for log in BUILTINS.logs() {
                 let log_id = &log.id.to_string();
                 self.send_builtin_table_updates(
@@ -528,25 +526,8 @@ impl Coordinator {
                 }
             }
 
-            let needed = self.need_advance;
-            let mut next_ts = self.get_ts();
-            self.need_advance = false;
-            if next_ts <= self.read_lower_bound {
-                next_ts = self.read_lower_bound + 1;
-            }
-            // TODO(justin): this is pretty hacky, and works more-or-less because this frequency
-            // lines up with that used in the logging views.
-            if needed
-                || self.logging_granularity.is_some()
-                    && next_ts / self.logging_granularity.unwrap()
-                        > self.closed_up_to / self.logging_granularity.unwrap()
-            {
-                if next_ts > self.closed_up_to {
-                    self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
-                        advance_to: next_ts,
-                    });
-                    self.closed_up_to = next_ts;
-                }
+            if self.need_advance {
+                self.advance_local_inputs();
             }
         }
 
@@ -554,6 +535,25 @@ impl Coordinator {
         // down.
         drop(self.internal_cmd_tx);
         while messages.next().await.is_some() {}
+    }
+
+    // Advance all local inputs (tables) to the current wall clock or at least
+    // a time greater than any previous table read (if wall clock has gone
+    // backward). This downgrades the capabilities of all tables, which means that
+    // all tables can no longer produce new data before this timestamp.
+    fn advance_local_inputs(&mut self) {
+        let mut next_ts = self.get_ts();
+        self.need_advance = false;
+        if next_ts <= self.read_lower_bound {
+            next_ts = self.read_lower_bound + 1;
+        }
+        // These can occasionally be equal, so ignore the update in that case.
+        if next_ts > self.closed_up_to {
+            self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+                advance_to: next_ts,
+            });
+            self.closed_up_to = next_ts;
+        }
     }
 
     async fn message_worker(
@@ -3392,11 +3392,9 @@ pub async fn serve(
                 symbiosis,
                 indexes: ArrangementFrontiers::default(),
                 sources: ArrangementFrontiers::default(),
-                logging_granularity: logging
-                    .as_ref()
-                    .and_then(|c| c.granularity.as_millis().try_into().ok()),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
+                logging_enabled: logging.is_some(),
                 internal_cmd_tx,
                 ts_tx: ts_tx.clone(),
                 metric_scraper_tx: metric_scraper_tx.clone(),
@@ -3549,8 +3547,8 @@ pub fn serve_debug(
             symbiosis: None,
             indexes: ArrangementFrontiers::default(),
             sources: ArrangementFrontiers::default(),
-            logging_granularity: None,
             logical_compaction_window_ms: None,
+            logging_enabled: false,
             internal_cmd_tx,
             ts_tx,
             metric_scraper_tx: None,
