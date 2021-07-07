@@ -26,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
 use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use itertools::{Either, Itertools};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -202,65 +203,44 @@ impl NonNullRequirements {
                 }
 
                 if !aggr_columns.is_empty() {
-                    // For each aggregate, determine if it is both
-                    // 1. appropriate to consider as an aggregation that can push down non-null constraints, and
-                    // 2. which columns of the input being null would allow an input record to be discardable.
-                    let nonnull_info_per_aggregate = aggregates
-                        .iter()
-                        .enumerate()
-                        .map(|(pos, aggr)| {
-                            let should_push_down = aggr.func.propagates_nonnull_constraint()
-                                && aggr_columns.contains(&(group_key.len() + pos));
+                    let (
+                        mut inferred_nonnull_constraints,
+                        mut ignored_nulls_by_remaining_aggregates,
+                    ): (Vec<HashSet<usize>>, Vec<HashSet<usize>>) =
+                        aggregates.iter().enumerate().partition_map(|(pos, aggr)| {
                             let mut ignores_nulls_on_columns = HashSet::new();
                             if let repr::Datum::Null = aggr.func.identity_datum() {
                                 aggr.expr
                                     .non_null_requirements(&mut ignores_nulls_on_columns);
                             }
-                            (should_push_down, ignores_nulls_on_columns)
-                        })
-                        .collect::<Vec<_>>();
-                    let mut pushable_nonnull_constraints: Option<HashSet<usize>> = None;
-                    for (should_push_down, ignores_nulls_on_columns) in
-                        nonnull_info_per_aggregate.iter()
-                    {
-                        // Each aggregate may either
-                        // 1. directly support non-null pushdown, on any of an indicated set of columns,
-                        // 2. allow non-null pushdowns if there is another aggregate that will push down a non-null
-                        //    constraint for any column whose null values result in a null input for the current
-                        //    aggregate, or
-                        // 3. disqualify all other non-null pushdowns, as they require all records to be surfaced.
-                        //
-                        // An example of 2 is when `MAX(column0)` is requested to be non-null, and there is any
-                        // other aggregate on `column0`. That other aggregate is implied to be non-null and
-                        // ignoring rows with nulls in `column0` won't alter its result.
-                        //
-                        // If no aggregate prevents other non-null pushdowns, `pushable_nonnull_constraints`
-                        // contains the columns whose nulls are ignored by all aggregates that can push down
-                        // non-null constraints.
-                        if *should_push_down {
-                            if let Some(previous) = pushable_nonnull_constraints {
-                                pushable_nonnull_constraints = Some(
-                                    ignores_nulls_on_columns
-                                        .intersection(&previous)
-                                        .cloned()
-                                        .collect(),
-                                );
+                            if aggr.func.propagates_nonnull_constraint()
+                                && aggr_columns.contains(&(group_key.len() + pos))
+                            {
+                                Either::Left(ignores_nulls_on_columns)
                             } else {
-                                pushable_nonnull_constraints =
-                                    Some(ignores_nulls_on_columns.clone());
+                                Either::Right(ignores_nulls_on_columns)
                             }
-                        } else if !nonnull_info_per_aggregate.iter().any(
-                            // check for 2.
-                            |(should_push_down2, ignores_nulls_on_columns2)| {
-                                *should_push_down2
-                                    && ignores_nulls_on_columns2
-                                        .is_subset(&ignores_nulls_on_columns)
-                            },
-                        ) {
-                            // 3. Early exist. The current aggregate discualifies all other non-null pushdowns as
-                            // it may require all records to reach the reduction.
-                            pushable_nonnull_constraints = Some(HashSet::new());
-                            break;
+                        });
+
+                    // Compute the intersection of all pushable non contraints inferred from
+                    // the non-null constraints on aggregate columns and the nulls ignored by
+                    // the remaining aggregates. Example:
+                    // - SUM(#0 + #2), MAX(#0 + #1), non-null requirements on both aggs => implies !isnull(#0)
+                    //  We don't want to push down a !isnull(#2) because deleting a row like (1,1, null) would
+                    //  make the MAX wrong.
+                    // - SUM(#0 + #2), MAX(#0 + #1), non-null requirements only on the MAX => implies !isnull(#0).
+                    let mut pushable_nonnull_constraints: Option<HashSet<usize>> = None;
+                    if !inferred_nonnull_constraints.is_empty() {
+                        for column_set in inferred_nonnull_constraints
+                            .drain(..)
+                            .chain(ignored_nulls_by_remaining_aggregates.drain(..))
+                        {
+                            if let Some(previous) = pushable_nonnull_constraints {
+                                pushable_nonnull_constraints =
+                                    Some(column_set.intersection(&previous).cloned().collect());
+                            } else {
+                                pushable_nonnull_constraints = Some(column_set);
+                            }
                         }
                     }
 
