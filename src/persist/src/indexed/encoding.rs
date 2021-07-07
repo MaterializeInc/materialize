@@ -10,13 +10,12 @@
 //! Data structures stored in Blobs and Buffers in serialized form.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::time::SystemTime;
 
 use abomonation_derive::Abomonation;
 use differential_dataflow::trace::Description;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
@@ -43,11 +42,17 @@ pub struct BufferEntry<K, V> {
 /// The structure serialized and stored as a value in [crate::storage::Blob]
 /// storage for metadata keys.
 ///
-/// TODO: Invariants
+/// Invariants:
+/// - All strings in id_mapping are unique.
+/// - All ids in id_mapping are unique.
+/// - The same set of ids are present in id_mapping, futures, and traces.
+/// - For each id, the ts_lower in the future is >= the ts_upper in the
+///   corresponding trace. (They're usually equal, but at the moment, we don't
+///   do the swap atomically, so there is a moment in t
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobMeta {
     /// The most recently assigned key name.
-    pub last_file_id: u128,
+    pub last_file_id: u64,
     /// The next internal stream id to assign.
     pub next_stream_id: Id,
     /// Internal stream id indexed by external stream name.
@@ -158,7 +163,7 @@ impl<K, V> BufferEntry<K, V> {
 impl Default for BlobMeta {
     fn default() -> Self {
         BlobMeta {
-            last_file_id: Self::now_millis(),
+            last_file_id: 0,
             next_stream_id: Id(0),
             id_mapping: Vec::new(),
             futures: Vec::new(),
@@ -190,24 +195,48 @@ impl BlobMeta {
             }
             ids.insert(*id);
         }
-        for (_, f) in self.futures.iter() {
+        for (id, f) in self.futures.iter() {
+            if !ids.contains(id) {
+                return Err(format!("futures id {:?} not present in id_mapping", id).into());
+            }
             f.validate()?;
         }
-        for (_, t) in self.traces.iter() {
+        for (id, t) in self.traces.iter() {
+            if !ids.contains(id) {
+                return Err(format!("traces id {:?} not present in id_mapping", id).into());
+            }
             t.validate()?;
         }
-        // TODO: Assert that each stream id in futures is also present in traces
-        // and vice-versa. Also validate that that ts_lower of each future lines
-        // up wth the ts_upper of the corresponding trace.
+        let futures: HashMap<_, _> = self.futures.iter().map(|(id, m)| (*id, m)).collect();
+        let traces: HashMap<_, _> = self.traces.iter().map(|(id, m)| (*id, m)).collect();
+        for id in ids.iter() {
+            let future = futures.get(id).ok_or_else(|| {
+                Error::from(format!("id_mapping id {:?} not present in futures", id))
+            })?;
+            let trace = traces.get(id).ok_or_else(|| {
+                Error::from(format!("id_mapping id {:?} not present in traces", id))
+            })?;
+            let trace_ts_upper = trace.batches.last().map_or_else(
+                || Antichain::from_elem(Timestamp::minimum()),
+                |(d, _)| d.upper().clone(),
+            );
+            if trace_ts_upper != future.ts_lower {
+                return Err(Error::from(format!(
+                    "id {:?} trace ts_upper {:?} does not match future ts_lower {:?}",
+                    id, trace_ts_upper, future.ts_lower,
+                )));
+            }
+        }
         Ok(())
     }
+}
 
-    /// Returns the current SystemTime in millis since epoch.
-    pub fn now_millis() -> u128 {
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
+impl Default for BlobFutureMeta {
+    fn default() -> Self {
+        BlobFutureMeta {
+            ts_lower: Antichain::from_elem(Timestamp::minimum()),
+            batches: Vec::new(),
+        }
     }
 }
 
@@ -232,7 +261,24 @@ impl BlobFutureMeta {
     }
 }
 
+impl Default for BlobTraceMeta {
+    fn default() -> Self {
+        BlobTraceMeta {
+            batches: Vec::new(),
+        }
+    }
+}
+
 impl BlobTraceMeta {
+    /// Returns an open upper bound on the timestamps of data contained in this
+    /// trace.
+    pub fn ts_upper(&self) -> Antichain<u64> {
+        self.batches.last().map_or_else(
+            || Antichain::from_elem(Timestamp::minimum()),
+            |(d, _)| d.upper().clone(),
+        )
+    }
+
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -699,8 +745,8 @@ mod tests {
             last_file_id: 1,
             next_stream_id: Id(2),
             id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
-            futures: vec![],
-            traces: vec![],
+            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -709,8 +755,8 @@ mod tests {
             last_file_id: 1,
             next_stream_id: Id(2),
             id_mapping: vec![("1".into(), Id(0)), ("1".into(), Id(1))],
-            futures: vec![],
-            traces: vec![],
+            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
         };
         assert_eq!(
             b.validate(),
@@ -722,8 +768,8 @@ mod tests {
             last_file_id: 1,
             next_stream_id: Id(2),
             id_mapping: vec![("0".into(), Id(1)), ("1".into(), Id(1))],
-            futures: vec![],
-            traces: vec![],
+            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
         };
         assert_eq!(
             b.validate(),
@@ -735,13 +781,91 @@ mod tests {
             last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
-            futures: vec![],
-            traces: vec![],
+            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
         };
         assert_eq!(
             b.validate(),
             Err(Error::from(
                 "contained stream id Id(1) >= next_stream_id: Id(1)"
+            ))
+        );
+
+        // Missing future
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![("0".into(), Id(0))],
+            futures: vec![],
+            traces: vec![(Id(0), Default::default())],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("id_mapping id Id(0) not present in futures"))
+        );
+
+        // Missing trace
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![("0".into(), Id(0))],
+            futures: vec![(Id(0), Default::default())],
+            traces: vec![],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("id_mapping id Id(0) not present in traces"))
+        );
+
+        // Extra future
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![],
+            futures: vec![(Id(0), Default::default())],
+            traces: vec![],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("futures id Id(0) not present in id_mapping"))
+        );
+
+        // Extra trace
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![],
+            futures: vec![],
+            traces: vec![(Id(0), Default::default())],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("traces id Id(0) not present in id_mapping"))
+        );
+
+        // Future ts_lower doesn't match trace ts_upper
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![("0".into(), Id(0))],
+            futures: vec![(
+                Id(0),
+                BlobFutureMeta {
+                    ts_lower: vec![2].into(),
+                    batches: vec![],
+                },
+            )],
+            traces: vec![(
+                Id(0),
+                BlobTraceMeta {
+                    batches: vec![(u64_desc(0, 1), "".into())],
+                },
+            )],
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "id Id(0) trace ts_upper Antichain { elements: [1] } does not match future ts_lower Antichain { elements: [2] }"
             ))
         );
     }

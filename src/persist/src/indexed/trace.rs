@@ -46,9 +46,7 @@ pub struct BlobTrace<K, V> {
 
 impl<K: Data, V: Data> Default for BlobTrace<K, V> {
     fn default() -> Self {
-        BlobTrace::new(BlobTraceMeta {
-            batches: Vec::new(),
-        })
+        BlobTrace::new(BlobTraceMeta::default())
     }
 }
 

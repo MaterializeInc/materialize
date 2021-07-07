@@ -85,7 +85,6 @@ impl MemBufferCore {
 
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
         self.ensure_open()?;
-        // TODO: Test the edge cases here.
         if upper <= self.seqno.start || upper > self.seqno.end {
             return Err(format!(
                 "invalid truncation {:?} for buffer containing: {:?}",
