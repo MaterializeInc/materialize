@@ -10,16 +10,13 @@
 #![allow(missing_docs)]
 
 use std::fmt;
-use std::fs;
 use std::iter;
-use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use regex::Regex;
-use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 
 use lowertest::MzEnumReflect;
@@ -27,9 +24,8 @@ use ore::cast::CastFrom;
 use repr::adt::apd;
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::regex::Regex as ReprRegex;
-use repr::{CachedRecordIter, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::id::GlobalId;
 use crate::scalar::func::jsonb_stringify;
 
 // TODO(jamii) be careful about overflow in sum/avg
@@ -794,44 +790,19 @@ pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
     vec![(Row::default(), n)]
 }
 
-// TODO(justin): this should return an error.
-pub fn files_for_source(id: GlobalId, persistence_directory: &PathBuf) -> Vec<PathBuf> {
-    let source_path = persistence_directory.join(id.to_string());
-    match std::fs::read_dir(&source_path) {
-        Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
-        Err(_) => {
-            // TODO(justin): it would be better to have a real error here, but saying
-            // "there are no records" is also acceptable for now.
-            return vec![];
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum TableFunc {
-    JsonbEach {
-        stringify: bool,
-    },
+    JsonbEach { stringify: bool },
     JsonbObjectKeys,
-    JsonbArrayElements {
-        stringify: bool,
-    },
+    JsonbArrayElements { stringify: bool },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
-    ReadCachedData {
-        source: GlobalId,
-        cache_directory: PathBuf,
-    },
-    UnnestArray {
-        el_typ: ScalarType,
-    },
-    UnnestList {
-        el_typ: ScalarType,
-    },
+    UnnestArray { el_typ: ScalarType },
+    UnnestList { el_typ: ScalarType },
 }
 
 impl TableFunc {
@@ -856,29 +827,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => generate_series_int32(datums[0], datums[1]),
             TableFunc::GenerateSeriesInt64 => generate_series_int64(datums[0], datums[1]),
             TableFunc::Repeat => repeat(datums[0]),
-            TableFunc::ReadCachedData {
-                source,
-                cache_directory,
-            } => files_for_source(*source, cache_directory)
-                .iter()
-                .flat_map(|e| {
-                    CachedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
-                })
-                .map(|(e, r)| {
-                    (
-                        Row::pack_slice(&[
-                            Datum::String(e.to_str().unwrap()),
-                            Datum::Int64(r.offset),
-                            Datum::Bytes(&r.key),
-                            match &r.value {
-                                MessagePayload::Data(data) => Datum::Bytes(&*data),
-                                MessagePayload::EOF => Datum::Null,
-                            },
-                        ]),
-                        1,
-                    )
-                })
-                .collect::<Vec<(Row, Diff)>>(),
             TableFunc::UnnestArray { .. } => unnest_array(datums[0]),
             TableFunc::UnnestList { .. } => unnest_list(datums[0]),
         }
@@ -911,12 +859,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => vec![ScalarType::Int32.nullable(false)],
             TableFunc::GenerateSeriesInt64 => vec![ScalarType::Int64.nullable(false)],
             TableFunc::Repeat => vec![],
-            TableFunc::ReadCachedData { .. } => vec![
-                ScalarType::String.nullable(true),
-                ScalarType::Int64.nullable(false),
-                ScalarType::Bytes.nullable(false),
-                ScalarType::Bytes.nullable(true),
-            ],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
         })
@@ -932,7 +874,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::Repeat => 0,
-            TableFunc::ReadCachedData { .. } => 4,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
         }
@@ -953,7 +894,6 @@ impl TableFunc {
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
-            | TableFunc::ReadCachedData { .. }
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
         }
@@ -972,7 +912,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => true,
             TableFunc::GenerateSeriesInt64 => true,
             TableFunc::Repeat => false,
-            TableFunc::ReadCachedData { .. } => true,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
         }
@@ -990,9 +929,6 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat_row"),
-            TableFunc::ReadCachedData { source, .. } => {
-                write!(f, "internal_read_cached_data({})", source)
-            }
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
         }

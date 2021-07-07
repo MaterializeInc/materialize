@@ -455,16 +455,6 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let enable_caching = match with_options.remove("cache") {
-                None => false,
-                Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("cache must be a bool!"),
-            };
-
-            if enable_caching && consistency != Consistency::RealTime {
-                unsupported!("BYO source caching")
-            }
-
             let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addrs: broker.parse()?,
                 topic: topic.clone(),
@@ -472,8 +462,6 @@ pub fn plan_create_source(
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
-                enable_caching,
-                cached_files: None,
             });
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
 

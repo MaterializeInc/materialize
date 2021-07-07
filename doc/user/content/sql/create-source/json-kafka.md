@@ -43,21 +43,6 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
   );
 ```
 
-### Caching records to local disk
-
-```sql
-CREATE SOURCE json_kafka
-FROM KAFKA BROKER 'localhost:9092' TOPIC 'json'
-WITH (cache = true)
-FORMAT BYTES;
-```
-
-This creates a source that...
-
-- Is append-only.
-- Has one column, `data`, which represents the stream's incoming bytes.
-- Caches messages from the `json` topic to local disk.
-
 ### Setting partition offsets
 
 ```sql

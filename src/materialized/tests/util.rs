@@ -125,7 +125,6 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
                 retain_readings_for: granularity,
             }),
         timestamp_frequency: Duration::from_secs(1),
-        cache: None,
         logical_compaction_window: config.logical_compaction_window,
         workers: config.workers,
         timely_worker: timely::WorkerConfig::default(),

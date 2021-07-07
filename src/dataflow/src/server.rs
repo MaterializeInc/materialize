@@ -29,7 +29,6 @@ use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
@@ -46,7 +45,6 @@ use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
 use crate::render::{self, RenderState};
 use crate::server::metrics::Metrics;
-use crate::source::cache::WorkerCacheData;
 use crate::source::timestamp::TimestampBindingRc;
 
 mod metrics;
@@ -141,8 +139,6 @@ pub enum SequencedCommand {
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(mpsc::UnboundedSender<WorkerFeedbackWithMeta>),
-    /// Request that cache data is streamed to the provided channel.
-    EnableCaching(mpsc::UnboundedSender<CacheMessage>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -157,18 +153,6 @@ pub struct WorkerFeedbackWithMeta {
     pub worker_id: usize,
     /// The feedback itself.
     pub message: WorkerFeedback,
-}
-
-/// All data and metadata messages that can be sent by dataflow workers or coordinator
-/// to the cacher thread.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum CacheMessage {
-    /// Data to be cached (sent from dataflow workers)
-    Data(WorkerCacheData),
-    /// Add source to cache.
-    AddSource(Uuid, GlobalId),
-    /// Drop source from cache.
-    DropSource(GlobalId),
 }
 
 /// Data about timestamp bindings that dataflow workers send to the coordinator
@@ -241,7 +225,6 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     ts_source_mapping: HashMap::new(),
                     ts_histories: HashMap::default(),
                     dataflow_tokens: HashMap::new(),
-                    caching_tx: None,
                     sink_write_frontiers: HashMap::new(),
                 },
                 materialized_logger: None,
@@ -824,9 +807,6 @@ where
             }
             SequencedCommand::EnableLogging(config) => {
                 self.initialize_logging(&config);
-            }
-            SequencedCommand::EnableCaching(tx) => {
-                self.render_state.caching_tx = Some(tx);
             }
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually

@@ -24,9 +24,8 @@ use lazy_static::lazy_static;
 use ore::collections::CollectionExt;
 use pgrepr::oid;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
-use sql_parser::ast::{Expr, Raw, UnresolvedObjectName};
+use sql_parser::ast::{Expr, Raw};
 
-use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, HirScalarExpr, NullaryFunc, TableFunc,
@@ -1951,31 +1950,6 @@ lazy_static! {
             },
             "current_timestamp" => Scalar {
                 params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID;
-            },
-            "internal_read_cached_data" => Table {
-                params!(String) => Operation::unary(move |ecx, source| {
-                    let source = match source.into_literal_string(){
-                        Some(id) => id,
-                        None => bail!("source passed to internal_read_cached_data must be literal string"),
-                    };
-                    let item = ecx.qcx.scx.resolve_item(UnresolvedObjectName::unqualified(&source))?;
-                    match item.item_type() {
-                        CatalogItemType::Source => {},
-                        _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),
-                    }
-                    let cache_directory = ecx.catalog().config().cache_directory.as_deref();
-                    if cache_directory.is_none() {
-                        bail!("source caching is currently disabled. Try rerunning Materialize with '--experimental'.");
-                    }
-                    Ok(TableFuncPlan {
-                        func: TableFunc::ReadCachedData {
-                            source: item.id(),
-                            cache_directory: cache_directory.expect("known to exist").to_path_buf(),
-                        },
-                        exprs: vec![],
-                        column_names: vec!["filename", "offset", "key", "value"].iter().map(|c| Some(ColumnName::from(*c))).collect(),
-                    })
-                }), oid::FUNC_INTERNAL_READ_CACHED_DATA_OID;
             },
             "list_append" => Scalar {
                 vec![ListAny, ListElementAny] => BinaryFunc::ListElementConcat, oid::FUNC_LIST_APPEND_OID;

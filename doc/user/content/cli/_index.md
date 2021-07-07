@@ -11,7 +11,6 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
@@ -313,15 +312,6 @@ You cannot disable experimental mode for a node. You can, however, extract your
 view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
 etc.), and then create a new node with those items.
 
-### Source cache
-
-The `--cache-max-pending-records` specifies the number of input messages
-Materialize buffers in memory before flushing them all to disk when using
-[cached sources][cache]. The default value is 1000000 messages. Note
-that Materialize will also flush buffered records every 10 minutes as well. See
-the [Deployment section][cache] for more guidance on how to tune this
-parameter.
-
 ### Telemetry
 
 Materialize periodically communicates with `telemetry.materialize.com` to report
@@ -363,4 +353,3 @@ should only set these parameters in consultation with Materialize engineers.
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
-[cache]: /ops/deployment/#source-caching

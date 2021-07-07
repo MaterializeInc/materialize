@@ -17,7 +17,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -34,7 +33,7 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
-use log::{debug, error};
+use log::error;
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{
@@ -42,7 +41,7 @@ use prometheus::{
     register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
-use repr::{CachedRecord, CachedRecordIter, Diff, Row, Timestamp};
+use repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::Scope;
@@ -54,9 +53,7 @@ use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
-use crate::source::cache::WorkerCacheData;
 use crate::source::timestamp::TimestampBindingRc;
-use crate::CacheMessage;
 
 mod file;
 mod kafka;
@@ -66,7 +63,6 @@ mod pubnub;
 mod s3;
 mod util;
 
-pub mod cache;
 pub mod timestamp;
 
 use differential_dataflow::Hashable;
@@ -112,8 +108,6 @@ pub struct SourceConfig<'a, G> {
     pub active: bool,
     /// Data encoding
     pub encoding: SourceDataEncoding,
-    /// Channel to send source caching information to cacher thread
-    pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Timely worker logger for source events
     pub logger: Option<Logger>,
     /// The function to return a now time.
@@ -327,65 +321,6 @@ pub(crate) trait SourceReader {
     /// Note that implementers are required to present messages in strictly ascending\
     /// offset order within each partition.
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error>;
-}
-
-fn cache_message(
-    message: &SourceMessage,
-    source_id: SourceInstanceId,
-    caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
-    timestamp: Timestamp,
-    predecessor: Option<MzOffset>,
-) {
-    // Send this record to be cached
-    if let Some(caching_tx) = caching_tx {
-        let partition_id = match message.partition {
-            PartitionId::Kafka(p) => p,
-            _ => unreachable!(),
-        };
-
-        // TODO(rkhaitan): let's experiment with wrapping these in a
-        // Arc so we don't have to clone.
-        let key = message.key.clone().unwrap_or_default();
-        let value = message.payload.clone().unwrap_or_default();
-
-        let cache_data = CacheMessage::Data(WorkerCacheData {
-            source_id: source_id.source_id,
-            partition_id,
-            record: CachedRecord {
-                predecessor: predecessor.map(|p| p.offset),
-                offset: message.offset.offset,
-                timestamp,
-                key,
-                value,
-            },
-        });
-
-        // TODO(benesch): the lack of backpressure here can result in
-        // unbounded memory usage.
-        caching_tx
-            .send(cache_data)
-            .expect("caching receiver should never drop first");
-    }
-}
-
-fn read_file(path: PathBuf) -> Vec<SourceMessage> {
-    debug!("reading cached data from {}", path.display());
-    let data = ::std::fs::read(&path).unwrap_or_else(|e| {
-        error!("failed to read source cache file {}: {}", path.display(), e);
-        vec![]
-    });
-
-    let partition =
-        crate::source::cache::cached_file_partition(&path).expect("partition known to exist");
-    CachedRecordIter::new(data)
-        .map(move |r| SourceMessage {
-            key: Some(r.key),
-            payload: Some(r.value),
-            offset: MzOffset { offset: r.offset },
-            upstream_time_millis: None,
-            partition: partition.clone(),
-        })
-        .collect()
 }
 
 #[derive(Debug)]
@@ -1278,7 +1213,6 @@ where
         timestamp_frequency,
         active,
         encoding,
-        mut caching_tx,
         logger,
         ..
     } = config;
@@ -1328,14 +1262,6 @@ where
             }
         };
 
-        let cached_files = dataflow_types::cached_files(source_connector);
-        let mut cached_files = crate::source::cache::cached_files_for_worker(
-            id.source_id,
-            cached_files,
-            &consistency_info,
-        );
-
-        let mut predecessor = None;
         // Stash messages we cannot yet timestamp here.
         let mut buffer = None;
 
@@ -1356,34 +1282,6 @@ where
                     return SourceStatus::Done;
                 }
             };
-
-            if let Some(file) = cached_files.pop() {
-                // TODO(rkhaitan) change this to properly re-use old timestamps.
-                // Currently this is hard to do because there can be arbitrary delays between
-                // different workers being scheduled, and this means that all cached state
-                // can potentially get pulled into memory without being able to close timestamps
-                // which causes the system to go out of memory.
-                // For now, constrain we constrain caching to RT sources, and we re-assign
-                // timestamps to cached messages on startup to 1 (which is the lowest possible timestamp)
-                let ts = 1;
-                let ts_cap = cap.delayed(&ts);
-
-                let messages = read_file(file);
-
-                for message in messages {
-                    let key = message.key.unwrap_or_default();
-                    let out = message.payload.unwrap_or_default();
-                    output.session(&ts_cap).give(Ok(SourceOutput::new(
-                        key,
-                        out,
-                        Some(message.offset.offset),
-                        message.upstream_time_millis,
-                    )));
-                }
-                // Yield to give downstream operators time to handle this data.
-                activator.activate_after(Duration::from_millis(10));
-                return SourceStatus::Alive;
-            }
 
             // Refresh any consistency info from the worker that we need to
             consistency_info.refresh(source_reader, &mut timestamp_histories);
@@ -1411,11 +1309,8 @@ where
                     let message = buffer.take().unwrap();
                     handle_message(
                         message,
-                        &mut predecessor,
                         &mut consistency_info,
-                        &id,
                         &mut bytes_read,
-                        &mut caching_tx,
                         &cap,
                         output,
                         &mut metric_updates,
@@ -1427,11 +1322,8 @@ where
                     match source_reader.get_next_message() {
                         Ok(NextMessage::Ready(message)) => handle_message(
                             message,
-                            &mut predecessor,
                             &mut consistency_info,
-                            &id,
                             &mut bytes_read,
-                            &mut caching_tx,
                             &cap,
                             output,
                             &mut metric_updates,
@@ -1507,11 +1399,8 @@ where
 /// existing mess more obvious and points towards ways to improve it.
 fn handle_message(
     message: SourceMessage,
-    predecessor: &mut Option<MzOffset>,
     consistency_info: &mut ConsistencyInfo,
-    id: &SourceInstanceId,
     bytes_read: &mut usize,
-    caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
@@ -1527,8 +1416,6 @@ where
 {
     let partition = message.partition.clone();
     let offset = message.offset;
-    let msg_predecessor = *predecessor;
-    *predecessor = Some(offset);
 
     // Update ingestion metrics. Guaranteed to exist as the appropriate
     // entry gets created in SourceReader or when a new partition
@@ -1551,7 +1438,6 @@ where
             (SourceStatus::Alive, MessageProcessing::Yielded)
         }
         Some(ts) => {
-            cache_message(&message, *id, caching_tx, ts, msg_predecessor);
             // Note: empty and null payload/keys are currently
             // treated as the same thing.
             let key = message.key.unwrap_or_default();

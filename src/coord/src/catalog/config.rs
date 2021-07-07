@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use build_info::BuildInfo;
@@ -23,10 +23,6 @@ pub struct Config<'a> {
     pub safe_mode: bool,
     /// Whether to enable logging sources and the views that depend upon them.
     pub enable_logging: bool,
-    /// Path to cache source data to disk.
-    ///
-    /// If set to `None`, indicates that source caching is disabled.
-    pub cache_directory: Option<PathBuf>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// The number of workers in use by the server.
