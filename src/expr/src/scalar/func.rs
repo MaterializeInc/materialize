@@ -2814,6 +2814,7 @@ pub enum BinaryFunc {
     MapContainsAnyKeys,
     MapContainsMap,
     ConvertFrom,
+    Left,
     Position,
     Right,
     RepeatString,
@@ -2987,6 +2988,7 @@ impl BinaryFunc {
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
+            BinaryFunc::Left => eager!(left),
             BinaryFunc::Position => eager!(position),
             BinaryFunc::Right => eager!(right),
             BinaryFunc::Trim => Ok(eager!(trim)),
@@ -3043,8 +3045,8 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(true)
             }
 
-            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Right | Trim | TrimLeading
-            | TrimTrailing => ScalarType::String.nullable(in_nullable),
+            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Left | Right | Trim
+            | TrimLeading | TrimTrailing => ScalarType::String.nullable(in_nullable),
 
             AddInt32
             | SubInt32
@@ -3370,6 +3372,7 @@ impl BinaryFunc {
             | RoundDecimal(_)
             | RoundAPD
             | ConvertFrom
+            | Left
             | Position
             | Right
             | Trim
@@ -3506,6 +3509,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::RoundAPD => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
+            BinaryFunc::Left => f.write_str("left"),
             BinaryFunc::Position => f.write_str("position"),
             BinaryFunc::Right => f.write_str("right"),
             BinaryFunc::Trim => f.write_str("btrim"),
@@ -5168,6 +5172,32 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else {
         Ok(Datum::Int32(0))
     }
+}
+
+fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let string: &'a str = a.unwrap_str();
+    let n = b.unwrap_int32();
+
+    let mut byte_indices = string.char_indices().map(|(i, _)| i);
+
+    let end_in_bytes = match n.cmp(&0) {
+        Ordering::Equal => 0,
+        Ordering::Greater => {
+            let n = usize::try_from(n).map_err(|_| {
+                EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+            })?;
+            // nth from the back
+            byte_indices.nth(n).unwrap_or_else(|| string.len())
+        }
+        Ordering::Less => {
+            let n = usize::try_from(n.abs() - 1).map_err(|_| {
+                EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+            })?;
+            byte_indices.rev().nth(n).unwrap_or(0)
+        }
+    };
+
+    Ok(Datum::String(&string[..end_in_bytes]))
 }
 
 fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {

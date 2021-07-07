@@ -224,6 +224,9 @@
     description: Encode `b` using the specified textual representation.
     url: encode
 
+  - signature: 'left(s: str, n: int) -> str'
+    description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
+
   - signature: 'length(s: str) -> int'
     description: Number of code points in `s`
     url: length
