@@ -481,9 +481,12 @@ where
                 let (oks, errs) = input.as_collection();
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
-            Plan::Threshold { input, arity } => {
+            Plan::Threshold {
+                input,
+                threshold_plan,
+            } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_threshold(input, arity)
+                self.render_threshold(input, threshold_plan)
             }
             Plan::Union { inputs } => {
                 let mut oks = Vec::new();
@@ -579,6 +582,7 @@ pub mod plan {
 
     use crate::render::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
     use crate::render::reduce::{KeyValPlan, ReducePlan};
+    use crate::render::threshold::ThresholdPlan;
     use crate::render::top_k::TopKPlan;
     use expr::{
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
@@ -714,8 +718,12 @@ pub mod plan {
         Threshold {
             /// The input collection.
             input: Box<Plan>,
-            /// The number of columns in the input and output.
-            arity: usize,
+            /// A plan for performing the threshold.
+            ///
+            /// The implementation of reduction has several different strategies based
+            /// on the properties of the reduction, and the input itself. Please check
+            /// out the documentation for this type for more detail.
+            threshold_plan: ThresholdPlan,
         },
         /// Adds the contents of the input collections.
         ///
@@ -917,7 +925,11 @@ pub mod plan {
                 MirRelationExpr::Threshold { input } => {
                     let arity = input.arity();
                     let input = Box::new(Self::from_mir(input)?);
-                    Plan::Threshold { input, arity }
+                    let threshold_plan = ThresholdPlan::create_from(arity, false);
+                    Plan::Threshold {
+                        input,
+                        threshold_plan,
+                    }
                 }
                 MirRelationExpr::Union { base, inputs } => {
                     let mut plans = Vec::with_capacity(1 + inputs.len());

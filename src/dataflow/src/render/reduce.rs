@@ -124,6 +124,10 @@ pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
     Distinct,
+    /// Plan for not computing any aggregations, just determining the set of distinct keys. A
+    /// specialization of [ReducePlan::Distinct] maintaining rows not in the output.
+    #[allow(dead_code)]
+    DistinctNegated,
     /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),
     /// Plan for computing only hierarchical aggregations.
@@ -224,7 +228,7 @@ pub struct BucketedPlan {
 /// additional reduce operator whenever we have multiple reduce aggregates
 /// to combine and present results in the appropriate order. If we
 /// were only asked to compute a single aggregation, we can skip
-/// that step and return the arragement provided by computing the aggregation
+/// that step and return the arrangement provided by computing the aggregation
 /// directly.
 #[derive(Clone, Debug)]
 pub enum BasicPlan {
@@ -331,7 +335,7 @@ impl ReducePlan {
                     assert!(collation.basic.is_none());
                     collation.basic = Some(e);
                 }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
+                ReducePlan::Distinct | ReducePlan::DistinctNegated | ReducePlan::Collation(_) => {
                     panic!("Inner reduce plan was unsupported type!")
                 }
             }
@@ -411,7 +415,7 @@ impl ReducePlan {
 
                     // Distribute buckets in powers of 16, so that we can strike
                     // a balance between how many inputs each layer gets from
-                    // the preceeding layer, while also limiting the number of
+                    // the preceding layer, while also limiting the number of
                     // layers.
                     while current < limit {
                         buckets.push(current as u64);
@@ -448,10 +452,16 @@ impl ReducePlan {
     /// The output will be an arrangements that looks the same as if
     /// we just had a single reduce operator computing everything together, and
     /// this arrangement can also be re-used.
-    fn render<G>(self, collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+    fn render<G, T>(
+        self,
+        collection: Collection<G, (Row, Row)>,
+        err_input: Collection<G, DataflowError>,
+        key_arity: usize,
+    ) -> CollectionBundle<G, Row, T>
     where
         G: Scope,
-        G::Timestamp: Lattice,
+        G::Timestamp: Lattice + Refines<T>,
+        T: Timestamp + Lattice,
     {
         // Convenience wrapper to render the right kind of hierarchical plan.
         let build_hierarchical = |collection: Collection<G, (Row, Row)>,
@@ -470,13 +480,14 @@ impl ReducePlan {
                 BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
             };
 
-        match self {
+        let arrangement_or_bundle: ArrangementOrCollection<G> = match self {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
-            ReducePlan::Distinct => build_distinct(collection),
-            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true),
-            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true),
-            ReducePlan::Basic(expr) => build_basic(collection, expr, true),
+            ReducePlan::Distinct => build_distinct(collection).into(),
+            ReducePlan::DistinctNegated => build_distinct_retractions(collection).into(),
+            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true).into(),
+            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true).into(),
+            ReducePlan::Basic(expr) => build_basic(collection, expr, true).into(),
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
             ReducePlan::Collation(expr) => {
@@ -502,9 +513,73 @@ impl ReducePlan {
                     ));
                 }
                 // Now we need to collate them together.
-                build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
+                build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
+            }
+        };
+        arrangement_or_bundle.into_bundle(key_arity, err_input)
+    }
+}
+
+/// A type wrapping either an arrangement or a single collection.
+enum ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    /// Wrap an arrangement
+    Arrangement(Arrangement<G, Row>),
+    /// Wrap a collection
+    Collection(Collection<G, Row>),
+}
+
+impl<G> ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    /// Convert to a [CollectionBundle] by either supplying the arrangement or construction from
+    /// collections.
+    ///
+    /// * `key_arity` - The number of columns in the key. Only used for arrangement variants.
+    /// * `err_input` - A collection containing the error stream.
+    fn into_bundle<T>(
+        self,
+        key_arity: usize,
+        err_input: Collection<G, DataflowError>,
+    ) -> CollectionBundle<G, Row, T>
+    where
+        G::Timestamp: Lattice + Refines<T>,
+        T: Timestamp + Lattice,
+    {
+        match self {
+            ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
+                0..key_arity,
+                ArrangementFlavor::Local(arrangement, err_input.arrange()),
+            ),
+            ArrangementOrCollection::Collection(oks) => {
+                CollectionBundle::from_collections(oks, err_input)
             }
         }
+    }
+}
+
+impl<G> From<Arrangement<G, Row>> for ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    fn from(arrangement: Arrangement<G, Row>) -> Self {
+        ArrangementOrCollection::Arrangement(arrangement)
+    }
+}
+
+impl<G> From<Collection<G, Row>> for ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    fn from(collection: Collection<G, Row>) -> Self {
+        ArrangementOrCollection::Collection(collection)
     }
 }
 
@@ -636,12 +711,8 @@ where
         let ok_input = ok.as_collection();
         err_input = err.as_collection().concat(&err_input);
 
-        // First, let's plan out what we are going to do with this reduce
-        let arrangement = reduce_plan.render(ok_input);
-        CollectionBundle::from_columns(
-            0..key_arity,
-            ArrangementFlavor::Local(arrangement, err_input.arrange()),
-        )
+        // Render the reduce plan
+        reduce_plan.render(ok_input, err_input, key_arity)
     }
 }
 
@@ -650,7 +721,7 @@ where
 ///
 /// This computes the same thing as a join on the group key followed by shuffling
 /// the values into the correct order. This implementation assumes that all input
-/// arrangements present values in a way thats respects the desired output order,
+/// arrangements present values in a way that respects the desired output order,
 /// so we can do a linear merge to form the output.
 fn build_collation<G>(
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
@@ -741,6 +812,35 @@ where
             output.push((key.clone(), 1));
         }
     })
+}
+
+/// Build the dataflow to compute the set of distinct keys.
+///
+/// This implementation maintains the rows that don't appear in the output.
+fn build_distinct_retractions<G, T>(collection: Collection<G, (Row, Row)>) -> Collection<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    let negated_result = collection.reduce_named("DistinctBy Retractions", {
+        |key, input, output| {
+            output.push((key.clone(), -1));
+            output.extend(
+                input
+                    .iter()
+                    .map(|(values, count)| ((*values).clone(), *count)),
+            );
+        }
+    });
+    use timely::dataflow::operators::Map;
+    negated_result
+        .negate()
+        .concat(&collection)
+        .consolidate()
+        .inner
+        .map(|((k, _), time, count)| (k, time, count))
+        .as_collection()
 }
 
 /// Build the dataflow to compute and arrange multiple non-accumulable,
