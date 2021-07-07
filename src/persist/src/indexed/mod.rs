@@ -209,7 +209,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             );
             Ok(())
         })?;
-        for (id, updates) in updates_by_id.drain() {
+        for (id, mut updates) in updates_by_id.drain() {
+            // Future batches are required to be sorted by (ts, k, v).
+            updates.sort_unstable_by(|(_, (k1, v1), t1, _), (_, (k2, v2), t2, _)| {
+                (t1, k1, v1).cmp(&(t2, k2, v2))
+            });
             let batch = BlobFutureBatch {
                 id,
                 desc: Description::new(
@@ -280,6 +284,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                 future.snapshot(desc.lower().clone(), Some(desc.upper().clone()), &self.blob)?;
             while snap.read(&mut updates) {}
         }
+
+        // Trace batches are required to be sorted by (k, v, ts).
+        updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
+            (k1, v1, t1).cmp(&(k2, v2, t2))
+        });
 
         // ...writing that snapshot's data into trace...
         let batch = BlobTraceBatch {
@@ -472,6 +481,33 @@ mod tests {
         assert_eq!(extract(future), vec![]);
         assert_eq!(extract(trace), updates);
 
+        Ok(())
+    }
+
+    #[test]
+    fn batch_sorting() -> Result<(), Box<dyn Error>> {
+        let updates = vec![
+            (("1".to_string(), "".to_string()), 2, 1),
+            (("2".to_string(), "".to_string()), 1, 1),
+        ];
+
+        let mut i = Indexed::new(
+            MemBuffer::new("batch_sorting")?,
+            MemBlob::new("batch_sorting")?,
+        )?;
+        let id = i.register("0");
+
+        // Write the data and move it into the future part of the index, which
+        // orders it within each batch by time. It's not, so this will fire a
+        // validations error if the sort code doesn't work.
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Now move it into the trace part of the index, which orders it within
+        // each batch by key. It should currently be ordered by time, which
+        // given the data is not ordered by key, so again this should fire a
+        // validations error if the sort code doesn't work.
+        i.seal(id, 3)?;
         Ok(())
     }
 }

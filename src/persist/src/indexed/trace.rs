@@ -104,9 +104,6 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
                 batch.desc
             )));
         }
-        // TODO: Sort the updates in the batch by `(key, value, time)` (or
-        // ensure that they're sorted, if it turns out this work should have
-        // happened somewhere else).
         let desc = batch.desc.clone();
         blob.set_trace_batch(key.clone(), batch)?;
         self.batches.push((desc, key));

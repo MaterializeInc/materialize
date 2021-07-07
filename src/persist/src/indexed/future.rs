@@ -95,9 +95,6 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
         // TODO: Assert that nothing in the batch is before self.ts_lower. That
         // would indicate a logic error by the user of this BlobFuture.
 
-        // TODO: Sort the updates in the batch by `(time, key, value)` (or
-        // ensure that they're sorted, if it turns out this work should have
-        // happened somewhere else).
         let desc = batch.desc.clone();
         blob.set_future_batch(key.clone(), batch)?;
         self.batches.push((desc, key));
