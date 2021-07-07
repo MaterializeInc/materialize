@@ -7,6 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Threshold planning and execution logic.
+
+//! The threshold operator produces only rows with a positive cardinality, for example required to
+//! provide SQL except and intersect semantics.
+//!
+//! We build a plan ([ThresholdPlan]) encapsulating all decisions and requirements on the specific
+//! threshold implementation. The idea is to decouple the logic deciding which plan to select from
+//! the actual implementation of each variant available.
+//!
+//! Currently, we provide two variants:
+//! * The [BasicThresholdPlan] maintains all its outputs as an arrangement. It is beneficial if the
+//!     threshold is the final operation, or a downstream operators expects arranged inputs.
+//! * The [RetractionsThresholdPlan] maintains retractions, i.e. rows that are not in the output. It
+//!     is beneficial to use this operator if the number of retractions is expected to be small, and
+//!     if a potential downstream operator does not expect its input to be arranged.
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
@@ -79,6 +94,10 @@ where
     })
 }
 
+/// Build a dataflow to threshold the input data.
+///
+/// This implementation maintains rows in the output, i.e. all rows that have a count greater than
+/// zero. It returns a [CollectionBundle] populated from a local arrangement.
 pub fn build_threshold_basic<G, T>(
     input: CollectionBundle<G, Row, T>,
     arity: usize,
@@ -89,8 +108,6 @@ where
     T: Timestamp + Lattice,
 {
     // Arrange the input by all columns in order.
-    // Different trace variants require different implementations because their
-    // types are different, but the logic is identical.
     let mut all_columns = Vec::new();
     for column in 0..arity {
         all_columns.push(expr::MirScalarExpr::Column(column));
@@ -113,6 +130,11 @@ where
     }
 }
 
+/// Build a dataflow to threshold the input data while maintaining retractions.
+///
+/// This implementation maintains rows that are not part of the output, i.e. all rows that have a
+/// count of less than zero. It returns a [CollectionBundle] populated from the output collection,
+/// which itself is not an arrangement.
 pub fn build_threshold_retractions<G, T>(
     input: CollectionBundle<G, Row, T>,
     arity: usize,
@@ -123,8 +145,6 @@ where
     T: Timestamp + Lattice,
 {
     // Arrange the input by all columns in order.
-    // Different trace variants require different implementations because their
-    // types are different, but the logic is identical.
     let mut all_columns = Vec::new();
     for column in 0..arity {
         all_columns.push(expr::MirScalarExpr::Column(column));
