@@ -13,25 +13,26 @@
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE IF EXISTS ten;
-CREATE TABLE ten (f1 INTEGER);
-INSERT INTO ten VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
-CREATE SEQUENCE update_pk_values_sequence;
-CREATE TABLE update_pk_values (f1 INTEGER, PRIMARY KEY (f1));
+CREATE TABLE update_pk_values (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE update_pk_values REPLICA IDENTITY FULL;
 BEGIN;
-INSERT INTO update_pk_values VALUES (1);
+INSERT INTO update_pk_values VALUES (1, 1);
 COMMIT;
+
+$ schema-registry-wait-schema schema=postgres.public.update_pk_values-value
 
 > CREATE MATERIALIZED SOURCE update_pk_values
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.update_pk_values'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM update_pk_values;
-1 1 1 1
+> SELECT COUNT(*) > 0 FROM update_pk_values;
+true
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO update_pk_values VALUES (11, 11);
 UPDATE update_pk_values SET f1 = f1 + 1;
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM update_pk_values;
-1 1 2 2
+> SELECT * FROM update_pk_values;
+2 1
+12 11
