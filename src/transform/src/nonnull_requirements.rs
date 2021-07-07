@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use expr::{func, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use itertools::{Either, Itertools};
 
 /// Push non-null requirements toward sources.
@@ -142,10 +142,11 @@ impl NonNullRequirements {
                 self.action(input, columns, gets);
             }
             MirRelationExpr::Filter { input, predicates } => {
-                for predicate in predicates {
+                for predicate in predicates.iter() {
                     predicate.non_null_requirements(&mut columns);
                     // TODO: Not(IsNull) should add a constraint!
                 }
+
                 self.action(input, columns, gets);
             }
             MirRelationExpr::Join {
@@ -162,27 +163,40 @@ impl NonNullRequirements {
                 // `variable` smears constraints around.
                 // Also, any non-nullable columns impose constraints on their equivalence class.
                 for equivalence in equivalences {
-                    let exists_constraint = equivalence.iter().any(|expr| {
-                        if let MirScalarExpr::Column(c) = expr {
+                    let exists_constraint = equivalence.iter().any(|expr| match expr {
+                        MirScalarExpr::Column(c) => {
                             let (col, rel) = input_mapper.map_column_to_local(*c);
                             new_columns[rel].contains(&col)
                                 || !input_types[rel].column_types[col].nullable
-                        } else {
-                            false
                         }
+                        // Any non-null literal in the equivalence imposes a non-null constraint
+                        // on the rest of the expressions in the equivalence
+                        MirScalarExpr::Literal(Ok(_), _) if !expr.is_literal_null() => true,
+                        _ => false,
                     });
 
                     if exists_constraint {
+                        let mut global_new_columns = HashSet::new();
                         for expr in equivalence.iter() {
-                            if let MirScalarExpr::Column(c) = expr {
-                                let (col, rel) = input_mapper.map_column_to_local(*c);
-                                new_columns[rel].insert(col);
-                            }
+                            expr.non_null_requirements(&mut global_new_columns);
+                        }
+                        for column in global_new_columns {
+                            let (col, rel) = input_mapper.map_column_to_local(column);
+                            new_columns[rel].insert(col);
                         }
                     }
                 }
 
                 for (input, columns) in inputs.iter_mut().zip(new_columns) {
+                    if !columns.is_empty() {
+                        *input = input.take_dangerous().filter(columns.iter().map(|col| {
+                            MirScalarExpr::Column(*col)
+                                .call_unary(UnaryFunc::IsNull(func::IsNull))
+                                .call_unary(UnaryFunc::Not(func::Not))
+                        }));
+                        // fuse nested filters, canonicalize predicates and detect impossible conditions
+                        crate::fusion::filter::Filter.action(input);
+                    }
                     self.action(input, columns, gets);
                 }
             }

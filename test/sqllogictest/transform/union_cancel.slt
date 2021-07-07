@@ -206,25 +206,22 @@ SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 | Filter !(isnull(#0))
 
 %1 =
-| Get materialize.public.t3 (u5)
-
-%2 =
 | Get %0 (l0)
 | Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%3 =
-| Join %1 %2 (= #0 #2)
-| | implementation = Differential %1 %2.(#0)
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %0 %1.(#0)
 | Project (#0, #1)
 | Negate
 
-%4 =
+%3 =
 | Get materialize.public.t3 (u5)
 
-%5 =
-| Union %3 %4 %0
+%4 =
+| Union %2 %3 %0
 
 EOF
 

@@ -34,6 +34,7 @@ EXPLAIN SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
 
 %1 =
 | Get materialize.public.t2 (u3)
+| Filter !(isnull(#0))
 | Project (#0)
 
 %2 =

@@ -1,0 +1,135 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (
+    f1 int NOT NULL,
+    f2 int
+)
+
+# non-null requirement on f2 derived from the join equality
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f2;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#1))
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = Differential %1 %0.(#0)
+| Project (#0..#2, #0)
+
+EOF
+
+# non-null requirement on f2 derived from the join equality
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f2 + 1;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#1))
+
+%2 =
+| Join %0 %1 (= #0 (#3 + 1))
+| | implementation = Differential %1 %0.(#0)
+
+EOF
+
+# non-null requirement on f2 derived from the join equality contradicts filter
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f2 AND a2.f2 IS NULL;
+----
+%0 =
+| Constant
+
+EOF
+
+# non-null requirement on f2 derived from the equality with a non-null literal
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f2 = a2.f2 AND a1.f2 = 2;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#1 = 2)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Join %1 %0
+| | implementation = Differential %0 %1.()
+
+EOF
+
+# we fail to infer here that a1.f2 SQL= a2.f2 can never be true, since a2.f2 is required to be NULL
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE (a1.f2 = a2.f2 or (a1.f2 IS NULL AND a2.f2 IS NULL)) AND a2.f2 IS NULL;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter isnull(#1)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| Filter (isnull(#1) || (#1 = #3))
+
+EOF
+
+# no requirement on f2, since NULLs are treated as equal by the join
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f2 = a2.f2 or (a1.f2 IS NULL AND a2.f2 IS NULL);
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#1)
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Join %0 %1 (= #1 #3)
+| | implementation = Differential %1 %0.(#1)
+| Project (#0..#2, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t1 WHERE f1 + f2 IS NULL) blah JOIN t1 t2 ON blah.f1 = t2.f1;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter isnull(#1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| Project (#0, #1, #0, #3)
+
+EOF

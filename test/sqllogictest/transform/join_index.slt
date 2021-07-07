@@ -306,10 +306,12 @@ explain plan for select foo.b, bar.b from foo, bar, (select 1 as a) const where 
 ----
 %0 =
 | Get materialize.public.foo (u1)
+| Filter !(isnull(#0))
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.bar (u3)
+| Filter !(isnull(#0))
 
 %2 =
 | Join %0 %1 (= 1 (#0 / #2))
@@ -335,10 +337,12 @@ and bar.b - foo.b = foo.a / bar.a
 ----
 %0 =
 | Get materialize.public.foo (u1)
+| Filter !(isnull(#0)), !(isnull(#1))
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.bar (u3)
+| Filter !(isnull(#0)), !(isnull(#1))
 
 %2 =
 | Join %0 %1 (= -1 (#3 - #1) (#0 / #2))

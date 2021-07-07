@@ -684,7 +684,7 @@ explain select min(a) from t_pk where a between 38 and 195 and a = (select a fro
 | Project ()
 | Reduce group=()
 | | agg count(true)
-| Filter (#0 > 1)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
 | Project ()
 | Map (err: more than one record produced in subquery)
 
@@ -738,7 +738,7 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 | Project ()
 | Reduce group=()
 | | agg count(true)
-| Filter (#0 > 1)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
 | Project ()
 | Map (err: more than one record produced in subquery)
 

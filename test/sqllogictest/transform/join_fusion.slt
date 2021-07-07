@@ -37,7 +37,7 @@ EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 =
 
 %1 =
 | Get materialize.public.t2 (u3)
-| Filter !(isnull(#1))
+| Filter !(isnull(#0)), !(isnull(#1))
 | ArrangeBy (#1)
 
 %2 =
