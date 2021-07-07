@@ -96,7 +96,7 @@ prof = { path = "../prof", features = ["jemalloc"] }
 jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "1.0.5"
+assert_cmd = "1.0.7"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coordtest = { path = "../coordtest" }
@@ -110,7 +110,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
-predicates = "1.0.8"
+predicates = "2.0.0"
 rand = "0.8.4"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.4", features = ["blocking"] }
