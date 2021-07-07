@@ -601,7 +601,10 @@ impl AggregateFunc {
         scalar_type.nullable(nullable)
     }
 
-    /// Whether the result of the aggregate can be non-null with null inputs
+    /// Returns true if the non-null constraint on the aggregation can be
+    /// converted into a non-null constraint on its parameter expression, ie.
+    /// whether the result of the aggregation is null if all the input values
+    /// are null.
     pub fn propagates_nonnull_constraint(&self) -> bool {
         match self {
             AggregateFunc::MaxApd
