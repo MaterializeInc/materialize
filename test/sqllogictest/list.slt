@@ -1709,6 +1709,12 @@ SELECT ('{1.2}'::numeric(38,5) list || '{2.3}'::numeric(38,0) list)::text;
 ----
 {1.20000,2.00000}
 
+# Note that APD values are also implicitly castable to one another, but do not rescale values
+query T
+SELECT ('{1.2}'::apd(39,5) list || '{2.3}'::apd(39,0) list)::text;
+----
+{1.2,2}
+
 # ...including on multiple dimensions
 query T
 SELECT ('{{1.2}}'::numeric(38,5) list list || '{{2.3}}'::numeric(38,0) list list)::text;

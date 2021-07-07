@@ -808,6 +808,30 @@ impl<'a> ScalarType {
         dims
     }
 
+    /// Returns `self` with any values equal to `ScalarType::APD` with their
+    /// `scale` set to `None`.
+    pub fn unscale_any_apd(&self) -> ScalarType {
+        use ScalarType::*;
+        match self {
+            APD { scale: Some(..) } => APD { scale: None },
+            List {
+                element_type,
+                custom_oid: None,
+            } => List {
+                element_type: Box::new(element_type.unscale_any_apd()),
+                custom_oid: None,
+            },
+            Map {
+                value_type,
+                custom_oid: None,
+            } => Map {
+                value_type: Box::new(value_type.unscale_any_apd()),
+                custom_oid: None,
+            },
+            _ => self.clone(),
+        }
+    }
+
     /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`].
     ///
     /// # Panics

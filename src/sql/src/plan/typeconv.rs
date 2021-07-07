@@ -160,7 +160,7 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToDecimal(s)))
             }),
-            (Float32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            (Float32, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToAPD(s)))
             }),
@@ -174,7 +174,7 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToDecimal(s)))
             }),
-            (Float64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            (Float64, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToAPD(s)))
             }),
@@ -510,13 +510,14 @@ fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
         ScalarType::Int32 => 0,
         ScalarType::Int64 => 1,
         ScalarType::Decimal(_, _) => 2,
-        ScalarType::Float32 => 3,
-        ScalarType::Float64 => 4,
+        ScalarType::APD { scale: None } => 3,
+        ScalarType::Float32 => 4,
+        ScalarType::Float64 => 5,
         // [`TypeCategory::DateTime`]
-        ScalarType::Date => 5,
-        ScalarType::Timestamp => 6,
-        ScalarType::TimestampTz => 7,
-        _ => 8,
+        ScalarType::Date => 6,
+        ScalarType::Timestamp => 7,
+        ScalarType::TimestampTz => 8,
+        _ => 9,
     })
 }
 
