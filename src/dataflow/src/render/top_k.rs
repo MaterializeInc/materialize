@@ -7,6 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! TopK planning and execution logic.
+//!
+//! We provide a plan ([TopKPlan]) encoding variants of the TopK operator, and provide
+//! implementations specific to plan variants.
+//!
+//! The TopK variants can be distinguished as follows:
+//! * A [MonotonicTop1Plan] maintains a single row per key and is suitable for monotonic inputs.
+//! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
+//! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -23,14 +32,27 @@ use repr::{Diff, Row};
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
+/// A plan encapsulating different variants to compute a TopK operation.
 #[derive(Debug)]
 pub enum TopKPlan {
+    /// A plan for Top1 for monotonic inputs.
     MonotonicTop1(MonotonicTop1Plan),
+    /// A plan for TopK for monotonic inputs.
     MonotonicTopK(MonotonicTopKPlan),
+    /// A plan for generic TopK operations.
     Basic(BasicTopKPlan),
 }
 
 impl TopKPlan {
+    /// Create a plan from the information provided. Here we decide on which of the TopK plan
+    /// variants to select.
+    ///
+    /// * `group_key` - The columns serving as the group key.
+    /// * `order_key` - The columns specifying an ordering withing each group.
+    /// * `offset` - The number of rows to skip at the top. Provide 0 to reveal all rows.
+    /// * `limit` - An optional limit of how many rows should be revealed.
+    /// * `arity` - The number of columns in the input and output.
+    /// * `monotonic` - `true` if the input is monotonic.
     pub(crate) fn create_from(
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
@@ -388,6 +410,7 @@ where
                         output.push((accum.row.clone(), 1));
                     }
                 });
+            // TODO(#7331): Here we discard the arranged output.
             result.as_collection(|_k, v| v.clone())
         }
     }
