@@ -31,12 +31,12 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = bar.a where foo.a =
 ----
 %0 =
 | Get materialize.public.foo (u1)
-| Filter !(isnull(#0)), (#0 = 1)
+| Filter (#0 = 1)
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.bar (u3)
-| Filter !(isnull(#0)), (#0 = 1)
+| Filter (#0 = 1)
 
 %2 =
 | Join %0 %1
@@ -59,12 +59,12 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = abs(bar.a) where mo
 ----
 %0 =
 | Get materialize.public.foo (u1)
-| Filter !(isnull(#0)), (1 = (#0 % 2))
+| Filter (1 = (#0 % 2))
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.bar (u3)
-| Filter !(isnull(#0)), (1 = (abs(#0) % 2))
+| Filter (1 = (abs(#0) % 2))
 
 %2 =
 | Join %0 %1 (= #0 abs(#2))
@@ -92,12 +92,12 @@ EXPLAIN PLAN FOR select * from (select * from foo where a = 1) filtered_foo, bar
 ----
 %0 =
 | Get materialize.public.foo (u1)
-| Filter !(isnull(#0)), (#0 = 1)
+| Filter (#0 = 1)
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.bar (u3)
-| Filter !(isnull(#0)), (#0 = 1)
+| Filter (#0 = 1)
 
 %2 =
 | Join %0 %1

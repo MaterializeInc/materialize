@@ -63,6 +63,9 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
 /// predicate. Then, it transforms predicates of the form "A and B" into two: "A"
 /// and "B". Aftewards, it reduces predicates based on information from other
 /// predicates in the set. Finally, it sorts and deduplicates the predicates.
+///
+/// Additionally, it also removes IS NOT NULL predicates if there is another
+/// null rejecting predicate for the same sub-expression.
 pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: &RelationType) {
     // 1) Reduce each individual predicate.
     let mut pending_predicates = predicates
@@ -117,6 +120,20 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     std::mem::swap(&mut todo, predicates);
 
     while let Some(predicate_to_apply) = todo.pop() {
+        // Remove redundant !isnull(x) predicates if there is another predicate
+        // that evaluates to NULL when `x` is NULL.
+        if let Some(operand) = is_not_null(&predicate_to_apply) {
+            if todo
+                .iter_mut()
+                .any(|p| is_null_rejecting_predicate(p, &operand))
+                || completed
+                    .iter_mut()
+                    .any(|p| is_null_rejecting_predicate(p, &operand))
+            {
+                // skip this predicate
+                continue;
+            }
+        }
         // Helper method: for each predicate `p`, see if all other predicates
         // (a.k.a. the union of todo & completed) contains `p` as a
         // subexpression, and replace the subexpression accordingly.
@@ -232,4 +249,41 @@ fn replace_subexpr_and_reduce(
         predicate.reduce(input_type);
     }
     changed
+}
+
+/// Returns the inner operand if the given predicate is an IS NOT NULL expression.
+fn is_not_null(predicate: &MirScalarExpr) -> Option<MirScalarExpr> {
+    if let MirScalarExpr::CallUnary {
+        func: UnaryFunc::Not,
+        expr,
+    } = &predicate
+    {
+        if let MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull,
+            expr,
+        } = &**expr
+        {
+            return Some((**expr).clone());
+        }
+    }
+    None
+}
+
+/// Whether the given predicate evaluates to NULL when the given operand expression is NULL.
+fn is_null_rejecting_predicate(predicate: &MirScalarExpr, operand: &MirScalarExpr) -> bool {
+    propagates_null_from_subexpression(predicate, operand)
+}
+
+fn propagates_null_from_subexpression(expr: &MirScalarExpr, operand: &MirScalarExpr) -> bool {
+    if operand == expr {
+        true
+    } else if let MirScalarExpr::CallBinary { func, expr1, expr2 } = &expr {
+        func.propagates_nulls()
+            && (propagates_null_from_subexpression(&expr1, operand)
+                || propagates_null_from_subexpression(&expr2, operand))
+    } else if let MirScalarExpr::CallUnary { func, expr } = &expr {
+        func.propagates_nulls() && propagates_null_from_subexpression(expr, operand)
+    } else {
+        false
+    }
 }
