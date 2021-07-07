@@ -385,7 +385,7 @@ where
         })
     }
 
-    /// Look up an arrangemement by the expressions that form the key.
+    /// Look up an arrangement by the expressions that form the key.
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.

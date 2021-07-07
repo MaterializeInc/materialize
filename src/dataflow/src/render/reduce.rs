@@ -516,7 +516,7 @@ impl ReducePlan {
                 build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
             }
         };
-        arrangement_or_bundle.to_bundle(key_arity, err_input)
+        arrangement_or_bundle.into_bundle(key_arity, err_input)
     }
 }
 
@@ -542,7 +542,7 @@ where
     ///
     /// * `key_arity` - The number of columns in the key. Only used for arrangement variants.
     /// * `err_input` - A collection containing the error stream.
-    fn to_bundle<T>(
+    fn into_bundle<T>(
         self,
         key_arity: usize,
         err_input: Collection<G, DataflowError>,
