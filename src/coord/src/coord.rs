@@ -57,6 +57,7 @@ use lazy_static::lazy_static;
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
@@ -992,10 +993,60 @@ impl Coordinator {
         }
     }
 
+    /// Validate that all upper frontier updates obey the following invariants:
+    ///
+    /// 1. The `upper` frontier for each source, index and sink does not go backwards with
+    /// upper updates
+    /// 2. `upper` never contains any times with negative multiplicity.
+    /// 3. `upper` never contains any times with multiplicity greater than `n_workers`
+    /// 4. No updates increase the sum of all multiplicities in `upper`.
+    ///
+    /// Note that invariants 2 - 4 require single dimensional time, and a fixed number of
+    /// dataflow workers. If we migrate to multidimensional time then 2 no longer holds, and
+    /// 3. relaxes to "the longest chain in `upper` has to have <= n_workers elements" and
+    /// 4. relaxes to "no comparable updates increase the sum of all multiplicities in `upper`".
+    /// If we ever switch to dynamically scaling the number of dataflow workers then 3 and 4 no
+    /// longer hold.
+    fn validate_update_iter(
+        upper: &mut MutableAntichain<Timestamp>,
+        mut changes: ChangeBatch<Timestamp>,
+        num_workers: usize,
+    ) -> Vec<(Timestamp, i64)> {
+        let old_frontier = upper.frontier().to_owned();
+
+        // Validate that no changes correspond to a net addition in the sum of all multiplicities.
+        // All updates have to relinquish a time, and optionally, acquire another time.
+        // TODO: generalize this to multidimensional times.
+        let total_changes = changes
+            .iter()
+            .map(|(_, change)| *change)
+            .fold(0, |acc, x| acc + x);
+        assert!(total_changes <= 0);
+
+        let frontier_changes = upper.update_iter(changes.clone().drain()).collect();
+
+        // Make sure no times in `upper` have a negative multiplicity
+        for (t, _) in changes.into_inner() {
+            let count = upper.count_for(&t);
+            assert!(count >= 0);
+            assert!(count as usize <= num_workers);
+        }
+
+        assert!(<_ as PartialOrder>::less_equal(
+            &old_frontier.borrow(),
+            &upper.frontier(),
+        ));
+
+        frontier_changes
+    }
+
     /// Updates the upper frontier of a named view.
-    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
+    fn update_upper(&mut self, name: &GlobalId, changes: ChangeBatch<Timestamp>) {
+        let num_workers = self.num_workers();
         if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
+            let changes =
+                Coordinator::validate_update_iter(&mut index_state.upper, changes, num_workers);
+
             if !changes.is_empty() {
                 // Advance the compaction frontier to trail the new frontier.
                 // If the compaction latency is `None` compaction messages are
@@ -1026,7 +1077,9 @@ impl Coordinator {
                 }
             }
         } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes: Vec<_> = source_state.upper.update_iter(changes.drain()).collect();
+            let changes =
+                Coordinator::validate_update_iter(&mut source_state.upper, changes, num_workers);
+
             if !changes.is_empty() {
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
                     if !source_state.upper.frontier().is_empty() {
@@ -1041,7 +1094,8 @@ impl Coordinator {
                 }
             }
         } else if let Some(sink_state) = self.sink_writes.get_mut(name) {
-            let changes: Vec<_> = sink_state.frontier.update_iter(changes.drain()).collect();
+            // Only one dataflow worker should give updates for sinks
+            let changes = Coordinator::validate_update_iter(&mut sink_state.frontier, changes, 1);
 
             if !changes.is_empty() {
                 sink_state.advance_source_handles();
