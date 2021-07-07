@@ -25,7 +25,6 @@ pub mod file;
 pub mod indexed;
 pub mod mem;
 pub mod operators;
-pub mod persister;
 pub mod storage;
 
 // TODO

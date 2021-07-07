@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Blob, Buffer, Persister, SeqNo};
+use crate::indexed::runtime::{self, RuntimeClient};
+use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
 
 struct MemBufferCore {
@@ -288,16 +289,15 @@ impl MemRegistry {
         MemBlob::open(blob, lock_info)
     }
 
-    /// Opens the in-memory [Persister] associated with `path` or creates one if
-    /// none exists.
-    pub fn open<K, V>(&mut self, path: &str, lock_info: &str) -> Result<Persister<K, V>, Error>
+    /// Open a [RuntimeClient] associated with `path`.
+    pub fn open<K, V>(&mut self, path: &str, lock_info: &str) -> Result<RuntimeClient<K, V>, Error>
     where
         K: Data + Send + Sync + 'static,
         V: Data + Send + Sync + 'static,
     {
         let buffer = self.buffer(path, lock_info)?;
         let blob = self.blob(path, lock_info)?;
-        Persister::new(buffer, blob)
+        runtime::start(buffer, blob)
     }
 }
 

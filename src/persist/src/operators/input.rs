@@ -17,8 +17,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
-use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
-use crate::persister::Snapshot;
+use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
+use crate::indexed::Snapshot;
 use crate::Token;
 
 /// A persistent equivalent of [UnorderedInput].
@@ -26,7 +26,7 @@ pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
     /// A persistent equivalent of [UnorderedInput::new_unordered_input].
     fn new_persistent_unordered_input(
         &mut self,
-        token: Token<StreamWriteHandle<K, ()>, StreamMetaHandle<K, ()>>,
+        token: Token<StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>>,
     ) -> (
         (
             PersistentUnorderedHandle<K>,
@@ -43,7 +43,7 @@ where
 {
     fn new_persistent_unordered_input(
         &mut self,
-        token: Token<StreamWriteHandle<K, ()>, StreamMetaHandle<K, ()>>,
+        token: Token<StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>>,
     ) -> (
         (
             PersistentUnorderedHandle<K>,
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn new_persistent_unordered_input() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        let mut p = registry.open("1", "new_persistent_unordered_input_1")?;
+        let p = registry.open("1", "new_persistent_unordered_input_1")?;
 
         timely::execute_directly(move |worker| {
             let (mut handle, cap) = worker.dataflow(|scope| {
@@ -146,7 +146,7 @@ mod tests {
         // Execute a second dataflow and reuse the previous in-memory state.
         // This exists to simulate what would happen after a restart in a Persister
         // that was actually backed by persistent storage
-        let mut p = registry.open("1", "new_persistent_unordered_input_2")?;
+        let p = registry.open("1", "new_persistent_unordered_input_2")?;
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
                 let persister = p.create_or_load("1").unwrap();

@@ -14,7 +14,6 @@
 pub mod cache;
 pub mod encoding;
 pub mod future;
-pub mod handle;
 pub mod runtime;
 pub mod trace;
 
@@ -30,7 +29,6 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch, BufferEntry, Id};
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
-use crate::persister::Snapshot;
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
 
@@ -386,6 +384,30 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     }
 }
 
+/// An isolated, consistent read of previously written (Key, Value, Time, Diff)
+/// updates.
+pub trait Snapshot<K, V> {
+    /// A partial read of the data in the snapshot.
+    ///
+    /// Returns true if read needs to be called again for more data.
+    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool;
+}
+
+/// Extension methods on `Snapshot<K, V>` for use in tests.
+#[cfg(test)]
+pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
+    /// A full read of the data in the snapshot.
+    fn read_to_end(mut self) -> Vec<((K, V), u64, isize)> {
+        let mut buf = Vec::new();
+        while self.read(&mut buf) {}
+        buf.sort();
+        buf
+    }
+}
+
+#[cfg(test)]
+impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
+
 /// A consistent snapshot of the data currently in a [Buffer].
 #[derive(Debug)]
 struct BufferSnapshot<K, V>(Vec<((K, V), u64, isize)>);
@@ -417,7 +439,6 @@ mod tests {
 
     use crate::mem::MemBlob;
     use crate::mem::MemBuffer;
-    use crate::persister::SnapshotExt;
 
     use super::*;
 
