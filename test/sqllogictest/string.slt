@@ -976,7 +976,7 @@ NULL
 (empty)
 (empty)
 
-# from the back
+# from the front
 query T rowsort
 SELECT left(vccol, 2) FROM lefttest
 ----
@@ -987,7 +987,7 @@ NULL
 爱不
 (empty)
 
-# from the front
+# from the back
 query T rowsort
 SELECT left(vccol, -2) FROM lefttest
 ----
