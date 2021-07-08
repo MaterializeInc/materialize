@@ -33,7 +33,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
 /// A plan encapsulating different variants to compute a TopK operation.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TopKPlan {
     /// A plan for Top1 for monotonic inputs.
     MonotonicTop1(MonotonicTop1Plan),
@@ -109,7 +109,7 @@ impl TopKPlan {
 /// differential's semantics. (2) is especially interesting because Kafka is
 /// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
 /// Materialize and commonly used by users.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
     group_key: Vec<usize>,
@@ -118,7 +118,7 @@ pub struct MonotonicTop1Plan {
 }
 
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
     group_key: Vec<usize>,
@@ -132,7 +132,7 @@ pub struct MonotonicTopKPlan {
 }
 
 /// A plan for generic TopKs that don't fit any more specific category.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
     group_key: Vec<usize>,

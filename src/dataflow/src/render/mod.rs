@@ -309,7 +309,7 @@ where
         object: BuildDesc<plan::Plan>,
     ) {
         // First, transform the relation expression into a render plan.
-        let bundle = self.render_plan(object.relation_expr, scope, scope.index());
+        let bundle = self.render_plan(object.view, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
     }
 
@@ -971,7 +971,7 @@ pub mod plan {
                 .into_iter()
                 .map(|build| dataflow_types::BuildDesc {
                     id: build.id,
-                    relation_expr: Self::from_mir(&build.relation_expr)
+                    view: Self::from_mir(&build.view)
                         .expect("Dataflow finalization failed to produce plan"),
                 })
                 .collect::<Vec<_>>();

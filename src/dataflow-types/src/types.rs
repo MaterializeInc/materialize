@@ -70,7 +70,7 @@ pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr>;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc<View> {
     pub id: GlobalId,
-    pub relation_expr: View,
+    pub view: View,
 }
 
 /// A description of a dataflow to construct and results to surface.
@@ -153,10 +153,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
         for get_id in view.global_uses() {
             self.record_depends_on(id, get_id);
         }
-        self.objects_to_build.push(BuildDesc {
-            id,
-            relation_expr: view,
-        });
+        self.objects_to_build.push(BuildDesc { id, view });
     }
 
     /// Exports as `id` an index on `on_id`.
@@ -264,7 +261,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
         }
         for desc in self.objects_to_build.iter() {
             if &desc.id == id {
-                return desc.relation_expr.arity();
+                return desc.view.arity();
             }
         }
         panic!("GlobalId {} not found in DataflowDesc", id);
