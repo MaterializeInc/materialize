@@ -36,7 +36,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 
 /// A plan describing how to compute a threshold operation.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
@@ -45,7 +45,7 @@ pub enum ThresholdPlan {
 }
 
 /// A plan to maintain all inputs with positive counts.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BasicThresholdPlan {
     /// The number of columns in the input and output.
     arity: usize,
@@ -53,7 +53,7 @@ pub struct BasicThresholdPlan {
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
 /// in order to maintain an equivalent collection compared to [BasicThresholdPlan].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RetractionsThresholdPlan {
     /// The number of columns in the input and output.
     arity: usize,

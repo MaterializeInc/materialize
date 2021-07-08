@@ -63,17 +63,19 @@ pub struct Update {
     pub diff: isize,
 }
 
-/// A description of view or index to be added to the local context
-/// for a dataflow
+/// A commonly used name for dataflows contain MIR expressions.
+pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr>;
+
+/// An association of a global identifier to an expression.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct BuildDesc {
+pub struct BuildDesc<View> {
     pub id: GlobalId,
-    pub relation_expr: OptimizedMirRelationExpr,
+    pub view: View,
 }
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default)]
-pub struct DataflowDesc {
+pub struct DataflowDescription<View> {
     /// Sources made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, (SourceDesc, GlobalId)>,
     /// Indexes made available to the dataflow.
@@ -81,7 +83,7 @@ pub struct DataflowDesc {
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
     /// dependencies of later objects on prior identifiers.
-    pub objects_to_build: Vec<BuildDesc>,
+    pub objects_to_build: Vec<BuildDesc<View>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view)
     pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
@@ -100,12 +102,18 @@ pub struct DataflowDesc {
     pub debug_name: String,
 }
 
-impl DataflowDesc {
+impl DataflowDescription<OptimizedMirRelationExpr> {
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
-        DataflowDesc {
+        Self {
+            source_imports: Default::default(),
+            index_imports: Default::default(),
+            objects_to_build: Vec::new(),
+            index_exports: Default::default(),
+            sink_exports: Default::default(),
+            dependent_objects: Default::default(),
+            as_of: Default::default(),
             debug_name: name,
-            ..Default::default()
         }
     }
 
@@ -141,14 +149,11 @@ impl DataflowDesc {
     }
 
     /// Binds to `id` the relation expression `expr`.
-    pub fn insert_view(&mut self, id: GlobalId, expr: OptimizedMirRelationExpr) {
-        for get_id in expr.global_uses() {
+    pub fn insert_view(&mut self, id: GlobalId, view: OptimizedMirRelationExpr) {
+        for get_id in view.global_uses() {
             self.record_depends_on(id, get_id);
         }
-        self.objects_to_build.push(BuildDesc {
-            id,
-            relation_expr: expr,
-        });
+        self.objects_to_build.push(BuildDesc { id, view });
     }
 
     /// Exports as `id` an index on `on_id`.
@@ -242,6 +247,28 @@ impl DataflowDesc {
         self.as_of = Some(as_of);
     }
 
+    /// The number of columns associated with an identifier in the dataflow.
+    pub fn arity_of(&self, id: &GlobalId) -> usize {
+        for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
+            if source_id == id {
+                return desc.bare_desc.arity();
+            }
+        }
+        for (_index_id, (desc, typ)) in self.index_imports.iter() {
+            if &desc.on_id == id {
+                return typ.arity();
+            }
+        }
+        for desc in self.objects_to_build.iter() {
+            if &desc.id == id {
+                return desc.view.arity();
+            }
+        }
+        panic!("GlobalId {} not found in DataflowDesc", id);
+    }
+}
+
+impl<View> DataflowDescription<View> {
     /// Collects all indexes required to construct all exports.
     pub fn get_all_imports(&self) -> HashSet<GlobalId> {
         let mut result = HashSet::new();
@@ -270,26 +297,6 @@ impl DataflowDesc {
         }
         result.retain(|id| self.dependent_objects.get(id).is_none());
         result
-    }
-
-    /// The number of columns associated with an identifier in the dataflow.
-    pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
-            if source_id == id {
-                return desc.bare_desc.arity();
-            }
-        }
-        for (_index_id, (desc, typ)) in self.index_imports.iter() {
-            if &desc.on_id == id {
-                return typ.arity();
-            }
-        }
-        for desc in self.objects_to_build.iter() {
-            if &desc.id == id {
-                return desc.relation_expr.arity();
-            }
-        }
-        panic!("GlobalId {} not found in DataflowDesc", id);
     }
 }
 

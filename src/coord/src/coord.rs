@@ -3105,13 +3105,17 @@ impl Coordinator {
     /// # Panics
     ///
     /// Panics if as_of is < the `since` frontiers.
-    async fn ship_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) {
+    ///
+    /// Panics if the dataflow descriptions contain an invalid plan.
+    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
         // state if we do not correctly clean up the catalog.
 
-        for dataflow in &mut dataflows {
+        // Each dataflow description will be planned into a `render::Plan` dataflow.
+        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
+        for mut dataflow in dataflows.into_iter() {
             // The identity for `join` is the minimum element.
             let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -3168,11 +3172,12 @@ impl Coordinator {
             }
 
             // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(dataflow);
+            transform::optimize_dataflow(&mut dataflow);
+            dataflow_plans.push(dataflow::Plan::finalize_dataflow(dataflow));
         }
 
         // Finalize the dataflow by broadcasting its construction to all workers.
-        self.broadcast(SequencedCommand::CreateDataflows(dataflows));
+        self.broadcast(SequencedCommand::CreateDataflows(dataflow_plans));
     }
 
     fn broadcast(&self, cmd: SequencedCommand) {

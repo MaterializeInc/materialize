@@ -70,7 +70,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
         let mut occurrences_in_later_views = Vec::new();
         for other in (index + 1)..dataflow.objects_to_build.len() {
             if dataflow.objects_to_build[other]
-                .relation_expr
+                .view
                 .global_uses()
                 .contains(&global_id)
             {
@@ -92,23 +92,19 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
             update_let.action(
-                dataflow.objects_to_build[index]
-                    .relation_expr
-                    .as_inner_mut(),
+                dataflow.objects_to_build[index].view.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
             );
             // Assign new identifiers to the other relation.
             update_let.action(
-                dataflow.objects_to_build[other]
-                    .relation_expr
-                    .as_inner_mut(),
+                dataflow.objects_to_build[other].view.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
             );
             // Install the `new_local` name wherever `global_id` was used.
             dataflow.objects_to_build[other]
-                .relation_expr
+                .view
                 .as_inner_mut()
                 .visit_mut(&mut |expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
@@ -122,16 +118,14 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             // a `MirRelationExpr::Let` binding, whose value is `index` and
             // whose body is `other`.
             let body = dataflow.objects_to_build[other]
-                .relation_expr
+                .view
                 .as_inner_mut()
                 .take_dangerous();
             let value = dataflow.objects_to_build[index]
-                .relation_expr
+                .view
                 .as_inner_mut()
                 .take_dangerous();
-            *dataflow.objects_to_build[other]
-                .relation_expr
-                .as_inner_mut() = MirRelationExpr::Let {
+            *dataflow.objects_to_build[other].view.as_inner_mut() = MirRelationExpr::Let {
                 id: new_local,
                 value: Box::new(value),
                 body: Box::new(body),
@@ -163,7 +157,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
         // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
         optimizer
-            .transform(object.relation_expr.as_inner_mut(), &indexes)
+            .transform(object.view.as_inner_mut(), &indexes)
             .unwrap();
     }
 }
@@ -194,11 +188,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         let transform = crate::demand::Demand;
         if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-            transform.action(
-                build_desc.relation_expr.as_inner_mut(),
-                columns.clone(),
-                &mut demand,
-            );
+            transform.action(build_desc.view.as_inner_mut(), columns.clone(), &mut demand);
         }
     }
 
@@ -231,14 +221,14 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
         let transform = crate::predicate_pushdown::PredicatePushdown;
         if let Some(list) = predicates.get(&Id::Global(build_desc.id)).clone() {
             if !list.is_empty() {
-                *build_desc.relation_expr.as_inner_mut() = build_desc
-                    .relation_expr
+                *build_desc.view.as_inner_mut() = build_desc
+                    .view
                     .as_inner_mut()
                     .take_dangerous()
                     .filter(list.iter().cloned());
             }
         }
-        transform.dataflow_transform(build_desc.relation_expr.as_inner_mut(), &mut predicates);
+        transform.dataflow_transform(build_desc.view.as_inner_mut(), &mut predicates);
     }
 
     // Push predicate information into the SourceDesc.
@@ -355,7 +345,7 @@ pub mod monotonic {
 
         // Propagate predicate information from outputs to inputs.
         for build_desc in dataflow.objects_to_build.iter_mut() {
-            is_monotonic(build_desc.relation_expr.as_inner_mut(), &monotonic);
+            is_monotonic(build_desc.view.as_inner_mut(), &monotonic);
         }
     }
 }

@@ -584,7 +584,7 @@ where
 }
 
 /// Plan for extracting keys and values in preparation for a reduction.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
     key_plan: expr::SafeMfpPlan,
