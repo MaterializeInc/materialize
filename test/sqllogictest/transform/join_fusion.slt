@@ -261,16 +261,6 @@ WHERE a2.f1 + a1.f2 = (SELECT 1)
 AND a2.f1 IS NULL;
 ----
 %0 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t1 (u1)
-| Filter isnull(#0)
-
-%2 =
-| Join %0 %1 (= 1 (#2 + #1))
-| | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
+| Constant
 
 EOF

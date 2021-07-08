@@ -125,13 +125,24 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
         if let Some(operand) = is_not_null(&predicate_to_apply) {
             if todo
                 .iter_mut()
+                .chain(completed.iter_mut())
                 .any(|p| is_null_rejecting_predicate(p, &operand))
-                || completed
-                    .iter_mut()
-                    .any(|p| is_null_rejecting_predicate(p, &operand))
             {
                 // skip this predicate
                 continue;
+            }
+        } else if let MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull,
+            expr,
+        } = &predicate_to_apply
+        {
+            if todo
+                .iter_mut()
+                .chain(completed.iter_mut())
+                .any(|p| is_null_rejecting_predicate(p, expr))
+            {
+                completed.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
+                break;
             }
         }
         // Helper method: for each predicate `p`, see if all other predicates
@@ -270,6 +281,7 @@ fn is_not_null(predicate: &MirScalarExpr) -> Option<MirScalarExpr> {
 }
 
 /// Whether the given predicate evaluates to NULL when the given operand expression is NULL.
+#[inline(always)]
 fn is_null_rejecting_predicate(predicate: &MirScalarExpr, operand: &MirScalarExpr) -> bool {
     propagates_null_from_subexpression(predicate, operand)
 }
