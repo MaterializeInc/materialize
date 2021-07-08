@@ -1472,6 +1472,9 @@ lazy_static! {
             "jsonb_typeof" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbTypeof, 3210;
             },
+            "left" => Scalar {
+                params!(String, Int32) => BinaryFunc::Left, 3060;
+            },
             "length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
                 params!(String) => UnaryFunc::CharLength, 1317;

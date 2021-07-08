@@ -58,6 +58,8 @@ Wrap your release notes at the 80 character mark.
   `mz_kafka_consumer_partitions` has an additional column `initial_high_offset`
   containing the first reported `hi_offset` from the broker for each partition.
 
+- Add `left` to the [string function](/sql/functions#string-func) suite.
+
 {{% version-header v0.8.1 %}}
 
 - Add [timelines](/sql/timelines) to all sources to prevent
