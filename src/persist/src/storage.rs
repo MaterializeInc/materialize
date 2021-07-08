@@ -60,10 +60,6 @@ pub trait Buffer {
 ///
 /// - Invariant: Implementations are responsible for ensuring that they are
 ///   exclusive writers to this location.
-///
-/// TODO: Document restrictions on what keys are legal.
-///
-/// TODO: Add the ability to close a blob so a new writer can use the location.
 pub trait Blob {
     /// Returns a reference to the value corresponding to the key.
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;

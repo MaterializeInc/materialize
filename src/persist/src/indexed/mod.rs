@@ -67,7 +67,7 @@ use crate::Data;
 /// for indexed use, instead of the current situation, which is more complicated
 /// to reason about.
 pub struct Indexed<K, V, U: Buffer, L: Blob> {
-    last_file_id: u128,
+    last_file_id: u64,
     next_stream_id: Id,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
     // and this representation is optimized for the metadata serialization path,
@@ -121,13 +121,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     }
 
     fn new_blob_key(&mut self) -> String {
-        // TODO: Use meaningful file names? Something like id+desc might be
-        // useful when debugging.
-        let mut file_id = BlobMeta::now_millis();
-        if file_id <= self.last_file_id {
-            file_id = self.last_file_id + 1;
-        }
-        self.last_file_id = file_id;
+        let file_id = self.last_file_id;
+        self.last_file_id = file_id + 1;
         file_id.to_string()
     }
 
@@ -274,7 +269,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             return Err(format!("invalid batch bounds: {:?}", desc).into());
         }
 
-        // Atomically move a batch of data from future into trace by reading a
+        // Move a batch of data from future into trace by reading a
         // snapshot from future...
         let mut updates = Vec::new();
         {
@@ -288,22 +283,17 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             (k1, v1, t1).cmp(&(k2, v2, t2))
         });
 
-        // ...writing that snapshot's data into trace...
+        // ...and atomically swapping that snapshot's data into trace.
         let batch = BlobTraceBatch {
             id: id,
-            desc: desc.clone(),
+            desc,
             updates,
         };
-        self.append_trace(key, batch)?;
-        let future = self
-            .futures
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        self.append_trace(key, batch)
 
-        // .. and removing the data from future once that's successful.
-        future.truncate(desc.upper().clone())
-
-        // TODO: Incrementally compact trace.
+        // TODO: This is a good point to compact future. The data that's been
+        // moved is still there but now irrelevant. It may also be a good time
+        // to compact trace.
     }
 
     /// Appends the given `batch` to the trace for `id`, writing the data at
@@ -326,7 +316,16 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             .traces
             .get_mut(&batch.id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
+        let future = self
+            .futures
+            .get_mut(&batch.id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
+        let new_future_ts_lower = batch.desc.upper().clone();
         trace.append(key, batch, &mut self.blob)?;
+        future.truncate(new_future_ts_lower)?;
+
+        // Atomically update the meta with both the trace and future changes.
+        //
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
         self.blob.set_meta(self.serialize_meta())
