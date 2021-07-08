@@ -46,6 +46,8 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.8.2 %}}
+
 - Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
   `--experimental`)
 
