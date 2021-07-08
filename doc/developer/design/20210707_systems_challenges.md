@@ -60,6 +60,23 @@ Let's look at the problems in detail.
 
 ### Memory consumption when scaling worker threads
 
+We conduct an experiment to measure the idle memory consumption of Materialize.
+First, we build Materialize in release mode and clean the `mzdata` directory, which only preserves the system tables and collections.
+Next, we start Materialize with a specific amount of workers and measure the Rss after a fixed delay, after which we stop the instance.
+
+The following graphs shows the idle memory consumption of Materialize.
+The x-axis shows the number of threads, the y-axis indicates the Rss in GiB.
+The data is presented in a log-log plot.
+The first plot shows data up to 32 threads, the second up to 128 threads.
+We collect the data on a AMD Ryzen 3955wx CPU with 16 physical cores and 32 hardware threads, combined with 128 GiB RAM.
+Note that the second graph oversubscribes the available CPU cores.
+
+![32 workers](20210707_systems_challenges/idle_memory_32.svg)
+![128 workers](20210707_systems_challenges/idle_memory_128.svg)
+
+We observe that the memory consumption grows with the number of threads and seems to follow an exponential pattern.
+A single worker consumes 330 MiB Rss, which grows to 7.2 GiB for 32 workers and increases further to 48.6 GiB at 128 worker threads.
+
 ### Progress tracking overhead
 
 ### Memory allocator stress
