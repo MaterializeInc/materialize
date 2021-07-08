@@ -45,6 +45,9 @@ b3 6
 
 $ s3-create-bucket bucket=gzip-compression
 
+# ensure that we can handle empty objects
+$ s3-put-object bucket=gzip-compression key=short/
+
 $ s3-put-object bucket=gzip-compression key=short/compressed compression=gzip
 a1
 a2
