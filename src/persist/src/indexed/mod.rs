@@ -17,7 +17,8 @@ pub mod future;
 pub mod runtime;
 pub mod trace;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::ops::Range;
 
 use abomonation::abomonated::Abomonated;
 use differential_dataflow::trace::Description;
@@ -184,7 +185,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Atomically moves all writes currently in the buffer into the future.
     fn drain_buf(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = HashMap::new();
+        let mut updates_by_id: HashMap<Id, Vec<((K, V), u64, isize)>> = HashMap::new();
+        let mut sequence_numbers: BTreeSet<SeqNo> = BTreeSet::new();
         let desc = self.buf.snapshot(|seqno, buf| {
             let mut buf = buf.to_vec();
             let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry<K, V>>(&mut buf) }
@@ -198,13 +200,20 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                 entry
                     .updates
                     .iter()
-                    .map(|((key, val), ts, diff)| (seqno, (key.clone(), val.clone()), *ts, *diff)),
+                    .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff)),
             );
+
+            // Record the sequence number so we can sanity check that it falls inside the
+            // declared range.
+            sequence_numbers.insert(seqno);
             Ok(())
         })?;
+
+        Self::validate_buf_snapshot(&desc, &sequence_numbers)?;
+
         for (id, mut updates) in updates_by_id.drain() {
             // Future batches are required to be sorted by (ts, k, v).
-            updates.sort_unstable_by(|(_, (k1, v1), t1, _), (_, (k2, v2), t2, _)| {
+            updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
                 (t1, k1, v1).cmp(&(t2, k2, v2))
             });
             let batch = BlobFutureBatch {
@@ -221,6 +230,21 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             self.append_future(key, batch)?;
         }
         self.buf.truncate(desc.end)
+    }
+
+    /// Check that Buffer snapshots match expected invariants.
+    fn validate_buf_snapshot(desc: &Range<SeqNo>, seqnos: &BTreeSet<SeqNo>) -> Result<(), Error> {
+        // Check that all sequence numbers from Buffer fall under the stated
+        // [start, end) range.
+        for seqno in seqnos.iter() {
+            if seqno < &desc.start || seqno >= &desc.end {
+                return Err(Error::from(format!(
+                            "invalid sequence number in snapshot {:?}, expected value greater than or equal to {:?} and less than {:?}",
+                                                   seqno, desc.start, desc.end)));
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the current "sealed" frontier for an id.
@@ -436,6 +460,7 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
 mod tests {
     use std::error::Error;
 
+    use crate::error::Error as IndexedError;
     use crate::mem::MemBlob;
     use crate::mem::MemBuffer;
 
@@ -522,5 +547,69 @@ mod tests {
         // validations error if the sort code doesn't work.
         i.seal(id, 3)?;
         Ok(())
+    }
+
+    #[test]
+    fn buf_snapshot_validate() {
+        let range = SeqNo(1)..SeqNo(3);
+
+        // Normal case (equals lower)
+        let mut seqnos = BTreeSet::new();
+        seqnos.insert(SeqNo(1));
+
+        assert_eq!(
+            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            Ok(())
+        );
+
+        // Normal case (between (lower, upper))
+        let mut seqnos = BTreeSet::new();
+        seqnos.insert(SeqNo(2));
+
+        assert_eq!(
+            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            Ok(())
+        );
+
+        // Normal case (empty)
+        let seqnos = BTreeSet::new();
+
+        assert_eq!(
+            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            Ok(())
+        );
+
+        // Less than lower
+        let mut seqnos = BTreeSet::new();
+        seqnos.insert(SeqNo(0));
+
+        assert_eq!(
+            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(0), expected value greater than or equal to SeqNo(1) and less than SeqNo(3)"
+            ))
+        );
+
+        // Equal to upper
+        let mut seqnos = BTreeSet::new();
+        seqnos.insert(SeqNo(3));
+
+        assert_eq!(
+            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(3), expected value greater than or equal to SeqNo(1) and less than SeqNo(3)"
+            ))
+        );
+
+        // Greater than upper
+        let mut seqnos = BTreeSet::new();
+        seqnos.insert(SeqNo(4));
+
+        assert_eq!(
+            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(4), expected value greater than or equal to SeqNo(1) and less than SeqNo(3)"
+            ))
+        );
     }
 }
