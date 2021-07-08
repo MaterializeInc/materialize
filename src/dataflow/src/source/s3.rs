@@ -628,7 +628,9 @@ async fn download_object(
 
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
-                let activate = !buf.is_empty();
+                if buf.is_empty() {
+                    return (DownloadStatus::Ok, None);
+                }
 
                 let bytes_read = buf.len() as u64;
 
@@ -683,9 +685,7 @@ async fn download_object(
                         download_status = DownloadStatus::SendFailed;
                     }
                 }
-                if activate {
-                    activator.activate().expect("s3 reader activation failed");
-                }
+                activator.activate().expect("s3 reader activation failed");
                 (
                     download_status,
                     Some(DownloadMetricUpdate {
