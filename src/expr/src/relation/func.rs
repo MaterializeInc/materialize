@@ -596,6 +596,46 @@ impl AggregateFunc {
         };
         scalar_type.nullable(nullable)
     }
+
+    /// Returns true if the non-null constraint on the aggregation can be
+    /// converted into a non-null constraint on its parameter expression, ie.
+    /// whether the result of the aggregation is null if all the input values
+    /// are null.
+    pub fn propagates_nonnull_constraint(&self) -> bool {
+        match self {
+            AggregateFunc::MaxApd
+            | AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxDecimal
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinApd
+            | AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinDecimal
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+            | AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumDecimal
+            | AggregateFunc::SumAPD => true,
+            // Count is never null
+            AggregateFunc::Count => false,
+            _ => false,
+        }
+    }
 }
 
 fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
