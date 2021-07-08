@@ -288,9 +288,9 @@ reduce
     (call_binary or #0 (call_binary or (call_binary lt #2 3) #1)))
 [bool bool int32]
 ----
-(#1 || (#0 || ((#2 > 2) && (#2 < 3))))
+(#1 || (#0 || ((#2 < 3) && (#2 > 2))))
 
-# a | (a & b)
+## a | (a & b)
 
 reduce
 (call_binary or #0
@@ -299,7 +299,7 @@ reduce
 ----
 #0
 
-# a & (a | b)
+## a & (a | b)
 
 reduce
 (call_binary and (call_binary or #0 #1)
@@ -307,3 +307,29 @@ reduce
 [bool bool int32]
 ----
 (#0 || #1)
+
+## undistribute_and/or works despite multiple copies of the same expression in
+## the intersection
+
+canonicalize
+[(call_binary or
+    (call_binary and
+        (call_unary not (call_unary is_null #1))
+        (call_binary lt #0 #2))
+    (call_unary not (call_binary or (call_unary is_null #1) (call_binary or
+    (call_unary is_null #1) (call_unary is_null #3)))))]
+[float64 float64 float64 float64]
+----
+!(isnull(#1))
+(!(isnull(#3)) || (#0 < #2))
+
+canonicalize
+[(call_binary or
+    (call_unary not (call_unary is_null (call_binary add_float_64 (call_binary add_float_64 #3 #1) #1)))
+        (call_binary and
+        (call_unary not (call_unary is_null #1))
+        (call_binary lt #0 #2)))]
+[float64 float64 float64 float64]
+----
+!(isnull(#1))
+(!(isnull(#3)) || (#0 < #2))

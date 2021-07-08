@@ -777,6 +777,8 @@ impl MirScalarExpr {
                     .into_iter()
                     .filter(|e| operands2.contains(e))
                     .collect::<Vec<_>>();
+                intersection.sort();
+                intersection.dedup();
 
                 // To construct the undistributed version from
                 // `((a1 && ... && aN) & b) || ((a1 && ... && aN) && c)`, we
@@ -792,6 +794,9 @@ impl MirScalarExpr {
                 } else if !intersection.is_empty() {
                     expr1.suppress_operands(&intersection[..], undistribute_and);
                     expr2.suppress_operands(&intersection[..], undistribute_and);
+                    if expr2 < expr1 {
+                        ::std::mem::swap(expr1, expr2);
+                    }
                 }
 
                 for term in intersection.into_iter() {
