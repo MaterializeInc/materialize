@@ -27,7 +27,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use dataflow_types::{DataflowDesc, DataflowError};
+use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
 use repr::{Row, RowArena};
 
@@ -89,7 +89,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Creates a new empty Context.
-    pub fn for_dataflow(dataflow: &DataflowDesc, dataflow_id: usize) -> Self {
+    pub fn for_dataflow<Plan>(dataflow: &DataflowDescription<Plan>, dataflow_id: usize) -> Self {
         let as_of_frontier = dataflow
             .as_of
             .clone()

@@ -32,8 +32,8 @@ use tokio::sync::mpsc;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
-    SourceConnector, TimestampSourceUpdate, Update,
+    Consistency, DataflowDescription, DataflowError, ExternalSourceConnector, MzOffset,
+    PeekResponse, SourceConnector, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::now::NowFn;
@@ -43,7 +43,7 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
-use crate::render::{self, RenderState};
+use crate::render::{self, plan::Plan as RenderPlan, RenderState};
 use crate::server::metrics::Metrics;
 use crate::source::timestamp::TimestampBindingRc;
 
@@ -57,7 +57,7 @@ static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 #[derive(Clone, Debug)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.
-    CreateDataflows(Vec<DataflowDesc>),
+    CreateDataflows(Vec<DataflowDescription<RenderPlan>>),
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
     /// Drop the sinks bound to these names.

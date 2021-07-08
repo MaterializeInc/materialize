@@ -175,7 +175,7 @@ pub struct RelevantTokens {
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     render_state: &mut RenderState,
-    dataflow: DataflowDesc,
+    dataflow: DataflowDescription<plan::Plan>,
     now: NowFn,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
@@ -223,7 +223,10 @@ pub fn build_dataflow<A: Allocate>(
 
             // Build declared objects.
             for object in &dataflow.objects_to_build {
-                context.build_object(region, object);
+                // We clone because we cannot deconstruct `object` for its members due
+                // to subsequent use of `dataflow.get_imports`.
+                // TODO: fix that and avoid the clones.
+                context.build_object(region, object.clone());
             }
 
             // Export declared indexes.
@@ -300,12 +303,13 @@ where
         }
     }
 
-    fn build_object(&mut self, scope: &mut Child<'g, G, G::Timestamp>, object: &BuildDesc) {
+    fn build_object(
+        &mut self,
+        scope: &mut Child<'g, G, G::Timestamp>,
+        object: BuildDesc<plan::Plan>,
+    ) {
         // First, transform the relation expression into a render plan.
-        let render_plan = plan::Plan::from_mir(&object.relation_expr)
-            .expect("Could not produce plan for expression");
-
-        let bundle = self.render_plan(render_plan, scope, scope.index());
+        let bundle = self.render_plan(object.relation_expr, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
     }
 
@@ -581,9 +585,10 @@ pub mod plan {
     use crate::render::reduce::{KeyValPlan, ReducePlan};
     use crate::render::threshold::ThresholdPlan;
     use crate::render::top_k::TopKPlan;
+    use dataflow_types::DataflowDescription;
     use expr::{
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-        TableFunc,
+        OptimizedMirRelationExpr, TableFunc,
     };
     use repr::{Datum, Row};
 
@@ -594,7 +599,7 @@ pub mod plan {
     /// compelling ways to represent renderable plans. Several stages have already
     /// encapsulated much of their logic in their own stage-specific plans, and we
     /// expect more of the plans to do the same in the future, without consultation.
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     pub enum Plan {
         /// A collection containing a pre-determined collection.
         Constant {
@@ -954,6 +959,31 @@ pub mod plan {
                 })
             } else {
                 Ok(plan)
+            }
+        }
+
+        /// Convert the dataflow description into one that uses render plans.
+        pub fn finalize_dataflow(
+            desc: DataflowDescription<OptimizedMirRelationExpr>,
+        ) -> DataflowDescription<Self> {
+            let objects_to_build = desc
+                .objects_to_build
+                .into_iter()
+                .map(|build| dataflow_types::BuildDesc {
+                    id: build.id,
+                    relation_expr: Self::from_mir(&build.relation_expr)
+                        .expect("Dataflow finalization failed to produce plan"),
+                })
+                .collect::<Vec<_>>();
+            DataflowDescription {
+                source_imports: desc.source_imports,
+                index_imports: desc.index_imports,
+                objects_to_build,
+                index_exports: desc.index_exports,
+                sink_exports: desc.sink_exports,
+                dependent_objects: desc.dependent_objects,
+                as_of: desc.as_of,
+                debug_name: desc.debug_name,
             }
         }
     }
