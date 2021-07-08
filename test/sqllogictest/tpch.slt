@@ -1696,7 +1696,7 @@ ORDER BY
 | Join %5 %6 (= #0 #2)
 | | implementation = Differential %5 %6.(#0)
 | | demand = (#0, #1, #4)
-| Filter (#4 != #1)
+| Filter (#1 != #4)
 | Distinct group=(#0, #1)
 | ArrangeBy (#0, #1)
 
@@ -1721,7 +1721,7 @@ ORDER BY
 | Join %9 %11 (= #0 #2)
 | | implementation = Differential %9 %11.(#0)
 | | demand = (#0, #1, #4, #13, #14)
-| Filter (#4 != #1), (#14 > #13)
+| Filter (#1 != #4), (#14 > #13)
 | Distinct group=(#0, #1)
 | Negate
 
