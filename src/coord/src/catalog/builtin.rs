@@ -20,7 +20,7 @@
 //! definitions of existing builtins!
 //!
 //! More information about builtin system tables and types can be found in
-//! https://materialize.com/docs/sql/system-tables/.
+//! <https://materialize.com/docs/sql/system-tables/>.
 
 use std::collections::{BTreeMap, BTreeSet};
 

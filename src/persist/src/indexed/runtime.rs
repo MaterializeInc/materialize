@@ -35,9 +35,9 @@ enum Cmd<K, V> {
 /// This returns a clone-able client handle. The runtime is stopped when any
 /// client calls [RuntimeClient::stop] or when all clients have been dropped.
 ///
-/// TODO: At the moment, this runs IO and heavy cpu work in a single thread.
-/// Move this work out into whatever async runtime the user likes, via something
-/// like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
+// TODO: At the moment, this runs IO and heavy cpu work in a single thread.
+// Move this work out into whatever async runtime the user likes, via something
+// like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
 pub fn start<K, V, U, L>(buf: U, blob: L) -> Result<RuntimeClient<K, V>, Error>
 where
     K: Data + Send + Sync + 'static,

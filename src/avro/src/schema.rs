@@ -186,11 +186,11 @@ pub enum SchemaPiece {
     Date,
     /// An `Int64` Avro schema with a semantic type being milliseconds since the unix epoch.
     ///
-    /// https://avro.apache.org/docs/current/spec.html#Timestamp+%28millisecond+precision%29
+    /// <https://avro.apache.org/docs/current/spec.html#Timestamp+%28millisecond+precision%29>
     TimestampMilli,
     /// An `Int64` Avro schema with a semantic type being microseconds since the unix epoch.
     ///
-    /// https://avro.apache.org/docs/current/spec.html#Timestamp+%28microsecond+precision%29
+    /// <https://avro.apache.org/docs/current/spec.html#Timestamp+%28microsecond+precision%29>
     TimestampMicro,
     /// A `bytes` or `fixed` Avro schema with a logical type of `decimal` and
     /// the specified precision and scale.
@@ -2025,7 +2025,7 @@ impl<'a> Serialize for RecordFieldSerContext<'a> {
 }
 
 /// Parses a **valid** avro schema into the Parsing Canonical Form.
-/// https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas
+/// <https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas>
 fn parsing_canonical_form(schema: &serde_json::Value) -> String {
     match schema {
         serde_json::Value::Object(map) => pcf_map(map),

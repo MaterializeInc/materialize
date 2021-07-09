@@ -15,7 +15,7 @@ use crate::error::CoordError;
 /// Manages allocation of u32 IDs.
 ///
 /// Note that the current implementation wastes memory. It would be far more
-/// efficient to use a compressed bitmap, like https://roaringbitmap.org or
+/// efficient to use a compressed bitmap, like <https://roaringbitmap.org> or
 /// the hibitset crate, but neither presently supports a fast "find first zero"
 /// operation.
 #[derive(Debug)]
