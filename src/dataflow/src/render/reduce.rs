@@ -705,11 +705,14 @@ where
         });
 
         // Demux out the potential errors from key and value selector evaluation.
+        use differential_dataflow::operators::consolidate::ConsolidateStream;
         use timely::dataflow::operators::ok_err::OkErr;
         let (ok, err) = key_val_input.ok_err(|x| x);
 
         let ok_input = ok.as_collection();
         err_input = err.as_collection().concat(&err_input);
+
+        let ok_input = ok_input.consolidate_stream();
 
         // Render the reduce plan
         reduce_plan.render(ok_input, err_input, key_arity)
