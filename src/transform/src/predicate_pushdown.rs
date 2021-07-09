@@ -168,9 +168,7 @@ impl PredicatePushdown {
                 // Reduce the predicates to determine as best as possible
                 // whether they are literal errors before working with them.
                 let input_type = input.typ();
-                for predicate in predicates.iter_mut() {
-                    predicate.reduce(&input_type);
-                }
+                expr::canonicalize::canonicalize_predicates(predicates, &input_type);
 
                 // It can be helpful to know if there are any non-literal errors,
                 // as this is justification for not pushing down literal errors.

@@ -263,8 +263,6 @@ impl Default for Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(crate::predicate_pushdown::PredicatePushdown),
                     // Lifts the information `!isnull(col)`
                     Box::new(crate::nonnullable::NonNullable),
                     // Lifts the information `col = literal`
@@ -274,6 +272,8 @@ impl Default for Optimizer {
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     // Lifts the information `col1 = col2`
                     Box::new(crate::demand::Demand),
+                    // Predicate pushdown sets the equivalence classes of joins.
+                    Box::new(crate::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
