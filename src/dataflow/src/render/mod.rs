@@ -409,7 +409,12 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get { id, keys, mfp } => {
+            Plan::Get {
+                id,
+                keys,
+                mfp,
+                key_val,
+            } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let collection = self
@@ -423,7 +428,7 @@ where
                     // collection.arranged.retain(|key, _value| keys.contains(key));
                     collection
                 } else {
-                    let (oks, errs) = collection.as_collection_core(mfp);
+                    let (oks, errs) = collection.as_collection_core(mfp, key_val);
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -437,13 +442,17 @@ where
                 self.remove_id(Id::Local(id));
                 body
             }
-            Plan::Mfp { input, mfp } => {
+            Plan::Mfp {
+                input,
+                mfp,
+                key_val,
+            } => {
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 let input = self.render_plan(*input, scope, worker_index);
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(mfp);
+                    let (oks, errs) = input.as_collection_core(mfp, key_val);
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -635,6 +644,12 @@ pub mod plan {
             /// that have been pre-arranged, avoiding copying rows that are not
             /// used and columns that are projected away.
             mfp: MapFilterProject,
+            /// Optionally, a pair of arrangement key and row value to search for.
+            ///
+            /// When this is present, it means that the implementation can search
+            /// the arrangement keyed by the first argument for the value that is
+            /// the second argument, and process only those elements.
+            key_val: Option<(Vec<MirScalarExpr>, Row)>,
         },
         /// Binds `value` to `id`, and then results in `body` with that binding.
         ///
@@ -662,6 +677,12 @@ pub mod plan {
             input: Box<Plan>,
             /// Linear operator to apply to each record.
             mfp: MapFilterProject,
+            /// Optionally, a pair of arrangement key and row value to search for.
+            ///
+            /// When this is present, it means that the implementation can search
+            /// the arrangement keyed by the first argument for the value that is
+            /// the second argument, and process only those elements.
+            key_val: Option<(Vec<MirScalarExpr>, Row)>,
         },
         /// A variable number of output records for each input record.
         ///
@@ -826,26 +847,33 @@ pub mod plan {
                     let mfp = mfp.take();
                     // If `mfp` is the identity, we can surface all imported arrangements.
                     // Otherwise, we apply `mfp` and promise no arrangements.
-                    if mfp.is_identity() {
-                        let keys = arrangements.get(id).cloned().unwrap_or_else(Vec::new);
-                        (
-                            Plan::Get {
-                                id: id.clone(),
-                                keys: keys.clone(),
-                                mfp,
-                            },
-                            keys,
-                        )
+                    let mut keys = if mfp.is_identity() {
+                        arrangements.get(id).cloned().unwrap_or_else(Vec::new)
                     } else {
-                        (
-                            Plan::Get {
-                                id: id.clone(),
-                                keys: Vec::new(),
-                                mfp,
-                            },
-                            Vec::new(),
-                        )
+                        Vec::new()
+                    };
+                    // Seek out an arrangement key that might be constrained to a literal.
+                    // TODO: Improve key selection heuristic.
+                    let key_val = keys
+                        .iter()
+                        .filter_map(|key| {
+                            mfp.literal_constraints(key).map(|val| (key.clone(), val))
+                        })
+                        .next();
+                    // If we discover a literal constraint, we can discard other arrangements.
+                    if let Some((key, _)) = &key_val {
+                        keys = vec![key.clone()];
                     }
+                    // Return the plan, and any keys if an identity `mfp`.
+                    (
+                        Plan::Get {
+                            id: id.clone(),
+                            keys: keys.clone(),
+                            mfp,
+                            key_val,
+                        },
+                        keys,
+                    )
                 }
                 MirRelationExpr::Let { id, value, body } => {
                     // It would be unfortunate to have a non-trivial `mfp` here, as we hope
@@ -1061,9 +1089,16 @@ pub mod plan {
 
             // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.
             if !mfp.is_identity() {
+                // Seek out an arrangement key that might be constrained to a literal.
+                // TODO: Improve key selection heuristic.
+                let key_val = keys
+                    .iter()
+                    .filter_map(|key| mfp.literal_constraints(key).map(|val| (key.clone(), val)))
+                    .next();
                 plan = Plan::Mfp {
                     input: Box::new(plan),
                     mfp,
+                    key_val,
                 };
                 keys = Vec::new();
             }
