@@ -1535,7 +1535,7 @@ where
 
     let mut to_aggregate = Vec::new();
     // First, collect all non-distinct aggregations in one pass.
-    let easy_cases = collection.inner.as_collection().explode({
+    let easy_cases = collection.explode({
         let zero_diffs = zero_diffs.clone();
         move |(key, row)| {
             let mut diffs = zero_diffs.clone();
