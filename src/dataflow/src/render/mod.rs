@@ -847,14 +847,16 @@ pub mod plan {
                     let mfp = mfp.take();
                     // If `mfp` is the identity, we can surface all imported arrangements.
                     // Otherwise, we apply `mfp` and promise no arrangements.
-                    let mut keys = if mfp.is_identity() {
-                        arrangements.get(id).cloned().unwrap_or_else(Vec::new)
+                    let mut in_keys = arrangements.get(id).cloned().unwrap_or_else(Vec::new);
+                    let out_keys = if mfp.is_identity() {
+                        in_keys.clone()
                     } else {
                         Vec::new()
                     };
+
                     // Seek out an arrangement key that might be constrained to a literal.
                     // TODO: Improve key selection heuristic.
-                    let key_val = keys
+                    let key_val = in_keys
                         .iter()
                         .filter_map(|key| {
                             mfp.literal_constraints(key).map(|val| (key.clone(), val))
@@ -862,17 +864,17 @@ pub mod plan {
                         .next();
                     // If we discover a literal constraint, we can discard other arrangements.
                     if let Some((key, _)) = &key_val {
-                        keys = vec![key.clone()];
+                        in_keys = vec![key.clone()];
                     }
                     // Return the plan, and any keys if an identity `mfp`.
                     (
                         Plan::Get {
                             id: id.clone(),
-                            keys: keys.clone(),
+                            keys: in_keys,
                             mfp,
                             key_val,
                         },
-                        keys,
+                        out_keys,
                     )
                 }
                 MirRelationExpr::Let { id, value, body } => {
