@@ -238,10 +238,12 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] Issue a PR to the cloud repo to allow the released version following [the instructions][].
 - [ ] After that PR has been merged, a PR suggesting a merge from `main` -> `production` will be
-  automatically created and assigned to you. Either merge it or request that someone from the
-  cloud team merge it.
+  automatically created and assigned to you. Request somebody on the
+  [@MaterializeInc/cloud-deployers][deployers] team review it; once approved, merge the PR and it
+  will be automatically deployed to production.
 
 [the instructions]: https://github.com/MaterializeInc/cloud/blob/main/doc/misc.md#updating-to-a-new-materialize-release
+[deployers]: https://github.com/orgs/MaterializeInc/teams/cloud-deployers/members
 
 ### Convert the GitHub Tag into a GitHub Release
 
