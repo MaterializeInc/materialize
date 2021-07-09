@@ -506,18 +506,20 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 // just gets caught elsewhere.
 fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
     types.iter().max_by_key(|scalar_type| match scalar_type {
+        // Strings can be cast to any type, so should be given lowest priority.
+        ScalarType::String => 0,
         // [`TypeCategory::Numeric`]
-        ScalarType::Int32 => 0,
-        ScalarType::Int64 => 1,
-        ScalarType::Decimal(_, _) => 2,
-        ScalarType::APD { scale: None } => 3,
-        ScalarType::Float32 => 4,
-        ScalarType::Float64 => 5,
+        ScalarType::Int32 => 1,
+        ScalarType::Int64 => 2,
+        ScalarType::Decimal(_, _) => 3,
+        ScalarType::APD { scale: None } => 4,
+        ScalarType::Float32 => 5,
+        ScalarType::Float64 => 6,
         // [`TypeCategory::DateTime`]
-        ScalarType::Date => 6,
-        ScalarType::Timestamp => 7,
-        ScalarType::TimestampTz => 8,
-        _ => 9,
+        ScalarType::Date => 7,
+        ScalarType::Timestamp => 8,
+        ScalarType::TimestampTz => 9,
+        _ => 10,
     })
 }
 
@@ -545,13 +547,16 @@ pub fn guess_best_common_type(
     types: &[Option<ScalarType>],
     type_hint: Option<&ScalarType>,
 ) -> Option<ScalarType> {
-    // Remove unknown types.
-    let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).cloned().collect();
+    // Remove unknown types and chain type_hint
+    let known_types: Vec<_> = types
+        .into_iter()
+        .filter_map(|v| match v {
+            None => type_hint.cloned(),
+            v => v.clone(),
+        })
+        .collect();
 
     if known_types.is_empty() {
-        if type_hint.is_some() {
-            return type_hint.cloned();
-        }
         return Some(ScalarType::String);
     }
 
@@ -560,8 +565,8 @@ pub fn guess_best_common_type(
     }
 
     // Determine best cast type among known types.
-    if let Some(btt) = guess_compatible_cast_type(&known_types) {
-        if let ScalarType::Decimal(_, _) = btt {
+    match guess_compatible_cast_type(&known_types) {
+        Some(ScalarType::Decimal(_, _)) => {
             // Determine best decimal scale (i.e. largest).
             let mut max_s = 0;
             for t in known_types {
@@ -569,13 +574,11 @@ pub fn guess_best_common_type(
                     max_s = std::cmp::max(s, max_s);
                 }
             }
-            return Some(ScalarType::Decimal(38, max_s));
-        } else {
-            return Some(btt.clone());
+            Some(ScalarType::Decimal(38, max_s))
         }
+        Some(btt) => Some(btt.clone()),
+        None => None,
     }
-
-    None
 }
 
 pub fn plan_coerce<'a>(

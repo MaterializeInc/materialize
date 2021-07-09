@@ -65,7 +65,7 @@ SELECT (LIST[[[[1], [2]]], [[[3]]]])::text
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error CAST does not support casting from integer list to integer list list
+query error LIST expression cannot be cast to uniform type: integer vs integer list
 SELECT LIST[1, null] :: INT LIST LIST
 
 query T
