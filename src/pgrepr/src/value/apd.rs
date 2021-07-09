@@ -19,22 +19,17 @@ use dec::OrderedDecimal;
 use lazy_static::lazy_static;
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-use repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
+use repr::adt::apd::{self, cx_datum, Apd as AdtApd, ApdAgg};
 
-/// (TO BE DEPRECATED) A wrapper for the `repr` crate's `Decimal` type that can be serialized to
-/// and deserialized from the PostgreSQL binary format.
+/// A wrapper for the `repr` crate's [`Decimal`](repr::adt::decimal::Decimal)
+/// type that can be serialized to and deserialized from the PostgreSQL binary
+/// format.
 #[derive(Debug)]
-pub struct Numeric(pub OrderedDecimal<AdtNumeric>);
+pub struct Apd(pub OrderedDecimal<AdtApd>);
 
-impl fmt::Display for Numeric {
+impl fmt::Display for Apd {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
-    }
-}
-
-impl From<AdtNumeric> for Numeric {
-    fn from(n: AdtNumeric) -> Numeric {
-        Numeric(OrderedDecimal(n))
     }
 }
 
@@ -42,26 +37,26 @@ impl From<AdtNumeric> for Numeric {
 const TO_FROM_SQL_BASE_POW: usize = 4;
 
 lazy_static! {
-    static ref TO_SQL_BASER: AdtNumeric = AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW as u32));
-    static ref FROM_SQL_SCALER: AdtNumeric = AdtNumeric::from(TO_FROM_SQL_BASE_POW);
+    static ref TO_SQL_BASER: AdtApd = AdtApd::from(10u32.pow(TO_FROM_SQL_BASE_POW as u32));
+    static ref FROM_SQL_SCALER: AdtApd = AdtApd::from(TO_FROM_SQL_BASE_POW);
 }
 
-/// The maximum number of units necessary to represent a valid [`AdtNumeric`] value.
+/// The maximum number of units necessary to represent a valid [`AdtApd`] value.
 const UNITS_LEN: usize = 11;
 
-impl ToSql for Numeric {
+impl ToSql for Apd {
     fn to_sql(
         &self,
         _: &Type,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + 'static + Send + Sync>> {
         let mut d = self.0 .0.clone();
-        let scale = u16::from(numeric::get_scale(&d));
+        let scale = u16::from(apd::get_scale(&d));
         let is_nan = d.is_nan();
-        let is_neg = d.is_negative();
         let is_infinite = d.is_infinite();
+        let is_neg = d.is_negative();
 
-        let mut cx = numeric::cx_datum();
+        let mut cx = apd::cx_datum();
         // Need to extend exponents slightly because fractional components need
         // to be aligned to base 10,000.
         cx.set_max_exponent(cx.max_exponent() + TO_FROM_SQL_BASE_POW as isize)
@@ -99,7 +94,7 @@ impl ToSql for Numeric {
 
             // Convert d into a "canonical coefficient" with most significant
             // fractional digit properly aligned.
-            cx.scaleb(&mut d, &AdtNumeric::from(unit_shift_exp));
+            cx.scaleb(&mut d, &AdtApd::from(unit_shift_exp));
 
             (
                 u16::try_from(unit_shift_exp / TO_FROM_SQL_BASE_POW).expect("value < 40"),
@@ -142,10 +137,8 @@ impl ToSql for Numeric {
             0
         });
         out.put_u16(scale);
-        if !is_nan {
-            for digit in digits[d_i..].iter() {
-                out.put_u16(*digit);
-            }
+        for digit in digits[d_i..].iter() {
+            out.put_u16(*digit);
         }
 
         Ok(IsNull::No)
@@ -158,8 +151,8 @@ impl ToSql for Numeric {
     to_sql_checked!();
 }
 
-impl<'a> FromSql<'a> for Numeric {
-    fn from_sql(_: &Type, mut raw: &'a [u8]) -> Result<Numeric, Box<dyn Error + Sync + Send>> {
+impl<'a> FromSql<'a> for Apd {
+    fn from_sql(_: &Type, mut raw: &'a [u8]) -> Result<Apd, Box<dyn Error + Sync + Send>> {
         let units = usize::from(raw.read_u16::<NetworkEndian>()?);
         let weight = raw.read_i16::<NetworkEndian>()?;
         let sign = raw.read_u16::<NetworkEndian>()?;
@@ -171,30 +164,30 @@ impl<'a> FromSql<'a> for Numeric {
 
         // We need wider context because decoding values can require >39 digits
         // of precision given how alignment works.
-        let mut cx = numeric::cx_agg();
-        let mut d = NumericAgg::zero();
+        let mut cx = apd::cx_agg();
+        let mut d = ApdAgg::zero();
 
         for digit in digits[..units].iter() {
             cx.scaleb(&mut d, &FROM_SQL_SCALER);
-            let n = AdtNumeric::from(u32::from(*digit));
+            let n = AdtApd::from(u32::from(*digit));
             cx.add(&mut d, &n);
         }
 
         match sign {
             0 => (),
             // Infinity
-            0xD000 => return Ok(Numeric::from(AdtNumeric::infinity())),
+            0xD000 => return Ok(Apd(OrderedDecimal(AdtApd::infinity()))),
             // -Infinity
             0xF000 => {
-                let mut cx = numeric::cx_datum();
-                let mut d = AdtNumeric::infinity();
+                let mut cx = apd::cx_datum();
+                let mut d = AdtApd::infinity();
                 cx.neg(&mut d);
-                return Ok(Numeric::from(d));
+                return Ok(Apd(OrderedDecimal(d)));
             }
             // Negative
             0x4000 => cx.neg(&mut d),
             // NaN
-            0xC000 => return Ok(Numeric::from(AdtNumeric::nan())),
+            0xC000 => return Ok(Apd(OrderedDecimal(AdtApd::nan()))),
             _ => return Err("bad sign in numeric".into()),
         }
 
@@ -203,15 +196,15 @@ impl<'a> FromSql<'a> for Numeric {
         // Adjust scales
         if scale < 0 {
             // Multiply by 10^scale
-            cx.scaleb(&mut d, &AdtNumeric::from(-i32::from(scale)));
+            cx.scaleb(&mut d, &AdtApd::from(-i32::from(scale)));
             scale = 0;
         } else if scale > in_scale {
             // Divide by 10^(difference in scale and in_scale)
-            cx.scaleb(&mut d, &AdtNumeric::from(-i32::from(scale - in_scale)));
+            cx.scaleb(&mut d, &AdtApd::from(-i32::from(scale - in_scale)));
             scale = in_scale;
         }
 
-        cx.scaleb(&mut d, &AdtNumeric::from(-i32::from(scale)));
+        cx.scaleb(&mut d, &AdtApd::from(-i32::from(scale)));
         cx.reduce(&mut d);
 
         let mut cx = cx_datum();
@@ -222,7 +215,7 @@ impl<'a> FromSql<'a> for Numeric {
         if d.is_infinite() || cx.status().any() {
             return Err(format!("Unable to take bytes to APD value; rendered {}", d).into());
         }
-        Ok(Numeric::from(d_datum))
+        Ok(Apd(OrderedDecimal(d_datum)))
     }
 
     fn accepts(ty: &Type) -> bool {
@@ -233,15 +226,15 @@ impl<'a> FromSql<'a> for Numeric {
 #[test]
 fn test_to_from_sql_roundtrip() {
     fn inner(s: &str) {
-        let mut cx = numeric::cx_datum();
+        let mut cx = apd::cx_datum();
         let d = cx.parse(s).unwrap();
-        let r = Numeric(OrderedDecimal(d));
+        let r = Apd(OrderedDecimal(d));
 
         let mut out = BytesMut::new();
 
         let _ = r.to_sql(&Type::NUMERIC, &mut out).unwrap();
 
-        let d_from_sql = Numeric::from_sql(&Type::NUMERIC, &out).unwrap();
+        let d_from_sql = Apd::from_sql(&Type::NUMERIC, &out).unwrap();
         assert_eq!(r.0, d_from_sql.0);
     }
     inner("0");
@@ -273,21 +266,24 @@ fn test_to_from_sql_roundtrip() {
     inner("NaN");
 
     // Test infinity, which is a valid value in aggregations over APD
-    let mut cx = numeric::cx_datum();
-    let v = vec![
+    let mut cx = apd::cx_datum();
+    let mut v = vec![];
+    v.push(
         cx.parse("-999999999999999999999999999999999999999")
             .unwrap(),
+    );
+    v.push(
         cx.parse("-999999999999999999999999999999999999999")
             .unwrap(),
-    ];
+    );
     // -Infinity
     let s = cx.sum(v.iter());
     assert!(s.is_infinite());
-    let r = Numeric::from(s);
+    let r = Apd(OrderedDecimal(s));
     let mut out = BytesMut::new();
 
     let _ = r.to_sql(&Type::NUMERIC, &mut out).unwrap();
 
-    let d_from_sql = Numeric::from_sql(&Type::NUMERIC, &out).unwrap();
+    let d_from_sql = Apd::from_sql(&Type::NUMERIC, &out).unwrap();
     assert_eq!(r.0, d_from_sql.0);
 }

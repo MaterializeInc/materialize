@@ -2165,3 +2165,15 @@ SELECT column1 FROM (
         )
 )
 ----
+
+# regression test for https://github.com/MaterializeInc/materialize/issues/7361
+statement ok
+CREATE TABLE A (f1 DECIMAL);
+
+statement ok
+INSERT INTO A VALUES ('-999999999999999999999999999999999999999'), ('-999999999999999999999999999999999999999');
+
+query R
+SELECT sum(f1) FROM A;
+----
+-Infinity
