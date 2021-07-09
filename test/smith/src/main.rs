@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Fuzz test Materialize using the Smith fuzzer
-//! available at https://api.jibson.dev/smith
+//! available at <https://api.jibson.dev/smith>
 
 #![deny(missing_debug_implementations, missing_docs)]
 

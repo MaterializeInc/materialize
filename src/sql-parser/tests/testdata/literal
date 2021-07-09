@@ -47,7 +47,7 @@ parse-scalar roundtrip
 parse-scalar
 'Jim''s salary'
 ----
-Value(String("Jim\'s salary"))
+Value(String("Jim's salary"))
 
 parse-scalar
 E'lots\tof\nescapes\bin\nhere\r.\f\U0001f64a\u2048'

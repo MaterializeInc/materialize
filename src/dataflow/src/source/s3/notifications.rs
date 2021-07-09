@@ -52,7 +52,7 @@ pub struct Record {
 
 /// The Event type
 ///
-/// https://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html#supported-notification-event-types
+/// <https://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html#supported-notification-event-types>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EventType {
     #[serde(rename = "ObjectCreated:Put")]

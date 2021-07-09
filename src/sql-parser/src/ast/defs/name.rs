@@ -73,7 +73,7 @@ impl From<&str> for Ident {
 
 /// More-or-less a direct translation of the Postgres function for doing the same thing:
 ///
-///   https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/ruleutils.c#L10730-L10812
+///   <https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/ruleutils.c#L10730-L10812>
 ///
 /// Quotation is forced when printing in Stable mode.
 impl AstDisplay for Ident {
