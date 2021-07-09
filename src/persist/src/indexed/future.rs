@@ -97,7 +97,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
             // write to the buffer, so this should never happen. Hopefully any
             // regressions in maintaining this invariant will be caught by this
             // debug/test check.
-            for (_, _, ts, _) in batch.updates.iter() {
+            for (_, ts, _) in batch.updates.iter() {
                 if !self.ts_lower.less_equal(ts) {
                     return Err(Error::from(format!(
                         "batch contains timestamp {:?} before ts_lower: {:?}",
@@ -166,12 +166,11 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {
             let updates = batch
                 .updates
                 .iter()
-                .filter(|(seqno, _, ts, _)| {
-                    !self.seqno_upper.less_equal(seqno)
-                        && self.ts_lower.less_equal(ts)
+                .filter(|(_, ts, _)| {
+                    self.ts_lower.less_equal(ts)
                         && self.ts_upper.as_ref().map_or(true, |u| !u.less_equal(ts))
                 })
-                .map(|(_, (key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
+                .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
             buf.extend(updates);
             return true;
         }
@@ -202,7 +201,7 @@ mod tests {
                 Antichain::from_elem(SeqNo(1)),
                 Antichain::from_elem(SeqNo(0)),
             ),
-            updates: vec![(SeqNo(0), ("k".to_string(), "v".to_string()), 1, 1)],
+            updates: vec![(("k".to_string(), "v".to_string()), 1, 1)],
         };
         assert_eq!(
             f.append("0".to_owned(), batch, &mut blob),
@@ -219,7 +218,7 @@ mod tests {
                 Antichain::from_elem(SeqNo(1)),
                 Antichain::from_elem(SeqNo(0)),
             ),
-            updates: vec![(SeqNo(0), ("k".to_string(), "v".to_string()), 2, 1)],
+            updates: vec![(("k".to_string(), "v".to_string()), 2, 1)],
         };
         assert_eq!(f.append("1".to_owned(), batch, &mut blob), Ok(()));
 

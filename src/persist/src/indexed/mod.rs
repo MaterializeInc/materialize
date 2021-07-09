@@ -18,6 +18,7 @@ pub mod runtime;
 pub mod trace;
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use abomonation::abomonated::Abomonated;
 use differential_dataflow::trace::Description;
@@ -200,27 +201,58 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                     .iter()
                     .map(|((key, val), ts, diff)| (seqno, (key.clone(), val.clone()), *ts, *diff)),
             );
+
             Ok(())
         })?;
-        for (id, mut updates) in updates_by_id.drain() {
-            // Future batches are required to be sorted by (ts, k, v).
-            updates.sort_unstable_by(|(_, (k1, v1), t1, _), (_, (k2, v2), t2, _)| {
-                (t1, k1, v1).cmp(&(t2, k2, v2))
-            });
-            let batch = BlobFutureBatch {
-                id,
-                desc: Description::new(
-                    Antichain::from_elem(desc.start),
-                    Antichain::from_elem(desc.end),
-                    // We never compact BlobFuture, so since is always the minimum.
-                    Antichain::from_elem(SeqNo(0)),
-                ),
-                updates: updates,
-            };
-            let key = self.new_blob_key();
-            self.append_future(key, batch)?;
+
+        for (id, updates) in updates_by_id.drain() {
+            self.drain_buf_inner(id, updates, &desc)?;
         }
         self.buf.truncate(desc.end)
+    }
+
+    /// Construct a new [BlobFutureBatch] out of the provided `updates` and add
+    /// it to the future for `id`.
+    fn drain_buf_inner(
+        &mut self,
+        id: Id,
+        mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
+        desc: &Range<SeqNo>,
+    ) -> Result<(), Error> {
+        if cfg!(any(debug, test)) {
+            // Sanity check that all received sequence numbers fall within the stated
+            // [lower, upper) range
+            for (seqno, _, _, _) in &updates {
+                if seqno < &desc.start || seqno >= &desc.end {
+                    return Err(Error::from(format!(
+                            "invalid sequence number in snapshot {:?}, expected value greater than or equal to {:?} and less than {:?}",
+                                                   seqno, desc.start, desc.end)));
+                }
+            }
+        }
+
+        let mut updates: Vec<_> = updates
+            .drain(..)
+            .map(|(_, (k, v), t, d)| ((k, v), t, d))
+            .collect();
+        // Future batches are required to be sorted by (ts, k, v).
+        updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
+            (t1, k1, v1).cmp(&(t2, k2, v2))
+        });
+        let batch = BlobFutureBatch {
+            id,
+            desc: Description::new(
+                Antichain::from_elem(desc.start),
+                Antichain::from_elem(desc.end),
+                // We never compact BlobFuture, so since is always the minimum.
+                Antichain::from_elem(SeqNo(0)),
+            ),
+            updates,
+        };
+        let key = self.new_blob_key();
+        self.append_future(key, batch)?;
+
+        Ok(())
     }
 
     /// Returns the current "sealed" frontier for an id.
@@ -436,10 +468,15 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
 mod tests {
     use std::error::Error;
 
+    use crate::error::Error as IndexedError;
     use crate::mem::MemBlob;
     use crate::mem::MemBuffer;
 
     use super::*;
+
+    fn record_with_seqno(seqno: u64) -> (SeqNo, (String, String), u64, isize) {
+        (SeqNo(seqno), ("".to_string(), "".to_string()), 1, 1)
+    }
 
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
@@ -521,6 +558,53 @@ mod tests {
         // given the data is not ordered by key, so again this should fire a
         // validations error if the sort code doesn't work.
         i.seal(id, 3)?;
+        Ok(())
+    }
+
+    #[test]
+    fn drain_buf_validate() -> Result<(), IndexedError> {
+        let mut i = Indexed::new(
+            MemBuffer::new("drain_buf_validate")?,
+            MemBlob::new("drain_buf_validate")?,
+        )?;
+        let id = i.register("0");
+
+        // Normal case (equals lower)
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(0)], &(SeqNo(0)..SeqNo(2))),
+            Ok(())
+        );
+
+        // Normal case (between (lower, upper))
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(3)], &(SeqNo(2)..SeqNo(4))),
+            Ok(())
+        );
+
+        // Less than lower
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(3)], &(SeqNo(4)..SeqNo(6))),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(3), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
+            ))
+        );
+
+        // Equal to upper
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(6)], &(SeqNo(4)..SeqNo(6))),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(6), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
+            ))
+        );
+
+        // Greater than upper
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(7)], &(SeqNo(4)..SeqNo(6))),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(7), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
+            ))
+        );
+
         Ok(())
     }
 }

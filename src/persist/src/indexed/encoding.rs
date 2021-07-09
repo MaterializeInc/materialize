@@ -105,7 +105,6 @@ pub struct BlobTraceMeta {
 /// storage for data keys corresponding to future data.
 ///
 /// Invariants:
-/// - The seqno of each update is >= to desc.lower() and < desc.upper().
 /// - The values in updates are sorted by (time, key, value).
 /// - The values in updates are "consolidated", i.e. (time, key, value) is
 ///   unique.
@@ -118,7 +117,7 @@ pub struct BlobFutureBatch<K, V> {
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
     /// The updates themselves.
-    pub updates: Vec<(SeqNo, (K, V), u64, isize)>,
+    pub updates: Vec<((K, V), u64, isize)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -321,23 +320,7 @@ where
 
         let mut prev: Option<(&u64, &K, &V)> = None;
         for update in self.updates.iter() {
-            let (seqno, (key, val), ts, diff) = update;
-            // Check seqno against desc.
-            if !self.desc.lower().less_equal(seqno) {
-                return Err(format!(
-                    "seqno {:?} is less than the batch lower: {:?}",
-                    seqno, self.desc
-                )
-                .into());
-            }
-            if self.desc.upper().less_equal(seqno) {
-                return Err(format!(
-                    "seqno {:?} is greater than or equal to the batch upper: {:?}",
-                    seqno, self.desc
-                )
-                .into());
-            }
-
+            let ((key, val), ts, diff) = update;
             // Check ordering.
             let this = (ts, key, val);
             if let Some(prev) = prev {
@@ -423,8 +406,8 @@ mod tests {
 
     use super::*;
 
-    fn update_with_ts(seqno: u64, ts: u64) -> (SeqNo, (String, String), u64, isize) {
-        (SeqNo(seqno), ("".into(), "".into()), ts, 1)
+    fn update_with_ts(ts: u64) -> ((String, String), u64, isize) {
+        (("".into(), "".into()), ts, 1)
     }
 
     fn update_with_key(ts: u64, key: &'static str) -> ((String, String), u64, isize) {
@@ -470,7 +453,7 @@ mod tests {
         let b = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(0, 2),
-            updates: vec![update_with_ts(0, 0), update_with_ts(1, 1)],
+            updates: vec![update_with_ts(0), update_with_ts(1)],
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -512,7 +495,7 @@ mod tests {
         let b = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(0, 2),
-            updates: vec![update_with_ts(0, 1), update_with_ts(1, 0)],
+            updates: vec![update_with_ts(1), update_with_ts(0)],
         };
         assert_eq!(
             b.validate(),
@@ -525,50 +508,22 @@ mod tests {
         let b = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(0, 2),
-            updates: vec![update_with_ts(0, 0), update_with_ts(1, 0)],
+            updates: vec![update_with_ts(0), update_with_ts(0)],
         };
         assert_eq!(
             b.validate(),
             Err(Error::from("unconsolidated: (0, \"\", \"\")"))
         );
 
-        // Update "before" desc
-        let b = BlobFutureBatch {
-            id: Id(0),
-            desc: seqno_desc(1, 2),
-            updates: vec![update_with_ts(0, 0)],
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from(
-                "seqno SeqNo(0) is less than the batch lower: Description { lower: Antichain { elements: [SeqNo(1)] }, upper: Antichain { elements: [SeqNo(2)] }, since: Antichain { elements: [SeqNo(0)] } }"
-            ))
-        );
-
-        // Update "after" desc
-        let b = BlobFutureBatch {
-            id: Id(0),
-            desc: seqno_desc(0, 2),
-            updates: vec![update_with_ts(2, 2)],
-        };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from(
-                "seqno SeqNo(2) is greater than or equal to the batch upper: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(2)] }, since: Antichain { elements: [SeqNo(0)] } }"
-            ))
-        );
-
         // Invalid update
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
             id: Id(0),
             desc: seqno_desc(0, 1),
-            updates: vec![(SeqNo(0), ("0".into(), "0".into()), 0, 0)],
+            updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
         assert_eq!(
             b.validate(),
-            Err(Error::from(
-                "update with 0 diff: (SeqNo(0), (\"0\", \"0\"), 0, 0)"
-            ))
+            Err(Error::from("update with 0 diff: ((\"0\", \"0\"), 0, 0)"))
         );
     }
 

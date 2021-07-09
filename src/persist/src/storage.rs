@@ -41,6 +41,9 @@ pub trait Buffer {
 
     /// Returns a consistent snapshot of all written but not yet truncated
     /// entries.
+    ///
+    /// - Invariant: all returned entries must have a sequence number within
+    ///   the declared [lower, upper) range of sequence numbers.
     fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
     where
         F: FnMut(SeqNo, &[u8]) -> Result<(), Error>;
