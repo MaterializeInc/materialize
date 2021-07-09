@@ -5183,7 +5183,7 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let string: &'a str = a.unwrap_str();
-    let n = b.unwrap_int32();
+    let n = i64::from(b.unwrap_int32());
 
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
 
