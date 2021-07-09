@@ -389,7 +389,7 @@ pub fn plan_create_source(
         materialized,
         format,
         key_constraint,
-        include_key,
+        key_envelope,
     } = &stmt;
 
     let with_options_original = with_options;
@@ -407,7 +407,7 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
-    if !matches!(connector, Connector::Kafka { .. }) && include_key.is_some() {
+    if !matches!(connector, Connector::Kafka { .. }) && key_envelope.is_present() {
         unsupported!("INCLUDE KEY with non-Kafka sources");
     }
 
@@ -459,7 +459,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            if include_key.is_some() {
+            if key_envelope.is_present() {
                 unsupported!("INCLUDE KEY is not yet implemented");
             }
 

@@ -22,8 +22,8 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, CreateSourceFormat, DataType, Envelope, Expr, Format, Ident,
-    KeyConstraint, Query, TableConstraint, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, Connector, CreateSourceFormat, CreateSourceKeyEnvelope, DataType, Envelope,
+    Expr, Format, Ident, KeyConstraint, Query, TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -357,8 +357,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub connector: Connector,
     pub with_options: Vec<SqlOption<T>>,
     pub format: CreateSourceFormat<T>,
-    /// `INCLUDE KEY` is `Some(None)` and `INCLUDE KEY AS i` is `Some(Some(i))`
-    pub include_key: Option<Option<Ident>>,
+    pub key_envelope: CreateSourceKeyEnvelope,
     pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,
@@ -398,6 +397,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str(")");
         }
         f.write_node(&self.format);
+        f.write_node(&self.key_envelope);
         match self.envelope {
             Envelope::None => (),
             _ => {
