@@ -46,6 +46,12 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.8.3 %}}
+
+- Refactor the [`numeric`](/sql/types/numeric) type's backing implementation.
+  With this change comes more PostgreSQL-like semantics for unscaled values, as
+  well as bug fixes. {{% gh 7312 %}}
+
 {{% version-header v0.8.2 %}}
 
 - Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
