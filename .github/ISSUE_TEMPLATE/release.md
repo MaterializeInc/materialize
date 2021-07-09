@@ -49,17 +49,11 @@ production readiness.
   bin/mkrelease -b rel-$tag $tag
   ```
 
-- [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
+- [ ] Update the [release notes][] to include a new "unreleased" version so that new
+  changes don't get advertised as being part of this release as folks add notes.
 
-  Without checking out main to `main`, perform:
-
-  ```shell
-  next=v<NEXT_VERSION>-dev
-  bin/mkrelease --no-tag -b prepare-$next $next
-  ```
-
-  > **NOTE:** `NEXT_VERSION` should always be a patch-level change, even if the next release is
-  > anticipated to be a minor or major version bump.
+  > **NOTE:** the next "unreleased" version should always be a patch-level change, even if the next
+  > release is currently anticipated to be a minor or major version bump.
   >
   > For example, if the version being released is `v0.5.9`, `<NEXT_VERSION>` should always be
   > `0.5.10`, not `0.6.0`, even if we expect that to be the true next version.
@@ -71,10 +65,19 @@ production readiness.
 
   - [ ] Related to the above note, **if this is a feature release** (i.e. the
     product team has decided that we are bumping the major or minor version) you
-    must also update [the release notes][releases]: the highest unreleased
+    must also update the [release notes][]: the highest unreleased
     version will be incorrect. It will be a patch version (i.e. the `Y` in
     `W.X.Y`) instead of a major or minor version change (`W` or `X`), update the
     release notes to reflect the version that is actually being released.
+
+- [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
+
+  Without checking out main to `main`, perform:
+
+  ```shell
+  next=v<NEXT_VERSION>-dev
+  bin/mkrelease --no-tag -b prepare-$next $next
+  ```
 
   Open a PR with this change, and land it.
 
