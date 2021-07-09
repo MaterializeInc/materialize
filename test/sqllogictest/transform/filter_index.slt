@@ -73,7 +73,7 @@ explain plan for select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 
 %1 =
 | Get materialize.public.bar (u3)
-| Filter !(isnull(abs(#0))), (3 = abs(#0))
+| Filter (3 = abs(#0))
 
 %2 =
 | Join %0 %1
