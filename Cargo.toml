@@ -2,6 +2,7 @@
 members = [
     "demo/billing",
     "fuzz",
+    "play/json-flattened-view-gen",
     "play/mbta",
     "src/avro",
     "src/avro-derive",
