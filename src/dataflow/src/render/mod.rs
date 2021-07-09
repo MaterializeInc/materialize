@@ -409,13 +409,18 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get { id, mfp } => {
+            Plan::Get { id, keys, mfp } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let collection = self
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
                 if mfp.is_identity() {
+                    // Assert that each of `keys` are present in `collection`.
+                    assert!(keys.iter().all(|key| collection.arranged.contains_key(key)));
+                    // Retain only those keys we want to import.
+                    // TODO: This stabilized in 1.53 and is not yet available to us.
+                    // collection.arranged.retain(|key, _value| keys.contains(key));
                     collection
                 } else {
                     let (oks, errs) = collection.as_collection_core(mfp);
@@ -578,9 +583,8 @@ pub mod datum_vec {
     }
 }
 
-/// An explicit represenation of a rendering plan for provided dataflows.
+/// An explicit representation of a rendering plan for provided dataflows.
 pub mod plan {
-
     use crate::render::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
     use crate::render::reduce::{KeyValPlan, ReducePlan};
     use crate::render::threshold::ThresholdPlan;
@@ -590,7 +594,9 @@ pub mod plan {
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
         OptimizedMirRelationExpr, TableFunc,
     };
+
     use repr::{Datum, Diff, Row};
+    use std::collections::BTreeMap;
 
     /// A rendering plan with all conditional logic removed.
     ///
@@ -613,6 +619,16 @@ pub mod plan {
         Get {
             /// A global or local identifier naming the collection.
             id: Id,
+            /// Arrangements that will be available.
+            ///
+            /// The collection will also be loaded if available, which it will
+            /// not be for imported data, but which it may be for locally defined
+            /// data.
+            // TODO: Be more explicit about whether a collection is available,
+            // although one can always produce it from an arrangement, and it
+            // seems generally advantageous to do that instead (to avoid cloning
+            // rows, by using `mfp` first on borrowed data).
+            keys: Vec<Vec<MirScalarExpr>>,
             /// Any linear operator work to apply as part of producing the data.
             ///
             /// This logic allows us to efficiently extract collections from data
@@ -759,7 +775,19 @@ pub mod plan {
         /// The rough structure is that we repeatedly extract map/filter/project operators
         /// from each expression we see, bundle them up as a `MapFilterProject` object, and
         /// then produce a plan for the combination of that with the next operator.
-        pub fn from_mir(expr: &MirRelationExpr) -> Result<Self, ()> {
+        ///
+        /// The method takes as an argument the existing arrangements for each bound identifier,
+        /// which it will locally add to and remove from for `Let` bindings (by the end of the
+        /// call it should contain the same bindings as when it started).
+        ///
+        /// The result of the method is both a `Plan`, but also a list of arrangements that
+        /// are certain to be produced, which can be relied on by the next steps in the plan.
+        /// An empty list of arrangement keys indicates that only a `Collection` stream can
+        /// be assumed to exist.
+        pub fn from_mir(
+            expr: &MirRelationExpr,
+            arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
+        ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
             // Extract a maximally large MapFilterProject from `expr`.
             // We will then try and push this in to the resulting expression.
             //
@@ -769,7 +797,7 @@ pub mod plan {
             let (mut mfp, expr) = MapFilterProject::extract_from_expression(expr);
             // We attempt to plan what we have remaining, in the context of `mfp`.
             // We may not be able to do this, and must wrap some operators with a `Mfp` stage.
-            let plan = match expr {
+            let (mut plan, mut keys) = match expr {
                 // These operators should have been extracted from the expression.
                 MirRelationExpr::Map { .. } => {
                     panic!("This operator should have been extracted");
@@ -790,27 +818,58 @@ pub mod plan {
                                 .collect()
                         }),
                     };
-                    plan
+                    // The plan, not arranged in any way.
+                    (plan, Vec::new())
                 }
                 MirRelationExpr::Get { id, typ: _ } => {
                     // This stage can absorb arbitrary MFP operators.
                     let mfp = mfp.take();
-                    Plan::Get {
-                        id: id.clone(),
-                        mfp,
+                    // If `mfp` is the identity, we can surface all imported arrangements.
+                    // Otherwise, we apply `mfp` and promise no arrangements.
+                    if mfp.is_identity() {
+                        let keys = arrangements.get(id).cloned().unwrap_or_else(Vec::new);
+                        (
+                            Plan::Get {
+                                id: id.clone(),
+                                keys: keys.clone(),
+                                mfp,
+                            },
+                            keys,
+                        )
+                    } else {
+                        (
+                            Plan::Get {
+                                id: id.clone(),
+                                keys: Vec::new(),
+                                mfp,
+                            },
+                            Vec::new(),
+                        )
                     }
                 }
                 MirRelationExpr::Let { id, value, body } => {
                     // It would be unfortunate to have a non-trivial `mfp` here, as we hope
                     // that they would be pushed down. I am not sure if we should take the
                     // initiative to push down the `mfp` ourselves.
-                    let value = Box::new(Plan::from_mir(value)?);
-                    let body = Box::new(Plan::from_mir(body)?);
-                    Plan::Let {
-                        id: id.clone(),
-                        value,
-                        body,
-                    }
+
+                    // Plan the value using only the initial arrangements, but
+                    // introduce any resulting arrangements bound to `id`.
+                    let (value, v_keys) = Plan::from_mir(value, arrangements)?;
+                    let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
+                    assert!(pre_existing.is_none());
+                    // Plan the body using initial and `value` arrangements,
+                    // and then remove reference to the value arrangements.
+                    let (body, b_keys) = Plan::from_mir(body, arrangements)?;
+                    arrangements.remove(&Id::Local(*id));
+                    // Return the plan, and any `body` arrangements.
+                    (
+                        Plan::Let {
+                            id: id.clone(),
+                            value: Box::new(value),
+                            body: Box::new(body),
+                        },
+                        b_keys,
+                    )
                 }
                 MirRelationExpr::FlatMap {
                     input,
@@ -823,15 +882,19 @@ pub mod plan {
                     if let Some(demand) = demand {
                         prepend_mfp_demand(&mut mfp, expr, demand);
                     }
-                    let input = Box::new(Plan::from_mir(input)?);
+                    let (input, _keys) = Plan::from_mir(input, arrangements)?;
                     // This stage can absorb arbitrary MFP instances.
                     let mfp = mfp.take();
-                    Plan::FlatMap {
-                        input,
-                        func: func.clone(),
-                        exprs: exprs.clone(),
-                        mfp,
-                    }
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::FlatMap {
+                            input: Box::new(input),
+                            func: func.clone(),
+                            exprs: exprs.clone(),
+                            mfp,
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Join {
                     inputs,
@@ -848,9 +911,15 @@ pub mod plan {
                     let input_mapper = JoinInputMapper::new(inputs);
 
                     // Plan each of the join inputs independently.
+                    // The `plans` get surfaced upwards, and the `input_keys` should
+                    // be used as part of join planning / to validate the existing
+                    // plans / to aid in indexed seeding of update streams.
                     let mut plans = Vec::new();
+                    let mut input_keys = Vec::new();
                     for input in inputs.iter() {
-                        plans.push(Plan::from_mir(input)?);
+                        let (plan, keys) = Plan::from_mir(input, arrangements)?;
+                        plans.push(plan);
+                        input_keys.push(keys);
                     }
                     // Extract temporal predicates as joins cannot currently absorb them.
                     let plan = match implementation {
@@ -874,10 +943,14 @@ pub mod plan {
                         // Other plans are errors, and should be reported as such.
                         _ => return Err(()),
                     };
-                    Plan::Join {
-                        inputs: plans,
-                        plan,
-                    }
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::Join {
+                            inputs: plans,
+                            plan,
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Reduce {
                     input,
@@ -887,18 +960,23 @@ pub mod plan {
                     expected_group_size,
                 } => {
                     let input_arity = input.arity();
-                    let input = Box::new(Self::from_mir(input)?);
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
                     let key_val_plan = KeyValPlan::new(input_arity, group_key, aggregates);
                     let reduce_plan = ReducePlan::create_from(
                         aggregates.clone(),
                         *monotonic,
                         *expected_group_size,
                     );
-                    Plan::Reduce {
-                        input,
-                        key_val_plan,
-                        plan: reduce_plan,
-                    }
+                    let output_keys = reduce_plan.keys(group_key.len());
+                    // Return the plan, and the keys it produces.
+                    (
+                        Plan::Reduce {
+                            input: Box::new(input),
+                            key_val_plan,
+                            plan: reduce_plan,
+                        },
+                        output_keys,
+                    )
                 }
                 MirRelationExpr::TopK {
                     input,
@@ -909,7 +987,7 @@ pub mod plan {
                     monotonic,
                 } => {
                     let arity = input.arity();
-                    let input = Box::new(Self::from_mir(input)?);
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
                     let top_k_plan = TopKPlan::create_from(
                         group_key.clone(),
                         order_key.clone(),
@@ -918,64 +996,107 @@ pub mod plan {
                         arity,
                         *monotonic,
                     );
-                    Plan::TopK { input, top_k_plan }
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::TopK {
+                            input: Box::new(input),
+                            top_k_plan,
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Negate { input } => {
-                    let input = Box::new(Self::from_mir(input)?);
-                    Plan::Negate { input }
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::Negate {
+                            input: Box::new(input),
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Threshold { input } => {
                     let arity = input.arity();
-                    let input = Box::new(Self::from_mir(input)?);
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
                     let threshold_plan = ThresholdPlan::create_from(arity, false);
-                    Plan::Threshold {
-                        input,
-                        threshold_plan,
-                    }
+                    let output_keys = threshold_plan.keys();
+                    // Return the plan, and any produced keys.
+                    (
+                        Plan::Threshold {
+                            input: Box::new(input),
+                            threshold_plan,
+                        },
+                        output_keys,
+                    )
                 }
                 MirRelationExpr::Union { base, inputs } => {
                     let mut plans = Vec::with_capacity(1 + inputs.len());
-                    plans.push(Self::from_mir(base)?);
+                    let (plan, _keys) = Self::from_mir(base, arrangements)?;
+                    plans.push(plan);
                     for input in inputs.iter() {
-                        plans.push(Self::from_mir(input)?)
+                        let (plan, _keys) = Self::from_mir(input, arrangements)?;
+                        plans.push(plan)
                     }
-                    Plan::Union { inputs: plans }
+                    // Return the plan and no arrangements.
+                    (Plan::Union { inputs: plans }, Vec::new())
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
-                    let input = Box::new(Self::from_mir(input)?);
-                    Plan::ArrangeBy {
-                        input,
-                        keys: keys.clone(),
-                    }
+                    let (input, mut input_keys) = Self::from_mir(input, arrangements)?;
+                    input_keys.extend(keys.iter().cloned());
+                    input_keys.sort();
+                    input_keys.dedup();
+                    // Return the plan and extended keys.
+                    (
+                        Plan::ArrangeBy {
+                            input: Box::new(input),
+                            keys: keys.clone(),
+                        },
+                        input_keys,
+                    )
                 }
-                MirRelationExpr::DeclareKeys { input, keys: _ } => Self::from_mir(input)?,
+                MirRelationExpr::DeclareKeys { input, keys: _ } => {
+                    Self::from_mir(input, arrangements)?
+                }
             };
 
             // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.
             if !mfp.is_identity() {
-                Ok(Plan::Mfp {
+                plan = Plan::Mfp {
                     input: Box::new(plan),
                     mfp,
-                })
-            } else {
-                Ok(plan)
+                };
+                keys = Vec::new();
             }
+
+            Ok((plan, keys))
         }
 
         /// Convert the dataflow description into one that uses render plans.
         pub fn finalize_dataflow(
             desc: DataflowDescription<OptimizedMirRelationExpr>,
-        ) -> DataflowDescription<Self> {
-            let objects_to_build = desc
-                .objects_to_build
-                .into_iter()
-                .map(|build| dataflow_types::BuildDesc {
+        ) -> Result<DataflowDescription<Self>, ()> {
+            // Collect available arrangements by identifier.
+            let mut arrangements = BTreeMap::new();
+            // Sources might provide arranged forms of their data, in the future.
+            // Indexes provide arranged forms of their data.
+            for (index_desc, _type) in desc.index_imports.values() {
+                arrangements
+                    .entry(Id::Global(index_desc.on_id))
+                    .or_insert_with(Vec::new)
+                    .push(index_desc.keys.clone());
+            }
+            // Build each object in order, registering the arrangements it forms.
+            let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
+            for build in desc.objects_to_build.into_iter() {
+                let (plan, keys) = Self::from_mir(&build.view, &mut arrangements)?;
+                arrangements.insert(Id::Global(build.id), keys);
+                objects_to_build.push(dataflow_types::BuildDesc {
                     id: build.id,
-                    view: Self::from_mir(&build.view)
-                        .expect("Dataflow finalization failed to produce plan"),
-                })
-                .collect::<Vec<_>>();
-            DataflowDescription {
+                    view: plan,
+                });
+            }
+
+            Ok(DataflowDescription {
                 source_imports: desc.source_imports,
                 index_imports: desc.index_imports,
                 objects_to_build,
@@ -984,7 +1105,7 @@ pub mod plan {
                 dependent_objects: desc.dependent_objects,
                 as_of: desc.as_of,
                 debug_name: desc.debug_name,
-            }
+            })
         }
     }
 

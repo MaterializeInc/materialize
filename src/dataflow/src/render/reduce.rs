@@ -447,6 +447,27 @@ impl ReducePlan {
         }
     }
 
+    /// Reports all keys of produced arrangements.
+    ///
+    /// This is likely either an empty vector, for no arrangement,
+    /// or a singleton vector containing the list of expressions
+    /// that key a single arrangement.
+    pub fn keys(&self, key_arity: usize) -> Vec<Vec<expr::MirScalarExpr>> {
+        // Accumulate keys into this vector, and return it.
+        let mut keys = Vec::new();
+        match self {
+            ReducePlan::DistinctNegated => {}
+            _ => {
+                keys.push(
+                    (0..key_arity)
+                        .map(|column| expr::MirScalarExpr::Column(column))
+                        .collect(),
+                );
+            }
+        }
+        keys
+    }
+
     /// Render a dataflow based on the provided plan.
     ///
     /// The output will be an arrangements that looks the same as if

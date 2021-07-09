@@ -44,6 +44,29 @@ pub enum ThresholdPlan {
     Retractions(RetractionsThresholdPlan),
 }
 
+impl ThresholdPlan {
+    /// Reports all keys of produced arrangements.
+    ///
+    /// This is likely either an empty vector, for no arrangement,
+    /// or a singleton vector containing the list of expressions
+    /// that key a single arrangement.
+    pub fn keys(&self) -> Vec<Vec<expr::MirScalarExpr>> {
+        // Accumulate keys into this vector, and return it.
+        let mut keys = Vec::new();
+        match self {
+            ThresholdPlan::Basic(plan) => {
+                keys.push(
+                    (0..plan.arity)
+                        .map(|column| expr::MirScalarExpr::Column(column))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            ThresholdPlan::Retractions(_plan) => {}
+        }
+        keys
+    }
+}
+
 /// A plan to maintain all inputs with positive counts.
 #[derive(Clone, Debug)]
 pub struct BasicThresholdPlan {
