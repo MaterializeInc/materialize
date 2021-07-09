@@ -9,7 +9,7 @@ menu:
 [Debezium](https://debezium.io/) works with Materialize in two capacities:
 
 - Debezium adds change data capture (CDC) to MySQL or PostgreSQL databases,
-  which lets you propagate data from your database to Materialize
+  which lets you propagate data from your database to Materialize.
 - Debezium's CDC data (known as its envelope) is formatted in a way that
   expresses arbitrary operations (e.g. updates and deletes) on the database's
   data. This envelope is a powerful feature that lets Materialize perform more
@@ -36,8 +36,4 @@ REPLICA IDENTITY FULL;
 
 ### Kafka-less setup
 
-Users who wish to connect a database to Materialize without having to use Kafka can
-do so with [tb](https://github.com/MaterializeInc/tb). tb is a tool built by Materialize
-that lets you send Debezium data to Materialize using Avro OCF files, bypassing the need
-for Kafka. For more information and instructions, see
-[tb's GitHub page](https://github.com/MaterializeInc/tb).
+If you need to connect Materialize to a PostgreSQL database but Kafka is not part of your stack, you can use the [PostgreSQL direct source](https://materialize.com/docs/sql/create-source/postgres/#postgresql-source-details). This source uses PostgreSQL’s native replication protocol to continuously propagate upstream changes into Materialize, bypassing the need to deploy and maintain a Kafka instance. For more details and step-by-step instructions, check the [documentation](https://materialize.com/docs/sql/create-source/postgres/#postgresql-source-details).
