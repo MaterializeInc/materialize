@@ -665,3 +665,11 @@ FROM (SELECT 1 col1)
 
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
+
+# Regression test for #7121, where the multiplicity of the outer query was not
+# preserved when an EXISTS subquery only involves constants/mpf/flatmaps.
+query I
+SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
+----
+1
+1

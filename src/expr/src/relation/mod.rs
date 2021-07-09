@@ -1328,7 +1328,9 @@ impl MirRelationExpr {
     /// Return:
     /// * every row in keys_and_values
     /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
-    /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
+    /// (This is LEFT OUTER JOIN if:
+    /// 1) `default` is a row of null
+    /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
     pub fn lookup(
         self,
         id_gen: &mut IdGen,

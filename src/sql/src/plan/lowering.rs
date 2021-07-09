@@ -623,7 +623,7 @@ impl HirScalarExpr {
             // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
-                let apply_requires_distinct_outer = false;
+                let apply_requires_distinct_outer = true;
                 *inner = branch(
                     id_gen,
                     inner.take_dangerous(),
