@@ -660,8 +660,8 @@ where
         let key_arity = key_plan.projection.len();
         let mut row_packer = Row::default();
         let mut datums = DatumVec::new();
-        let (key_val_input, mut err_input): (
-            timely::dataflow::Stream<_, Result<((Row, Row), _, _), (DataflowError, _, _)>>,
+        let (key_val_input, err_input): (
+            timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
         ) = input.flat_map(None, move |row, time, diff| {
             let temp_storage = RowArena::new();
@@ -676,14 +676,14 @@ where
             // Evaluate the key expressions.
             row_packer.clear();
             let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
-                Err(e) => return Some(Err((DataflowError::from(e), time.clone(), diff.clone()))),
+                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
                 Ok(key) => key.expect("Row expected as no predicate was used"),
             };
             // Evaluate the value expressions.
             // The prior evaluation may have left additional columns we should delete.
             datums_local.truncate(skips.len());
             let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                Err(e) => return Some(Err((DataflowError::from(e), time.clone(), diff.clone()))),
+                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
                 Ok(val) => val.expect("Row expected as no predicate was used"),
             };
             row_packer.extend(val);
@@ -701,21 +701,21 @@ where
                     std::mem::take(row)
                 }
             };
-            return Some(Ok(((key, row), time.clone(), diff.clone())));
+            return Some((Ok((key, row)), time.clone(), diff.clone()));
         });
 
         // Demux out the potential errors from key and value selector evaluation.
+        use crate::operator::CollectionExt;
         use differential_dataflow::operators::consolidate::ConsolidateStream;
-        use timely::dataflow::operators::ok_err::OkErr;
-        let (ok, err) = key_val_input.ok_err(|x| x);
+        let (ok, mut err) = key_val_input
+            .as_collection()
+            .consolidate_stream()
+            .flat_map_fallible("OkErrDemux", |x| Some(x));
 
-        let ok_input = ok.as_collection();
-        err_input = err.as_collection().concat(&err_input);
-
-        let ok_input = ok_input.consolidate_stream();
+        err = err.concat(&err_input);
 
         // Render the reduce plan
-        reduce_plan.render(ok_input, err_input, key_arity)
+        reduce_plan.render(ok, err, key_arity)
     }
 }
 
