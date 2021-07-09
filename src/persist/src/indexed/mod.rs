@@ -17,7 +17,7 @@ pub mod future;
 pub mod runtime;
 pub mod trace;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::ops::Range;
 
 use abomonation::abomonated::Abomonated;
@@ -185,8 +185,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Atomically moves all writes currently in the buffer into the future.
     fn drain_buf(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<((K, V), u64, isize)>> = HashMap::new();
-        let mut sequence_numbers: BTreeSet<SeqNo> = BTreeSet::new();
+        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = HashMap::new();
         let desc = self.buf.snapshot(|seqno, buf| {
             let mut buf = buf.to_vec();
             let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry<K, V>>(&mut buf) }
@@ -200,49 +199,58 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                 entry
                     .updates
                     .iter()
-                    .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff)),
+                    .map(|((key, val), ts, diff)| (seqno, (key.clone(), val.clone()), *ts, *diff)),
             );
 
-            // Record the sequence number so we can sanity check that it falls inside the
-            // declared range.
-            sequence_numbers.insert(seqno);
             Ok(())
         })?;
 
-        Self::validate_buf_snapshot(&desc, &sequence_numbers)?;
-
-        for (id, mut updates) in updates_by_id.drain() {
-            // Future batches are required to be sorted by (ts, k, v).
-            updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
-                (t1, k1, v1).cmp(&(t2, k2, v2))
-            });
-            let batch = BlobFutureBatch {
-                id,
-                desc: Description::new(
-                    Antichain::from_elem(desc.start),
-                    Antichain::from_elem(desc.end),
-                    // We never compact BlobFuture, so since is always the minimum.
-                    Antichain::from_elem(SeqNo(0)),
-                ),
-                updates: updates,
-            };
-            let key = self.new_blob_key();
-            self.append_future(key, batch)?;
+        for (id, updates) in updates_by_id.drain() {
+            self.drain_buf_inner(id, updates, &desc)?;
         }
         self.buf.truncate(desc.end)
     }
 
-    /// Check that Buffer snapshots match expected invariants.
-    fn validate_buf_snapshot(desc: &Range<SeqNo>, seqnos: &BTreeSet<SeqNo>) -> Result<(), Error> {
-        // Check that all sequence numbers from Buffer fall under the stated
-        // [start, end) range.
-        for seqno in seqnos.iter() {
-            if seqno < &desc.start || seqno >= &desc.end {
-                return Err(Error::from(format!(
+    /// Construct a new [BlobFutureBatch] out of the provided `updates` and add
+    /// it to the future for `id`.
+    fn drain_buf_inner(
+        &mut self,
+        id: Id,
+        mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
+        desc: &Range<SeqNo>,
+    ) -> Result<(), Error> {
+        if cfg!(any(debug, test)) {
+            // Sanity check that all received sequence numbers fall within the stated
+            // [lower, upper) range
+            for (seqno, _, _, _) in &updates {
+                if seqno < &desc.start || seqno >= &desc.end {
+                    return Err(Error::from(format!(
                             "invalid sequence number in snapshot {:?}, expected value greater than or equal to {:?} and less than {:?}",
                                                    seqno, desc.start, desc.end)));
+                }
             }
         }
+
+        let mut updates: Vec<_> = updates
+            .drain(..)
+            .map(|(_, (k, v), t, d)| ((k, v), t, d))
+            .collect();
+        // Future batches are required to be sorted by (ts, k, v).
+        updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
+            (t1, k1, v1).cmp(&(t2, k2, v2))
+        });
+        let batch = BlobFutureBatch {
+            id,
+            desc: Description::new(
+                Antichain::from_elem(desc.start),
+                Antichain::from_elem(desc.end),
+                // We never compact BlobFuture, so since is always the minimum.
+                Antichain::from_elem(SeqNo(0)),
+            ),
+            updates,
+        };
+        let key = self.new_blob_key();
+        self.append_future(key, batch)?;
 
         Ok(())
     }
@@ -466,6 +474,10 @@ mod tests {
 
     use super::*;
 
+    fn record_with_seqno(seqno: u64) -> (SeqNo, (String, String), u64, isize) {
+        (SeqNo(seqno), ("".to_string(), "".to_string()), 1, 1)
+    }
+
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
         let updates = vec![
@@ -550,66 +562,49 @@ mod tests {
     }
 
     #[test]
-    fn buf_snapshot_validate() {
-        let range = SeqNo(1)..SeqNo(3);
+    fn drain_buf_validate() -> Result<(), IndexedError> {
+        let mut i = Indexed::new(
+            MemBuffer::new("drain_buf_validate")?,
+            MemBlob::new("drain_buf_validate")?,
+        )?;
+        let id = i.register("0");
 
         // Normal case (equals lower)
-        let mut seqnos = BTreeSet::new();
-        seqnos.insert(SeqNo(1));
-
         assert_eq!(
-            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            i.drain_buf_inner(id, vec![record_with_seqno(0)], &(SeqNo(0)..SeqNo(2))),
             Ok(())
         );
 
         // Normal case (between (lower, upper))
-        let mut seqnos = BTreeSet::new();
-        seqnos.insert(SeqNo(2));
-
         assert_eq!(
-            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
-            Ok(())
-        );
-
-        // Normal case (empty)
-        let seqnos = BTreeSet::new();
-
-        assert_eq!(
-            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            i.drain_buf_inner(id, vec![record_with_seqno(3)], &(SeqNo(2)..SeqNo(4))),
             Ok(())
         );
 
         // Less than lower
-        let mut seqnos = BTreeSet::new();
-        seqnos.insert(SeqNo(0));
-
         assert_eq!(
-            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            i.drain_buf_inner(id, vec![record_with_seqno(3)], &(SeqNo(4)..SeqNo(6))),
             Err(IndexedError::from(
-                "invalid sequence number in snapshot SeqNo(0), expected value greater than or equal to SeqNo(1) and less than SeqNo(3)"
+                "invalid sequence number in snapshot SeqNo(3), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
             ))
         );
 
         // Equal to upper
-        let mut seqnos = BTreeSet::new();
-        seqnos.insert(SeqNo(3));
-
         assert_eq!(
-            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            i.drain_buf_inner(id, vec![record_with_seqno(6)], &(SeqNo(4)..SeqNo(6))),
             Err(IndexedError::from(
-                "invalid sequence number in snapshot SeqNo(3), expected value greater than or equal to SeqNo(1) and less than SeqNo(3)"
+                "invalid sequence number in snapshot SeqNo(6), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
             ))
         );
 
         // Greater than upper
-        let mut seqnos = BTreeSet::new();
-        seqnos.insert(SeqNo(4));
-
         assert_eq!(
-            Indexed::<u64, u64, MemBuffer, MemBlob>::validate_buf_snapshot(&range, &seqnos),
+            i.drain_buf_inner(id, vec![record_with_seqno(7)], &(SeqNo(4)..SeqNo(6))),
             Err(IndexedError::from(
-                "invalid sequence number in snapshot SeqNo(4), expected value greater than or equal to SeqNo(1) and less than SeqNo(3)"
+                "invalid sequence number in snapshot SeqNo(7), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
             ))
         );
+
+        Ok(())
     }
 }
