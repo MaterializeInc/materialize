@@ -20,7 +20,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use lowertest::MzEnumReflect;
-use ore::cast::CastFrom;
 use repr::adt::apd;
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::regex::Regex as ReprRegex;
@@ -826,7 +825,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
 }
 
 pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
-    let n = Diff::cast_from(a.unwrap_int64());
+    let n = a.unwrap_int64();
     vec![(Row::default(), n)]
 }
 

@@ -21,11 +21,11 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
 use expr::{MapFilterProject, MirScalarExpr};
-use repr::{Row, RowArena};
+use repr::{Diff, Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::CollectionBundle;
-use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context, Diff};
+use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 
@@ -297,8 +297,8 @@ where
         lookup_relation: CollectionBundle<G, Row, T>,
         lookup_key: Vec<MirScalarExpr>,
         closure: JoinClosure,
-        errors: &mut Vec<Collection<G, DataflowError>>,
-    ) -> Collection<G, Row> {
+        errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    ) -> Collection<G, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
@@ -378,7 +378,7 @@ where
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
         closure: JoinClosure,
-    ) -> (Collection<G, Row>, Collection<G, DataflowError>)
+    ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,
         Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = repr::Diff>

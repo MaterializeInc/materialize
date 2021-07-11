@@ -34,7 +34,7 @@ use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, P
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
-use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType, Timestamp};
+use repr::{ColumnName, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -60,7 +60,7 @@ impl PeekResponse {
 pub struct Update {
     pub row: Row,
     pub timestamp: u64,
-    pub diff: isize,
+    pub diff: Diff,
 }
 
 /// A commonly used name for dataflows contain MIR expressions.

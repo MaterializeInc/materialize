@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::MzEnumReflect;
 use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, RelationType, Row};
+use repr::{ColumnType, Datum, Diff, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
@@ -41,7 +41,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Constant {
         /// Rows of the constant collection and their multiplicities.
-        rows: Result<Vec<(Row, isize)>, EvalError>,
+        rows: Result<Vec<(Row, Diff)>, EvalError>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -639,7 +639,7 @@ impl MirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row can have an arbitrary multiplicity.
-    pub fn constant_diff(rows: Vec<(Vec<Datum>, isize)>, typ: RelationType) -> Self {
+    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: RelationType) -> Self {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(

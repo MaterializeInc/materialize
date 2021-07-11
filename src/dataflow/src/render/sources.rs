@@ -27,7 +27,7 @@ use ore::cast::CastFrom;
 use ore::now::NowFn;
 use repr::RelationDesc;
 use repr::ScalarType;
-use repr::{Datum, Row, Timestamp};
+use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -126,7 +126,7 @@ where
 
                 // All sources should push their various error streams into this vector,
                 // whose contents will be concatenated and inserted along the collection.
-                let mut error_collections = Vec::<Collection<_, _>>::new();
+                let mut error_collections = Vec::<Collection<_, _, Diff>>::new();
 
                 let fast_forwarded = match &connector {
                     ExternalSourceConnector::Kafka(KafkaSourceConnector {

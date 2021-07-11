@@ -169,7 +169,7 @@ where
                         if emit_progress {
                             rp.push(Datum::False);
                         }
-                        rp.push(Datum::Int64(i64::cast_from(diff)));
+                        rp.push(Datum::Int64(diff));
                         rp.extend_by_row(&v);
                         let v = rp.finish_and_reuse();
                         ((k, Some(v)), time, 1)

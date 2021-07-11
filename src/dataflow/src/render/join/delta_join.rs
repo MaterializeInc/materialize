@@ -23,7 +23,7 @@ use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, MirScalarExpr};
-use repr::{Row, RowArena};
+use repr::{Diff, Row, RowArena};
 use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
@@ -495,18 +495,18 @@ use differential_dataflow::Collection;
 /// the time of the update. This is crucial for correctness, as the total order on times of updates is used
 /// to ensure that any two updates are matched at most once.
 fn build_halfjoin<G, Tr, CF>(
-    updates: Collection<G, (Row, G::Timestamp)>,
+    updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<MirScalarExpr>,
     comparison: CF,
     closure: JoinClosure,
 ) -> (
-    Collection<G, (Row, G::Timestamp)>,
-    Collection<G, DataflowError>,
+    Collection<G, (Row, G::Timestamp), Diff>,
+    Collection<G, DataflowError, Diff>,
 )
 where
     G: Scope<Timestamp = repr::Timestamp>,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
@@ -574,10 +574,10 @@ fn build_update_stream<G, Tr>(
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
     initial_closure: Option<JoinClosure>,
-) -> (Collection<G, Row>, Collection<G, DataflowError>)
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope<Timestamp = repr::Timestamp>,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {

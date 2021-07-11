@@ -82,7 +82,7 @@ use dec::OrderedDecimal;
 use expr::{AggregateExpr, AggregateFunc};
 use ore::cast::CastFrom;
 use repr::adt::apd::{self, Apd, ApdAgg};
-use repr::{Datum, DatumList, Row, RowArena};
+use repr::{Datum, DatumList, Diff, Row, RowArena};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
@@ -454,8 +454,8 @@ impl ReducePlan {
     /// this arrangement can also be re-used.
     fn render<G, T>(
         self,
-        collection: Collection<G, (Row, Row)>,
-        err_input: Collection<G, DataflowError>,
+        collection: Collection<G, (Row, Row), Diff>,
+        err_input: Collection<G, DataflowError, Diff>,
         key_arity: usize,
     ) -> CollectionBundle<G, Row, T>
     where
@@ -464,7 +464,7 @@ impl ReducePlan {
         T: Timestamp + Lattice,
     {
         // Convenience wrapper to render the right kind of hierarchical plan.
-        let build_hierarchical = |collection: Collection<G, (Row, Row)>,
+        let build_hierarchical = |collection: Collection<G, (Row, Row), Diff>,
                                   expr: HierarchicalPlan,
                                   top_level: bool| match expr {
             HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr, top_level),
@@ -472,13 +472,14 @@ impl ReducePlan {
         };
 
         // Convenience wrapper to render the right kind of basic plan.
-        let build_basic =
-            |collection: Collection<G, (Row, Row)>, expr: BasicPlan, top_level: bool| match expr {
-                BasicPlan::Single(index, aggr) => {
-                    build_basic_aggregate(collection, index, &aggr, top_level)
-                }
-                BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
-            };
+        let build_basic = |collection: Collection<G, (Row, Row), Diff>,
+                           expr: BasicPlan,
+                           top_level: bool| match expr {
+            BasicPlan::Single(index, aggr) => {
+                build_basic_aggregate(collection, index, &aggr, top_level)
+            }
+            BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
+        };
 
         let arrangement_or_bundle: ArrangementOrCollection<G> = match self {
             // If we have no aggregations or just a single type of reduction, we
@@ -529,7 +530,7 @@ where
     /// Wrap an arrangement
     Arrangement(Arrangement<G, Row>),
     /// Wrap a collection
-    Collection(Collection<G, Row>),
+    Collection(Collection<G, Row, Diff>),
 }
 
 impl<G> ArrangementOrCollection<G>
@@ -545,7 +546,7 @@ where
     fn into_bundle<T>(
         self,
         key_arity: usize,
-        err_input: Collection<G, DataflowError>,
+        err_input: Collection<G, DataflowError, Diff>,
     ) -> CollectionBundle<G, Row, T>
     where
         G::Timestamp: Lattice + Refines<T>,
@@ -573,12 +574,12 @@ where
     }
 }
 
-impl<G> From<Collection<G, Row>> for ArrangementOrCollection<G>
+impl<G> From<Collection<G, Row, Diff>> for ArrangementOrCollection<G>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    fn from(collection: Collection<G, Row>) -> Self {
+    fn from(collection: Collection<G, Row, Diff>) -> Self {
         ArrangementOrCollection::Collection(collection)
     }
 }
@@ -805,7 +806,7 @@ where
 }
 
 /// Build the dataflow to compute the set of distinct keys.
-fn build_distinct<G>(collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+fn build_distinct<G>(collection: Collection<G, (Row, Row), Diff>) -> Arrangement<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -820,7 +821,9 @@ where
 /// Build the dataflow to compute the set of distinct keys.
 ///
 /// This implementation maintains the rows that don't appear in the output.
-fn build_distinct_retractions<G, T>(collection: Collection<G, (Row, Row)>) -> Collection<G, Row>
+fn build_distinct_retractions<G, T>(
+    collection: Collection<G, (Row, Row), Diff>,
+) -> Collection<G, Row, Diff>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -855,7 +858,7 @@ where
 /// in the order specified by `aggrs`. `prepend_keys` is true if the arrangement
 /// produced by this function needs to be reused by other views.
 fn build_basic_aggregates<G>(
-    input: Collection<G, (Row, Row)>,
+    input: Collection<G, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
@@ -896,7 +899,7 @@ where
 /// This method also applies distinctness if required. `prepend_keys` is true if
 /// the arrangement produced by this function needs to be reused by other views.
 fn build_basic_aggregate<G>(
-    input: Collection<G, (Row, Row)>,
+    input: Collection<G, (Row, Row), Diff>,
     index: usize,
     aggr: &AggregateExpr,
     prepend_key: bool,
@@ -932,7 +935,12 @@ where
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
-        partial = partial.distinct();
+        use timely::dataflow::operators::Map;
+        partial = partial
+            .distinct()
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
     }
 
     partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
@@ -978,7 +986,7 @@ where
 /// currently only perform min / max hierarchically and the reduction tree
 /// efficiently suppresses non-distinct updates.
 fn build_bucketed<G>(
-    input: Collection<G, (Row, Row)>,
+    input: Collection<G, (Row, Row), Diff>,
     BucketedPlan {
         aggr_funcs,
         skips,
@@ -1051,10 +1059,10 @@ where
 /// output collection maintains the `((key, bucket), (passing value)` for this
 /// stage.
 fn build_bucketed_stage<G>(
-    input: Collection<G, ((Row, u64), Vec<Row>)>,
+    input: Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
     buckets: u64,
-) -> Collection<G, ((Row, u64), Vec<Row>)>
+) -> Collection<G, ((Row, u64), Vec<Row>), Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -1099,7 +1107,7 @@ where
 /// `prepend_keys` is true if the arrangement produced by this function needs to
 /// be reused by other views.
 fn build_monotonic<G>(
-    collection: Collection<G, (Row, Row)>,
+    collection: Collection<G, (Row, Row), Diff>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
@@ -1170,29 +1178,29 @@ enum AccumInner {
     /// Accumulates boolean values.
     Bool {
         /// The number of `true` values observed.
-        trues: isize,
+        trues: Diff,
         /// The number of `false` values observed.
-        falses: isize,
+        falses: Diff,
     },
     /// Accumulates simple numeric values.
     SimpleNumber {
         /// The accumulation of all non-NULL values observed.
         accum: i128,
         /// The number of non-NULL values observed.
-        non_nulls: isize,
+        non_nulls: Diff,
     },
     /// Accumulates arbitrary precision decimals.
     APD {
         /// Accumulates non-special values
         accum: OrderedDecimal<ApdAgg>,
         /// Counts +inf
-        pos_infs: isize,
+        pos_infs: Diff,
         /// Counts -inf
-        neg_infs: isize,
+        neg_infs: Diff,
         /// Counts NaNs
-        nans: isize,
+        nans: Diff,
         /// Counts non-NULL values
-        non_nulls: isize,
+        non_nulls: Diff,
     },
 }
 
@@ -1295,10 +1303,10 @@ impl Semigroup for AccumInner {
     }
 }
 
-impl Multiply<isize> for AccumInner {
+impl Multiply<Diff> for AccumInner {
     type Output = AccumInner;
 
-    fn multiply(self, factor: &isize) -> AccumInner {
+    fn multiply(self, factor: &Diff) -> AccumInner {
         let factor = *factor;
         match self {
             AccumInner::Bool { trues, falses } => AccumInner::Bool {
@@ -1306,7 +1314,7 @@ impl Multiply<isize> for AccumInner {
                 falses: falses * factor,
             },
             AccumInner::SimpleNumber { accum, non_nulls } => AccumInner::SimpleNumber {
-                accum: accum * i128::cast_from(factor),
+                accum: accum * factor as i128,
                 non_nulls: non_nulls * factor,
             },
             AccumInner::APD {
@@ -1350,7 +1358,7 @@ impl Multiply<isize> for AccumInner {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct Accum {
     inner: AccumInner,
-    total: isize,
+    total: Diff,
 }
 
 impl Semigroup for Accum {
@@ -1364,10 +1372,10 @@ impl Semigroup for Accum {
     }
 }
 
-impl Multiply<isize> for Accum {
+impl Multiply<Diff> for Accum {
     type Output = Accum;
 
-    fn multiply(self, factor: &isize) -> Accum {
+    fn multiply(self, factor: &Diff) -> Accum {
         Accum {
             inner: self.inner.multiply(factor),
             total: self.total * *factor,
@@ -1385,7 +1393,7 @@ impl Multiply<isize> for Accum {
 /// If `prepend_key` is specified, the key is prepended to the arranged values, making
 /// the arrangement suitable for publication itself.
 fn build_accumulable<G>(
-    collection: Collection<G, (Row, Row)>,
+    collection: Collection<G, (Row, Row), Diff>,
     AccumulablePlan {
         full_aggrs,
         simple_aggrs,
@@ -1560,6 +1568,7 @@ where
 
     // Next, collect all aggregations that require distinctness.
     for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
+        use timely::dataflow::operators::Map;
         let mut packer = Row::default();
         let collection = collection
             .map(move |(key, row)| {
@@ -1569,6 +1578,7 @@ where
             })
             .distinct()
             .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
             .as_collection()
             .explode({
                 let zero_diffs = zero_diffs.clone();
@@ -1620,7 +1630,7 @@ where
                     } else {
                         match (&aggr.func, &accum.inner) {
                             (AggregateFunc::Count, AccumInner::SimpleNumber { non_nulls, .. }) => {
-                                Datum::Int64(i64::cast_from(*non_nulls))
+                                Datum::Int64(*non_nulls)
                             }
                             (AggregateFunc::All, AccumInner::Bool { falses, trues }) => {
                                 // If any false, else if all true, else must be no false and some nulls.

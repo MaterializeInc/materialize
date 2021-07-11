@@ -289,11 +289,11 @@ where
             // We only want to arrange parts of the input that are not part of the actual output
             // such that `input.concat(&negated_output.negate())` yields the correct TopK
             let negated_output = input.reduce_named("TopK", {
-                move |_key, source, target: &mut Vec<(Row, isize)>| {
+                move |_key, source, target: &mut Vec<(Row, Diff)>| {
                     // Determine if we must actually shrink the result set.
                     let must_shrink = offset > 0
                         || limit
-                            .map(|l| source.iter().map(|(_, d)| *d).sum::<isize>() as usize > l)
+                            .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
                             .unwrap_or(false);
                     if must_shrink {
                         // First go ahead and emit all records
@@ -333,11 +333,11 @@ where
                                 if offset > 0 {
                                     let to_skip = std::cmp::min(offset, diff as usize);
                                     offset -= to_skip;
-                                    diff -= to_skip as isize;
+                                    diff -= to_skip as Diff;
                                 }
                                 // We should produce at most `limit` records.
                                 if let Some(limit) = &mut limit {
-                                    diff = std::cmp::min(diff, *limit as isize);
+                                    diff = std::cmp::min(diff, *limit as Diff);
                                     *limit -= diff as usize;
                                 }
                                 // Output the indicated number of rows.

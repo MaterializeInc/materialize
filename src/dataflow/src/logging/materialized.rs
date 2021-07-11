@@ -21,7 +21,8 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use expr::{GlobalId, SourceInstanceId};
-use repr::{Datum, Row, Timestamp};
+use ore::cast::CastFrom;
+use repr::{Datum, Diff, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -255,7 +256,7 @@ pub fn construct<A: Allocate>(
                                         Datum::Int64(logical as i64),
                                     ]),
                                     time_ms,
-                                    delta as isize,
+                                    delta as Diff,
                                 ));
                             }
                             MaterializedEvent::KafkaBrokerRtt {
@@ -375,49 +376,61 @@ pub fn construct<A: Allocate>(
         let frontier_current = frontier.as_collection();
 
         use differential_dataflow::operators::Count;
-        let kafka_broker_rtt_current = kafka_broker_rtt.as_collection().count().map({
-            move |((consumer_name, source_id, broker_name), diff_vector)| {
-                Row::pack_slice(&[
-                    Datum::String(&consumer_name),
-                    Datum::String(&source_id.source_id.to_string()),
-                    Datum::Int64(source_id.dataflow_id as i64),
-                    Datum::String(&broker_name),
-                    Datum::Int64(diff_vector[0]),
-                    Datum::Int64(diff_vector[1]),
-                    Datum::Int64(diff_vector[2]),
-                    Datum::Int64(diff_vector[3]),
-                    Datum::Int64(diff_vector[4]),
-                    Datum::Int64(diff_vector[5]),
-                    Datum::Int64(diff_vector[6]),
-                    Datum::Int64(diff_vector[7]),
-                    Datum::Int64(diff_vector[8]),
-                    Datum::Int64(diff_vector[9]),
-                    Datum::Int64(diff_vector[10]),
-                    Datum::Int64(diff_vector[11]),
-                ])
-            }
-        });
+        let kafka_broker_rtt_current = kafka_broker_rtt
+            .as_collection()
+            .count()
+            .map({
+                move |((consumer_name, source_id, broker_name), diff_vector)| {
+                    Row::pack_slice(&[
+                        Datum::String(&consumer_name),
+                        Datum::String(&source_id.source_id.to_string()),
+                        Datum::Int64(source_id.dataflow_id as i64),
+                        Datum::String(&broker_name),
+                        Datum::Int64(diff_vector[0]),
+                        Datum::Int64(diff_vector[1]),
+                        Datum::Int64(diff_vector[2]),
+                        Datum::Int64(diff_vector[3]),
+                        Datum::Int64(diff_vector[4]),
+                        Datum::Int64(diff_vector[5]),
+                        Datum::Int64(diff_vector[6]),
+                        Datum::Int64(diff_vector[7]),
+                        Datum::Int64(diff_vector[8]),
+                        Datum::Int64(diff_vector[9]),
+                        Datum::Int64(diff_vector[10]),
+                        Datum::Int64(diff_vector[11]),
+                    ])
+                }
+            })
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
-        let kafka_consumer_info_current = kafka_consumer_info.as_collection().count().map({
-            move |((consumer_name, source_id, partition_id), diff_vector)| {
-                Row::pack_slice(&[
-                    Datum::String(&consumer_name),
-                    Datum::String(&source_id.source_id.to_string()),
-                    Datum::Int64(source_id.dataflow_id as i64),
-                    Datum::String(&partition_id),
-                    Datum::Int64(diff_vector[0]),
-                    Datum::Int64(diff_vector[1]),
-                    Datum::Int64(diff_vector[2]),
-                    Datum::Int64(diff_vector[3]),
-                    Datum::Int64(diff_vector[4]),
-                    Datum::Int64(diff_vector[5]),
-                    Datum::Int64(diff_vector[6]),
-                    Datum::Int64(diff_vector[7]),
-                    Datum::Int64(diff_vector[8]),
-                    Datum::Int64(diff_vector[9]),
-                ])
-            }
-        });
+        let kafka_consumer_info_current = kafka_consumer_info
+            .as_collection()
+            .count()
+            .map({
+                move |((consumer_name, source_id, partition_id), diff_vector)| {
+                    Row::pack_slice(&[
+                        Datum::String(&consumer_name),
+                        Datum::String(&source_id.source_id.to_string()),
+                        Datum::Int64(source_id.dataflow_id as i64),
+                        Datum::String(&partition_id),
+                        Datum::Int64(diff_vector[0]),
+                        Datum::Int64(diff_vector[1]),
+                        Datum::Int64(diff_vector[2]),
+                        Datum::Int64(diff_vector[3]),
+                        Datum::Int64(diff_vector[4]),
+                        Datum::Int64(diff_vector[5]),
+                        Datum::Int64(diff_vector[6]),
+                        Datum::Int64(diff_vector[7]),
+                        Datum::Int64(diff_vector[8]),
+                        Datum::Int64(diff_vector[9]),
+                    ])
+                }
+            })
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
         let peek_current = peek
             .map(move |(name, worker, is_install, time_ns)| {
@@ -438,18 +451,24 @@ pub fn construct<A: Allocate>(
                 }
             });
 
-        let source_info_current = source_info.as_collection().count().map({
-            move |((name, id, pid), (offset, timestamp))| {
-                Row::pack_slice(&[
-                    Datum::String(&name),
-                    Datum::String(&id.source_id.to_string()),
-                    Datum::Int64(id.dataflow_id as i64),
-                    Datum::from(pid.as_deref()),
-                    Datum::Int64(offset),
-                    Datum::Int64(timestamp),
-                ])
-            }
-        });
+        let source_info_current = source_info
+            .as_collection()
+            .count()
+            .map({
+                move |((name, id, pid), (offset, timestamp))| {
+                    Row::pack_slice(&[
+                        Datum::String(&name),
+                        Datum::String(&id.source_id.to_string()),
+                        Datum::Int64(id.dataflow_id as i64),
+                        Datum::from(pid.as_deref()),
+                        Datum::Int64(offset),
+                        Datum::Int64(timestamp),
+                    ])
+                }
+            })
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
         // Duration statistics derive from the non-rounded event times.
         let peek_duration = peek
@@ -487,7 +506,7 @@ pub fn construct<A: Allocate>(
                                         session.give((
                                             (key.0, elapsed_ns.next_power_of_two()),
                                             time_ms,
-                                            1isize,
+                                            1 as Diff,
                                         ));
                                     } else {
                                         error!(
@@ -512,7 +531,10 @@ pub fn construct<A: Allocate>(
                         Datum::Int64(count as i64),
                     ])
                 }
-            });
+            })
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
         let logs = vec![
             (

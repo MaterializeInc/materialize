@@ -25,7 +25,8 @@ use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
-use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
+use ore::cast::CastFrom;
+use repr::{datum_list_size, datum_size, Datum, Diff, Row, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -290,21 +291,29 @@ pub fn construct<A: Allocate>(
         // Accumulate the durations of each operator.
         // The first `map` exists so that we can semijoin effectively (it requires a key-val pair).
         let mut elapsed = duration
-            .map(|(op_worker, t, d)| ((op_worker, ()), t, d as isize))
+            .map(|(op_worker, t, d)| ((op_worker, ()), t, d as Diff))
             .as_collection();
         // Remove elapsed times for operators not present in `operates`.
         elapsed = thin_collection(elapsed, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
-        let elapsed = elapsed.map(|(op, ())| op).count_total();
+        let elapsed = elapsed
+            .map(|(op, ())| op)
+            .count_total()
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
         // Accumulate histograms of execution times for each operator.
         let mut histogram = duration
-            .map(|(op_worker, t, d)| ((op_worker, d.next_power_of_two()), t, 1isize))
+            .map(|(op_worker, t, d)| ((op_worker, d.next_power_of_two()), t, 1 as Diff))
             .as_collection();
         // Remove histogram measurements for operators not present in `operates`.
         histogram = thin_collection(histogram, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
         let histogram = histogram
             .count_total()
-            .map(|((key, pow), count)| ((key), (pow, count)));
+            .map(|((key, pow), count)| ((key), (pow, count)))
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
         let elapsed = elapsed.map({
             move |((id, worker), cnt)| {
@@ -363,21 +372,24 @@ pub fn construct<A: Allocate>(
                         Datum::Int64(c),
                     ])
                 }
-            });
+            })
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
         use differential_dataflow::operators::Count;
         let messages_sent = thin_collection(messages_sent.as_collection(), delay, |c| {
             c.semijoin(&channels.map(|(k, _, _, _, _)| k))
         })
         .map(|((channel, source), (target, count))| ((channel, source, target), count))
-        .explode(|(key, count)| Some((key, count as isize)))
+        .explode(|(key, count)| Some((key, count as Diff)))
         .count();
 
         let messages_received = thin_collection(messages_received.as_collection(), delay, |c| {
             c.semijoin(&channels.map(|(k, _, _, _, _)| k))
         })
         .map(|((channel, target), (source, count))| ((channel, source, target), count))
-        .explode(|(key, count)| Some((key, count as isize)))
+        .explode(|(key, count)| Some((key, count as Diff)))
         .count();
 
         let messages = messages_received
@@ -394,7 +406,10 @@ pub fn construct<A: Allocate>(
                         Datum::Int64(received as i64),
                     ])
                 }
-            });
+            })
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection();
 
         let channels = channels.map({
             move |((id, worker), source_node, source_port, target_node, target_port)| {

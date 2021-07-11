@@ -20,10 +20,10 @@ use timely::dataflow::Scope;
 use dataflow_types::AvroOcfSinkConnector;
 use expr::GlobalId;
 use interchange::avro::{encode_datums_as_avro, Encoder};
-use repr::{RelationDesc, Row, Timestamp};
+use repr::{Diff, RelationDesc, Row, Timestamp};
 
 pub fn avro_ocf<G>(
-    collection: Collection<G, (Option<Row>, Option<Row>)>,
+    collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
     connector: AvroOcfSinkConnector,
     desc: RelationDesc,

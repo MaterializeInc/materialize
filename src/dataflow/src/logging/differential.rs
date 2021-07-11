@@ -19,7 +19,8 @@ use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysValsHandle;
-use repr::{Datum, Row, Timestamp};
+use ore::cast::CastFrom;
+use repr::{Datum, Diff, Row, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -46,7 +47,7 @@ pub fn construct<A: Allocate>(
                 let time_ms = ((ts.as_millis() as Timestamp / granularity_ms) + 1) * granularity_ms;
                 match event {
                     DifferentialEvent::Batch(event) => {
-                        let difference = (event.length as isize, 1);
+                        let difference = (event.length as Diff, 1);
                         Some(((event.operator, worker), time_ms, difference))
                     }
                     DifferentialEvent::Merge(event) => {
@@ -55,7 +56,7 @@ pub fn construct<A: Allocate>(
                                 (event.operator, worker),
                                 time_ms,
                                 (
-                                    (done as isize) - ((event.length1 + event.length2) as isize),
+                                    (done as Diff) - ((event.length1 + event.length2) as Diff),
                                     -1,
                                 ),
                             ))
@@ -64,7 +65,7 @@ pub fn construct<A: Allocate>(
                         }
                     }
                     DifferentialEvent::Drop(event) => {
-                        let difference = (-(event.length as isize), -1);
+                        let difference = (-(event.length as Diff), -1);
                         Some(((event.operator, worker), time_ms, difference))
                     }
                     DifferentialEvent::MergeShortfall(_) => None,
@@ -73,6 +74,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .count_total()
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection()
             .map({
                 move |((op, worker), count)| {
                     Row::pack_slice(&[
@@ -96,6 +100,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .count_total()
+            .inner
+            .map(|(r, t, diff)| (r, t, i64::cast_from(diff)))
+            .as_collection()
             .map({
                 move |((op, worker), count)| {
                     Row::pack_slice(&[
