@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.41"
+anyhow = "1.0.42"
 http-util = { path = "../http-util" }
 log = "0.4.13"
 rusoto_core = "0.47.0"
