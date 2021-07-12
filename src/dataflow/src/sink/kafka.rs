@@ -36,8 +36,9 @@ use timely::dataflow::operators::generic::{FrontieredInputHandle, InputHandle, O
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::scheduling::Activator;
 
-use dataflow_types::{KafkaSinkConnector, SinkAsOf};
+use dataflow_types::{KafkaSinkConnector, KafkaSinkConsistencyConnector, SinkAsOf};
 use expr::GlobalId;
 use interchange::avro::{self, Encoder};
 use repr::{Diff, RelationDesc, Row, Timestamp};
@@ -145,16 +146,110 @@ impl Drop for KafkaSinkToken {
     }
 }
 
-struct KafkaSink {
+struct KafkaSinkState {
     name: String,
+    topic: String,
+    topic_prefix: String,
     shutdown_flag: Arc<AtomicBool>,
     metrics: SinkMetrics,
     producer: ThreadedProducer<SinkProducerContext>,
     activator: timely::scheduling::Activator,
     txn_timeout: Duration,
+    transactional: bool,
+    consistency: Option<KafkaSinkConsistencyConnector>,
+    fuel: usize,
+    pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
+    ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
+    send_state: SendState,
 }
 
-impl KafkaSink {
+impl KafkaSinkState {
+    fn new(
+        connector: KafkaSinkConnector,
+        sink_name: String,
+        sink_id: &GlobalId,
+        worker_id: String,
+        shutdown_flag: Arc<AtomicBool>,
+        activator: Activator,
+    ) -> Self {
+        let config = Self::create_producer_config(&connector);
+
+        let metrics = SinkMetrics::new(&connector.topic, &sink_id.to_string(), &worker_id);
+
+        let producer = config
+            .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
+                metrics.clone(),
+                Arc::clone(&shutdown_flag),
+            ))
+            .expect("creating kafka producer for Kafka sink failed");
+
+        KafkaSinkState {
+            name: sink_name,
+            topic: connector.topic,
+            topic_prefix: connector.topic_prefix,
+            shutdown_flag,
+            metrics,
+            producer,
+            activator,
+            txn_timeout: Duration::from_secs(5),
+            transactional: connector.exactly_once,
+            consistency: connector.consistency,
+            fuel: connector.fuel,
+            pending_rows: HashMap::new(),
+            ready_rows: VecDeque::new(),
+            send_state: SendState::Init,
+        }
+    }
+
+    fn create_producer_config(connector: &KafkaSinkConnector) -> ClientConfig {
+        let mut config = ClientConfig::new();
+        config.set("bootstrap.servers", &connector.addrs.to_string());
+
+        // Ensure that messages are sinked in order and without duplicates. Note that
+        // this only applies to a single instance of a producer - in the case of restarts,
+        // all bets are off and full exactly once support is required.
+        config.set("enable.idempotence", "true");
+
+        // Increase limits for the Kafka producer's internal buffering of messages
+        // Currently we don't have a great backpressure mechanism to tell indexes or
+        // views to slow down, so the only thing we can do with a message that we
+        // can't immediately send is to put it in a buffer and there's no point
+        // having buffers within the dataflow layer and Kafka
+        // If the sink starts falling behind and the buffers start consuming
+        // too much memory the best thing to do is to drop the sink
+        // Sets the buffer size to be 16 GB (note that this setting is in KB)
+        config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
+
+        // Set the max messages buffered by the producer at any time to 10MM which
+        // is the maximum allowed value
+        config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
+
+        // Make the Kafka producer wait at least 10 ms before sending out MessageSets
+        // TODO(rkhaitan): experiment with different settings for this value to see
+        // if it makes a big difference
+        config.set("queue.buffering.max.ms", &format!("{}", 10));
+
+        for (k, v) in connector.config_options.iter() {
+            // We explicitly reject `statistics.interval.ms` here so that we don't
+            // flood the INFO log with statistics messages.
+            // TODO: properly support statistics on Kafka sinks
+            // We explicitly reject 'isolation.level' as it's a consumer property
+            // and, while benign, will fill the log with WARN messages
+            if k != "statistics.interval.ms" && k != "isolation.level" {
+                config.set(k, v);
+            }
+        }
+
+        if connector.exactly_once {
+            // TODO(aljoscha): this only works for now, once there's an actual
+            // Kafka producer on each worker they would step on each others toes
+            let transactional_id = format!("mz-producer-{}", connector.topic);
+            config.set("transactional.id", transactional_id);
+        }
+
+        config
+    }
+
     fn transition_on_txn_error(
         &self,
         current_state: SendState,
@@ -307,88 +402,22 @@ pub fn produce_to_kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &connector.addrs.to_string());
-
-    // Ensure that messages are sinked in order and without duplicates. Note that
-    // this only applies to a single instance of a producer - in the case of restarts,
-    // all bets are off and full exactly once support is required.
-    config.set("enable.idempotence", "true");
-
-    // Increase limits for the Kafka producer's internal buffering of messages
-    // Currently we don't have a great backpressure mechanism to tell indexes or
-    // views to slow down, so the only thing we can do with a message that we
-    // can't immediately send is to put it in a buffer and there's no point
-    // having buffers within the dataflow layer and Kafka
-    // If the sink starts falling behind and the buffers start consuming
-    // too much memory the best thing to do is to drop the sink
-    // Sets the buffer size to be 16 GB (note that this setting is in KB)
-    config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
-
-    // Set the max messages buffered by the producer at any time to 10MM which
-    // is the maximum allowed value
-    config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
-
-    // Make the Kafka producer wait at least 10 ms before sending out MessageSets
-    // TODO(rkhaitan): experiment with different settings for this value to see
-    // if it makes a big difference
-    config.set("queue.buffering.max.ms", &format!("{}", 10));
-
-    for (k, v) in connector.config_options.iter() {
-        // We explicitly reject `statistics.interval.ms` here so that we don't
-        // flood the INFO log with statistics messages.
-        // TODO: properly support statistics on Kafka sinks
-        // We explicitly reject 'isolation.level' as it's a consumer property
-        // and, while benign, will fill the log with WARN messages
-        if k != "statistics.interval.ms" && k != "isolation.level" {
-            config.set(k, v);
-        }
-    }
-
-    let transactional = if connector.exactly_once {
-        // TODO(aljoscha): this only works for now, once there's an actual
-        // Kafka producer on each worker they would step on each others toes
-        let transactional_id = format!("mz-producer-{}", connector.topic);
-        config.set("transactional.id", transactional_id);
-        true
-    } else {
-        false
-    };
+    let mut builder = OperatorBuilder::new(name.clone(), stream.scope());
+    let activator = stream
+        .scope()
+        .activator_for(&builder.operator_info().address[..]);
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let mut builder = OperatorBuilder::new(name.clone(), stream.scope());
 
-    let s = {
-        let metrics = SinkMetrics::new(
-            &connector.topic,
-            &id.to_string(),
-            &stream.scope().index().to_string(),
-        );
+    let mut s = KafkaSinkState::new(
+        connector,
+        name,
+        &id,
+        stream.scope().index().to_string(),
+        Arc::clone(&shutdown_flag),
+        activator,
+    );
 
-        let producer = config
-            .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
-                metrics.clone(),
-                shutdown_flag.clone(),
-            ))
-            .expect("creating kafka producer for kafka sinks failed");
-
-        let activator = stream
-            .scope()
-            .activator_for(&builder.operator_info().address[..]);
-
-        KafkaSink {
-            name,
-            shutdown_flag: shutdown_flag.clone(),
-            metrics,
-            producer,
-            activator,
-            txn_timeout: Duration::from_secs(5),
-        }
-    };
-
-    let mut pending_rows: HashMap<Timestamp, Vec<EncodedRow>> = HashMap::new();
-    let mut ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)> = VecDeque::new();
-    let mut state = SendState::Init;
     let mut vector = Vec::new();
 
     let mut sink_logic = move |input: &mut FrontieredInputHandle<
@@ -411,7 +440,7 @@ where
                     as_of.frontier.less_equal(&time)
                 };
 
-                let previously_published = match &connector.consistency {
+                let previously_published = match &s.consistency {
                     Some(consistency) => match consistency.gate_ts {
                         Some(gate_ts) => time <= gate_ts,
                         None => false,
@@ -431,7 +460,7 @@ where
                 };
                 let diff = diff as usize;
 
-                let rows = pending_rows.entry(time).or_default();
+                let rows = s.pending_rows.entry(time).or_default();
                 rows.push(EncodedRow {
                     key,
                     value,
@@ -449,7 +478,8 @@ where
             durability_frontier.meet_assign(&history.durability_frontier());
         }
         // Move any newly closed timestamps from pending to ready
-        let mut closed_ts: Vec<u64> = pending_rows
+        let mut closed_ts: Vec<u64> = s
+            .pending_rows
             .iter()
             .filter(|(ts, _)| {
                 !input.frontier.less_equal(*ts) && !durability_frontier.less_equal(*ts)
@@ -458,18 +488,18 @@ where
             .collect();
         closed_ts.sort_unstable();
         closed_ts.into_iter().for_each(|ts| {
-            let rows = pending_rows.remove(&ts).unwrap();
-            ready_rows.push_back((ts, rows));
+            let rows = s.pending_rows.remove(&ts).unwrap();
+            s.ready_rows.push_back((ts, rows));
         });
 
         // Send a bounded number of records to Kafka from the ready queue.
         // This loop has explicitly been designed so that each iteration sends
         // at most one record to Kafka
-        for _ in 0..connector.fuel {
-            if let Some((ts, rows)) = ready_rows.front() {
-                state = match state {
+        for _ in 0..s.fuel {
+            if let Some((ts, rows)) = s.ready_rows.front() {
+                s.send_state = match s.send_state {
                     SendState::Init => {
-                        let result = if transactional {
+                        let result = if s.transactional {
                             s.producer.init_transactions(s.txn_timeout)
                         } else {
                             Ok(())
@@ -477,11 +507,11 @@ where
 
                         match result {
                             Ok(()) => SendState::BeginTxn,
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
                         }
                     }
                     SendState::BeginTxn => {
-                        let result = if transactional {
+                        let result = if s.transactional {
                             s.producer.begin_transaction()
                         } else {
                             Ok(())
@@ -489,14 +519,14 @@ where
 
                         match result {
                             Ok(()) => SendState::Begin,
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
                         }
                     }
                     SendState::Begin => {
-                        if let Some(consistency) = &connector.consistency {
+                        if let Some(consistency) = &s.consistency {
                             let encoded = avro::encode_debezium_transaction_unchecked(
                                 consistency.schema_id,
-                                &connector.topic_prefix,
+                                &s.topic_prefix,
                                 &ts.to_string(),
                                 "BEGIN",
                                 None,
@@ -519,7 +549,7 @@ where
                         mut total_sent,
                     } => {
                         let encoded_row = &rows[row_index];
-                        let record = BaseRecord::to(&connector.topic);
+                        let record = BaseRecord::to(&s.topic);
                         let record = if encoded_row.value.is_some() {
                             record.payload(encoded_row.value.as_ref().unwrap())
                         } else {
@@ -556,10 +586,10 @@ where
                         }
                     }
                     SendState::End(total_count) => {
-                        if let Some(consistency) = &connector.consistency {
+                        if let Some(consistency) = &s.consistency {
                             let encoded = avro::encode_debezium_transaction_unchecked(
                                 consistency.schema_id,
-                                &connector.topic_prefix,
+                                &s.topic_prefix,
                                 &ts.to_string(),
                                 "END",
                                 Some(total_count),
@@ -573,7 +603,7 @@ where
                         SendState::CommitTxn
                     }
                     SendState::CommitTxn => {
-                        let result = if transactional {
+                        let result = if s.transactional {
                             s.producer.commit_transaction(s.txn_timeout)
                         } else {
                             Ok(())
@@ -591,14 +621,14 @@ where
                                 // bindings < t, not <= t.
                                 assert!(write_frontier.borrow().less_equal(ts));
 
-                                ready_rows.pop_front();
+                                s.ready_rows.pop_front();
                                 SendState::BeginTxn
                             }
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
                         }
                     }
                     SendState::AbortTxn => {
-                        let result = if transactional {
+                        let result = if s.transactional {
                             s.producer.abort_transaction(s.txn_timeout)
                         } else {
                             Ok(())
@@ -606,7 +636,7 @@ where
 
                         match result {
                             Ok(()) => SendState::BeginTxn,
-                            Err(e) => s.transition_on_txn_error(state, *ts, e),
+                            Err(e) => s.transition_on_txn_error(s.send_state, *ts, e),
                         }
                     }
                     SendState::Shutdown => {
@@ -623,24 +653,24 @@ where
         // of the input frontier and any stashed timestamps.
         // While we still have ready rows that we're emitting, hold the write
         // frontier at the previous time.
-        if ready_rows.is_empty() {
+        if s.ready_rows.is_empty() {
             write_frontier.borrow_mut().clear();
             let mut write_frontier = write_frontier.borrow_mut();
-            write_frontier.extend(pending_rows.keys().cloned());
+            write_frontier.extend(s.pending_rows.keys().cloned());
             write_frontier.extend(input.frontier.frontier().iter().cloned());
         }
 
         let in_flight = s.producer.in_flight_count();
         s.metrics.messages_in_flight.set(in_flight as u64);
 
-        if !ready_rows.is_empty() {
+        if !s.ready_rows.is_empty() {
             // We need timely to reschedule this operator as we have pending
             // items that we need to send to Kafka
             s.activator.activate();
             return true;
         }
 
-        if !pending_rows.is_empty() {
+        if !s.pending_rows.is_empty() {
             // We have some more rows that we need to wait for frontiers to advance before we
             // can write them out. Let's make sure to reschedule with a small delay to give the
             // system time to advance.
