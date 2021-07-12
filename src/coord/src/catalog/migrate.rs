@@ -10,6 +10,7 @@
 use anyhow::bail;
 
 use ore::collections::CollectionExt;
+use pgrepr::Type;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
@@ -351,6 +352,122 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
 
             let serialized_item = SerializedCatalogItem::V1 {
                 create_sql: resolved.to_ast_string_stable(),
+                eval_env,
+            };
+
+            let serialized_item =
+                serde_json::to_vec(&serialized_item).expect("catalog serialization cannot fail");
+            tx.update_item(id, &name.item, &serialized_item)?;
+        }
+        tx.commit()?;
+        Ok(())
+    },
+    // Rewrites all references to aliased types to their "concrete types".
+    //
+    // Introduced for v0.8.2
+    |catalog: &mut Catalog| {
+        struct TypeNormalizer;
+
+        impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
+            fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType<Raw>) {
+                if let DataType::Other { name, typ_mod } = data_type {
+                    let mut unresolved_name = name.name().clone();
+                    unresolved_name = match unresolved_name.to_string().as_str() {
+                        "pg_catalog.int2" => UnresolvedObjectName(vec![
+                            Ident::new(PG_CATALOG_SCHEMA),
+                            Ident::new(Type::Int4.name()),
+                        ]),
+                        "pg_catalog.bpchar" | "pg_catalog.char" | "pg_catalog.varchar" => {
+                            UnresolvedObjectName(vec![
+                                Ident::new(PG_CATALOG_SCHEMA),
+                                Ident::new(Type::Text.name()),
+                            ])
+                        }
+                        _ => return,
+                    };
+                    *name = match name {
+                        RawName::Name(_) => RawName::Name(unresolved_name),
+                        RawName::Id(id, _) => RawName::Id(id.clone(), unresolved_name),
+                    };
+                    *typ_mod = vec![];
+                }
+            }
+        }
+
+        let mut storage = catalog.storage();
+        let items = storage.load_items()?;
+        let tx = storage.transaction()?;
+
+        for (id, name, def) in items {
+            let SerializedCatalogItem::V1 {
+                create_sql,
+                eval_env,
+            } = serde_json::from_slice(&def)?;
+
+            let mut stmt = sql::parse::parse(&create_sql)?.into_element();
+            match &mut stmt {
+                Statement::CreateTable(CreateTableStatement {
+                    name: _,
+                    columns,
+                    constraints: _,
+                    with_options: _,
+                    if_not_exists: _,
+                    temporary: _,
+                }) => {
+                    for c in columns {
+                        TypeNormalizer.visit_column_def_mut(c);
+                    }
+                }
+
+                Statement::CreateView(CreateViewStatement {
+                    temporary: _,
+                    materialized: _,
+                    if_exists: _,
+                    definition:
+                        ViewDefinition {
+                            name: _,
+                            columns: _,
+                            query,
+                            with_options: _,
+                        },
+                }) => TypeNormalizer.visit_query_mut(query),
+
+                Statement::CreateIndex(CreateIndexStatement {
+                    name: _,
+                    on_name: _,
+                    key_parts,
+                    with_options,
+                    if_not_exists: _,
+                }) => {
+                    if let Some(key_parts) = key_parts {
+                        for key_part in key_parts {
+                            TypeNormalizer.visit_expr_mut(key_part);
+                        }
+                    }
+                    for with_option in with_options {
+                        TypeNormalizer.visit_with_option_mut(with_option);
+                    }
+                }
+
+                Statement::CreateType(CreateTypeStatement {
+                    name: _,
+                    as_type: _,
+                    with_options,
+                }) => {
+                    for option in with_options {
+                        TypeNormalizer.visit_sql_option_mut(option);
+                    }
+                }
+
+                // At the time the migration was written, sinks and sources
+                // could not contain references to types.
+                Statement::CreateSource(_) | Statement::CreateSink(_) => continue,
+
+                _ => bail!("catalog item contained inappropriate statement: {}", stmt),
+            }
+
+            let serialized_item = SerializedCatalogItem::V1 {
+                create_sql: stmt.to_ast_string_stable(),
                 eval_env,
             };
 
