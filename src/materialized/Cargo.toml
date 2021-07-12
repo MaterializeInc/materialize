@@ -35,7 +35,7 @@ backtrace = "0.3.60"
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 clap = { version = "2.33.0", features = ["wrap_help"] }
-compile-time-run = "0.2.11"
+compile-time-run = "0.2.12"
 coord = { path = "../coord" }
 crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
