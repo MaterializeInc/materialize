@@ -17,8 +17,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::{Collection, Hashable};
+use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{error, info};
+use log::{debug, error, info};
 use prometheus::{
     register_int_counter_vec, register_uint_gauge_vec, IntCounter, IntCounterVec, UIntGauge,
     UIntGaugeVec,
@@ -42,6 +43,7 @@ use dataflow_types::{KafkaSinkConnector, KafkaSinkConsistencyConnector, SinkAsOf
 use expr::GlobalId;
 use interchange::avro::{self, Encoder};
 use repr::{Diff, RelationDesc, Row, Timestamp};
+use timely::progress::frontier::AntichainRef;
 
 use crate::source::timestamp::TimestampBindingRc;
 
@@ -161,6 +163,19 @@ struct KafkaSinkState {
     pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     send_state: SendState,
+
+    /// Timestamp of the latest `END` record that was written out to Kafka.
+    latest_progress_ts: Timestamp,
+
+    /// Write frontier of this sink.
+    ///
+    /// The write frontier potentially blocks compaction of timestamp bindings
+    /// in upstream sources. The latest written `END` record is used when
+    /// restarting the sink to gate updates with a lower timestamp. We advance
+    /// the write frontier in lockstep with writing out END records. This
+    /// ensures that we don't write updates more than once, ensuring
+    /// exactly-once guaruantees.
+    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 }
 
 impl KafkaSinkState {
@@ -171,6 +186,8 @@ impl KafkaSinkState {
         worker_id: String,
         shutdown_flag: Arc<AtomicBool>,
         activator: Activator,
+        latest_progress_ts: Timestamp,
+        write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     ) -> Self {
         let config = Self::create_producer_config(&connector);
 
@@ -198,6 +215,8 @@ impl KafkaSinkState {
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
             send_state: SendState::Init,
+            latest_progress_ts,
+            write_frontier,
         }
     }
 
@@ -292,6 +311,97 @@ impl KafkaSinkState {
             self.metrics.messages_sent_counter.inc();
             Ok(())
         }
+    }
+
+    /// Asserts that the write frontier has not yet advanced beyond `t`.
+    fn assert_progress(&self, ts: &Timestamp) {
+        assert!(self.write_frontier.borrow().less_equal(ts));
+    }
+
+    /// Updates the latest progress update timestamp to `latest_update_ts` if it
+    /// is greater than the currently maintained timestamp.
+    ///
+    /// This does not emit a progress update and should be used when the sink
+    /// emits a progress update that is not based on updates of the input
+    /// frontier.
+    ///
+    /// See [`maybe_emit_progress`](Self::maybe_emit_progress).
+    fn maybe_update_progress(&mut self, latest_update_ts: &Timestamp) {
+        if *latest_update_ts > self.latest_progress_ts {
+            self.latest_progress_ts = *latest_update_ts;
+        }
+    }
+
+    /// Updates the latest progress update timestamp based on the given
+    /// input frontier and pending rows.
+    ///
+    /// This will emit an `END` record to the consistency topic if the frontier
+    /// advanced and advance the maintained write frontier, which will in turn
+    /// unblock compaction of timestamp bindings in sources.
+    ///
+    /// *NOTE*: `END` records will only be emitted when
+    /// `KafkaSinkConnector.consistency` points to a consistency topic. The
+    /// write frontier will be advanced regardless.
+    fn maybe_emit_progress<'a>(
+        &mut self,
+        input_frontier: AntichainRef<Timestamp>,
+    ) -> Result<(), anyhow::Error> {
+        // This only looks at the first entry of the antichain.
+        // If we ever have multi-dimensional time, this is not correct
+        // anymore. There might not even be progress in the first dimension.
+        // We panic, so that future developers introducing multi-dimensional
+        // time in Materialize will notice.
+        let input_frontier = input_frontier
+            .iter()
+            .at_most_one()
+            .expect("more than one element in the frontier")
+            .cloned();
+
+        let min_pending_ts = self.pending_rows.keys().min().cloned();
+
+        let min_frontier = input_frontier.into_iter().chain(min_pending_ts).min();
+
+        if let Some(min_frontier) = min_frontier {
+            // a frontier of `t` means we still might receive updates with `t`.
+            // The progress frontier we emit is a strict frontier, so subtract `1`.
+            let min_frontier = min_frontier.saturating_sub(1);
+
+            if min_frontier > self.latest_progress_ts {
+                // record the write frontier in the consistency topic.
+                if let Some(consistency) = &self.consistency {
+                    let encoded = avro::encode_debezium_transaction_unchecked(
+                        consistency.schema_id,
+                        &self.topic_prefix,
+                        &min_frontier.to_string(),
+                        "END",
+                        None,
+                    );
+
+                    let record = BaseRecord::to(&consistency.topic).payload(&encoded);
+
+                    if self.transactional {
+                        self.producer.begin_transaction()?
+                    }
+
+                    self.send(record)
+                        .map_err(|_e| anyhow::anyhow!("Error sending write frontier update."))?;
+
+                    if self.transactional {
+                        self.producer.commit_transaction(self.txn_timeout)?
+                    }
+                }
+                self.latest_progress_ts = min_frontier;
+            }
+
+            let mut write_frontier = self.write_frontier.borrow_mut();
+
+            // make sure we don't regress
+            assert!(write_frontier.less_equal(&min_frontier));
+            write_frontier.clear();
+            write_frontier.insert(min_frontier);
+        }
+
+        Ok(())
     }
 }
 
@@ -409,6 +519,14 @@ where
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
+    let latest_progress_ts = match &connector.consistency {
+        Some(consistency) => match consistency.gate_ts {
+            Some(gate_ts) => gate_ts,
+            None => Timestamp::MIN,
+        },
+        None => Timestamp::MIN,
+    };
+
     let mut s = KafkaSinkState::new(
         connector,
         name,
@@ -416,9 +534,20 @@ where
         stream.scope().index().to_string(),
         Arc::clone(&shutdown_flag),
         activator,
+        latest_progress_ts,
+        write_frontier,
     );
 
+    // Keep track of whether this operator/worker ever received updates. We
+    // use this to control who should send continuous END progress records
+    // to Kafka below.
+    let mut is_active_worker = false;
+
     let mut vector = Vec::new();
+
+    // keep the latest progress updates, if any, in order to update
+    // our internal state after the send loop
+    let mut progress_update = None;
 
     let mut sink_logic = move |input: &mut FrontieredInputHandle<
         _,
@@ -432,6 +561,7 @@ where
 
         // Queue all pending rows waiting to be sent to kafka
         input.for_each(|_, rows| {
+            is_active_worker = true;
             rows.swap(&mut vector);
             for ((key, value), time, diff) in vector.drain(..) {
                 let should_emit = if as_of.strict {
@@ -613,13 +743,9 @@ where
                             Ok(()) => {
                                 // sanity check for the continuous updating
                                 // of the write frontier below
-                                //
-                                // While we're processing records of timestamp t
-                                // the write frontier is already at t. Which is
-                                // okay because the Source "since", which this
-                                // holds back, is used to compact timestamp
-                                // bindings < t, not <= t.
-                                assert!(write_frontier.borrow().less_equal(ts));
+
+                                s.assert_progress(ts);
+                                progress_update.replace(ts.clone());
 
                                 s.ready_rows.pop_front();
                                 SendState::BeginTxn
@@ -649,15 +775,27 @@ where
             }
         }
 
+        // update our state based on any END records we might have sent
+        if let Some(ts) = progress_update.take() {
+            s.maybe_update_progress(&ts);
+        }
+
         // If we don't have ready rows, our write frontier equals the minimum
         // of the input frontier and any stashed timestamps.
         // While we still have ready rows that we're emitting, hold the write
         // frontier at the previous time.
-        if s.ready_rows.is_empty() {
-            write_frontier.borrow_mut().clear();
-            let mut write_frontier = write_frontier.borrow_mut();
-            write_frontier.extend(s.pending_rows.keys().cloned());
-            write_frontier.extend(input.frontier.frontier().iter().cloned());
+        //
+        // Only ever emit progress records if this operator/worker received
+        // updates. Only on worker receives all the updates and we don't want
+        // the other workers to also emit END records.
+        if s.ready_rows.is_empty() && is_active_worker {
+            if let Err(e) = s.maybe_emit_progress(input.frontier.frontier()) {
+                // This can happen when the producer has not been
+                // initialized yet. This also means, that we only start
+                // emitting continuous updates once some real data
+                // has been emitted.
+                debug!("Error writing out progress update: {}", e);
+            }
         }
 
         let in_flight = s.producer.in_flight_count();
