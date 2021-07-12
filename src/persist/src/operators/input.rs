@@ -11,6 +11,7 @@
 
 use timely::dataflow::channels::pushers::buffer::AutoflushSession;
 use timely::dataflow::channels::pushers::{Counter, Tee};
+use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::{ActivateCapability, Concat, ToStream, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
@@ -56,14 +57,20 @@ where
 
         // Replay the previously persisted data, if any.
         //
-        // TODO: Do this with a timely operator that reads the snapshot.
-        let previously_persisted = {
+        // TODO: This currently works by only emitting the persisted data on
+        // worker 0 because that was the simplest thing to do initially.
+        // Instead, we should shard up the responsibility between all the
+        // workers.
+        let previously_persisted = if self.index() == 0 {
+            // TODO: Do this with a timely operator that reads the snapshot.
             let mut snap = meta.snapshot().expect("TODO");
             let mut buf = Vec::new();
             while snap.read(&mut buf) {}
             buf.into_iter()
                 .map(|((key, _), ts, diff)| (key, ts, diff))
                 .to_stream(self)
+        } else {
+            operator::empty(self)
         };
 
         let handle = PersistentUnorderedHandle {
@@ -118,8 +125,11 @@ impl<'b, K: timely::Data> PersistentUnorderedSession<'b, K> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{mpsc, Arc, Mutex};
+
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::Capture;
+    use timely::Config;
 
     use crate::error::Error;
     use crate::mem::MemRegistry;
@@ -171,6 +181,57 @@ mod tests {
         actual.sort();
         let expected = (1usize..=9usize).map(|x| x.to_string()).collect::<Vec<_>>();
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn multiple_workers() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        let p = registry.open("1", "multiple_workers 1")?;
+
+        // Write some data using 3 workers.
+        timely::execute(Config::process(3), move |worker| {
+            worker.dataflow(|scope| {
+                let persister = p.create_or_load("multiple_workers").unwrap();
+                let ((mut handle, cap), _stream) = scope.new_persistent_unordered_input(persister);
+                // Write one thing from each worker.
+                handle
+                    .session(cap)
+                    .give((format!("worker-{}", scope.index()), 1, 1));
+            });
+        })?;
+
+        // Execute a second dataflow with a different number of workers (2).
+        // This is mainly testing that we only get one copy of the original
+        // persisted data in the stream (as opposed to one per worker).
+        let p = registry.open("1", "multiple_workers 2")?;
+        let (tx, rx) = mpsc::channel();
+        let tx = Arc::new(Mutex::new(tx));
+        timely::execute(Config::process(2), move |worker| {
+            worker.dataflow(|scope| {
+                let persister = p.create_or_load("multiple_workers").unwrap();
+                let (_, stream) = scope.new_persistent_unordered_input(persister);
+                // Send the data to be captured by a channel so that we can replay
+                // its contents outside of the dataflow and verify they are correct
+                let tx = tx.lock().expect("lock is not poisoned").clone();
+                stream.capture_into(tx);
+            });
+        })?;
+
+        let mut actual = rx
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter())
+            .collect::<Vec<_>>();
+        actual.sort();
+
+        let expected = vec![
+            ("worker-0".to_owned(), 1, 1),
+            ("worker-1".to_owned(), 1, 1),
+            ("worker-2".to_owned(), 1, 1),
+        ];
+        assert_eq!(expected, actual);
 
         Ok(())
     }
