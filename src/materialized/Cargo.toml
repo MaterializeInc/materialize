@@ -44,7 +44,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.15"
 hex = "0.4.3"
 http-util = { path = "../http-util" }
-hyper = { version = "0.14.9", features = ["http1", "server"] }
+hyper = { version = "0.14.10", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
 include_dir = "0.6.1"
 itertools = "0.10.1"
