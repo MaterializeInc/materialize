@@ -203,6 +203,36 @@ impl<T: AstInfo> Format<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSourceKeyEnvelope {
+    /// `INCLUDE KEY` is absent
+    None,
+    /// bare `INCLUDE KEY`
+    Included,
+    /// `INCLUDE KEY AS name`
+    Named(Ident),
+}
+
+impl AstDisplay for CreateSourceKeyEnvelope {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSourceKeyEnvelope::None => {}
+            CreateSourceKeyEnvelope::Included => f.write_str(" INCLUDE KEY"),
+            CreateSourceKeyEnvelope::Named(name) => {
+                f.write_str(" INCLUDE KEY AS ");
+                f.write_str(name)
+            }
+        }
+    }
+}
+impl_display!(CreateSourceKeyEnvelope);
+
+impl CreateSourceKeyEnvelope {
+    pub fn is_present(&self) -> bool {
+        !matches!(self, CreateSourceKeyEnvelope::None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope {
     None,
     Debezium(DbzMode),
