@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.41"
+anyhow = "1.0.42"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 expr = { path = "../expr" }
 fallible-iterator = "0.2.0"

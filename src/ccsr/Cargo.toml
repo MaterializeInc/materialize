@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.41"
+anyhow = "1.0.42"
 futures = "0.3.15"
 http-util = { path = "../http-util" }
 native-tls = "0.2.7"
