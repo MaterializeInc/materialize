@@ -1,3 +1,18 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use serde_json::value::Value;
 use structopt::StructOpt;
 
@@ -9,15 +24,19 @@ enum PostgresType {
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
-    #[error("Sample json was not an serde_json::Value::Object.")]
+    #[error("Sample json was not a serde_json::Value::Object.")]
     NotAnObject,
 }
 
+/// Flatten a serde_json::Value::Object into a vector of column names and the Postgres type to use
+/// for that column.
+///
+/// This will return an error if the provided Value is not an Object variant.
 fn flatten_object(map: Value) -> Result<Vec<(String, PostgresType)>, Error> {
     if let Value::Object(m) = map {
         let mut flattened = Vec::new();
         for (key, val) in m.into_iter() {
-            flattened.extend(flatten_json(key, val));
+            flatten_single_value(&mut flattened, key, val);
         }
         Ok(flattened)
     } else {
@@ -25,27 +44,27 @@ fn flatten_object(map: Value) -> Result<Vec<(String, PostgresType)>, Error> {
     }
 }
 
-fn flatten_json(key: String, value: Value) -> Vec<(String, PostgresType)> {
-    let mut flattened: Vec<(String, PostgresType)> = Vec::new();
+/// Flatten the provided Value using keys prefixed with the given String. New column names and
+/// their Postgres types will be appended to the provided vector.
+fn flatten_single_value(flattened: &mut Vec<(String, PostgresType)>, key: String, value: Value) {
     match value {
         Value::Array(v) => {
             v.into_iter().enumerate().for_each(|(i, v)| {
                 let new_key = format!("{}__{}", key, i);
-                flattened.extend(flatten_json(new_key, v));
+                flatten_single_value(flattened, new_key, v);
             });
         }
         Value::Bool(_) => flattened.push((key, PostgresType::Other)),
         Value::Number(_) => flattened.push((key, PostgresType::Other)),
         Value::String(_) => flattened.push((key, PostgresType::Text)),
         Value::Object(v) => {
-            v.into_iter().for_each(|(i, v)| {
-                let new_key = format!("{}__{}", key, i);
-                flattened.extend(flatten_json(new_key, v));
+            v.into_iter().for_each(|(k, v)| {
+                let new_key = format!("{}__{}", key, k);
+                flatten_single_value(flattened, new_key, v);
             });
         }
         Value::Null => {}
     }
-    flattened
 }
 
 #[derive(Debug, StructOpt)]
