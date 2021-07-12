@@ -45,7 +45,7 @@ symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.8.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tokio-stream = "0.1.6"
+tokio-stream = "0.1.7"
 transform = { path = "../transform" }
 uncased = "0.9.6"
 url = "2.2.2"
