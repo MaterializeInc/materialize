@@ -1,9 +1,6 @@
 ---
 title: "bytea Data Type"
 description: "Expresses a Unicode string"
-aliases:
-    - /sql/types/string
-    - /sql/types/varchar
 menu:
   main:
     parent: 'sql-types'

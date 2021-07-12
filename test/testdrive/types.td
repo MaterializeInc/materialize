@@ -38,9 +38,7 @@ anyelement
 anynonarray
 apd
 bool
-bpchar
 bytea
-char
 date
 float4
 float8
@@ -58,7 +56,6 @@ time
 timestamp
 timestamptz
 uuid
-varchar
 
 > SHOW EXTENDED FULL TYPES
 name             type
@@ -86,9 +83,7 @@ anyelement       system
 anynonarray      system
 apd              system
 bool             system
-bpchar           system
 bytea            system
-char             system
 date             system
 float4           system
 float8           system
@@ -106,7 +101,6 @@ time             system
 timestamp        system
 timestamptz      system
 uuid             system
-varchar          system
 
 # Support creating tables with catalog types and their aliases
 > CREATE TABLE bool_t (a bool);
@@ -145,9 +139,6 @@ varchar          system
 > CREATE TABLE regclass_t (a regclass);
 
 > CREATE TABLE text_t (a text);
-> CREATE TABLE char_t (a char(100));
-> CREATE TABLE bpchar_t (a bpchar(100));
-> CREATE TABLE varchar_t (a varchar(100));
 
 > CREATE TABLE time_t (a time);
 

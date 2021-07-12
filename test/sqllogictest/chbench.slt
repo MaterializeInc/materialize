@@ -10,12 +10,12 @@
 statement ok
 CREATE TABLE warehouse (
     w_id integer,
-    w_name char(10),
-    w_street_1 char(20),
-    w_street_2 char(20),
-    w_city char(20),
-    w_state char(2),
-    w_zip char(9),
+    w_name text,
+    w_street_1 text,
+    w_street_2 text,
+    w_city text,
+    w_state text,
+    w_zip text,
     w_tax decimal(4, 4),
     w_ytd decimal(12, 2),
     PRIMARY KEY (w_id)
@@ -25,12 +25,12 @@ statement ok
 CREATE TABLE district (
     d_id integer,
     d_w_id integer,
-    d_name char(10),
-    d_street_1 char(20),
-    d_street_2 char(20),
-    d_city char(20),
-    d_state char(2),
-    d_zip char(9),
+    d_name text,
+    d_street_1 text,
+    d_street_2 text,
+    d_city text,
+    d_state text,
+    d_zip text,
     d_tax decimal(4, 4),
     d_ytd decimal(12, 2),
     d_next_o_id integer,
@@ -45,17 +45,17 @@ CREATE TABLE customer (
     c_id integer,
     c_d_id integer,
     c_w_id integer,
-    c_first char(16),
-    c_middle char(2),
-    c_last char(16),
-    c_street_1 char(20),
-    c_street_2 char(20),
-    c_city char(20),
-    c_state char(2),
-    c_zip char(9),
-    c_phone char(16),
+    c_first text,
+    c_middle text,
+    c_last text,
+    c_street_1 text,
+    c_street_2 text,
+    c_city text,
+    c_state text,
+    c_zip text,
+    c_phone text,
     c_since DATE,
-    c_credit char(2),
+    c_credit text,
     c_credit_lim decimal(12, 2),
     c_discount decimal(4, 4),
     c_balance decimal(12, 2),
@@ -82,7 +82,7 @@ CREATE TABLE history (
     h_w_id integer,
     h_date date,
     h_amount decimal(6, 2),
-    h_data char(24)
+    h_data text
 )
 
 statement ok
@@ -126,7 +126,7 @@ CREATE TABLE orderline (
     ol_delivery_d date,
     ol_quantity integer,
     ol_amount decimal(6, 2),
-    ol_dist_info char(24),
+    ol_dist_info text,
     PRIMARY KEY (ol_w_id, ol_d_id, ol_o_id, ol_number)
 )
 
@@ -143,9 +143,9 @@ statement ok
 CREATE TABLE item (
     i_id integer,
     i_im_id integer,
-    i_name char(24),
+    i_name text,
     i_price decimal(5, 2),
-    i_data char(50),
+    i_data text,
     PRIMARY KEY (i_id)
 )
 
@@ -154,20 +154,20 @@ CREATE TABLE stock (
     s_i_id integer,
     s_w_id integer,
     s_quantity integer,
-    s_dist_01 char(24),
-    s_dist_02 char(24),
-    s_dist_03 char(24),
-    s_dist_04 char(24),
-    s_dist_05 char(24),
-    s_dist_06 char(24),
-    s_dist_07 char(24),
-    s_dist_08 char(24),
-    s_dist_09 char(24),
-    s_dist_10 char(24),
+    s_dist_01 text,
+    s_dist_02 text,
+    s_dist_03 text,
+    s_dist_04 text,
+    s_dist_05 text,
+    s_dist_06 text,
+    s_dist_07 text,
+    s_dist_08 text,
+    s_dist_09 text,
+    s_dist_10 text,
     s_ytd integer,
     s_order_cnt integer,
     s_remote_cnt integer,
-    s_data char(50),
+    s_data text,
     s_su_suppkey integer NOT NULL,
     PRIMARY KEY (s_w_id, s_i_id)
 )
@@ -184,9 +184,9 @@ CREATE INDEX fk_stock_supplier ON stock (s_su_suppkey ASC)
 statement ok
 CREATE TABLE nation (
     n_nationkey integer NOT NULL,
-    n_name char(25) NOT NULL,
+    n_name text NOT NULL,
     n_regionkey integer NOT NULL,
-    n_comment char(152) NOT NULL,
+    n_comment text NOT NULL,
     PRIMARY KEY (n_nationkey)
 )
 
@@ -196,12 +196,12 @@ CREATE INDEX fk_nation_regionkey ON nation (n_regionkey ASC)
 statement ok
 CREATE TABLE supplier (
     su_suppkey integer NOT NULL,
-    su_name char(25) NOT NULL,
-    su_address char(40) NOT NULL,
+    su_name text NOT NULL,
+    su_address text NOT NULL,
     su_nationkey integer NOT NULL,
-    su_phone char(15) NOT NULL,
+    su_phone text NOT NULL,
     su_acctbal decimal(12, 2) NOT NULL,
-    su_comment char(101) NOT NULL,
+    su_comment text NOT NULL,
     PRIMARY KEY (su_suppkey)
 )
 
@@ -211,8 +211,8 @@ CREATE INDEX fk_supplier_nationkey ON supplier (su_nationkey ASC)
 statement ok
 CREATE TABLE region (
     r_regionkey integer NOT NULL,
-    r_name char(55) NOT NULL,
-    r_comment char(152) NOT NULL,
+    r_name text NOT NULL,
+    r_comment text NOT NULL,
     PRIMARY KEY (r_regionkey)
 )
 

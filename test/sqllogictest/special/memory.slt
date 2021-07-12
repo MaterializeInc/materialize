@@ -14,7 +14,7 @@ statement ok
 CREATE TABLE t1 (
   a1 integer PRIMARY KEY,
   b1 integer,
-  x1 varchar(40)
+  x1 text
 )
 
 statement ok
@@ -51,7 +51,7 @@ statement ok
 CREATE TABLE t2 (
   a2 integer PRIMARY KEY,
   b2 integer,
-  x2 varchar(40)
+  x2 text
 )
 
 statement ok
@@ -88,7 +88,7 @@ statement ok
 CREATE TABLE t3 (
   a3 integer PRIMARY KEY,
   b3 integer,
-  x3 varchar(40)
+  x3 text
 )
 
 statement ok
@@ -125,7 +125,7 @@ statement ok
 CREATE TABLE t4 (
   a4 integer PRIMARY KEY,
   b4 integer,
-  x4 varchar(40)
+  x4 text
 )
 
 statement ok
@@ -162,7 +162,7 @@ statement ok
 CREATE TABLE t5 (
   a5 integer PRIMARY KEY,
   b5 integer,
-  x5 varchar(40)
+  x5 text
 )
 
 statement ok
@@ -199,7 +199,7 @@ statement ok
 CREATE TABLE t6 (
   a6 integer PRIMARY KEY,
   b6 integer,
-  x6 varchar(40)
+  x6 text
 )
 
 statement ok
@@ -236,7 +236,7 @@ statement ok
 CREATE TABLE t7 (
   a7 integer PRIMARY KEY,
   b7 integer,
-  x7 varchar(40)
+  x7 text
 )
 
 statement ok
@@ -273,7 +273,7 @@ statement ok
 CREATE TABLE t8 (
   a8 integer PRIMARY KEY,
   b8 integer,
-  x8 varchar(40)
+  x8 text
 )
 
 statement ok
@@ -310,7 +310,7 @@ statement ok
 CREATE TABLE t9 (
   a9 integer PRIMARY KEY,
   b9 integer,
-  x9 varchar(40)
+  x9 text
 )
 
 statement ok
@@ -347,7 +347,7 @@ statement ok
 CREATE TABLE t10 (
   a10 integer PRIMARY KEY,
   b10 integer,
-  x10 varchar(40)
+  x10 text
 )
 
 statement ok

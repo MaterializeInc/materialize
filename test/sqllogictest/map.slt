@@ -371,7 +371,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1, b=>2, c=>3}'::map[text=>int]
 true
 
 query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
-SELECT '{hello=>{world=>a}}'::map[text=>map[text=>char]] <@ '{hello=>c}'::map[text=>char]
+SELECT '{hello=>{world=>a}}'::map[text=>map[text=>text]] <@ '{hello=>c}'::map[text=>text]
 ----
 false
 

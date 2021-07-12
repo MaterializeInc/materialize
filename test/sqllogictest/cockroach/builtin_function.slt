@@ -1791,17 +1791,15 @@ VALUES (format_type('anyelement'::regtype, -1)),
        (format_type('uuid'::regtype, -1)),
        (format_type('unknown'::regtype, -1)),
        (format_type('varbit'::regtype, -1)),
-       (format_type('varchar'::regtype, -1)),
        (format_type('int[]'::regtype, -1)),
        (format_type('int2[]'::regtype, -1)),
-       (format_type('string[]'::regtype, -1)),
-       (format_type('varchar[]'::regtype, -1))
+       (format_type('string[]'::regtype, -1))
 ----
 anyelement
 bit
 boolean
 bytea
-character
+
 date
 numeric
 double precision
@@ -1830,10 +1828,8 @@ record
 uuid
 unknown
 bit varying
-character varying
 bigint[]
 text[]
-character varying[]
 
 query T
 VALUES (format_type('anyelement'::regtype, NULL)),

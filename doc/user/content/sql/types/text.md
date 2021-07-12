@@ -9,8 +9,8 @@ menu:
     parent: 'sql-types'
 ---
 
-`text` data expresses a Unicode string. This is equivalent to `string` or
-`varchar` in other RDBMSes.
+`text` data expresses a Unicode string. This is equivalent to `string` in other
+RDBMSes, and roughly equivalent to an unconstrained `varchar`.
 
 Detail | Info
 -------|------

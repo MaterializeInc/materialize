@@ -3105,18 +3105,6 @@ pub fn scalar_type_from_sql(
                             scale.unwrap_or(0),
                         )
                     }
-                    ScalarType::String => {
-                        // TODO(justin): we should look up in the catalog to see
-                        // if this type is actually a length-parameterized
-                        // string.
-                        match name.raw_name().item.as_str() {
-                            n @ "bpchar" | n @ "char" | n @ "varchar" => {
-                                validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
-                            }
-                            _ => {}
-                        }
-                        ScalarType::String
-                    }
                     t => {
                         validate_typ_mod(&name.to_string(), &typ_mod, &[])?;
                         t

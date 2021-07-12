@@ -17,13 +17,13 @@ For example, here is a properly formatted `CREATE TABLE statement:
 ```sql
 CREATE TABLE distributors (
     id integer PRIMARY KEY,
-    name varchar(40)
+    name text
 )
 ```
 
 `CREATE` and `TABLE` are obviously both keywords, and are capitalized as such.
 Perhaps surprisingly, `integer` is a type name—an identifier—and therefore is
-not capitalized. The same is true for `varchar`. But `PRIMARY` and `KEY` *are*
+not capitalized. The same is true for `text`. But `PRIMARY` and `KEY` *are*
 identifiers, and are again capitalized.
 
 The formatting of SQL statements is generally straightforward. For example:
@@ -65,7 +65,7 @@ and commas should always be followed by a space. Following are several examples
 of queries that obey the spacing rules
 
 ```sql
-CREATE TABLE t (a varchar(40));
+CREATE TABLE t (a text);
 CREATE SOURCE test FROM FILE 'test.csv' WITH (tail = true) FORMAT BYTES;
 SELECT coalesce(1, NULL, 2);
 SELECT CAST (1 AS text); -- note the space after CAST
@@ -75,7 +75,7 @@ SELECT (1 + 2) - (7 * 4);
 and several queries that don't:
 
 ```sql
-CREATE TABLE t (a varchar (40));
+CREATE TABLE t (a text);
 CREATE SOURCE test FROM FILE 'test.csv' WITH(tail=true);
 SELECT coalesce (1, NULL,2);
 SELECT CAST(1 AS text);

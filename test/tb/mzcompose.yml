@@ -46,7 +46,7 @@ mzworkflows:
       query: |
           CREATE DATABASE tb_test;
           USE tb_test;
-          CREATE TABLE stonks (ticker varchar(255) NOT NULL, price int NOT NULL);
+          CREATE TABLE stonks (ticker text NOT NULL, price int NOT NULL);
           INSERT INTO stonks VALUES ('AAPL', 499), ('GOOG', 1608);
     - step: start-services
       services: [tb]

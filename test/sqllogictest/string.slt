@@ -29,7 +29,7 @@ column1
 ### ascii ###
 
 statement ok
-CREATE TABLE asciitest (strcol CHAR(15), vccol VARCHAR(15))
+CREATE TABLE asciitest (textcol_l TEXT, textcol_r TEXT)
 
 # TODO: materialize#589 Add two tests:
 # 1: empty string to each column
@@ -42,7 +42,7 @@ statement error
 SELECT ascii(98)
 
 query II colnames
-SELECT ascii(strcol) AS strres, ascii(vccol) AS vcres FROM asciitest ORDER BY strres
+SELECT ascii(textcol_l) AS strres, ascii(textcol_r) AS vcres FROM asciitest ORDER BY strres
 ----
 strres  vcres
 104     103
@@ -62,7 +62,7 @@ SELECT ascii(substr('inside literal', 3, 4))
 
 ### substr ###
 statement ok
-CREATE TABLE substrtest (strcol char(15), vccol varchar(15), intcol_l int, intcol_r int)
+CREATE TABLE substrtest (textcol_l TEXT, textcol_r TEXT, intcol_l int, intcol_r int)
 
 statement ok
 INSERT INTO substrtest VALUES ('Mg', 'Mn', 1, 1), ('magnesium', 'manganese', 3, NULL),
@@ -87,9 +87,9 @@ SELECT substr('for still cannot be negative', 30, -2)
 
 # standard tests
 
-# TODO: materialize#589 SELECT strcol FROM substrtest
+# TODO: materialize#589 SELECT textcol_l FROM substrtest
 query T colnames
-SELECT substr(vccol, 1, 3) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, 1, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -100,7 +100,7 @@ man
 NULL
 
 query T colnames
-SELECT substr(vccol, 1, 5) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, 1, 5) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -111,7 +111,7 @@ manga
 NULL
 
 query T colnames
-SELECT substr(vccol, 1) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, 1) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -122,7 +122,7 @@ manganese
 NULL
 
 query T colnames
-SELECT substr(vccol, 3) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -133,7 +133,7 @@ nganese
 NULL
 
 query T colnames
-SELECT substr(vccol, 3, 1) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, 3, 1) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -145,7 +145,7 @@ NULL
 
 # negative start position
 query T colnames
-SELECT substr(vccol, -1) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, -1) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -156,7 +156,7 @@ manganese
 NULL
 
 query T colnames
-SELECT substr(vccol, -2, 6) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, -2, 6) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -167,7 +167,7 @@ man
 NULL
 
 query T colnames
-SELECT substr(vccol, -3, 5) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, -3, 5) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -178,7 +178,7 @@ m
 NULL
 
 query TT colnames
-SELECT substr(strcol, -4, 5) AS strres, substr(vccol, -4, 5) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_l, -4, 5) AS strres, substr(textcol_r, -4, 5) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 (empty) (empty)
@@ -189,7 +189,7 @@ strres  vcres
 NULL    NULL
 
 query TT colnames
-SELECT substr(strcol, -6, 6) AS strres, substr(vccol, -6, 6) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_l, -6, 6) AS strres, substr(textcol_r, -6, 6) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 (empty) (empty)
@@ -200,7 +200,7 @@ strres  vcres
 NULL    NULL
 
 query TT colnames
-SELECT substr(strcol, -5, 4) AS strres, substr(vccol, -5, 4) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_l, -5, 4) AS strres, substr(textcol_r, -5, 4) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 (empty) (empty)
@@ -212,7 +212,7 @@ NULL    NULL
 
 # for or start is zero
 query T colnames
-SELECT substr(vccol, 0) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, 0) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -223,7 +223,7 @@ manganese
 NULL
 
 query T colnames
-SELECT substr(vccol, 0, 3) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, 0, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -234,7 +234,7 @@ ma
 NULL
 
 query TT colnames
-SELECT substr(strcol, 0, 0) AS strres, substr(vccol, 0, 0) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_l, 0, 0) AS strres, substr(textcol_r, 0, 0) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 (empty) (empty)
@@ -245,7 +245,7 @@ strres  vcres
 NULL    NULL
 
 query TT colnames
-SELECT substr(strcol, 3, 0) AS strres, substr(vccol, 3, 0) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_l, 3, 0) AS strres, substr(textcol_r, 3, 0) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 (empty) (empty)
@@ -298,7 +298,7 @@ NULL
 
 # alternative syntax
 query T colnames
-SELECT substring(vccol, 1, 3) AS vcres FROM substrtest ORDER BY vcres
+SELECT substring(textcol_r, 1, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 (empty)
@@ -310,7 +310,7 @@ NULL
 
 # testing different kinds of int columns and NULL content in columns
 query T
-SELECT substr(vccol, intcol_l, intcol_l) AS vcres FROM substrtest WHERE intcol_l > -1  ORDER BY vcres
+SELECT substr(textcol_r, intcol_l, intcol_l) AS vcres FROM substrtest WHERE intcol_l > -1  ORDER BY vcres
 ----
 4.
 M
@@ -318,10 +318,10 @@ nga
 NULL
 
 query error negative substring length not allowed
-SELECT substr(vccol, intcol_l, intcol_l) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, intcol_l, intcol_l) AS vcres FROM substrtest ORDER BY vcres
 
 query T
-SELECT substr(vccol, intcol_r, intcol_r) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, intcol_r, intcol_r) AS vcres FROM substrtest ORDER BY vcres
 ----
 (empty)
 .94
@@ -331,7 +331,7 @@ NULL
 NULL
 
 query T
-SELECT substr(vccol, intcol_l, intcol_r) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(textcol_r, intcol_l, intcol_r) AS vcres FROM substrtest ORDER BY vcres
 ----
 (empty)
 4.9
@@ -341,7 +341,7 @@ NULL
 NULL
 
 query T
-SELECT substr(vccol, intcol_r, intcol_l) AS vcres FROM substrtest WHERE intcol_l > -1 ORDER BY vcres
+SELECT substr(textcol_r, intcol_r, intcol_l) AS vcres FROM substrtest WHERE intcol_l > -1 ORDER BY vcres
 ----
 .9
 M
@@ -373,7 +373,7 @@ SELECT substr('abcdef', 2147483648, 2147483648);
 
 ### length ###
 statement ok
-CREATE TABLE lengthtest(strcol char(15), vccol varchar(15))
+CREATE TABLE lengthtest(textcol_l TEXT, textcol_r TEXT)
 
 statement ok
 INSERT INTO lengthtest VALUES
@@ -389,20 +389,9 @@ statement error
 SELECT length('str', 99)
 
 # standard tests
-query I rowsort
-SELECT length(strcol) FROM lengthtest
-----
-15
-15
-15
-15
-15
-15
-15
-NULL
 
 query I rowsort
-SELECT length(vccol) FROM lengthtest
+SELECT length(textcol_r) FROM lengthtest
 ----
 0
 2
@@ -849,35 +838,9 @@ SELECT 'TEST' NOT ILIKE 'TE_'
 ----
 true
 
-# Invalid type mods
-
-query error length for type varchar must be within \[1-10485760\], have 0
-SELECT ''::VARCHAR(0)
-
-query error length for type varchar must be within \[1-10485760\], have 10485761
-SELECT ''::VARCHAR(10485761)
-
-query error length for type char must be within \[1-10485760\], have 0
-SELECT ''::CHAR(0)
-
-query error length for type char must be within \[1-10485760\], have 10485761
-SELECT ''::CHAR(10485761)
-
-query error length for type varchar must be within \[1-10485760\], have 0
-SELECT ''::pg_catalog.VARCHAR(0)
-
-query error length for type varchar must be within \[1-10485760\], have 10485761
-SELECT ''::pg_catalog.VARCHAR(10485761)
-
-query error length for type char must be within \[1-10485760\], have 0
-SELECT ''::pg_catalog.CHAR(0)
-
-query error length for type char must be within \[1-10485760\], have 10485761
-SELECT ''::pg_catalog.CHAR(10485761)
-
 ### position ###
 statement ok
-CREATE TABLE positiontest (strcol1 char(15), strcol2 char(15), vccol1 varchar(15), vccol2 varchar(15))
+CREATE TABLE positiontest (textcol_l1 TEXT, textcol_l2 TEXT, textcol_r1 TEXT, textcol_r2 TEXT)
 
 statement ok
 INSERT INTO positiontest VALUES ('om', 'Thomas', 'om', 'Thomas'), ('foo', 'barbar', 'foo', 'barbar'),
@@ -902,10 +865,10 @@ SELECT position('str' IN 42, 172)
 
 # standard tests
 
-#TODO: materialize#589 select position(strcol1 IN strcol2) from positiontest
+#TODO: materialize#589 select position(textcol_l1 IN textcol_l2) from positiontest
 
 query I rowsort
-SELECT position(vccol1 IN vccol2) FROM positiontest
+SELECT position(textcol_r1 IN textcol_r2) FROM positiontest
 ----
 3
 0
@@ -941,7 +904,7 @@ SELECT position(e'\u0903\u0951' IN e'\u0930\u0903\u0951')
 
 ### left ###
 statement ok
-CREATE TABLE lefttest (strcol char(15), vccol varchar(15), intcol_l int, intcol_r int)
+CREATE TABLE lefttest (textcol_l TEXT, textcol_r TEXT, intcol_l int, intcol_r int)
 
 statement ok
 INSERT INTO lefttest VALUES ('Mg', 'Mn', 1, -1), ('magnesium', 'manganese', 3, NULL),
@@ -963,11 +926,11 @@ SELECT left('str', 42, 17)
 
 # standard tests
 
-#TODO: materialize#589 select left(strcol, foo) from lefttest
+#TODO: materialize#589 select left(textcol_l, foo) from lefttest
 
 # edge case
 query T rowsort
-SELECT left(vccol, 0) FROM lefttest
+SELECT left(textcol_r, 0) FROM lefttest
 ----
 (empty)
 (empty)
@@ -978,7 +941,7 @@ NULL
 
 # from the front
 query T rowsort
-SELECT left(vccol, 2) FROM lefttest
+SELECT left(textcol_r, 2) FROM lefttest
 ----
 Mn
 ma
@@ -989,7 +952,7 @@ NULL
 
 # from the back
 query T rowsort
-SELECT left(vccol, -2) FROM lefttest
+SELECT left(textcol_r, -2) FROM lefttest
 ----
 (empty)
 mangane
@@ -999,7 +962,7 @@ NULL
 (empty)
 
 query TT rowsort
-SELECT left(vccol, intcol_l), left(vccol, intcol_r) FROM lefttest
+SELECT left(textcol_r, intcol_l), left(textcol_r, intcol_r) FROM lefttest
 ----
 M   M
 man NULL
@@ -1063,7 +1026,7 @@ SELECT left('hello', 2147483648)
 
 ### right ###
 statement ok
-CREATE TABLE righttest (strcol char(15), vccol varchar(15), intcol_l int, intcol_r int)
+CREATE TABLE righttest (textcol_l TEXT, textcol_r TEXT, intcol_l int, intcol_r int)
 
 statement ok
 INSERT INTO righttest VALUES ('Mg', 'Mn', 1, -1), ('magnesium', 'manganese', 3, NULL),
@@ -1085,11 +1048,11 @@ SELECT right('str', 42, 17)
 
 # standard tests
 
-#TODO: materialize#589 select right(strcol, foo) from righttest
+#TODO: materialize#589 select right(textcol_l, foo) from righttest
 
 # edge case
 query T rowsort
-SELECT right(vccol, 0) FROM righttest
+SELECT right(textcol_r, 0) FROM righttest
 ----
 (empty)
 (empty)
@@ -1100,7 +1063,7 @@ NULL
 
 # from the back
 query T rowsort
-SELECT right(vccol, 2) FROM righttest
+SELECT right(textcol_r, 2) FROM righttest
 ----
 Mn
 se
@@ -1111,7 +1074,7 @@ NULL
 
 # from the front
 query T rowsort
-SELECT right(vccol, -2) FROM righttest
+SELECT right(textcol_r, -2) FROM righttest
 ----
 (empty)
 nganese
@@ -1121,7 +1084,7 @@ NULL
 (empty)
 
 query TT rowsort
-SELECT right(vccol, intcol_l), right(vccol, intcol_r) FROM righttest
+SELECT right(textcol_r, intcol_l), right(textcol_r, intcol_r) FROM righttest
 ----
 n   n
 ese NULL

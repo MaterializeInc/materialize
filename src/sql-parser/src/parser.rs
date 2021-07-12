@@ -2627,34 +2627,6 @@ impl<'a> Parser<'a> {
         let mut data_type = match self.next_token() {
             Some(Token::Keyword(kw)) => match kw {
                 // Text-like types
-                CHAR | CHARACTER => {
-                    let name = if self.parse_keyword(VARYING) {
-                        "varchar"
-                    } else {
-                        "char"
-                    };
-                    DataType::Other {
-                        name: RawName::Name(UnresolvedObjectName::unqualified(name)),
-                        typ_mod: match self.parse_optional_precision()? {
-                            Some(u) => vec![u],
-                            None => vec![],
-                        },
-                    }
-                }
-                BPCHAR => DataType::Other {
-                    name: RawName::Name(UnresolvedObjectName::unqualified("bpchar")),
-                    typ_mod: match self.parse_optional_precision()? {
-                        Some(u) => vec![u],
-                        None => vec![],
-                    },
-                },
-                VARCHAR => DataType::Other {
-                    name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
-                    typ_mod: match self.parse_optional_precision()? {
-                        Some(u) => vec![u],
-                        None => vec![],
-                    },
-                },
                 STRING => other("text"),
 
                 // Number-like types

@@ -343,28 +343,6 @@ SELECT 'dog'::pg_catalog.text
 ----
 dog
 
-# 🔬🔬🔬 text aliases
-
-query T
-SELECT 'dog'::char(10)
-----
-dog
-
-query T
-SELECT '1'::pg_catalog.char(10)
-----
-1
-
-query T
-SELECT 'dog'::varchar(10)
-----
-dog
-
-query T
-SELECT 'dog'::pg_catalog.varchar(10)
-----
-dog
-
 # 🔬🔬 time
 
 query T
@@ -496,15 +474,11 @@ SELECT format_type(25, NULL)
 ----
 text
 
+# should be char
 query T
 SELECT format_type(18, NULL)
 ----
-char
-
-query T
-SELECT format_type(1043, NULL)
-----
-varchar
+???
 
 query T
 SELECT format_type(26, NULL)

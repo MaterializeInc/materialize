@@ -9,10 +9,12 @@
 
 statement ok
 CREATE TABLE nation (
-    n_nationkey  integer PRIMARY KEY,
-    n_name       char(25) NOT NULL,
-    n_regionkey  integer NOT NULL,
-    n_comment    varchar(152)
+    n_nationkey     integer PRIMARY KEY,
+    -- n_name       char(25) NOT NULL,
+    n_name          text NOT NULL,
+    n_regionkey     integer NOT NULL,
+    -- n_comment    varchar(152)
+    n_comment       text
 )
 
 statement ok
@@ -20,33 +22,45 @@ CREATE INDEX fk_nation_regionkey ON nation (n_regionkey ASC)
 
 statement ok
 CREATE TABLE region  (
-    r_regionkey  integer PRIMARY KEY,
-    r_name       char(25) NOT NULL,
-    r_comment    varchar(152)
+    r_regionkey     integer PRIMARY KEY,
+    -- r_name       char(25) NOT NULL,
+    r_name          text NOT NULL,
+    -- r_comment    varchar(152)
+    r_comment       text
 )
 
 statement ok
 CREATE TABLE part (
-    p_partkey     integer PRIMARY KEY,
-    p_name        varchar(55) NOT NULL,
-    p_mfgr        char(25) NOT NULL,
-    p_brand       char(10) NOT NULL,
-    p_type        varchar(25) NOT NULL,
-    p_size        integer NOT NULL,
-    p_container   char(10) NOT NULL,
-    p_retailprice decimal(15, 2) NOT NULL,
-    p_comment     varchar(23) NOT NULL
+    p_partkey       integer PRIMARY KEY,
+    -- p_name       varchar(55) NOT NULL,
+    p_name          text NOT NULL,
+    -- p_mfgr       char(25) NOT NULL,
+    p_mfgr          text NOT NULL,
+    -- p_brand      char(10) NOT NULL,
+    p_brand         text NOT NULL,
+    -- p_type       varchar(25) NOT NULL,
+    p_type          text NOT NULL,
+    p_size          integer NOT NULL,
+    -- p_container  char(10) NOT NULL,
+    p_container     text NOT NULL,
+    p_retailprice   decimal(15, 2) NOT NULL,
+    -- p_comment    varchar(23) NOT NULL
+    p_comment       text NOT NULL
 )
 
 statement ok
 CREATE TABLE supplier (
-    s_suppkey     integer PRIMARY KEY,
-    s_name        char(25) NOT NULL,
-    s_address     varchar(40) NOT NULL,
-    s_nationkey   integer NOT NULL,
-    s_phone       char(15) NOT NULL,
-    s_acctbal     decimal(15, 2) NOT NULL,
-    s_comment     varchar(101) NOT NULL
+    s_suppkey       integer PRIMARY KEY,
+    -- s_name       char(25) NOT NULL,
+    s_name          text NOT NULL,
+    -- s_address    varchar(40) NOT NULL,
+    s_address       text NOT NULL,
+    s_nationkey     integer NOT NULL,
+    -- s_phone      char(15) NOT NULL,
+    s_phone         text NOT NULL,
+    s_acctbal       decimal(15, 2) NOT NULL,
+    -- s_comment    varchar(101) NOT NULL
+    s_comment       text NOT NULL
 )
 
 statement ok
@@ -54,11 +68,12 @@ CREATE INDEX fk_supplier_nationkey ON supplier (s_nationkey ASC)
 
 statement ok
 CREATE TABLE partsupp (
-    ps_partkey     integer NOT NULL,
-    ps_suppkey     integer NOT NULL,
-    ps_availqty    integer NOT NULL,
-    ps_supplycost  decimal(15, 2) NOT NULL,
-    ps_comment     varchar(199) NOT NULL,
+    ps_partkey      integer NOT NULL,
+    ps_suppkey      integer NOT NULL,
+    ps_availqty     integer NOT NULL,
+    ps_supplycost   decimal(15, 2) NOT NULL,
+    -- ps_comment   varchar(199) NOT NULL,
+    ps_comment      text NOT NULL,
     PRIMARY KEY (ps_partkey, ps_suppkey)
 )
 
@@ -70,14 +85,19 @@ CREATE INDEX fk_partsupp_suppkey ON partsupp (ps_suppkey ASC)
 
 statement ok
 CREATE TABLE customer (
-    c_custkey     integer PRIMARY KEY,
-    c_name        varchar(25) NOT NULL,
-    c_address     varchar(40) NOT NULL,
-    c_nationkey   integer NOT NULL,
-    c_phone       char(15) NOT NULL,
-    c_acctbal     decimal(15, 2) NOT NULL,
-    c_mktsegment  char(10) NOT NULL,
-    c_comment     varchar(117) NOT NULL
+    c_custkey       integer PRIMARY KEY,
+    -- c_name       varchar(25) NOT NULL,
+    c_name          text NOT NULL,
+    -- c_address    varchar(40) NOT NULL,
+    c_address       text NOT NULL,
+    c_nationkey     integer NOT NULL,
+    -- c_phone      char(15) NOT NULL,
+    c_phone         text NOT NULL,
+    c_acctbal       decimal(15, 2) NOT NULL,
+    -- c_mktsegment char(10) NOT NULL,
+    c_mktsegment    text NOT NULL,
+    -- c_comment    varchar(117) NOT NULL
+    c_comment text NOT NULL
 )
 
 statement ok
@@ -85,15 +105,19 @@ CREATE INDEX fk_customer_nationkey ON customer (c_nationkey ASC)
 
 statement ok
 CREATE TABLE orders (
-    o_orderkey       integer PRIMARY KEY,
-    o_custkey        integer NOT NULL,
-    o_orderstatus    char(1) NOT NULL,
-    o_totalprice     decimal(15, 2) NOT NULL,
-    o_orderdate      DATE NOT NULL,
-    o_orderpriority  char(15) NOT NULL,
-    o_clerk          char(15) NOT NULL,
-    o_shippriority   integer NOT NULL,
-    o_comment        varchar(79) NOT NULL
+    o_orderkey          integer PRIMARY KEY,
+    o_custkey           integer NOT NULL,
+    -- o_orderstatus    char(1) NOT NULL,
+    o_orderstatus       text NOT NULL,
+    o_totalprice        decimal(15, 2) NOT NULL,
+    o_orderdate         DATE NOT NULL,
+    -- o_orderpriority  char(15) NOT NULL,
+    o_orderpriority     text NOT NULL,
+    -- o_clerk          char(15) NOT NULL,
+    o_clerk             text NOT NULL,
+    o_shippriority      integer NOT NULL,
+    -- o_comment        varchar(79) NOT NULL
+    o_comment           text NOT NULL
 )
 
 statement ok
@@ -101,22 +125,27 @@ CREATE INDEX fk_orders_custkey ON orders (o_custkey ASC)
 
 statement ok
 CREATE TABLE lineitem (
-    l_orderkey       integer NOT NULL,
-    l_partkey        integer NOT NULL,
-    l_suppkey        integer NOT NULL,
-    l_linenumber     integer NOT NULL,
-    l_quantity       decimal(15, 2) NOT NULL,
-    l_extendedprice  decimal(15, 2) NOT NULL,
-    l_discount       decimal(15, 2) NOT NULL,
-    l_tax            decimal(15, 2) NOT NULL,
-    l_returnflag     char(1) NOT NULL,
-    l_linestatus     char(1) NOT NULL,
-    l_shipdate       date NOT NULL,
-    l_commitdate     date NOT NULL,
-    l_receiptdate    date NOT NULL,
-    l_shipinstruct   char(25) NOT NULL,
-    l_shipmode       char(10) NOT NULL,
-    l_comment        varchar(44) NOT NULL,
+    l_orderkey          integer NOT NULL,
+    l_partkey           integer NOT NULL,
+    l_suppkey           integer NOT NULL,
+    l_linenumber        integer NOT NULL,
+    l_quantity          decimal(15, 2) NOT NULL,
+    l_extendedprice     decimal(15, 2) NOT NULL,
+    l_discount          decimal(15, 2) NOT NULL,
+    l_tax               decimal(15, 2) NOT NULL,
+    -- l_returnflag     char(1) NOT NULL,
+    l_returnflag        text NOT NULL,
+    -- l_linestatus     char(1) NOT NULL,
+    l_linestatus        text NOT NULL,
+    l_shipdate          date NOT NULL,
+    l_commitdate        date NOT NULL,
+    l_receiptdate       date NOT NULL,
+    -- l_shipinstruct   char(25) NOT NULL,
+    l_shipinstruct      text NOT NULL,
+    -- l_shipmode       char(10) NOT NULL,
+    l_shipmode          text NOT NULL,
+    -- l_comment        varchar(44) NOT NULL,
+    l_comment           text NOT NULL,
     PRIMARY KEY (l_orderkey, l_linenumber)
 )
 

@@ -85,7 +85,7 @@ pub enum Expr<T: AstInfo> {
         expr1: Box<Expr<T>>,
         expr2: Option<Box<Expr<T>>>,
     },
-    /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
+    /// CAST an expression to a different data type e.g. `CAST(foo AS TEXT)`
     Cast {
         expr: Box<Expr<T>>,
         data_type: DataType<T>,

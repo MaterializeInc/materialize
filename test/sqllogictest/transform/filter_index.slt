@@ -10,7 +10,7 @@
 statement ok
 create table foo (
     a int NOT NULL,
-    b varchar,
+    b text,
     c decimal(13, 1)
 )
 
@@ -20,7 +20,7 @@ INSERT INTO foo (a, b, c) VALUES (5, 'this', -4.4), (3, 'just', 11.3), (-45, 'it
 statement ok
 create table bar (
     a int NOT NULL,
-    d varchar,
+    d text,
     e decimal(13, 1)
 )
 

@@ -38,7 +38,6 @@ Between
 Bigint
 Boolean
 Both
-Bpchar
 Broker
 Bucket
 By
@@ -48,8 +47,6 @@ Case
 Cast
 Chain
 Channel
-Char
-Character
 Check
 Close
 Coalesce
@@ -265,8 +262,6 @@ Users
 Using
 Value
 Values
-Varchar
-Varying
 View
 Views
 When
