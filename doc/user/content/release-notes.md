@@ -48,6 +48,8 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.8.2 %}}
 
+- Avro-formatted Kafka sinks can now [reuse the existing topic after restart](/sql/create-sink/#enabling-topic-reuse-after-restart) instead of creating a new topic for each restart. This feature is available only in experimental mode.
+
 - Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
   `--experimental`)
 
