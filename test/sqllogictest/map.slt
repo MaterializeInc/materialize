@@ -240,7 +240,7 @@ SELECT '{hello=>{world=>123.40}}'::map[text=>map[text=>double]] -> 'hello'::text
 true
 
 query T
-SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>smallint]] -> 'hello'::text ?& ARRAY['world', 'extra']
+SELECT '{hello=>{world=>1293}}'::map[text=>map[text=>integer]] -> 'hello'::text ?& ARRAY['world', 'extra']
 ----
 false
 

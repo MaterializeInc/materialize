@@ -628,7 +628,7 @@ DROP TABLE a
 # Ensure that additional type info stays when used as an array.
 
 statement ok
-CREATE TABLE a (b SMALLINT[])
+CREATE TABLE a (b int[])
 
 query TT
 SHOW CREATE TABLE a

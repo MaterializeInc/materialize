@@ -62,7 +62,7 @@ SELECT ascii(substr('inside literal', 3, 4))
 
 ### substr ###
 statement ok
-CREATE TABLE substrtest (strcol char(15), vccol varchar(15), smicol smallint, intcol int)
+CREATE TABLE substrtest (strcol char(15), vccol varchar(15), intcol_l int, intcol_r int)
 
 statement ok
 INSERT INTO substrtest VALUES ('Mg', 'Mn', 1, 1), ('magnesium', 'manganese', 3, NULL),
@@ -310,7 +310,7 @@ NULL
 
 # testing different kinds of int columns and NULL content in columns
 query T
-SELECT substr(vccol, smicol, smicol) AS vcres FROM substrtest WHERE smicol > -1  ORDER BY vcres
+SELECT substr(vccol, intcol_l, intcol_l) AS vcres FROM substrtest WHERE intcol_l > -1  ORDER BY vcres
 ----
 4.
 M
@@ -318,10 +318,10 @@ nga
 NULL
 
 query error negative substring length not allowed
-SELECT substr(vccol, smicol, smicol) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(vccol, intcol_l, intcol_l) AS vcres FROM substrtest ORDER BY vcres
 
 query T
-SELECT substr(vccol, intcol, intcol) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(vccol, intcol_r, intcol_r) AS vcres FROM substrtest ORDER BY vcres
 ----
 (empty)
 .94
@@ -331,7 +331,7 @@ NULL
 NULL
 
 query T
-SELECT substr(vccol, smicol, intcol) AS vcres FROM substrtest ORDER BY vcres
+SELECT substr(vccol, intcol_l, intcol_r) AS vcres FROM substrtest ORDER BY vcres
 ----
 (empty)
 4.9
@@ -341,7 +341,7 @@ NULL
 NULL
 
 query T
-SELECT substr(vccol, intcol, smicol) AS vcres FROM substrtest WHERE smicol > -1 ORDER BY vcres
+SELECT substr(vccol, intcol_r, intcol_l) AS vcres FROM substrtest WHERE intcol_l > -1 ORDER BY vcres
 ----
 .9
 M
@@ -941,7 +941,7 @@ SELECT position(e'\u0903\u0951' IN e'\u0930\u0903\u0951')
 
 ### left ###
 statement ok
-CREATE TABLE lefttest (strcol char(15), vccol varchar(15), smicol smallint, intcol int)
+CREATE TABLE lefttest (strcol char(15), vccol varchar(15), intcol_l int, intcol_r int)
 
 statement ok
 INSERT INTO lefttest VALUES ('Mg', 'Mn', 1, -1), ('magnesium', 'manganese', 3, NULL),
@@ -999,7 +999,7 @@ NULL
 (empty)
 
 query TT rowsort
-SELECT left(vccol, smicol), left(vccol, intcol) FROM lefttest
+SELECT left(vccol, intcol_l), left(vccol, intcol_r) FROM lefttest
 ----
 M   M
 man NULL
@@ -1063,7 +1063,7 @@ SELECT left('hello', 2147483648)
 
 ### right ###
 statement ok
-CREATE TABLE righttest (strcol char(15), vccol varchar(15), smicol smallint, intcol int)
+CREATE TABLE righttest (strcol char(15), vccol varchar(15), intcol_l int, intcol_r int)
 
 statement ok
 INSERT INTO righttest VALUES ('Mg', 'Mn', 1, -1), ('magnesium', 'manganese', 3, NULL),
@@ -1121,7 +1121,7 @@ NULL
 (empty)
 
 query TT rowsort
-SELECT right(vccol, smicol), right(vccol, intcol) FROM righttest
+SELECT right(vccol, intcol_l), right(vccol, intcol_r) FROM righttest
 ----
 n   n
 ese NULL

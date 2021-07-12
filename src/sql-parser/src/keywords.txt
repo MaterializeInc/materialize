@@ -224,7 +224,6 @@ Show
 Sink
 Sinks
 Slot
-Smallint
 Snapshot
 Some
 Source

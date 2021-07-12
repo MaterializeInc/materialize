@@ -107,7 +107,6 @@ impl Type {
             postgres_types::Type::DATE => Some(Type::Date),
             postgres_types::Type::FLOAT4 => Some(Type::Float4),
             postgres_types::Type::FLOAT8 => Some(Type::Float8),
-            postgres_types::Type::INT2 => Some(Type::Int4),
             postgres_types::Type::INT4 => Some(Type::Int4),
             postgres_types::Type::INT8 => Some(Type::Int8),
             postgres_types::Type::INTERVAL => Some(Type::Interval),

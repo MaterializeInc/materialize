@@ -922,7 +922,6 @@ WHERE table_schema = 'public' AND table_name = 'data_types'
 ----
 table_name  column_name  data_type                    crdb_sql_type            udt_catalog  udt_schema  udt_name      collation_catalog  collation_schema  collation_name
 data_types  a            bigint                       INT8                     test         pg_catalog  int8          NULL               NULL              NULL
-data_types  a2           smallint                     INT2                     test         pg_catalog  int2          NULL               NULL              NULL
 data_types  a4           integer                      INT4                     test         pg_catalog  int4          NULL               NULL              NULL
 data_types  a8           bigint                       INT8                     test         pg_catalog  int8          NULL               NULL              NULL
 data_types  b            double precision             FLOAT8                   test         pg_catalog  float8        NULL               NULL              NULL

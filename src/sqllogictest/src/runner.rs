@@ -372,7 +372,6 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::DATE
                 | PgType::FLOAT4
                 | PgType::FLOAT8
-                | PgType::INT2
                 | PgType::INT4
                 | PgType::INT8
                 | PgType::INTERVAL

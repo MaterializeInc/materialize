@@ -190,18 +190,8 @@ SELECT pg_typeof('1'::integer)
 ----
 integer
 
-query T
-SELECT '1'::smallint
-----
-1
-
 query error unknown catalog item 'pg_catalog.smallint'
 SELECT '1'::pg_catalog.smallint
-
-query T
-SELECT pg_typeof('1'::smallint)
-----
-integer
 
 # 🔬🔬 int8
 

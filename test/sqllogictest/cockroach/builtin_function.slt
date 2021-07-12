@@ -1813,7 +1813,6 @@ oidvector
 inet
 bigint
 integer
-smallint
 int2vector
 interval
 jsonb
@@ -1833,7 +1832,6 @@ unknown
 bit varying
 character varying
 bigint[]
-smallint[]
 text[]
 character varying[]
 

@@ -65,7 +65,7 @@ The syntax is either:
 or
 ```
 CREATE TABLE bar (
-    a smallint,
+    a int,
     b integer,
     c char(10),
     d char(20),

@@ -192,7 +192,7 @@ FROM
 WHERE
     p_partkey = ps_partkey
     AND s_suppkey = ps_suppkey
-    AND p_size = CAST (15 AS smallint)
+    AND p_size = 15
     AND p_type LIKE '%BRASS'
     AND s_nationkey = n_nationkey
     AND n_regionkey = r_regionkey
@@ -1436,8 +1436,8 @@ WHERE
         p_partkey = l_partkey
         AND p_brand = 'Brand#12'
         AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
-        AND l_quantity >= CAST (1 AS smallint) AND l_quantity <= CAST (1 + 10 AS smallint)
-        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (5 AS smallint)
+        AND l_quantity >= 1 AND l_quantity <= 1 + 10
+        AND p_size BETWEEN 1 AND 5
         AND l_shipmode IN ('AIR', 'AIR REG')
         AND l_shipinstruct = 'DELIVER IN PERSON'
     )
@@ -1446,8 +1446,8 @@ WHERE
         p_partkey = l_partkey
         AND p_brand = 'Brand#23'
         AND p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
-        AND l_quantity >= CAST (10 AS smallint) AND l_quantity <= CAST (10 + 10 AS smallint)
-        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (10 AS smallint)
+        AND l_quantity >= 10 AND l_quantity <= 10 + 10
+        AND p_size BETWEEN 1 AND 10
         AND l_shipmode IN ('AIR', 'AIR REG')
         AND l_shipinstruct = 'DELIVER IN PERSON'
     )
@@ -1456,8 +1456,8 @@ WHERE
         p_partkey = l_partkey
         AND p_brand = 'Brand#34'
         AND p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
-        AND l_quantity >= CAST (20 AS smallint) AND l_quantity <= CAST (20 + 10 AS smallint)
-        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (15 AS smallint)
+        AND l_quantity >= 20 AND l_quantity <= 20 + 10
+        AND p_size BETWEEN 1 AND 15
         AND l_shipmode IN ('AIR', 'AIR REG')
         AND l_shipinstruct = 'DELIVER IN PERSON'
     )

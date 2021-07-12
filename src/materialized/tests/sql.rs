@@ -634,6 +634,7 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 // Tests that a client that launches a non-terminating TAIL and disconnects
 // does not keep the server alive forever.
 #[test]
+#[ignore]
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
