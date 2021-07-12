@@ -28,6 +28,7 @@ pub mod mem;
 pub mod nemesis;
 pub mod operators;
 pub mod storage;
+pub mod unreliable;
 
 // TODO
 // - This method of getting the metadata handle ends up being pretty clunky in
