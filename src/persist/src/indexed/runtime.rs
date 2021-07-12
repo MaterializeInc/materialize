@@ -96,7 +96,7 @@ impl<T> From<Box<dyn FnOnce(Result<T, Error>) + Send + 'static>> for CmdResponse
 }
 
 impl<T> CmdResponse<T> {
-    fn send(self, t: Result<T, Error>) {
+    pub(crate) fn send(self, t: Result<T, Error>) {
         match self {
             CmdResponse::Ignore => {}
             CmdResponse::Callback(c) => c(t),
@@ -271,20 +271,14 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
     }
 
     /// Synchronously writes (Key, Value, Time, Diff) updates.
-    pub fn write_sync(&mut self, updates: &[((K, V), u64, isize)]) -> Result<(), Error> {
-        // TODO: Make write_sync signature non-blocking.
-        let (rx, tx) = mpsc::channel();
-        self.runtime.write(self.id, updates, rx.into());
-        tx.recv().map_err(|_| Error::RuntimeShutdown)?
+    pub fn write(&mut self, updates: &[((K, V), u64, isize)], res: CmdResponse<()>) {
+        self.runtime.write(self.id, updates, res);
     }
 
     /// Closes the stream at the given timestamp, migrating data strictly less
     /// than it into the trace.
-    pub fn seal(&mut self, upper: u64) -> Result<(), Error> {
-        // TODO: Make seal signature non-blocking.
-        let (rx, tx) = mpsc::channel();
-        self.runtime.seal(self.id, upper, rx.into());
-        tx.recv().map_err(|_| Error::RuntimeShutdown)?
+    pub fn seal(&mut self, upper: u64, res: CmdResponse<()>) {
+        self.runtime.seal(self.id, upper, res);
     }
 }
 
@@ -380,6 +374,12 @@ mod tests {
 
     use super::*;
 
+    fn block_on<T, F: FnOnce(CmdResponse<T>)>(f: F) -> Result<T, Error> {
+        let (tx, rx) = mpsc::channel();
+        f(tx.into());
+        rx.recv().map_err(|_| Error::RuntimeShutdown)?
+    }
+
     #[test]
     fn runtime() -> Result<(), Error> {
         let data = vec![
@@ -392,7 +392,7 @@ mod tests {
         let mut runtime = start(buffer, blob)?;
 
         let (mut write, meta) = runtime.create_or_load("0")?.into_inner();
-        write.write_sync(&data)?;
+        block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
 
@@ -421,7 +421,7 @@ mod tests {
         let mut client2 = client1.clone();
         drop(client1);
         let (mut write, meta) = client2.create_or_load("0")?.into_inner();
-        write.write_sync(&data)?;
+        block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
         client2.stop()?;
@@ -442,14 +442,14 @@ mod tests {
         // blob and allowing them to be reused in the next Indexed.
         let mut persister = registry.open("path", "restart-1")?;
         let (mut write, _) = persister.create_or_load("0")?.into_inner();
-        write.write_sync(&data[0..1])?;
+        block_on(|res| write.write(&data[0..1], res))?;
         assert_eq!(persister.stop(), Ok(()));
 
         // Shutdown happens if all handles are dropped, even if we don't call
         // stop.
         let persister = registry.open("path", "restart-2")?;
         let (mut write, _) = persister.create_or_load("0")?.into_inner();
-        write.write_sync(&data[1..2])?;
+        block_on(|res| write.write(&data[1..2], res))?;
         drop(write);
         drop(persister);
 
