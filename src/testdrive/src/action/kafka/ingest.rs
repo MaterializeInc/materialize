@@ -123,23 +123,29 @@ impl Transcoder {
                 }
             }
             Transcoder::Protobuf { message } => {
-                let val: Box<dyn protobuf::Message> = match message {
+                fn convert<T: protobuf::Message>(decoded: T) -> Box<dyn protobuf::Message> {
+                    let d: Box<dyn protobuf::Message> = Box::new(decoded);
+                    d
+                }
+                let val = match message {
                     protobuf::MessageType::Batch => {
-                        let decoded = Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?;
-                        if let Some(decoded) = decoded {
-                            Box::new(decoded)
-                        } else {
-                            return Ok(None);
-                        }
+                        Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?.map(convert)
+                    }
+                    protobuf::MessageType::Measurement => {
+                        Self::decode_json::<_, protobuf::gen::billing::Measurement>(row)?
+                            .map(convert)
                     }
                     protobuf::MessageType::Struct => {
-                        let decoded = Self::decode_json::<_, protobuf::gen::simple::Struct>(row)?;
-                        if let Some(decoded) = decoded {
-                            Box::new(decoded)
-                        } else {
-                            return Ok(None);
-                        }
+                        Self::decode_json::<_, protobuf::gen::simple::Struct>(row)?.map(convert)
                     }
+                    protobuf::MessageType::SimpleId => {
+                        Self::decode_json::<_, protobuf::gen::simple::SimpleId>(row)?.map(convert)
+                    }
+                };
+                let val = if let Some(decoded) = val {
+                    decoded
+                } else {
+                    return Ok(None);
                 };
                 let mut out = val.write_to_bytes().map_err(|e| e.to_string())?;
                 if corrupt_buffer {
@@ -272,7 +278,7 @@ impl Action for IngestAction {
                         1
                     };
                     let schema = avro::parse_schema(&schema)
-                        .map_err(|e| format!("parsing avro schema: {}", e))?;
+                        .map_err(|e| format!("parsing avro schema: {}\nschema={}", e, schema))?;
                     Ok::<_, String>(Transcoder::Avro {
                         schema,
                         schema_id,
@@ -299,7 +305,9 @@ impl Action for IngestAction {
                     None => None,
                     Some(kt) => kt.transcode(&mut row, self.corrupt_keys)?,
                 };
-                let value = value_transcoder.transcode(&mut row, self.corrupt_values)?;
+                let value = value_transcoder
+                    .transcode(&mut row, self.corrupt_values)
+                    .map_err(|e| format!("parsing row: {} {}", String::from_utf8_lossy(row), e))?;
                 let producer = &state.kafka_producer;
                 let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
                 futs.push(async move {

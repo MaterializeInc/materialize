@@ -19,6 +19,8 @@ pub use protobuf::Message;
 pub enum MessageType {
     Batch,
     Struct,
+    Measurement,
+    SimpleId,
 }
 
 impl FromStr for MessageType {
@@ -28,7 +30,12 @@ impl FromStr for MessageType {
         match s {
             "batch" => Ok(MessageType::Batch),
             "struct" => Ok(MessageType::Struct),
-            _ => Err(format!("unknown built-in protobuf message: {}", s)),
+            "measurement" => Ok(MessageType::Measurement),
+            "simpleid" => Ok(MessageType::SimpleId),
+            _ => Err(format!(
+                "testdrive: unknown built-in protobuf message: {}",
+                s
+            )),
         }
     }
 }

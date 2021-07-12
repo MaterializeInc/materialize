@@ -193,3 +193,36 @@ id_name id animal
 -----------------
 one     1  horse
 two     2  bee
+
+$ kafka-create-topic topic=proto
+
+$ kafka-ingest topic=proto key-format=protobuf key-message=simpleid format=protobuf message=measurement timestamp=1
+{"id": "a"} {"resource": "CPU", "measured_value": 10}
+
+> CREATE MATERIALIZED SOURCE input_proto
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-${testdrive.seed}'
+  KEY FORMAT PROTOBUF MESSAGE '.SimpleId' USING SCHEMA  '${testdrive.protobuf-descriptors}'
+  VALUE FORMAT PROTOBUF MESSAGE '.Measurement' USING SCHEMA '${testdrive.protobuf-descriptors}'
+  INCLUDE KEY
+
+> SELECT * FROM input_proto
+id resource measured_value mz_offset
+------------------------------------
+a  CPU      10             1
+
+
+$ kafka-create-topic topic=proto-structured
+
+$ kafka-ingest topic=proto-structured key-format=protobuf key-message=measurement format=protobuf message=simpleid timestamp=1
+{"resource": "CPU", "measured_value": 10} {"id": "a"}
+
+> CREATE MATERIALIZED SOURCE input_proto_structured
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-structured-${testdrive.seed}'
+  KEY FORMAT PROTOBUF MESSAGE '.Measurement' USING SCHEMA '${testdrive.protobuf-descriptors}'
+  VALUE FORMAT PROTOBUF MESSAGE '.SimpleId' USING SCHEMA  '${testdrive.protobuf-descriptors}'
+  INCLUDE KEY AS measurement
+
+> SELECT (measurement).resource as r, (measurement).measured_value as v, id FROM input_proto_structured
+r    v   id
+-----------
+CPU  10  a
