@@ -655,6 +655,10 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
         // Un-gracefully abort the connection.
         conn_task.abort();
 
+        // Need to await `conn_task` to actually deliver the `abort`. We don't
+        // care about the result though (it's probably `JoinError::Cancelled`).
+        let _ = conn_task.await;
+
         Ok::<_, Box<dyn Error>>(())
     })?;
 
