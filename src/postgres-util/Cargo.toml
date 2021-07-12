@@ -10,5 +10,5 @@ anyhow = "1.0.41"
 openssl = { version = "0.10.35", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 sql-parser = { path = "../sql-parser" }
-tokio = { version = "1.6.1", features = ["fs"] }
+tokio = { version = "1.8.1", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
