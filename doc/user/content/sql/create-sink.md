@@ -167,19 +167,20 @@ You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
 #### Enabling topic reuse after restart
 
-{{< version-added v0.8.2 />}}
+{{< experimental v0.8.2 />}}
 
-This feature is only available in experimental mode. By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead, when you create a sink, you must:
+By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead, Materialize must be able to reconstruct the prior history of the sinked object and all objects on which it is dependent--that is, events must have replayable timestamps. This is currently available only for Kafka sources and the views based on them.
+
+When you create a sink, you must:
 
 * Enable the `exactly_once` switch.
-* Specify a consistency topic to store the information Materialize will use to identify where synching left off. For more information, see [Consistency metadata](#consistency-metadata).
+* Specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system.
 
-To synchronize this history, Materialize must be able to reconstruct the history of the sinked object and all objects on which it is dependent. For Kafka, this means that the sinked topic should be set to infinite retention. Additionally, the name of the consistency_topic must be unique across all your sinks (not only the sink for which it tracks consistency data).
+The sink topic and the sink consistency topic cannot be written to by any other process, and both need to be set to infinite data retention.
 
-Compaction may be set for the Kafka sink topic. We have not tested this with compaction set on the consistency topic; time-based compaction is *not* supported, but key-value compaction may work.
+Compaction may be set for the Kafka sink topic.
 
 Because this feature is still experimental, we strongly suggest that you start with test data, rather than with production. Please [escalate](https://github.com/MaterializeInc/materialize/issues/new/choose) any issues to us.
-
 
 #### Consistency metadata
 
