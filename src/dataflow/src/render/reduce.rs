@@ -1568,8 +1568,6 @@ where
                 (key, packer.finish_and_reuse())
             })
             .distinct()
-            .inner
-            .as_collection()
             .explode({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
