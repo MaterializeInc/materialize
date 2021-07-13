@@ -24,6 +24,7 @@ use timely::Data;
 use crate::error::Error;
 use crate::indexed::runtime::{CmdResponse, StreamReadHandle, StreamWriteHandle};
 use crate::indexed::Snapshot;
+use crate::storage::SeqNo;
 use crate::Token;
 
 /// A persistent equivalent of [UnorderedInput].
@@ -119,7 +120,7 @@ pub struct PersistentUnorderedSession<'b, K: timely::Data> {
 
 impl<'b, K: timely::Data> PersistentUnorderedSession<'b, K> {
     /// Transmits a single record after synchronously persisting it.
-    pub fn give(&mut self, data: (K, u64, isize), res: CmdResponse<()>) {
+    pub fn give(&mut self, data: (K, u64, isize), res: CmdResponse<SeqNo>) {
         let (tx, rx) = mpsc::channel();
         self.write
             .write(&[((data.0.clone(), ()), data.1, data.2)], tx.into());
@@ -168,7 +169,7 @@ mod tests {
             for _ in 1..=5 {
                 rx.recv()
                     .expect("runtime has not stopped")
-                    .expect("write was successful")
+                    .expect("write was successful");
             }
         });
 
@@ -193,7 +194,7 @@ mod tests {
             for _ in 6..=9 {
                 rx.recv()
                     .expect("runtime has not stopped")
-                    .expect("write was successful")
+                    .expect("write was successful");
             }
             recv
         });

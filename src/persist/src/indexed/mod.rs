@@ -160,7 +160,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
     /// with the given id.
-    pub fn write_sync(&mut self, id: Id, updates: &[((K, V), u64, isize)]) -> Result<(), Error> {
+    pub fn write_sync(&mut self, id: Id, updates: &[((K, V), u64, isize)]) -> Result<SeqNo, Error> {
         let sealed_frontier = self.sealed_frontier(id)?;
         for update in updates.iter() {
             if !sealed_frontier.less_equal(&update.1) {
@@ -179,8 +179,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let mut entry_bytes = Vec::new();
         unsafe { abomonation::encode(&entry, &mut entry_bytes) }
             .expect("write to Vec is infallible");
-        self.buf.write_sync(entry_bytes)?;
-        Ok(())
+        self.buf.write_sync(entry_bytes)
     }
 
     /// Atomically moves all writes currently in the buffer into the future.
@@ -397,19 +396,23 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         // A closed lower bound on the updates we should include in `buffer` (i.e.
         // the ones not included in `future`).
         let buf_lower = &future.seqno_upper;
-        let mut buffer = BufferSnapshot(Vec::new());
-        {
-            self.buf.snapshot(|seqno, buf| {
-                let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
-                    unsafe { Abomonated::new(buf.to_owned()) }
-                        .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
-                if entry.id != id || !buf_lower.less_equal(&seqno) {
-                    return Ok(());
-                }
-                buffer.0.extend(entry.updates.iter().cloned());
-                Ok(())
-            })?;
-        }
+        let buffer = {
+            let mut data = Vec::new();
+            let seqno = self
+                .buf
+                .snapshot(|seqno, buf| {
+                    let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
+                        unsafe { Abomonated::new(buf.to_owned()) }
+                            .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
+                    if entry.id != id || !buf_lower.less_equal(&seqno) {
+                        return Ok(());
+                    }
+                    data.extend(entry.updates.iter().cloned());
+                    Ok(())
+                })?
+                .end;
+            BufferSnapshot(seqno, data)
+        };
 
         Ok(IndexedSnapshot(buffer, future, trace))
     }
@@ -441,11 +444,11 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 /// A consistent snapshot of the data currently in a [Buffer].
 #[derive(Debug)]
-struct BufferSnapshot<K, V>(Vec<((K, V), u64, isize)>);
+struct BufferSnapshot<K, V>(SeqNo, Vec<((K, V), u64, isize)>);
 
 impl<K, V> Snapshot<K, V> for BufferSnapshot<K, V> {
     fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
-        buf.extend(self.0.drain(..));
+        buf.extend(self.1.drain(..));
         false
     }
 }
@@ -457,6 +460,15 @@ pub struct IndexedSnapshot<K, V>(
     FutureSnapshot<K, V>,
     TraceSnapshot<K, V>,
 );
+
+impl<K, V> IndexedSnapshot<K, V> {
+    /// Returns the SeqNo at which this snapshot was run.
+    ///
+    /// All writes assigned a seqno < this are included.
+    pub fn seqno(&self) -> SeqNo {
+        self.0 .0
+    }
+}
 
 impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
     fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {

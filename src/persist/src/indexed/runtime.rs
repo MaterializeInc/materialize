@@ -18,13 +18,13 @@ use log;
 use crate::error::Error;
 use crate::indexed::encoding::Id;
 use crate::indexed::{Indexed, IndexedSnapshot};
-use crate::storage::{Blob, Buffer};
+use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
 use crate::Token;
 
 enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
-    Write(Id, Vec<((K, V), u64, isize)>, CmdResponse<()>),
+    Write(Id, Vec<((K, V), u64, isize)>, CmdResponse<SeqNo>),
     Seal(Id, u64, CmdResponse<()>),
     Snapshot(Id, CmdResponse<IndexedSnapshot<K, V>>),
     Stop(CmdResponse<()>),
@@ -217,7 +217,7 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// stream with the given id.
     ///
     /// The id must have previously been registered.
-    fn write(&self, id: Id, updates: &[((K, V), u64, isize)], res: CmdResponse<()>) {
+    fn write(&self, id: Id, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
         self.core.send(Cmd::Write(id, updates.to_vec(), res))
     }
 
@@ -271,7 +271,7 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
     }
 
     /// Synchronously writes (Key, Value, Time, Diff) updates.
-    pub fn write(&mut self, updates: &[((K, V), u64, isize)], res: CmdResponse<()>) {
+    pub fn write(&mut self, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
         self.runtime.write(self.id, updates, res);
     }
 
@@ -349,10 +349,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
                 res.send(Ok(r));
             }
             Cmd::Write(id, updates, res) => {
-                let r = self.indexed.write_sync(id, &updates);
+                let write_res = self.indexed.write_sync(id, &updates);
                 // TODO: Move this to a Cmd::Tick or something.
-                let r = r.and_then(|_| self.indexed.step());
-                res.send(r);
+                let step_res = self.indexed.step();
+                res.send(step_res.and_then(|_| write_res));
             }
             Cmd::Seal(id, ts, res) => {
                 let r = self.indexed.seal(id, ts);

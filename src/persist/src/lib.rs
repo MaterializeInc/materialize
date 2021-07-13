@@ -24,6 +24,8 @@ pub mod error;
 pub mod file;
 pub mod indexed;
 pub mod mem;
+#[cfg(test)]
+pub mod nemesis;
 pub mod operators;
 pub mod storage;
 

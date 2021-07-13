@@ -2737,6 +2737,7 @@ dependencies = [
  "differential-dataflow",
  "log",
  "ore",
+ "rand",
  "tempfile",
  "timely",
 ]
