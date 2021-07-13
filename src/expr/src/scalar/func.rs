@@ -1777,9 +1777,9 @@ fn power_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut cx = apd::cx_datum();
     cx.pow(&mut a, &b);
     let cx_status = cx.status();
-    if cx_status.overflow() {
+    if cx_status.overflow() || (cx_status.invalid_operation() && !b.is_negative()) {
         Err(EvalError::FloatOverflow)
-    } else if cx_status.subnormal() {
+    } else if cx_status.subnormal() || cx_status.invalid_operation() {
         Err(EvalError::FloatUnderflow)
     } else {
         apd::munge_apd(&mut a).unwrap();
