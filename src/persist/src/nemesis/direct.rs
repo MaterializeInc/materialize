@@ -121,9 +121,7 @@ mod tests {
 
     use super::*;
 
-    // TODO: Un-ignore this once the bugs it's catching are fixed.
     #[test]
-    #[ignore]
     fn direct_mem() {
         nemesis::run(100, || {
             Direct::new("direct_mem").expect("new empty persist runtime is infallible")
