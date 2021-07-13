@@ -102,6 +102,8 @@ If you stop or delete Materialize without first dropping the Postgres source, th
   SET STORAGE PLAIN;
   ```
 - Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is re-created.
+- Since Postgres sources are materialized by default, Postgres table sources must be smaller than the available memory.
+- Records deleted from Postgres do not take up space in memory.
 
 ## Examples
 
