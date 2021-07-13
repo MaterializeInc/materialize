@@ -1040,8 +1040,14 @@ NaN NaN
 query error value out of range: overflow
 SELECT pow('999'::apd, '9999'::apd)::text;
 
+query error value out of range: overflow
+SELECT pow('-2'::apd, '2111176704'::apd)::text;
+
 query error value out of range: underflow
 SELECT pow('999'::apd, '-9999'::apd)::text;
+
+query error value out of range: underflow
+SELECT pow('-2'::apd, '-2111176704'::apd)::text;
 
 query error zero raised to a negative power is undefined
 SELECT pow('0'::apd, '-1'::apd)::text
