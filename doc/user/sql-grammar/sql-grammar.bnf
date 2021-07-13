@@ -100,10 +100,10 @@ create_source_json_kafka ::=
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'BYTES'
 create_source_postgres ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? '"'src_name'"'
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
-  'CONNECTION' '('connection_info')'
-  'PUBLICATION' 'publication_name'
+  'CONNECTION' connection_info
+  'PUBLICATION' publication_name
 create_source_protobuf_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
