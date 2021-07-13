@@ -359,23 +359,21 @@ pub struct AggregateExpr {
 /// only return null values when supplied nulls as input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AggregateFunc {
-    MaxApd,
+    MaxNumeric,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
     MaxFloat64,
-    MaxDecimal,
     MaxBool,
     MaxString,
     MaxDate,
     MaxTimestamp,
     MaxTimestampTz,
-    MinApd,
+    MinNumeric,
     MinInt32,
     MinInt64,
     MinFloat32,
     MinFloat64,
-    MinDecimal,
     MinBool,
     MinString,
     MinDate,
@@ -385,8 +383,7 @@ pub enum AggregateFunc {
     SumInt64,
     SumFloat32,
     SumFloat64,
-    SumDecimal,
-    SumAPD,
+    SumNumeric,
     Count,
     Any,
     All,
@@ -409,23 +406,21 @@ impl AggregateFunc {
     /// Converts the `sql::AggregateFunc` to a corresponding `expr::AggregateFunc`.
     pub fn into_expr(self) -> expr::AggregateFunc {
         match self {
-            AggregateFunc::MaxApd => expr::AggregateFunc::MaxApd,
+            AggregateFunc::MaxNumeric => expr::AggregateFunc::MaxNumeric,
             AggregateFunc::MaxInt64 => expr::AggregateFunc::MaxInt64,
             AggregateFunc::MaxInt32 => expr::AggregateFunc::MaxInt32,
             AggregateFunc::MaxFloat32 => expr::AggregateFunc::MaxFloat32,
             AggregateFunc::MaxFloat64 => expr::AggregateFunc::MaxFloat64,
-            AggregateFunc::MaxDecimal => expr::AggregateFunc::MaxDecimal,
             AggregateFunc::MaxBool => expr::AggregateFunc::MaxBool,
             AggregateFunc::MaxString => expr::AggregateFunc::MaxString,
             AggregateFunc::MaxDate => expr::AggregateFunc::MaxDate,
             AggregateFunc::MaxTimestamp => expr::AggregateFunc::MaxTimestamp,
             AggregateFunc::MaxTimestampTz => expr::AggregateFunc::MaxTimestampTz,
-            AggregateFunc::MinApd => expr::AggregateFunc::MinApd,
+            AggregateFunc::MinNumeric => expr::AggregateFunc::MinNumeric,
             AggregateFunc::MinInt32 => expr::AggregateFunc::MinInt32,
             AggregateFunc::MinInt64 => expr::AggregateFunc::MinInt64,
             AggregateFunc::MinFloat32 => expr::AggregateFunc::MinFloat32,
             AggregateFunc::MinFloat64 => expr::AggregateFunc::MinFloat64,
-            AggregateFunc::MinDecimal => expr::AggregateFunc::MinDecimal,
             AggregateFunc::MinBool => expr::AggregateFunc::MinBool,
             AggregateFunc::MinString => expr::AggregateFunc::MinString,
             AggregateFunc::MinDate => expr::AggregateFunc::MinDate,
@@ -435,8 +430,7 @@ impl AggregateFunc {
             AggregateFunc::SumInt64 => expr::AggregateFunc::SumInt64,
             AggregateFunc::SumFloat32 => expr::AggregateFunc::SumFloat32,
             AggregateFunc::SumFloat64 => expr::AggregateFunc::SumFloat64,
-            AggregateFunc::SumDecimal => expr::AggregateFunc::SumDecimal,
-            AggregateFunc::SumAPD => expr::AggregateFunc::SumAPD,
+            AggregateFunc::SumNumeric => expr::AggregateFunc::SumNumeric,
             AggregateFunc::Count => expr::AggregateFunc::Count,
             AggregateFunc::Any => expr::AggregateFunc::Any,
             AggregateFunc::All => expr::AggregateFunc::All,
@@ -470,9 +464,7 @@ impl AggregateFunc {
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => {
-                ScalarType::Decimal(repr::adt::decimal::MAX_DECIMAL_PRECISION, 0)
-            }
+            AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
             _ => input_type.scalar_type,
         };
         // max/min/sum return null on empty sets

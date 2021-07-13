@@ -56,4 +56,4 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 
 > SELECT * FROM data_view
 17.94
--0.70
+-0.7

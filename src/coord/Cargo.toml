@@ -18,6 +18,7 @@ crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 derivative = "2.2.0"
+dec = "0.4.3"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 futures = "0.3.15"

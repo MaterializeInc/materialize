@@ -15,43 +15,46 @@ use std::fmt;
 use std::mem::{size_of, transmute};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use dec::OrderedDecimal;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
-use crate::adt::apd;
-use crate::adt::apd::Apd;
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
 };
-use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
+use crate::adt::numeric;
+use crate::adt::numeric::Numeric;
 use crate::Datum;
 use fmt::Debug;
 
 /// A packed representation for `Datum`s.
 ///
-/// `Datum` is easy to work with but very space inefficent. A `Datum::Int32(42)` is laid out in memory like this:
+/// `Datum` is easy to work with but very space inefficent. A `Datum::Int32(42)`
+/// is laid out in memory like this:
 ///
 ///   tag: 3
 ///   padding: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 ///   data: 0 0 0 42
 ///   padding: 0 0 0 0 0 0 0 0 0 0 0 0
 ///
-/// For a total of 32 bytes! The second set of padding is needed in case we were to write a `Datum::Decimal` into this location. The first set of padding is needed to align that hypothetical decimal to a 16 bytes boundary.
+/// For a total of 32 bytes! The second set of padding is needed in case we were
+/// to write a 16-byte datum into this location. The first set of padding is
+/// needed to align that hypothetical decimal to a 16 bytes boundary.
 ///
-/// A `Row` stores zero or more `Datum`s without any padding.
-/// We avoid the need for the first set of padding by only providing access to the `Datum`s via calls to `ptr::read_unaligned`, which on modern x86 is barely penalized.
-/// We avoid the need for the second set of padding by not providing mutable access to the `Datum`. Instead, `Row` is append-only.
+/// A `Row` stores zero or more `Datum`s without any padding. We avoid the need
+/// for the first set of padding by only providing access to the `Datum`s via
+/// calls to `ptr::read_unaligned`, which on modern x86 is barely penalized. We
+/// avoid the need for the second set of padding by not providing mutable access
+/// to the `Datum`. Instead, `Row` is append-only.
 ///
 /// A `Row` can be built from a collection of `Datum`s using `Row::pack`, but it
 /// is more efficient to use `Row::pack_slice` so that a right-sized allocation
 /// can be created. If that is not possible, consider using the "packer"
-/// pattern: allocate one row, pack into it, and then call [`Row::finish_and_reuse`]
-/// to receive a copy of that row, leaving behind the original allocation to
-/// pack future rows.
+/// pattern: allocate one row, pack into it, and then call
+/// [`Row::finish_and_reuse`] to receive a copy of that row, leaving behind the
+/// original allocation to pack future rows.
 ///
 /// Creating a row via [`Row::pack_slice`]:
 ///
@@ -192,7 +195,6 @@ enum Tag {
     Int64,
     Float32,
     Float64,
-    Decimal,
     Date,
     Time,
     Timestamp,
@@ -212,7 +214,7 @@ enum Tag {
     Dict,
     JsonNull,
     Dummy,
-    APD,
+    Numeric,
 }
 
 // --------------------------------------------------------------------------------
@@ -330,10 +332,6 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let duration = read_copy::<i128>(data, offset);
             Datum::Interval(Interval { months, duration })
         }
-        Tag::Decimal => {
-            let s = read_copy::<Significand>(data, offset);
-            Datum::Decimal(s)
-        }
         Tag::BytesTiny
         | Tag::BytesShort
         | Tag::BytesLong
@@ -373,15 +371,15 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
-        Tag::APD => {
+        Tag::Numeric => {
             let digits = u32::from(read_copy::<u8>(data, offset));
             let exponent = i32::from(read_copy::<i8>(data, offset));
             let bits = read_copy::<u8>(data, offset);
-            let lsu_u8_len = Apd::digits_to_lsu_elements_len(digits) * 2;
+            let lsu_u8_len = Numeric::digits_to_lsu_elements_len(digits) * 2;
             let lsu_u8 = &data[*offset..(*offset + lsu_u8_len)];
             *offset += lsu_u8_len;
-            let d = Apd::from_raw_parts(digits, exponent, bits, lsu_u8);
-            Datum::APD(OrderedDecimal(d))
+            let d = Numeric::from_raw_parts(digits, exponent, bits, lsu_u8);
+            Datum::from(d)
         }
     }
 }
@@ -492,10 +490,6 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
             push_copy!(data, i.months, i32);
             push_copy!(data, i.duration, i128);
         }
-        Datum::Decimal(s) => {
-            data.push(Tag::Decimal as u8);
-            push_copy!(data, s, Significand);
-        }
         Datum::Bytes(bytes) => {
             let tag = match bytes.len() {
                 0..=255 => Tag::BytesTiny,
@@ -538,14 +532,14 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
         }
         Datum::JsonNull => data.push(Tag::JsonNull as u8),
         Datum::Dummy => data.push(Tag::Dummy as u8),
-        Datum::APD(mut n) => {
+        Datum::Numeric(mut n) => {
             // Pseudo-canonical representation of decimal values with
             // insignificant zeroes trimmed. This compresses the number further
-            // than `Apd::trim` by removing all zeroes, and not only those in
+            // than `Numeric::trim` by removing all zeroes, and not only those in
             // the fractional component.
-            apd::cx_datum().reduce(&mut n.0);
+            numeric::cx_datum().reduce(&mut n.0);
             let (digits, exponent, bits, lsu) = n.0.to_raw_parts();
-            data.push(Tag::APD as u8);
+            data.push(Tag::Numeric as u8);
             push_copy!(
                 data,
                 u8::try_from(digits).expect("digits to fit within u8; should not exceed 39"),
@@ -601,7 +595,6 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Timestamp(_) => 1 + size_of::<NaiveDateTime>(),
         Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
         Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i128>(),
-        Datum::Decimal(_) => 1 + size_of::<Significand>(),
         Datum::Bytes(bytes) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match bytes.len() {
@@ -630,7 +623,14 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Map(dict) => 1 + size_of::<usize>() + dict.data.len(),
         Datum::JsonNull => 1,
         Datum::Dummy => 1,
-        Datum::APD(_) => 1 + size_of::<OrderedDecimal<Apd>>(),
+        Datum::Numeric(d) => {
+            let mut d = d.0.clone();
+            // Values must be reduced to determine appropriate number of
+            // coefficient units.
+            numeric::cx_datum().reduce(&mut d);
+            // 4 = 1 bit each for tag, digits, exponent, bits
+            4 + (d.coefficient_units().len() * 2)
+        }
     }
 }
 
@@ -1573,7 +1573,9 @@ mod tests {
             Datum::Int64(0),
             Datum::Float32(OrderedFloat(0.0)),
             Datum::Float64(OrderedFloat(0.0)),
-            Datum::Decimal(Significand::new(0)),
+            Datum::from(numeric::Numeric::from(0)),
+            Datum::from(numeric::Numeric::from(1000)),
+            Datum::from(numeric::Numeric::from(9999)),
             Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
             Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
             Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)),

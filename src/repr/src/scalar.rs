@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
@@ -20,10 +21,9 @@ use uuid::Uuid;
 
 use lowertest::MzEnumReflect;
 
-use crate::adt::apd::Apd;
 use crate::adt::array::Array;
-use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
+use crate::adt::numeric::Numeric;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 
 /// A single value.
@@ -51,9 +51,6 @@ pub enum Datum<'a> {
     TimestampTz(DateTime<Utc>),
     /// A span of time.
     Interval(Interval),
-    /// An exact decimal number, possibly with a fractional component, with up
-    /// to 38 digits of precision.
-    Decimal(Significand),
     /// A sequence of untyped bytes.
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
@@ -69,9 +66,9 @@ pub enum Datum<'a> {
     List(DatumList<'a>),
     /// A mapping from string keys to `Datum`s.
     Map(DatumMap<'a>),
-    /// A refactor of `Decimal` using `rust-dec`; allows up to 39 digits of
-    /// precision.
-    APD(OrderedDecimal<Apd>),
+    /// An exact decimal number, possibly with a fractional component, with up
+    /// to 39 digits of precision.
+    Numeric(OrderedDecimal<Numeric>),
     /// An unknown value within a JSON-typed `Datum`.
     ///
     /// This variant is distinct from [`Datum::Null`] as a null datum is
@@ -255,19 +252,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the decimal value within this datum.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the datum is not [`Datum::Decimal`].
-    #[track_caller]
-    pub fn unwrap_decimal(&self) -> Significand {
-        match self {
-            Datum::Decimal(d) => *d,
-            _ => panic!("Datum::unwrap_decimal called on {:?}", self),
-        }
-    }
-
     /// Unwraps the string value within this datum.
     ///
     /// # Panics
@@ -346,15 +330,15 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the apd value within this datum.
+    /// Unwraps the numeric value within this datum.
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::APD`].
+    /// Panics if the datum is not [`Datum::Numeric`].
     #[track_caller]
-    pub fn unwrap_apd(&self) -> OrderedDecimal<Apd> {
+    pub fn unwrap_numeric(&self) -> OrderedDecimal<Numeric> {
         match self {
-            Datum::APD(n) => *n,
+            Datum::Numeric(n) => *n,
             _ => panic!("Datum::unwrap_numeric called on {:?}", self),
         }
     }
@@ -407,8 +391,6 @@ impl<'a> Datum<'a> {
                     (Datum::TimestampTz(_), _) => false,
                     (Datum::Interval(_), ScalarType::Interval) => true,
                     (Datum::Interval(_), _) => false,
-                    (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
-                    (Datum::Decimal(_), _) => false,
                     (Datum::Bytes(_), ScalarType::Bytes) => true,
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String) => true,
@@ -437,8 +419,8 @@ impl<'a> Datum<'a> {
                         .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
                     (Datum::Map(_), _) => false,
                     (Datum::JsonNull, _) => false,
-                    (Datum::APD(_), ScalarType::APD { .. }) => true,
-                    (Datum::APD(_), _) => false,
+                    (Datum::Numeric(_), ScalarType::Numeric { .. }) => true,
+                    (Datum::Numeric(_), _) => false,
                 }
             }
         }
@@ -499,13 +481,13 @@ impl From<f64> for Datum<'static> {
 
 impl From<i128> for Datum<'static> {
     fn from(d: i128) -> Datum<'static> {
-        Datum::Decimal(Significand::new(d))
+        Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
-impl From<Significand> for Datum<'static> {
-    fn from(d: Significand) -> Datum<'static> {
-        Datum::Decimal(d)
+impl From<Numeric> for Datum<'static> {
+    fn from(n: Numeric) -> Datum<'static> {
+        Datum::Numeric(OrderedDecimal(n))
     }
 }
 
@@ -618,7 +600,6 @@ impl fmt::Display for Datum<'_> {
             Datum::Timestamp(t) => write!(f, "{}", t),
             Datum::TimestampTz(t) => write!(f, "{}", t),
             Datum::Interval(iv) => write!(f, "{}", iv),
-            Datum::Decimal(sig) => write!(f, "{}dec", sig.as_i128()),
             Datum::Bytes(dat) => {
                 f.write_str("0x")?;
                 for b in dat.iter() {
@@ -653,7 +634,7 @@ impl fmt::Display for Datum<'_> {
                 write_delimited(f, ", ", dict, |f, (k, v)| write!(f, "{}: {}", k, v))?;
                 f.write_str("}")
             }
-            Datum::APD(n) => write!(f, "{}", n.0.to_standard_notation_string()),
+            Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
         }
@@ -677,16 +658,18 @@ pub enum ScalarType {
     Float32,
     /// The type of [`Datum::Float64`].
     Float64,
-    /// The type of [`Datum::Decimal`].
+    /// The type of [`Datum::Numeric`].
     ///
-    /// This type additionally specifies the precision and scale of the decimal
-    /// . The precision constrains the total number of digits in the number,
-    /// while the scale specifies the number of digits after the decimal point.
-    /// The maximum precision is [`MAX_DECIMAL_PRECISION`]. The scale
-    /// must be less than or equal to the precision.
+    /// `Numeric` values cannot exceed [`NUMERIC_DATUM_MAX_PRECISION`] digits of
+    /// precision.
     ///
-    /// [`MAX_DECIMAL_PRECISION`]: crate::adt::decimal::MAX_DECIMAL_PRECISION
-    Decimal(u8, u8),
+    /// This type additionally specifies the scale of the decimal. The scale
+    /// specifies the number of digits after the decimal point. The scale must
+    /// be less than or equal to the maximum precision.
+    ///
+    /// [`NUMERIC_DATUM_MAX_PRECISION`]:
+    /// crate::adt::numeric::NUMERIC_DATUM_MAX_PRECISION
+    Numeric { scale: Option<u8> },
     /// The type of [`Datum::Date`].
     Date,
     /// The type of [`Datum::Time`].
@@ -748,33 +731,18 @@ pub enum ScalarType {
         value_type: Box<ScalarType>,
         custom_oid: Option<u32>,
     },
-    APD {
-        scale: Option<u8>,
-    },
 }
 
 impl<'a> ScalarType {
-    /// Returns the contained decimal precision and scale.
+    /// Returns the contained numeric scale.
     ///
     /// # Panics
     ///
-    /// Panics if the scalar type is not [`ScalarType::Decimal`].
-    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
+    /// Panics if the scalar type is not [`ScalarType::Numeric`].
+    pub fn unwrap_numeric_scale(&self) -> Option<u8> {
         match self {
-            ScalarType::Decimal(p, s) => (*p, *s),
-            _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
-        }
-    }
-
-    /// Returns the contained apd scale.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the scalar type is not [`ScalarType::APD`].
-    pub fn unwrap_apd_scale(&self) -> Option<u8> {
-        match self {
-            ScalarType::APD { scale } => *scale,
-            _ => panic!("ScalarType::unwrap_apd_scale called on {:?}", self),
+            ScalarType::Numeric { scale } => *scale,
+            _ => panic!("ScalarType::unwrap_numeric_scale called on {:?}", self),
         }
     }
 
@@ -808,24 +776,24 @@ impl<'a> ScalarType {
         dims
     }
 
-    /// Returns `self` with any values equal to `ScalarType::APD` with their
+    /// Returns `self` with any values equal to [`ScalarType::Numeric`] with their
     /// `scale` set to `None`.
-    pub fn unscale_any_apd(&self) -> ScalarType {
+    pub fn unscale_any_numeric(&self) -> ScalarType {
         use ScalarType::*;
         match self {
-            APD { scale: Some(..) } => APD { scale: None },
+            Numeric { scale: Some(..) } => Numeric { scale: None },
             List {
                 element_type,
                 custom_oid: None,
             } => List {
-                element_type: Box::new(element_type.unscale_any_apd()),
+                element_type: Box::new(element_type.unscale_any_numeric()),
                 custom_oid: None,
             },
             Map {
                 value_type,
                 custom_oid: None,
             } => Map {
-                value_type: Box::new(value_type.unscale_any_apd()),
+                value_type: Box::new(value_type.unscale_any_numeric()),
                 custom_oid: None,
             },
             _ => self.clone(),
@@ -899,8 +867,6 @@ impl PartialEq for ScalarType {
     fn eq(&self, other: &Self) -> bool {
         use ScalarType::*;
         match (self, other) {
-            (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
-
             (Bool, Bool)
             | (Int32, Int32)
             | (Int64, Int64)
@@ -916,7 +882,7 @@ impl PartialEq for ScalarType {
             | (Uuid, Uuid)
             | (Jsonb, Jsonb)
             | (Oid, Oid)
-            | (APD { .. }, APD { .. }) => true,
+            | (Numeric { .. }, Numeric { .. }) => true,
             (
                 List {
                     element_type: element_l,
@@ -957,7 +923,6 @@ impl PartialEq for ScalarType {
             | (Int64, _)
             | (Float32, _)
             | (Float64, _)
-            | (Decimal(_, _), _)
             | (Date, _)
             | (Time, _)
             | (Timestamp, _)
@@ -972,7 +937,7 @@ impl PartialEq for ScalarType {
             | (Record { .. }, _)
             | (Oid, _)
             | (Map { .. }, _)
-            | (APD { .. }, _) => false,
+            | (Numeric { .. }, _) => false,
         }
     }
 }
@@ -986,12 +951,7 @@ impl Hash for ScalarType {
             Int64 => state.write_u8(2),
             Float32 => state.write_u8(3),
             Float64 => state.write_u8(4),
-            Decimal(_, s) => {
-                // TODO(benesch): we should properly implement decimal precision
-                // tracking, or just remove it.
-                state.write_u8(5);
-                state.write_u8(*s);
-            }
+            Numeric { .. } => state.write_u8(5),
             Date => state.write_u8(6),
             Time => state.write_u8(7),
             Timestamp => state.write_u8(8),
@@ -1032,7 +992,6 @@ impl Hash for ScalarType {
                 value_type.hash(state);
                 custom_oid.hash(state);
             }
-            APD { .. } => state.write_u8(19),
         }
     }
 }

@@ -115,7 +115,7 @@ query T colnames
 SELECT pg_typeof(sum(b)) FROM t_bigint
 ----
 pg_typeof
-numeric(38,0)
+numeric
 
 # Tests to make sure reduce elision works correctly
 
@@ -154,7 +154,7 @@ EXPLAIN PLAN FOR SELECT a, sum(c) from agg_pk group by a
 ----
 %0 =
 | Get materialize.public.agg_pk (u5)
-| Map i64todec(#2)
+| Map i64tonumeric(#2)
 | Project (#0, #3)
 
 EOF
@@ -192,7 +192,7 @@ query RRRRRR colnames
 SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t
 ----
 variance        var_samp        var_pop         stddev          stddev_samp     stddev_pop
-0.916666666666  0.916666666666  0.687500000000  0.957427107755  0.957427107755  0.829156197588
+0.916666666666666666666666666666666666667  0.916666666666666666666666666666666666667  0.6875  0.957427107756338109975101911369821553037  0.957427107756338109975101911369821553037  0.829156197588849962278733184167671670982
 
 query RRRRRR
 SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t2
@@ -259,9 +259,9 @@ NULL NULL
 query IRR rowsort
 SELECT v, variance(k) FILTER (WHERE k > 5), stddev(k) FILTER (WHERE k > 5) FROM filter_test GROUP BY v
 ----
-2     0.500000000000  0.707106781186
-4     NULL            NULL
-NULL  NULL            NULL
+2  0.5  0.707106781186547524400844362104849039285
+4  NULL  NULL
+NULL  NULL  NULL
 
 
 # Multiple tests related to distinctness of aggregates on constants (issue #2535)

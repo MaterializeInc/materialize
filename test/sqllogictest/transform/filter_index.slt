@@ -41,7 +41,7 @@ query TR
 select b, c from foo where a = 5
 ----
 this
--4.400
+-4.4
 
 # Test that a query that joins to a (select literal) gets planned as a filter
 # and not a join.
@@ -59,7 +59,7 @@ query TR
 select b, c from foo, (select 5 as a) const where foo.a = const.a
 ----
 this
--4.400
+-4.4
 
 # Test that equality with a literal predicate gets pushed down to both inputs
 # even when one of the join constraints is an expression as opposed to a column reference.
@@ -87,10 +87,10 @@ select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 ----
 3
 just
-11.300
+11.3
 -3
 is
--1.0000
+-1
 
 statement ok
 create index foo_idx on foo(a);
@@ -113,7 +113,7 @@ query TR
 select b, c from foo where a = 5
 ----
 this
--4.400
+-4.4
 
 #query T multiline
 #explain plan for select b, c from foo where a = 5 and b = 'this'
@@ -134,7 +134,7 @@ query TR
 select b, c from foo where a = 5
 ----
 this
--4.400
+-4.4
 
 statement ok
 create index foo_idx2 on foo(b, a);
@@ -168,6 +168,6 @@ select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
 ----
 5
 this
--4.400
+-4.4
 still
-0.000
+0

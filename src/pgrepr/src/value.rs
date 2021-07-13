@@ -20,16 +20,14 @@ use repr::ColumnType;
 use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
-use repr::adt::apd::{self as adt_apd};
 use repr::adt::array::ArrayDimension;
-use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
+use repr::adt::numeric::{self as adt_numeric};
 use repr::strconv::{self, Nestable};
 use repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::{Apd, Format, Interval, Jsonb, Numeric, Type};
+use crate::{Format, Interval, Jsonb, Numeric, Type};
 
-pub mod apd;
 pub mod interval;
 pub mod jsonb;
 pub mod numeric;
@@ -81,8 +79,6 @@ pub enum Value {
     Text(String),
     /// A universally unique identifier.
     Uuid(Uuid),
-    /// Refactored numeric using `rust-dec`.
-    Apd(Apd),
 }
 
 impl Value {
@@ -100,14 +96,11 @@ impl Value {
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
-            (Datum::Decimal(d), ScalarType::Decimal(_, scale)) => {
-                Some(Value::Numeric(Numeric(d.with_scale(*scale))))
-            }
-            (Datum::APD(mut d), ScalarType::APD { scale }) => {
+            (Datum::Numeric(mut d), ScalarType::Numeric { scale }) => {
                 if let Some(scale) = scale {
-                    adt_apd::rescale(&mut d.0, *scale).unwrap();
+                    adt_numeric::rescale(&mut d.0, *scale).unwrap();
                 }
-                Some(Value::Apd(Apd(d)))
+                Some(Value::Numeric(Numeric(d)))
             }
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
@@ -156,10 +149,6 @@ impl Value {
     }
 
     /// Converts a Materialize datum and type from this value.
-    ///
-    /// The conversion happens in the obvious manner, except that a
-    /// `Value::Numeric`'s scale will be recorded in the returned scalar type,
-    /// not the datum.
     ///
     /// To construct a null datum, see the [`null_datum`] function.
     pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, ScalarType) {
@@ -225,10 +214,6 @@ impl Value {
                     },
                 )
             }
-            Value::Numeric(d) => (
-                Datum::from(d.0.significand()),
-                ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.0.scale()),
-            ),
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
@@ -240,10 +225,10 @@ impl Value {
             Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
             Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
-            Value::Apd(n) => (
-                Datum::APD(n.0),
-                ScalarType::APD {
-                    scale: Some(adt_apd::get_scale(&n.0 .0)),
+            Value::Numeric(n) => (
+                Datum::Numeric(n.0),
+                ScalarType::Numeric {
+                    scale: Some(adt_numeric::get_scale(&n.0 .0)),
                 },
             ),
         }
@@ -290,7 +275,6 @@ impl Value {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
             }),
-            Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
@@ -300,7 +284,7 @@ impl Value {
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
-            Value::Apd(d) => strconv::format_apd(buf, &d.0),
+            Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
         }
     }
 
@@ -346,7 +330,6 @@ impl Value {
                 self.encode_text(buf);
                 Ok(postgres_types::IsNull::No)
             }
-            Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
                 buf.put_i32(nfields);
@@ -365,7 +348,7 @@ impl Value {
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
-            Value::Apd(a) => a.to_sql(&PgType::NUMERIC, buf),
+            Value::Numeric(a) => a.to_sql(&PgType::NUMERIC, buf),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -413,7 +396,7 @@ impl Value {
                 matches!(**value_type, Type::Map { .. }),
                 |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
             )?),
-            Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
+            Type::Numeric => Value::Numeric(Numeric(strconv::parse_numeric(raw)?)),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into())
             }
@@ -422,7 +405,6 @@ impl Value {
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
-            Type::APD => Value::Apd(Apd(strconv::parse_apd(raw)?)),
         })
     }
 
@@ -449,7 +431,6 @@ impl Value {
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
-            Type::APD => Apd::from_sql(ty.inner(), raw).map(Value::Apd),
         }
     }
 }
@@ -500,8 +481,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
                 custom_oid: None,
             }
         }
-        Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
-        Type::APD => ScalarType::APD { scale: None },
+        Type::Numeric => ScalarType::Numeric { scale: None },
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
         Type::Time => ScalarType::Time,

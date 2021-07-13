@@ -625,7 +625,7 @@ select x, (select count(*) from ys where y < x) from xs
 2  2
 
 # Tests that conditional subqueries should not error.
-query II rowsort
+query RR rowsort
 select y, (
     case when (select count(*) from xs where x < y) != 0
          then (select 1.0 / count(*) from xs where x < y)
@@ -636,7 +636,7 @@ from ys
 ----
 0  -1
 1  -1
-2  1
+2  0.5
 
 # Regression test for #3924, in which quantified comparision simplification was
 # not correctly handling LATERAL joins.

@@ -32,9 +32,9 @@ build-scalar-type
 TimestampTz
 
 build-scalar-type
-(a_p_d 11)
+(numeric 11)
 ----
-APD { scale: Some(11) }
+Numeric { scale: Some(11) }
 
 build-scalar-type
 (array oid)

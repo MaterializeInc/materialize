@@ -62,9 +62,9 @@ pub const FUNC_MZ_SLEEP_OID: u32 = 16_434;
 pub const FUNC_MZ_SESSION_ID_OID: u32 = 16_435;
 pub const FUNC_MZ_UPTIME_OID: u32 = 16_436;
 pub const FUNC_MZ_WORKERS_OID: u32 = 16_437;
-pub const TYPE_APD_OID: u32 = 16_438;
+pub const __DEPRECATED_TYPE_APD_OID: u32 = 16_438;
 pub const FUNC_LIST_EQ_OID: u32 = 16_439;
 pub const FUNC_MZ_ROW_SIZE: u32 = 16_440;
-pub const FUNC_MAX_APD_OID: u32 = 16_441;
-pub const FUNC_MIN_APD_OID: u32 = 16_442;
+pub const FUNC_MAX_NUMERIC_OID: u32 = 16_441;
+pub const FUNC_MIN_NUMERIC_OID: u32 = 16_442;
 // next ID: 16_443

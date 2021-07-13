@@ -450,7 +450,9 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
             Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
             Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
             Type::OID => row.get::<_, Option<u32>>(i).map(|x| x.to_string()),
-            Type::NUMERIC => row.get::<_, Option<Numeric>>(i).map(|x| x.to_string()),
+            Type::NUMERIC => row
+                .get::<_, Option<Numeric>>(i)
+                .map(|x| x.0 .0.to_standard_notation_string()),
             Type::FLOAT4 => row.get::<_, Option<f32>>(i).map(|x| x.to_string()),
             Type::FLOAT8 => row.get::<_, Option<f64>>(i).map(|x| x.to_string()),
             Type::TIMESTAMP => row

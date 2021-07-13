@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
 use std::rc::Rc;
@@ -23,8 +24,8 @@ use mz_avro::{
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
-use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
+use repr::adt::numeric;
 use repr::{Datum, Row};
 
 use super::envelope_debezium::DebeziumSourceCoordinates;
@@ -447,25 +448,45 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         }
         Ok(())
     }
+
     #[inline]
     fn decimal<'b, R: AvroRead>(
         self,
         _precision: usize,
-        _scale: usize,
+        scale: usize,
         r: ValueOrReader<'b, &'b [u8], R>,
     ) -> Result<Self::Out, AvroError> {
-        let buf = match r {
-            ValueOrReader::Value(val) => val,
+        let mut buf = match r {
+            ValueOrReader::Value(val) => val.to_vec(),
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
-                &self.buf
+                let v = self.buf.clone();
+                v
             }
         };
-        self.packer.push(Datum::Decimal(
-            Significand::from_twos_complement_be(buf)
-                .map_err(|e| DecodeError::Custom(e.to_string()))?,
-        ));
+
+        let scale = u8::try_from(scale).map_err(|_| {
+            DecodeError::Custom(format!(
+                "Error decoding decimal: scale must fit within u8, but got scale {}",
+                scale,
+            ))
+        })?;
+
+        let n = numeric::twos_complement_be_to_numeric(&mut buf, scale)
+            .map_err(|e| DecodeError::Custom(e.to_string()))?;
+
+        if n.is_special()
+            || numeric::get_precision(&n) > numeric::NUMERIC_DATUM_MAX_PRECISION as u32
+        {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Error decoding numeric: exceeds maximum precision {}",
+                numeric::NUMERIC_DATUM_MAX_PRECISION
+            ))));
+        }
+
+        self.packer.push(Datum::from(n));
+
         Ok(())
     }
 

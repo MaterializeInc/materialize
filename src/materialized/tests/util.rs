@@ -207,11 +207,13 @@ pub struct MzTimestamp(pub u64);
 
 impl<'a> FromSql<'a> for MzTimestamp {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
-        let n = pgrepr::Numeric::from_sql(ty, raw)?;
-        if n.0.scale() != 0 {
-            return Err("scale of numeric was not 0".into());
+        let mut n = pgrepr::Numeric::from_sql(ty, raw)?;
+        if repr::adt::numeric::get_scale(&n.0 .0) != 0 {
+            return Err("scale of apd was not 0".into());
         }
-        Ok(MzTimestamp(n.0.significand().try_into()?))
+        // Converting apd to int requires its exponent be zero.
+        repr::adt::numeric::rescale(&mut n.0 .0, 0).unwrap();
+        Ok(MzTimestamp(n.0 .0.try_into()?))
     }
 
     fn accepts(ty: &Type) -> bool {

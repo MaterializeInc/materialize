@@ -51,6 +51,7 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
 use pgrepr::{Interval, Jsonb, Numeric, Value};
+use repr::adt::numeric;
 use repr::ColumnName;
 use sql::ast::Statement;
 
@@ -425,12 +426,18 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
 
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
-        (Type::Integer, Value::Numeric(d)) => format!("{:.0}", d),
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
         (Type::Integer, Value::Text(_)) => "0".to_string(),
         (Type::Integer, Value::Bool(b)) => i8::from(b).to_string(),
+        (Type::Integer, Value::Numeric(d)) => {
+            let mut d = d.0 .0.clone();
+            let mut cx = numeric::cx_datum();
+            cx.round(&mut d);
+            numeric::munge_numeric(&mut d).unwrap();
+            d.to_standard_notation_string()
+        }
 
         (Type::Real, Value::Int4(i)) => format!("{:.3}", i),
         (Type::Real, Value::Int8(i)) => format!("{:.3}", i),
@@ -443,8 +450,15 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Mode::Cockroach => format!("{}", f),
         },
         (Type::Real, Value::Numeric(d)) => match mode {
-            Mode::Standard => format!("{:.3}", d),
-            Mode::Cockroach => format!("{}", d),
+            Mode::Standard => {
+                let mut d = d.0 .0.clone();
+                if d.exponent() < -3 {
+                    numeric::rescale(&mut d, 3).unwrap();
+                }
+                numeric::munge_numeric(&mut d).unwrap();
+                d.to_standard_notation_string()
+            }
+            Mode::Cockroach => d.0 .0.to_standard_notation_string(),
         },
 
         (Type::Text, Value::Text(s)) => {
@@ -455,7 +469,6 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             }
         }
         (Type::Text, Value::Bool(b)) => b.to_string(),
-        (Type::Text, Value::Numeric(d)) => format!("{:.0}", d),
         (Type::Text, Value::Float4(f)) => format!("{:.3}", f),
         (Type::Text, Value::Float8(f)) => format!("{:.3}", f),
         // Bytes are printed as text iff they are valid UTF-8. This
@@ -467,6 +480,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Ok(s) => s.to_string(),
             Err(_) => format!("{:?}", b),
         },
+        (Type::Text, Value::Numeric(d)) => d.0 .0.to_standard_notation_string(),
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {

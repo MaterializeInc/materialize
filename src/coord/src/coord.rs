@@ -55,6 +55,7 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
+use repr::adt::numeric;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -3073,10 +3074,8 @@ impl Coordinator {
             if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
                 if let ExprPrepStyle::OneShot { logical_time } = style {
-                    *e = MirScalarExpr::literal_ok(
-                        Datum::from(i128::from(logical_time)),
-                        f.output_type().scalar_type,
-                    );
+                    let ts = numeric::Numeric::from(logical_time);
+                    *e = MirScalarExpr::literal_ok(Datum::from(ts), f.output_type().scalar_type);
                 }
             }
         });
