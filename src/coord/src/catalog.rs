@@ -2182,7 +2182,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .iter()
                     .any(|schema| schema == &PG_CATALOG_SCHEMA)
                 {
-                    pgrepr_type.name().to_string()
+                    pgrepr_type.pretty_name().to_string()
                 } else {
                     // If PG_CATALOG_SCHEMA is not in search path, you need
                     // qualified object name to refer to type.

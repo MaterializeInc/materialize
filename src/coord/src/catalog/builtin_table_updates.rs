@@ -126,7 +126,7 @@ impl Catalog {
                         ),
                         Datum::Int64(i as i64 + 1),
                         Datum::from(column_type.nullable),
-                        Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
+                        Datum::String(pgrepr::Type::from(&column_type.scalar_type).pretty_name()),
                     ]),
                     diff,
                 });

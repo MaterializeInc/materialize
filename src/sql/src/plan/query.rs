@@ -524,8 +524,8 @@ pub fn plan_insert_query(
                 .unwrap_or(&ColumnName::from("?column?"))
                 .as_str()
                 .quoted(),
-            pgrepr::Type::from(&e.target_type).name(),
-            pgrepr::Type::from(&e.source_type).name(),
+            pgrepr::Type::from(&e.target_type).pretty_name(),
+            pgrepr::Type::from(&e.source_type).pretty_name(),
         )
     })?;
 
