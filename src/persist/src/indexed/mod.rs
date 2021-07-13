@@ -232,12 +232,20 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
         let mut updates: Vec<_> = updates
             .drain(..)
-            .map(|(_, (k, v), t, d)| ((k, v), t, d))
+            .map(|(_, (k, v), t, d)| (t, (k, v), d))
             .collect();
-        // Future batches are required to be sorted by (ts, k, v).
-        updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
-            (t1, k1, v1).cmp(&(t2, k2, v2))
-        });
+        // Future batches are required to be sorted and consolidated by ((ts, (k, v)).
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        // Reshape updates back to the desired type.
+        let updates: Vec<_> = updates
+            .drain(..)
+            .map(|(t, (k, v), d)| ((k, v), t, d))
+            .collect();
         let batch = BlobFutureBatch {
             id,
             desc: Description::new(
@@ -313,6 +321,9 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
             (k1, v1, t1).cmp(&(k2, v2, t2))
         });
+
+        // Trace batches are required to be sorted and consolidated by ((k, v), t)
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         // ...and atomically swapping that snapshot's data into trace.
         let batch = BlobTraceBatch {
@@ -570,6 +581,70 @@ mod tests {
         // given the data is not ordered by key, so again this should fire a
         // validations error if the sort code doesn't work.
         i.seal(id, 3)?;
+        Ok(())
+    }
+
+    #[test]
+    fn batch_consolidation() -> Result<(), Box<dyn Error>> {
+        let updates = vec![
+            (("1".to_string(), "".to_string()), 1, 1),
+            (("1".to_string(), "".to_string()), 1, 1),
+        ];
+
+        let mut i = Indexed::new(
+            MemBuffer::new("batch_consolidation")?,
+            MemBlob::new("batch_consolidation")?,
+        )?;
+        let id = i.register("0");
+
+        // Write the data and move it into the future part of the index, which
+        // consolidates updates to identical ((k, v), t). Since the writes are
+        // not already consolidated this test will fail if the consolidation
+        // code does not work.
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Add another set of identical updates and place into another future
+        // batch.
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Now move the data to the trace part of the index, which consolidates
+        // updates at identical ((k, v), t). Since the writes are only consolidated
+        // within individual future batches this test will fail if trace batch
+        // consolidation does not work.
+        i.seal(id, 2)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn batch_future_empty() -> Result<(), Box<dyn Error>> {
+        let mut i = Indexed::new(
+            MemBuffer::new("batch_future_empty")?,
+            MemBlob::new("batch_future_empty")?,
+        )?;
+        let id = i.register("0");
+
+        // Write an empty set of updates and try to move it into the future part
+        // of the index.
+        i.write_sync(id, &[])?;
+        i.step()?;
+
+        // Sending updates with dif = 0.
+        let updates = vec![(("1".to_string(), "".to_string()), 1, 0)];
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Now try again with a set of updates that consolidates down to the empty
+        // set.
+        let updates = vec![
+            (("1".to_string(), "".to_string()), 1, 2),
+            (("1".to_string(), "".to_string()), 1, -2),
+        ];
+
+        i.write_sync(id, &updates)?;
+        i.step()?;
         Ok(())
     }
 
