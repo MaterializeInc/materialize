@@ -12,7 +12,12 @@
 set -e
 
 cat >> "$PGDATA/postgresql.conf" <<-EOCONF
+ssl = on
 ssl_cert_file = '/share/secrets/postgres.crt'
 ssl_key_file = '/share/secrets/postgres.key'
 ssl_ca_file = '/share/secrets/ca.crt'
+hba_file = '/share/conf/pg_hba.conf'
+wal_level = logical
+max_wal_senders = 20
+max_replication_slots = 20
 EOCONF
