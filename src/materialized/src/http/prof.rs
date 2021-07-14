@@ -266,10 +266,7 @@ mod enabled {
                 let mut borrow = prof_ctl.lock().await;
                 let s = borrow.dump_stats()?;
                 Ok(Response::builder()
-                    .header(
-                        header::CONTENT_DISPOSITION,
-                        "attachment; filename=\"jestats.txt\"",
-                    )
+                    .header(header::CONTENT_TYPE, "text/plain")
                     .body(Body::from(s))
                     .unwrap())
             }
