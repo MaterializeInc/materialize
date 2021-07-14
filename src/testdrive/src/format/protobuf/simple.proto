@@ -14,6 +14,10 @@ enum Binary {
   ONE = 1;
 }
 
+message SimpleId {
+  string id = 1;
+}
+
 message Struct {
   sint32 int = 1;
   int32 bad_int = 2;

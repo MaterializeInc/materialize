@@ -351,52 +351,108 @@ impl SourceDataEncoding {
         }
     }
 
-    pub fn desc(&self, envelope: &SourceEnvelope) -> Result<RelationDesc, anyhow::Error> {
+    pub fn desc(
+        &self,
+        envelope: &SourceEnvelope,
+        key_envelope: &KeyEnvelope,
+    ) -> Result<RelationDesc, anyhow::Error> {
         match self {
             SourceDataEncoding::Single(enc) => enc.desc(envelope, RelationDesc::empty(), None),
-            SourceDataEncoding::KeyValue { key, value } => {
-                // Add columns for the key, if using the upsert envelope.
-                // TODO: this will be removed with upsert value rewriting
-                let desc = if matches!(envelope, SourceEnvelope::Upsert) {
-                    let key_desc = {
-                        let key_desc =
-                            key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
-
-                        // It doesn't make sense for the key to have keys.
-                        assert!(key_desc.typ().keys.is_empty());
-
-                        // Add the key columns as a key.
-                        let key_indices = (0..key_desc.arity()).collect();
-                        let key_desc = key_desc.with_key(key_indices);
-
-                        // Rename key columns to "keyN" if the encoding is not Avro.
-                        match key {
-                            DataEncoding::Avro(_) => key_desc,
-                            _ => {
-                                let names =
-                                    (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
-                                key_desc.with_names(names)
-                            }
-                        }
-                    };
-                    let key_schema = if let DataEncoding::Avro(AvroEncoding { schema, .. }) = key {
-                        Some(&**schema)
-                    } else {
-                        None
-                    };
-                    value.desc(envelope, key_desc, key_schema)
-                } else {
-                    value.desc(envelope, RelationDesc::empty(), None)
-                };
-                desc
-            }
+            SourceDataEncoding::KeyValue { key, value } => match key_envelope {
+                KeyEnvelope::None => value.desc(envelope, RelationDesc::empty(), None),
+                KeyEnvelope::Flattened => insert_flattened_key(key, value, envelope, false),
+                KeyEnvelope::LegacyUpsert => insert_flattened_key(key, value, envelope, true),
+                KeyEnvelope::Named(key_name) => insert_named_key(key_name, key, value, envelope),
+            },
         }
     }
+}
+
+/// modify the desc to include the key using the appropriate name
+fn insert_named_key(
+    key_name: &str,
+    key: &DataEncoding,
+    value: &DataEncoding,
+    envelope: &SourceEnvelope,
+) -> Result<RelationDesc, anyhow::Error> {
+    let key_desc = {
+        let key_desc = key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
+
+        // It doesn't make sense for the key to have keys.
+        assert!(key_desc.typ().keys.is_empty());
+
+        // if the key has multiple objects, nest them as a record inside of a single name
+        if key_desc.arity() > 1 {
+            let key_type = key_desc.typ();
+            let key_as_record = RelationType::new(vec![ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::Record {
+                    fields: key_desc
+                        .iter_names()
+                        .enumerate()
+                        .map(|(i, name)| {
+                            name.map(Clone::clone)
+                                .unwrap_or_else(|| format!("key{}", i).into())
+                        })
+                        .zip(key_type.column_types.iter())
+                        .map(|(name, typ)| (name, typ.clone()))
+                        .collect(),
+                    custom_oid: None,
+                    custom_name: None,
+                },
+            }])
+            // The entire record is a key
+            .with_key(vec![0]);
+
+            RelationDesc::new(key_as_record, vec![Some(key_name.to_string())])
+        } else {
+            key_desc.with_names(vec![Some(key_name.to_string())])
+        }
+    };
+
+    value.desc(envelope, key_desc, None)
+}
+
+fn insert_flattened_key(
+    key: &DataEncoding,
+    value: &DataEncoding,
+    envelope: &SourceEnvelope,
+    is_legacy_upsert: bool,
+) -> Result<RelationDesc, anyhow::Error> {
+    let key_desc = {
+        let key_desc = key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
+
+        // It doesn't make sense for the key to have keys.
+        assert!(key_desc.typ().keys.is_empty());
+
+        // Add the key columns as a key.
+        let key_indices = (0..key_desc.arity()).collect();
+        let key_desc = key_desc.with_key(key_indices);
+
+        if let DataEncoding::Avro(_) = key {
+            key_desc
+        } else if is_legacy_upsert {
+            // Rename key columns to "keyN" if the encoding is not Avro and we're in unadorned
+            // upsert mode
+            let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
+            key_desc.with_names(names)
+        } else {
+            key_desc
+        }
+    };
+    let key_schema = if let DataEncoding::Avro(AvroEncoding { schema, .. }) = key {
+        Some(&**schema)
+    } else {
+        None
+    };
+    value.desc(envelope, key_desc, key_schema)
 }
 
 impl DataEncoding {
     /// Computes the [`RelationDesc`] for the relation specified by this
     /// data encoding and envelope.
+    ///
+    /// If a key desc is provided it will be prepended to the returned desc
     fn desc(
         &self,
         envelope: &SourceEnvelope,
@@ -664,6 +720,7 @@ pub enum SourceConnector {
         connector: ExternalSourceConnector,
         encoding: SourceDataEncoding,
         envelope: SourceEnvelope,
+        key_envelope: KeyEnvelope,
         consistency: Consistency,
         ts_frequency: Duration,
         timeline: Timeline,
@@ -880,7 +937,28 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
+    pub key_envelope: KeyEnvelope,
     pub cluster_id: Uuid,
+}
+
+/// Whether and how to include the key portion of a stream in dataflows
+///
+/// Currently only Kafka streams have Key parts of messages, but there do exist other streaming
+/// systems which we do not yet integrate with that have a similar concept.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KeyEnvelope {
+    /// Do not include the key in dataflows.
+    None,
+    /// For composite key encodings, pull the fields from the encoding into columns.
+    Flattened,
+    /// Upsert is identical to Flattened but differs for non-avro sources, for which key names are overwritten.
+    LegacyUpsert,
+    /// Always use the given name for the key.
+    ///
+    /// * For a single-field key, this means that the column will get the given name.
+    /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
+    ///   that Record will get the given name.
+    Named(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

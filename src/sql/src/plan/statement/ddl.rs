@@ -29,7 +29,7 @@ use reqwest::Url;
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, Consistency,
     CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
-    KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
+    KafkaSinkConnectorBuilder, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
     PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector, RegexEncoding,
     S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding,
     SourceEnvelope, Timeline,
@@ -47,10 +47,11 @@ use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement, DataType, DbzMode,
-    DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
-    ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement,
+    DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
+    ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -411,7 +412,7 @@ pub fn plan_create_source(
         unsupported!("INCLUDE KEY with non-Kafka sources");
     }
 
-    let (external_connector, encoding) = match connector {
+    let (external_connector, encoding, key_envelope) = match connector {
         Connector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
@@ -459,9 +460,8 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            if key_envelope.is_present() {
-                unsupported!("INCLUDE KEY is not yet implemented");
-            }
+            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
+            let key_envelope = get_key_envelope(key_envelope, envelope, &encoding)?;
 
             let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -470,8 +470,8 @@ pub fn plan_create_source(
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
+                key_envelope: key_envelope.clone(),
             });
-            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
 
             if consistency != Consistency::RealTime
                 && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
@@ -481,7 +481,7 @@ pub fn plan_create_source(
                 bail!("BYO consistency only supported for plain Debezium Kafka sources");
             }
 
-            (connector, encoding)
+            (connector, encoding, key_envelope)
         }
         Connector::Kinesis { arn, .. } => {
             let arn: ARN = arn
@@ -505,7 +505,7 @@ pub fn plan_create_source(
                 aws_info,
             });
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
         Connector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
@@ -527,7 +527,7 @@ pub fn plan_create_source(
                 tail,
             });
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
         Connector::S3 {
             key_sources,
@@ -569,7 +569,7 @@ pub fn plan_create_source(
                 },
             });
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
         Connector::Postgres {
             conn,
@@ -587,7 +587,7 @@ pub fn plan_create_source(
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
         Connector::PubNub {
             subscribe_key,
@@ -601,7 +601,11 @@ pub fn plan_create_source(
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (connector, SourceDataEncoding::Single(DataEncoding::Text))
+            (
+                connector,
+                SourceDataEncoding::Single(DataEncoding::Text),
+                KeyEnvelope::None,
+            )
         }
         Connector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
@@ -640,7 +644,7 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
                 reader_schema,
             }));
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
     };
 
@@ -762,7 +766,7 @@ pub fn plan_create_source(
         }
     }
 
-    let mut bare_desc = encoding.desc(&envelope)?;
+    let mut bare_desc = encoding.desc(&envelope, &key_envelope)?;
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
@@ -886,6 +890,7 @@ pub fn plan_create_source(
             connector: external_connector,
             encoding,
             envelope,
+            key_envelope,
             consistency,
             ts_frequency,
             timeline,
@@ -1082,6 +1087,48 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         Format::Json => unsupported!("JSON sources"),
         Format::Text => DataEncoding::Text,
     }))
+}
+
+fn get_key_envelope(
+    key_envelope: &CreateSourceKeyEnvelope,
+    envelope: &Envelope,
+    encoding: &SourceDataEncoding,
+) -> Result<KeyEnvelope, anyhow::Error> {
+    if key_envelope.is_present() && matches!(envelope, Envelope::Debezium { .. }) {
+        bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
+    }
+    Ok(match key_envelope {
+        CreateSourceKeyEnvelope::None if matches!(envelope, Envelope::Upsert { .. }) => {
+            KeyEnvelope::LegacyUpsert
+        }
+        CreateSourceKeyEnvelope::None => KeyEnvelope::None,
+        CreateSourceKeyEnvelope::Named(name) => KeyEnvelope::Named(name.clone().into_string()),
+        CreateSourceKeyEnvelope::Included => {
+            // If the key is requested but comes from an unnamed type then it gets the name "key"
+            //
+            // Otherwise it gets the names of the columns in the type
+            if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
+                let is_composite = match key {
+                    DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
+                        bail!("{} sources cannot use INCLUDE KEY", key.op_name())
+                    }
+                    DataEncoding::Bytes | DataEncoding::Text => false,
+                    DataEncoding::Avro(_)
+                    | DataEncoding::Csv(_)
+                    | DataEncoding::Protobuf(_)
+                    | DataEncoding::Regex { .. } => true,
+                };
+
+                if is_composite {
+                    KeyEnvelope::Flattened
+                } else {
+                    KeyEnvelope::Named("key".to_string())
+                }
+            } else {
+                bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
+            }
+        }
+    })
 }
 
 pub fn describe_create_view(
