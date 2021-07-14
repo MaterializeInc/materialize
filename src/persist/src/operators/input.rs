@@ -39,6 +39,7 @@ pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
             ActivateCapability<G::Timestamp>,
         ),
         Stream<G, (K, u64, isize)>,
+        Stream<G, (String, u64, isize)>,
     );
 }
 
@@ -56,8 +57,9 @@ where
             ActivateCapability<G::Timestamp>,
         ),
         Stream<G, (K, u64, isize)>,
+        Stream<G, (String, u64, isize)>,
     ) {
-        let ((handle, cap), stream) = self.new_unordered_input();
+        let ((handle, cap), ok_new) = self.new_unordered_input();
         let (write, meta) = token.into_inner();
 
         // Replay the previously persisted data, if any.
@@ -66,23 +68,37 @@ where
         // worker 0 because that was the simplest thing to do initially.
         // Instead, we should shard up the responsibility between all the
         // workers.
-        let previously_persisted = if self.index() == 0 {
+        let (ok_previous, err_previous) = if self.index() == 0 {
             // TODO: Do this with a timely operator that reads the snapshot.
-            let mut snap = meta.snapshot().expect("TODO");
-            let mut buf = Vec::new();
-            while snap.read(&mut buf) {}
-            buf.into_iter()
+            let (mut buf, mut errors) = (Vec::new(), Vec::new());
+            match meta.snapshot() {
+                Ok(mut snap) => while snap.read(&mut buf) {},
+                Err(err) => {
+                    // TODO: Figure out how to make these retractable.
+                    let err_str = format!("replaying persisted data: {}", err);
+                    errors.push((err_str, 0u64, 1isize));
+                }
+            }
+            let ok_previous = buf
+                .into_iter()
                 .map(|((key, _), ts, diff)| (key, ts, diff))
-                .to_stream(self)
+                .to_stream(self);
+            let err_previous = errors.into_iter().to_stream(self);
+            (ok_previous, err_previous)
         } else {
-            operator::empty(self)
+            (operator::empty(self), operator::empty(self))
         };
 
         let handle = PersistentUnorderedHandle {
             write: Box::new(write),
             handle,
         };
-        ((handle, cap), previously_persisted.concat(&stream))
+        let ok_all = ok_previous.concat(&ok_new);
+        // In contrast to other operators, PersistentUnorderedInput returns
+        // errors persisting new data via the handle, so the only errors we can
+        // have are from trying to read the previously persisted data.
+        let err_all = err_previous;
+        ((handle, cap), ok_all, err_all)
     }
 }
 
@@ -158,7 +174,7 @@ mod tests {
         timely::execute_directly(move |worker| {
             let (mut handle, cap) = worker.dataflow(|scope| {
                 let persister = p.create_or_load("1").unwrap();
-                let (input, _stream) = scope.new_persistent_unordered_input(persister);
+                let (input, _ok_stream, _) = scope.new_persistent_unordered_input(persister);
                 input
             });
             let mut session = handle.session(cap);
@@ -180,10 +196,10 @@ mod tests {
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
                 let persister = p.create_or_load("1").unwrap();
-                let (input, stream) = scope.new_persistent_unordered_input(persister);
+                let (input, ok_stream, _) = scope.new_persistent_unordered_input(persister);
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
-                let recv = stream.capture();
+                let recv = ok_stream.capture();
                 (input, recv)
             });
             let mut session = handle.session(cap);
@@ -220,7 +236,8 @@ mod tests {
         timely::execute(Config::process(3), move |worker| {
             worker.dataflow(|scope| {
                 let persister = p.create_or_load("multiple_workers").unwrap();
-                let ((mut handle, cap), _stream) = scope.new_persistent_unordered_input(persister);
+                let ((mut handle, cap), _ok_stream, _) =
+                    scope.new_persistent_unordered_input(persister);
                 // Write one thing from each worker.
                 let (tx, rx) = mpsc::channel();
                 handle
@@ -241,11 +258,11 @@ mod tests {
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
                 let persister = p.create_or_load("multiple_workers").unwrap();
-                let (_, stream) = scope.new_persistent_unordered_input(persister);
+                let (_, ok_stream, _) = scope.new_persistent_unordered_input(persister);
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
                 let tx = tx.lock().expect("lock is not poisoned").clone();
-                stream.capture_into(tx);
+                ok_stream.capture_into(tx);
             });
         })?;
 
@@ -262,6 +279,36 @@ mod tests {
             ("worker-2".to_owned(), 1, 1),
         ];
         assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn error_stream() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        let (p, mut unreliable) = registry.open_unreliable::<(), ()>("1", "error_stream")?;
+        unreliable.make_unavailable();
+
+        let recv = timely::execute_directly(move |worker| {
+            worker.dataflow(|scope| {
+                let persister = p.create_or_load("error_stream").unwrap();
+                let (_, _, err_stream) = scope.new_persistent_unordered_input(persister);
+                err_stream.capture()
+            })
+        });
+
+        let actual = recv
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter())
+            .collect::<Vec<_>>();
+
+        let expected = vec![(
+            "replaying persisted data: unavailable: buffer snapshot".to_string(),
+            0,
+            1,
+        )];
+        assert_eq!(actual, expected);
 
         Ok(())
     }

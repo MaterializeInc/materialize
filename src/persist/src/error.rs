@@ -27,7 +27,11 @@ impl error::Error for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(self, f)
+        match self {
+            Error::IO(e) => fmt::Display::fmt(e, f),
+            Error::String(e) => f.write_str(e),
+            Error::RuntimeShutdown => f.write_str("runtime shutdown"),
+        }
     }
 }
 
