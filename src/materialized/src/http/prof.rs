@@ -262,6 +262,17 @@ mod enabled {
                     .body(Body::from(s))
                     .unwrap())
             }
+            "dump_stats" => {
+                let mut borrow = prof_ctl.lock().await;
+                let s = borrow.dump_stats()?;
+                Ok(Response::builder()
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"jestats.txt\"",
+                    )
+                    .body(Body::from(s))
+                    .unwrap())
+            }
             "dump_symbolicated_file" => {
                 let mut borrow = prof_ctl.lock().await;
                 let f = borrow.dump()?;
