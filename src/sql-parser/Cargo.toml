@@ -13,8 +13,11 @@ log = "0.4.13"
 ore = { path = "../ore"}
 phf = { version = "0.9.0", features = ["uncased"] }
 repr = { path = "../repr" }
+sources = { path = "../sources" }
 stacker = "0.1.14"
 uncased = "0.9.6"
+unicase = "2.4.0"
+serde = { version = "1", features = [ "derive" ] }
 
 [dev-dependencies]
 datadriven = "0.6.0"

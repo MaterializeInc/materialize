@@ -1,0 +1,18 @@
+[package]
+name = "sources"
+description = "Source definitions"
+version = "0.0.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+serde = "1"
+futures = "0.3"
+repr = { path = "../repr" }
+enum_dispatch = "0.3.7"
+async-trait = "0.1.50"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
+tokio = { version = "1", features = [ "full" ] }
+tokio-stream = { version = "0.1", features = [ "time" ] }
+pin-project = "1"
+paste = "1"

@@ -40,6 +40,7 @@ use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use sources::Source as _;
 use sql_parser::ast::{CreateSourceFormat, KeyConstraint};
 
 use crate::ast::display::AstDisplay;
@@ -50,7 +51,8 @@ use crate::ast::{
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
     CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement, DataType, DbzMode,
     DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
-    ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    ObjectType, Raw, SourceType, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -382,8 +384,7 @@ pub fn plan_create_source(
     let CreateSourceStatement {
         name,
         col_names,
-        connector,
-        with_options,
+        source,
         envelope,
         if_not_exists,
         materialized,
@@ -391,6 +392,32 @@ pub fn plan_create_source(
         key_constraint,
         key_envelope,
     } = &stmt;
+
+    let (connector, with_options) = match source {
+        SourceType::Old(a, b) => (a, b),
+        SourceType::New(source) => {
+            let bare_desc = source.desc();
+            let (expr, column_names) =
+                plan_source_envelope(&bare_desc, &SourceEnvelope::None, None)?;
+
+            let name = scx.allocate_name(normalize::unresolved_object_name(name.clone())?);
+
+            let source = Source {
+                create_sql: String::new(),
+                connector: SourceConnector::New(source.clone()),
+                expr,
+                bare_desc,
+                column_names,
+            };
+
+            return Ok(Plan::CreateSource(CreateSourcePlan {
+                name,
+                source,
+                if_not_exists: *if_not_exists,
+                materialized: *materialized,
+            }));
+        }
+    };
 
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options);

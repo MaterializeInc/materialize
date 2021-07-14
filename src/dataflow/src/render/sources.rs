@@ -15,6 +15,8 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
+use futures::StreamExt as _;
+use timely::dataflow::operators::to_stream::ToStreamAsync;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::operators::OkErr;
@@ -28,6 +30,7 @@ use ore::now::NowFn;
 use repr::RelationDesc;
 use repr::ScalarType;
 use repr::{Datum, Row, Timestamp};
+use sources::{Event, InstanceConfig as _, SomeState, Source as _};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -104,6 +107,43 @@ where
                     crate::render::CollectionBundle::from_collections(
                         ok_collection,
                         err_collection,
+                    ),
+                );
+            }
+
+            SourceConnector::New(source) => {
+                let active = (usize::cast_from(src_id.hashed()) % scope.peers()) == scope.index();
+
+                let collection = if active {
+                    let mut configs = source.create_instances(1);
+
+                    let config = configs.pop().unwrap();
+                    assert!(configs.is_empty());
+
+                    let mut state = SomeState::default();
+                    let instance = config.instantiate(&mut state);
+
+                    instance
+                        .boxed()
+                        .to_stream(scope)
+                        .map_fallible("Foobar", |r| r)
+                        .0
+                        .as_collection()
+                } else {
+                    futures::stream::empty::<Event>()
+                        .boxed()
+                        .to_stream(scope)
+                        .map_fallible("Foobar", |r| r)
+                        .0
+                        .as_collection()
+                };
+
+                // Introduce the stream by name, as an unarranged collection.
+                self.insert_id(
+                    Id::Global(src_id),
+                    crate::render::CollectionBundle::from_collections(
+                        collection,
+                        Collection::empty(scope),
                     ),
                 );
             }

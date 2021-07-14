@@ -86,7 +86,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::{
     Connector, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
-    FetchStatement, Ident, ObjectType, Raw, Statement,
+    FetchStatement, Ident, ObjectType, Raw, SourceType, Statement,
 };
 use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
@@ -3709,8 +3709,7 @@ pub fn describe(
 fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
     let (ty, connector, with_options) = match stmt {
         Statement::CreateSource(CreateSourceStatement {
-            connector,
-            with_options,
+            source: SourceType::Old(connector, with_options),
             ..
         }) => ("source", connector, with_options),
         Statement::CreateSink(CreateSinkStatement {

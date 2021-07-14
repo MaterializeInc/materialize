@@ -821,6 +821,7 @@ dependencies = [
  "rusoto_sqs",
  "serde",
  "serde_json",
+ "sources",
  "tempfile",
  "timely",
  "tokio",
@@ -858,6 +859,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
+ "sources",
  "timely",
  "tokio",
  "url",
@@ -1122,6 +1124,18 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c30ea541ff8aec761976f2eadf20371fa06fbc0f2cb2f8fb505a7f1340d459a0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd53b3fde38a39a06b2e66dc282f3e86191e53bd04cc499929c15742beae3df8"
+dependencies = [
+ "once_cell",
  "proc-macro2",
  "quote",
  "syn",
@@ -1915,7 +1929,7 @@ checksum = "c502a5ff9dd2924f1ed32ba96e3b65735d837b4bfd978d3161b1702e66aca4b7"
 dependencies = [
  "jemalloc-sys",
  "libc",
- "paste",
+ "paste 0.1.18",
 ]
 
 [[package]]
@@ -2642,6 +2656,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acbf547ad0c65e31259204bd90935776d1c693cec2f4ff7abb7a1bbbd40dfe58"
+
+[[package]]
 name = "paste-impl"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2841,6 +2861,26 @@ checksum = "a68318426de33640f02be62b4ae8eb1261be2efbc337b60c54d845bf4484e0d9"
 dependencies = [
  "siphasher",
  "uncased",
+]
+
+[[package]]
+name = "pin-project"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7509cc106041c40a4518d2af7a61530e1eed0e6285296a3d8c5472806ccc4a4"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c950132583b500556b1efd71d45b319029f2b71518d979fcc208e16b42426f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3977,6 +4017,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sources"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "enum_dispatch",
+ "futures",
+ "paste 1.0.5",
+ "pin-project",
+ "repr",
+ "serde",
+ "timely",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "sql"
 version = "0.0.0"
 dependencies = [
@@ -4010,6 +4066,7 @@ dependencies = [
  "rusoto_core",
  "serde",
  "serde_json",
+ "sources",
  "sql-parser",
  "tokio",
  "tokio-postgres",
@@ -4032,8 +4089,11 @@ dependencies = [
  "phf",
  "phf_codegen",
  "repr",
+ "serde",
+ "sources",
  "stacker",
  "uncased",
+ "unicase",
  "unicode-width",
  "walkabout",
 ]
@@ -4508,6 +4568,7 @@ dependencies = [
  "mio",
  "num_cpus",
  "once_cell",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "tokio-macros",
@@ -4713,6 +4774,15 @@ name = "uncased"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baeed7327e25054889b9bd4f975f32e5f4c5d434042d59ab6cd4142c0a76ed0"
+dependencies = [
+ "version_check",
+]
+
+[[package]]
+name = "unicase"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50f37be617794602aabbeee0be4f259dc1778fabe05e2d67ee8f79326d5cb4f6"
 dependencies = [
  "version_check",
 ]

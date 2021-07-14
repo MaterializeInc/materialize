@@ -28,8 +28,8 @@ use repr::strconv;
 use sql_parser::ast::{
     display::AstDisplay, AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement,
     CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrSeed, DbzMode,
-    Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem, SetExpr, Statement,
-    TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
+    Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem, SetExpr, SourceType,
+    Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
 };
 use sql_parser::parser::parse_columns;
 
@@ -75,10 +75,9 @@ pub fn purify(
     async move {
         if let Statement::CreateSource(CreateSourceStatement {
             col_names,
-            connector,
+            source: SourceType::Old(connector, with_options),
             format,
             envelope,
-            with_options,
             ..
         }) = &mut stmt
         {
@@ -340,6 +339,7 @@ pub fn purify(
                         bail!("cannot generate views from {} sources", connector.name())
                     }
                     SourceConnector::Local(_) => bail!("cannot generate views from local sources"),
+                    SourceConnector::New(_) => bail!("cannot generate views from new sources"),
                 }
             }
         }
