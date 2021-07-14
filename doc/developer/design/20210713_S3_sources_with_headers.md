@@ -36,6 +36,9 @@ for future multi-object sources.
 // ie. what could we do or what do we want to do in the future - but are not doing now
 -->
 
+The first version of this will only support the CSV format, Avro OCF objects
+should be extendable with the current work, but will be prioritized separately.
+
 ## Description
 
 <!--
@@ -43,10 +46,8 @@ for future multi-object sources.
 // If applicable, be sure to call out any new testing/validation that will be required
 -->
 
-User-facing changes are twofold:
-
-* The ability to specify additional formats (e.g `FORMAT CSV WITH HEADER`)
-* The ability to specify a header or schema inline as part of the declaration
+User-facing changes are limited to an expansion of the ability to combine
+existing formats with S3 sources, for example e.g. `FORMAT CSV WITH HEADER`.
 
 When a user specifies a source format that has a header, we will obtain an
 arbitrary file from the source declaration and inspect its header, making it the
@@ -56,16 +57,56 @@ encountered that do not match, the dataflow will be put into an error state.
 Internally, there are only a few changes that need to be made.
 
 * Add some code in purify that can obtain an object according to the source
-  declaration and use it to extract the schema
+  declaration and use it to extract the schema.
 * Modify the messages sent from sources to include a signifier for "beginning of
   object", which will cause the decode loop to perform schema validation and
   drop the header line.
 
-## Alternatives and future work
+### Purification strategy
 
-<!--
-// Similar to the Description section. List of alternative approaches considered, pros/cons or why they were not chosen
--->
+We will extend the [purification strategy from existing formats][csv-purify]
+into their combination with S3, including using existing syntax.
+
+[csv-purify]: https://github.com/MaterializeInc/materialize/blob/88cf93c3309ca62/src/sql/src/pure.rs#L480-L501
+
+#### Examples
+
+A CSV source containing files with header lines like `id,value` as:
+
+```sql
+CREATE SOURCE example
+FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'bucket'
+FORMAT CSV WITH HEADER;
+```
+
+will be rewritten via purify to:
+
+```sql
+CREATE SOURCE example (id, value)
+FROM S3 DISCOVER OBJECTS USING USING BUCKET SCAN 'bucket'
+FORMAT CSV WITH HEADER;
+```
+
+Conversely, the following create source statement (and the equivalent without
+headers) will be rejected:
+
+```sql
+CREATE SOURCE example
+FROM S3 DISCOVER OBJECTS USING SQS NOTIFICATIONS 'queuename'
+FORMAT CSV WITH HEADER;
+```
+
+it will instead require that users specify the column names:
+
+```sql
+CREATE SOURCE example (id, value)
+FROM S3 DISCOVER OBJECTS USING SQS NOTIFICATIONS 'queuename'
+FORMAT CSV WITH HEADER;
+```
+
+Similar rules will apply to Avro OCF objects, when implemented.
+
+## Alternatives and future work
 
 ### Supporting a subset of schema fields
 
