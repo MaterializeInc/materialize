@@ -187,7 +187,7 @@ pub fn build_dataflow<A: Allocate>(
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
-        scope.clone().region(|region| {
+        scope.clone().region_named(&name, |region| {
             let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
             let mut tokens = RelevantTokens::default();
 
