@@ -35,7 +35,7 @@ planned][object-specifiers] for the future.
 
 All strategies follow the same basic pattern.  Materialize will:
 
-* Obtain a list of objects using AWS APIs.
+* Obtain a list of objects using [AWS APIs](#permissions-required).
 * Deduplicate objects so the same object is never downloaded twice.
 * Filter the list of objects against the [**MATCHING** clause
   patterns](#patterns).
@@ -45,8 +45,6 @@ All strategies follow the same basic pattern.  Materialize will:
 
 No guarantees are made about the relative order of records sent from the object discovery process
 and the Materialize SQL engine. As usual with SQL, you must impose your own order.
-
-[object-specifiers]: https://github.com/MaterializeInc/materialize/issues/5502
 
 You may specify strategies multiple times within one
 `CREATE SOURCE` statement. For example, this is a legal invocation:
@@ -58,18 +56,34 @@ DISCOVER OBJECTS USING
   SQS NOTIFICATIONS 'example-notifications'
 ```
 
+[object-specifiers]: https://github.com/MaterializeInc/materialize/issues/5502
+
+##### Listing Bucket objects
+
+The `BUCKET SCAN` discovery performs a single scan over the specified bucket at source creation
+time. If you would like an S3 source to ingest objects that are added to the bucket after the
+source is created you must also configure an `SQS NOTIFICATIONS` discovery mechanism on the source.
+
 ##### Listening to SQS notifications
 
 AWS S3 has a built-in method for notifying downstream applications of bucket modification, the
-[Event Notification API][notification-aws]. For Materialize, the only interesting
-modifications are object creation, aka the `s3:ObjectCreated:*` event namespace. Follow [the
-AWS Tutorial][notification-tutorial] to configure a bucket for exactly this namespace.
+[Event Notification API][notification-aws]. For Materialize, the only interesting modifications are
+object creation, aka the `s3:ObjectCreated:*` event namespace. Follow [the AWS
+Tutorial][notification-tutorial] to configure a bucket for exactly this namespace.
 
 Once you have configured S3 notifications to go to an SQS queue, you can point Materialize at that
 queue with **DISCOVER OBJECTS USING SQS NOTIFICATIONS `'queue-name'`**.
 
+Materialize deletes SQS messages as soon as they are ingested -- the same SQS queue cannot be used
+for multiple sources. If you would like to have multiple Materialize sources listening to
+notifications from the same bucket you must [configure an SNS topic][sns] as an intermediary, with
+multiple SQS queues subscribed to it. Note that SQS queues subscribed to SNS topics intended for
+Materialize must be configured to use [raw message delivery][raw-delivery].
+
 [notification-aws]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
 [notification-tutorial]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ways-to-add-notification-config-to-bucket.html
+[sns]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ways-to-add-notification-config-to-bucket.html#step1-create-sns-topic-for-notification
+[raw-delivery]: https://docs.aws.amazon.com/sns/latest/dg/sns-large-payload-raw-message-delivery.html
 
 #### Patterns
 
