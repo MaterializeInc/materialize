@@ -115,6 +115,7 @@ pub struct State {
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
     default_timeout: Duration,
+    postgres_clients: HashMap<String, tokio_postgres::Client>,
 }
 
 #[derive(Clone)]
@@ -437,6 +438,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
+                    "postgres-connect" => {
+                        Box::new(postgres::build_connect(builtin).map_err(wrap_err)?)
+                    }
                     "postgres-execute" => {
                         Box::new(postgres::build_execute(builtin).map_err(wrap_err)?)
                     }
@@ -726,6 +730,7 @@ pub async fn create_state(
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
         default_timeout: config.default_timeout,
+        postgres_clients: HashMap::new(),
     };
     Ok((state, pgconn_task))
 }
