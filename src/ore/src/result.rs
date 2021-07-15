@@ -31,6 +31,12 @@ pub trait ResultExt<T, E> {
     fn err_to_string(&self) -> Option<String>
     where
         E: std::fmt::Display;
+
+    /// Maps a `Result<T, E>` to `Result<T, String>` by converting the [`Err`] result into a string
+    /// using the "alternate" formatting.
+    fn map_err_to_string(self) -> Result<T, String>
+    where
+        E: std::fmt::Display;
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
@@ -46,6 +52,13 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         E: std::fmt::Display,
     {
         self.as_ref().err().map(DisplayExt::to_string_alt)
+    }
+
+    fn map_err_to_string(self) -> Result<T, String>
+    where
+        E: std::fmt::Display,
+    {
+        self.map_err(|e| DisplayExt::to_string_alt(&e))
     }
 }
 
@@ -69,6 +82,9 @@ mod test {
         }
 
         let res: Result<(), Foo> = Err(Foo);
-        assert_eq!("success", res.err_to_string().unwrap());
+        assert_eq!(Some("success".to_string()), res.err_to_string());
+
+        let res: Result<(), Foo> = Err(Foo);
+        assert_eq!(Err("success".to_string()), res.map_err_to_string());
     }
 }
