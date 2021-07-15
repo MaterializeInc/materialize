@@ -14,7 +14,7 @@ use dataflow_types::{AvroOcfSinkConnector, KafkaSinkConnector};
 use expr::{GlobalId, MirScalarExpr};
 use ore::collections::CollectionExt;
 use repr::adt::array::ArrayDimension;
-use repr::{Datum, Row};
+use repr::{Datum, Diff, Row};
 use sql::ast::{CreateIndexStatement, Statement};
 use sql::names::DatabaseSpecifier;
 
@@ -36,11 +36,11 @@ pub struct BuiltinTableUpdate {
     /// The data to put into the table.
     pub row: Row,
     /// The diff of the data.
-    pub diff: isize,
+    pub diff: Diff,
 }
 
 impl Catalog {
-    pub(super) fn pack_database_update(&self, name: &str, diff: isize) -> BuiltinTableUpdate {
+    pub(super) fn pack_database_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
         let database = &self.by_name[name];
         BuiltinTableUpdate {
             id: MZ_DATABASES.id,
@@ -57,7 +57,7 @@ impl Catalog {
         &self,
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
-        diff: isize,
+        diff: Diff,
     ) -> BuiltinTableUpdate {
         let (database_id, schema) = match database_spec {
             DatabaseSpecifier::Ambient => (None, &self.ambient_schemas[schema_name]),
@@ -78,7 +78,7 @@ impl Catalog {
         }
     }
 
-    pub(super) fn pack_role_update(&self, name: &str, diff: isize) -> BuiltinTableUpdate {
+    pub(super) fn pack_role_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
         let role = &self.roles[name];
         BuiltinTableUpdate {
             id: MZ_ROLES.id,
@@ -91,7 +91,7 @@ impl Catalog {
         }
     }
 
-    pub(super) fn pack_item_update(&self, id: GlobalId, diff: isize) -> Vec<BuiltinTableUpdate> {
+    pub(super) fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         let entry = self.get_by_id(&id);
         let id = entry.id();
         let oid = entry.oid();
@@ -142,7 +142,7 @@ impl Catalog {
         oid: u32,
         schema_id: i64,
         name: &str,
-        diff: isize,
+        diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
             id: MZ_TABLES.id,
@@ -163,7 +163,7 @@ impl Catalog {
         schema_id: i64,
         name: &str,
         source: &Source,
-        diff: isize,
+        diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
             id: MZ_SOURCES.id,
@@ -185,7 +185,7 @@ impl Catalog {
         oid: u32,
         schema_id: i64,
         name: &str,
-        diff: isize,
+        diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
             id: MZ_VIEWS.id,
@@ -207,7 +207,7 @@ impl Catalog {
         schema_id: i64,
         name: &str,
         sink: &Sink,
-        diff: isize,
+        diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
         if let Sink {
@@ -268,7 +268,7 @@ impl Catalog {
         oid: u32,
         name: &str,
         index: &Index,
-        diff: isize,
+        diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
 
@@ -330,7 +330,7 @@ impl Catalog {
         schema_id: i64,
         name: &str,
         typ: &Type,
-        diff: isize,
+        diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let generic_update = BuiltinTableUpdate {
             id: MZ_TYPES.id,
@@ -374,7 +374,7 @@ impl Catalog {
         schema_id: i64,
         name: &str,
         func: &Func,
-        diff: isize,
+        diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
         for func_impl_details in func.inner.func_impls() {

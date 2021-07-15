@@ -18,7 +18,7 @@ use std::{
 
 use chrono::NaiveDateTime;
 use prometheus::{proto::MetricType, Registry};
-use repr::{Datum, Row, Timestamp};
+use repr::{Datum, Diff, Row, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::catalog::{builtin::BuiltinTable, BuiltinTableUpdate};
@@ -228,7 +228,7 @@ impl<'a> Scraper<'a> {
             .expect("Sending metric reading retraction messages");
     }
 
-    fn send_metadata_update<I: IntoIterator<Item = Row>>(&self, updates: I, diff: isize) {
+    fn send_metadata_update<I: IntoIterator<Item = Row>>(&self, updates: I, diff: Diff) {
         let id = MZ_PROMETHEUS_METRICS.id;
         self.internal_tx
             .send(Message::InsertBuiltinTableUpdates(TimestampedUpdate {
