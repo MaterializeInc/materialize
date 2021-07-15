@@ -125,6 +125,11 @@ async fn download_objects_task(
                     let is_new = bi.keys.insert(msg.key.clone());
                     if !is_new {
                         bi.metrics.objects_duplicate.inc();
+                        log::debug!(
+                            "skipping object because it was already seen: {}/{}",
+                            msg.bucket,
+                            msg.key
+                        );
                         continue;
                     }
                 } else {
@@ -564,7 +569,11 @@ enum S3Error {
     BodyMissing(String),
     ClientConstructionFailed(anyhow::Error),
     Decode(String, std::io::Error),
-    GetObjectError(RusotoError<rusoto_s3::GetObjectError>),
+    GetObjectError {
+        bucket: String,
+        key: String,
+        err: RusotoError<rusoto_s3::GetObjectError>,
+    },
     ListObjectsFailed(RusotoError<rusoto_s3::ListObjectsV2Error>),
     Read(std::io::Error),
     RetryFailed,
@@ -578,7 +587,9 @@ impl std::fmt::Display for S3Error {
             S3Error::Decode(key, err) => {
                 write!(f, "Failed to decode object {} using gzip: {}", key, err)
             }
-            S3Error::GetObjectError(err) => err.fmt(f),
+            S3Error::GetObjectError { bucket, key, err } => {
+                write!(f, "getting object {}/{}: {}", bucket, key, err)
+            }
             S3Error::ListObjectsFailed(err) => err.fmt(f),
             S3Error::Read(err) => err.fmt(f),
             S3Error::RetryFailed => write!(f, "Retry failed to produce result"),
@@ -598,7 +609,7 @@ async fn download_object(
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
     let obj = match client
         .get_object(GetObjectRequest {
-            bucket: bucket.into(),
+            bucket: bucket.to_string(),
             key: key.to_string(),
             ..Default::default()
         })
@@ -606,7 +617,14 @@ async fn download_object(
     {
         Ok(obj) => obj,
         Err(err) => {
-            return (DownloadStatus::Retry(S3Error::GetObjectError(err)), None);
+            return (
+                DownloadStatus::Retry(S3Error::GetObjectError {
+                    bucket: bucket.to_string(),
+                    key: key.to_string(),
+                    err,
+                }),
+                None,
+            );
         }
     };
 
@@ -750,6 +768,7 @@ impl SourceReader for S3SourceReader {
                         ));
                     }
                     S3KeySource::SqsNotifications { queue } => {
+                        log::debug!("reading sqs queue={} worker={}", queue, worker_id);
                         tokio::spawn(read_sqs_task(
                             source_id.to_string(),
                             glob.clone(),
@@ -800,7 +819,7 @@ impl SourceReader for S3SourceReader {
                     S3Error::RetryFailed => Err(anyhow!("Retry failed")),
                     S3Error::BodyMissing(_)
                     | S3Error::Decode(_, _)
-                    | S3Error::GetObjectError(_)
+                    | S3Error::GetObjectError { .. }
                     | S3Error::ListObjectsFailed(_)
                     | S3Error::Read(_) => Ok(NextMessage::Pending),
                 }
