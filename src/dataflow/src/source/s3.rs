@@ -186,11 +186,12 @@ async fn download_objects_task(
                 }
                 // Extract and handle status updates
                 match status {
+                    // Retry making it out of the retry loop means retries failed
                     DownloadStatus::Retry(e) => {
-                        tx.send(Err(S3Error::RetryFailed)).unwrap_or_else(|e| {
-                            log::debug!("unable to send error on retries failed: {}", e)
-                        });
-                        break;
+                        if tx.send(Err(e)).is_err() {
+                            rx.close();
+                            break;
+                        };
                     }
                     DownloadStatus::SendFailed => {
                         rx.close();
@@ -208,6 +209,7 @@ async fn download_objects_task(
             }
             Err(e) => {
                 if tx.send(Err(e)).is_err() {
+                    rx.close();
                     break;
                 }
             }
