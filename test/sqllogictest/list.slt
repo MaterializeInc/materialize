@@ -1316,7 +1316,7 @@ SELECT (LIST[[1.4], [-1.5]]::text)::text
 query T
 SELECT (LIST[[1.4::float], [-1.5::float, 2.5::float]]::text)::text
 ----
-{{1.4000000000000001},{-1.5,2.5}}
+{{1.4},{-1.5,2.5}}
 
 # Show that these are actually strings
 query I
