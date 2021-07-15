@@ -55,7 +55,7 @@ impl SyncAction for WriteAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Writing to {}", path.display());
         let mut file = File::create(path).map_err(|e| e.to_string())?;
         let schema =
@@ -90,7 +90,7 @@ impl SyncAction for AppendAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Appending to {}", path.display());
         let file = OpenOptions::new()
             .read(true)

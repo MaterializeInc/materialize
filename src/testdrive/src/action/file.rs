@@ -84,7 +84,7 @@ impl Action for AppendAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Appending to file {}", path.display());
         let file = OpenOptions::new()
             .create(true)
@@ -124,7 +124,7 @@ impl Action for DeleteAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Deleting file {}", path.display());
         tokio::fs::remove_file(&path)
             .await
