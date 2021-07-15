@@ -38,7 +38,7 @@ type Result<T> = std::result::Result<T, Error>;
 fn main() -> Result<()> {
     ore::panic::set_abort_on_panic();
 
-    LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
+    LogBuilder::from_env(Env::new().filter_or("MZ_LOG_FILTER", "info"))
         .target(Target::Stdout)
         .init();
 

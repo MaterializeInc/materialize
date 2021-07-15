@@ -196,7 +196,7 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG
+    - MZ_LOG_FILTER
 
   postgres:
     mzbuild: postgres

@@ -53,7 +53,7 @@ services:
     environment:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
-      - MZ_LOG=pgwire=debug,info
+      - MZ_LOG_FILTER=pgwire=debug,info
       - MZ_DEV=1
   materialized-experimental:
     mzbuild: materialized
@@ -74,7 +74,7 @@ services:
     environment:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
-      - MZ_LOG=pgwire=debug,info
+      - MZ_LOG_FILTER=pgwire=debug,info
       - MZ_DEV=1
   mysql:
     mzbuild: chbench-mysql

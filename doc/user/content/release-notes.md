@@ -46,6 +46,10 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+- The `MZ_LOG` environment variable is no longer recognized. Setting the log
+  level can be done using the `--log-filter` command line parameter or the
+  `MZ_LOG_FILTER` environment variable.
+
 {{% version-header v0.8.3 %}}
 
 - Refactor the [`numeric`](/sql/types/numeric) type's backing implementation.

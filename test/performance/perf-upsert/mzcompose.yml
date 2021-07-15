@@ -20,7 +20,7 @@ services:
      - *materialized
     command: --workers ${MZ_WORKERS:-1} --differential-idle-merge-effort=1000 --disable-telemetry
     environment:
-      - MZ_LOG=dataflow=error,info
+      - MZ_LOG_FILTER=dataflow=error,info
       - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
