@@ -33,7 +33,7 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 static MAX_BACKOFF: Duration = Duration::from_secs(2);
 
 fn main() -> Result<(), Error> {
-    LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
+    LogBuilder::from_env(Env::new().filter_or("MZ_LOG_FILTER", "info"))
         .target(Target::Stdout)
         .init();
 

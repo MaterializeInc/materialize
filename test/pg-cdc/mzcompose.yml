@@ -49,7 +49,7 @@ services:
       - secrets:/share/secrets
     environment:
       - MZ_DEV=1
-      - MZ_LOG
+      - MZ_LOG_FILTER
     depends_on: [test-certs]
 
   postgres:

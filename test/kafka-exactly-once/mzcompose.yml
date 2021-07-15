@@ -80,7 +80,7 @@ services:
       --experimental
     environment:
       - MZ_DEV=1
-      - MZ_LOG=${MZ_LOG:-dataflow::sink::kafka=debug,dataflow::source::kafka=debug,coord::timestamp=debug,dataflow::source=debug,info}
+      - MZ_LOG_FILTER=${MZ_LOG_FILTER:-dataflow::sink::kafka=debug,dataflow::source::kafka=debug,coord::timestamp=debug,dataflow::source=debug,info}
     ports:
       - 6875
     volumes:

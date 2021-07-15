@@ -112,7 +112,7 @@ services:
       - bash
     environment:
     - TMPDIR=/share/tmp
-    - MZ_LOG
+    - MZ_LOG_FILTER
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
@@ -135,7 +135,7 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG
+    - MZ_LOG_FILTER
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
