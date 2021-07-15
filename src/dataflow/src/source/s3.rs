@@ -169,28 +169,37 @@ async fn download_objects_task(
                         }
                     })
                     .await;
-                // Extract metrics updates
-                match &result {
-                    Err((_, Some(update))) | Ok((_, Some(update))) => seen_buckets
+                // We use Result to communicate with Retry, both variants have the same data
+                let (status, update) = match &result {
+                    Err((status, update)) | Ok((status, update)) => (status, update),
+                };
+                if let Some(update) = update {
+                    seen_buckets
                         .get_mut(&msg.bucket)
                         .expect("just inserted")
                         .metrics
-                        .inc(1, update.bytes, update.messages),
-                    _ => (),
-                };
+                        .inc(1, update.bytes, update.messages);
+                }
                 // Extract and handle status updates
-                match result {
-                    Err((DownloadStatus::Retry, _)) => {
+                match status {
+                    DownloadStatus::Retry => {
                         tx.send(Err(S3Error::RetryFailed)).unwrap_or_else(|e| {
                             log::debug!("unable to send error on retries failed: {}", e)
                         });
                         break;
                     }
-                    Ok((DownloadStatus::SendFailed, _)) => {
+                    DownloadStatus::SendFailed => {
                         rx.close();
                         break;
                     }
-                    _ => (),
+                    DownloadStatus::Ok => {
+                        log::trace!(
+                            "{} successfully downloaded {}/{}",
+                            source_id,
+                            msg.bucket,
+                            msg.key
+                        )
+                    }
                 };
             }
             Err(e) => {
