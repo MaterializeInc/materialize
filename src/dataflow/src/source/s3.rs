@@ -122,8 +122,7 @@ async fn download_objects_task(
         match msg {
             Ok(msg) => {
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
-                    let is_new = bi.keys.insert(msg.key.clone());
-                    if !is_new {
+                    if bi.keys.contains(&msg.key) {
                         bi.metrics.objects_duplicate.inc();
                         log::debug!(
                             "skipping object because it was already seen: {}/{}",
@@ -133,16 +132,14 @@ async fn download_objects_task(
                         continue;
                     }
                 } else {
-                    let mut keys = HashSet::new();
-                    keys.insert(msg.key.clone());
                     let bi = BucketInfo {
-                        keys,
+                        keys: HashSet::new(),
                         metrics: BucketMetrics::new(&source_id, &msg.bucket),
                     };
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
 
-                let (tx, activator, client, msg) = (&tx, &activator, &client, &msg);
+                let (tx, activator, client, msg_ref) = (&tx, &activator, &client, &msg);
 
                 let result = Retry::default()
                     .retry(|state| async move {
@@ -150,8 +147,8 @@ async fn download_objects_task(
                             tx,
                             &activator,
                             &client,
-                            &msg.bucket,
-                            &msg.key,
+                            &msg_ref.bucket,
+                            &msg_ref.key,
                             compression,
                         )
                         .await;
@@ -164,8 +161,8 @@ async fn download_objects_task(
                             DownloadStatus::Retry(e) => {
                                 log::debug!(
                                     "Failed to download object: {}/{} (attempt {})",
-                                    msg.bucket,
-                                    msg.key,
+                                    msg_ref.bucket,
+                                    msg_ref.key,
                                     state.i
                                 );
                                 Err((DownloadStatus::Retry(e), update))
@@ -177,12 +174,9 @@ async fn download_objects_task(
                 let (status, update) = match result {
                     Err((status, update)) | Ok((status, update)) => (status, update),
                 };
+                let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
                 if let Some(update) = update {
-                    seen_buckets
-                        .get_mut(&msg.bucket)
-                        .expect("just inserted")
-                        .metrics
-                        .inc(1, update.bytes, update.messages);
+                    bucket_info.metrics.inc(1, update.bytes, update.messages);
                 }
                 // Extract and handle status updates
                 match status {
@@ -203,7 +197,8 @@ async fn download_objects_task(
                             source_id,
                             msg.bucket,
                             msg.key
-                        )
+                        );
+                        bucket_info.keys.insert(msg.key);
                     }
                 };
             }

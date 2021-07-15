@@ -447,6 +447,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
                     }
                     "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
+                    "s3-delete-objects" => {
+                        Box::new(s3::build_delete_object(builtin).map_err(wrap_err)?)
+                    }
                     "s3-add-notifications" => {
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
