@@ -46,15 +46,20 @@ pub struct BufferEntry<K, V> {
 /// - All strings in id_mapping are unique.
 /// - All ids in id_mapping are unique.
 /// - The same set of ids are present in id_mapping, futures, and traces.
-/// - For each id, the ts_lower in the future is >= the ts_upper in the
-///   corresponding trace. (They're usually equal, but at the moment, we don't
-///   do the swap atomically, so there is a moment in t
+/// - For each id, the ts_lower in the future is == the ts_upper in the
+///   corresponding trace.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobMeta {
     /// The most recently assigned key name.
     pub last_file_id: u64,
     /// The next internal stream id to assign.
     pub next_stream_id: Id,
+    /// The position of buffer the last time data was step'd into futures.
+    ///
+    /// Invariant: For each BlobFutureMeta in `futures`, this is >= the last
+    /// batch's upper. If they are not equal, there is logically an empty batch
+    /// between [last batch's upper, futures_seqno_upper).
+    pub futures_seqno_upper: SeqNo,
     /// Internal stream id indexed by external stream name.
     ///
     /// Invariant: Each stream name and stream id are in here at most once.
@@ -164,6 +169,7 @@ impl Default for BlobMeta {
         BlobMeta {
             last_file_id: 0,
             next_stream_id: Id(0),
+            futures_seqno_upper: SeqNo(0),
             id_mapping: Vec::new(),
             futures: Vec::new(),
             traces: Vec::new(),
@@ -230,10 +236,14 @@ impl BlobMeta {
             let trace = traces.get(id).ok_or_else(|| {
                 Error::from(format!("id_mapping id {:?} not present in traces", id))
             })?;
-            let trace_ts_upper = trace.batches.last().map_or_else(
-                || Antichain::from_elem(Timestamp::minimum()),
-                |(d, _)| d.upper().clone(),
-            );
+            let future_seqno_upper = future.seqno_upper();
+            if !future_seqno_upper.less_equal(&self.futures_seqno_upper) {
+                return Err(Error::from(format!(
+                    "id {:?} future seqno_upper {:?} is not less than the blob's future_seqno_upper {:?}",
+                    id, future_seqno_upper, self.futures_seqno_upper,
+                )));
+            }
+            let trace_ts_upper = trace.ts_upper();
             if trace_ts_upper != future.ts_lower {
                 return Err(Error::from(format!(
                     "id {:?} trace ts_upper {:?} does not match future ts_lower {:?}",
@@ -261,6 +271,10 @@ impl BlobFutureMeta {
         let mut prev: Option<&Description<SeqNo>> = None;
         for (desc, _) in self.batches.iter() {
             if let Some(prev) = prev {
+                // TODO: It's definitely useful in Trace for us to enforce that
+                // these line up, but is it useful in Future? Maybe not. It's
+                // also harder since SeqNos are multiplexed for all streams, but
+                // traces are sealed per-stream.
                 if prev.upper() != desc.lower() {
                     return Err(format!(
                         "invalid batch sequence: {:?} followed by {:?}",
@@ -272,6 +286,14 @@ impl BlobFutureMeta {
             prev = Some(desc)
         }
         Ok(())
+    }
+
+    /// Returns an open upper bound on the seqnos contained in this future.
+    pub fn seqno_upper(&self) -> Antichain<SeqNo> {
+        self.batches.last().map_or_else(
+            || Antichain::from_elem(SeqNo(0)),
+            |(d, _)| d.upper().clone(),
+        )
     }
 }
 
@@ -712,21 +734,21 @@ mod tests {
 
         // Normal case
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(2),
             id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
             futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
             traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Duplicate external stream id
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(2),
             id_mapping: vec![("1".into(), Id(0)), ("1".into(), Id(1))],
             futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
             traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -735,11 +757,11 @@ mod tests {
 
         // Duplicate internal stream id
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(2),
             id_mapping: vec![("0".into(), Id(1)), ("1".into(), Id(1))],
             futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
             traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -748,11 +770,11 @@ mod tests {
 
         // Invalid next_stream_id
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
             futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
             traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -763,11 +785,11 @@ mod tests {
 
         // Missing future
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![],
             traces: vec![(Id(0), Default::default())],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -776,11 +798,11 @@ mod tests {
 
         // Missing trace
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![(Id(0), Default::default())],
             traces: vec![],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -789,11 +811,11 @@ mod tests {
 
         // Extra future
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![],
             futures: vec![(Id(0), Default::default())],
             traces: vec![],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -802,11 +824,11 @@ mod tests {
 
         // Extra trace
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![],
             futures: vec![],
             traces: vec![(Id(0), Default::default())],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
@@ -835,7 +857,6 @@ mod tests {
 
         // Future ts_lower doesn't match trace ts_upper
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![(
@@ -851,11 +872,34 @@ mod tests {
                     batches: vec![(u64_desc(0, 1), "".into())],
                 },
             )],
+            ..Default::default()
         };
         assert_eq!(
             b.validate(),
             Err(Error::from(
                 "id Id(0) trace ts_upper Antichain { elements: [1] } does not match future ts_lower Antichain { elements: [2] }"
+            ))
+        );
+
+        // future_seqno_upper less than one of the future seqno uppers
+        let b = BlobMeta {
+            next_stream_id: Id(1),
+            id_mapping: vec![("0".into(), Id(0))],
+            futures_seqno_upper: SeqNo(2),
+            futures: vec![(
+                Id(0),
+                BlobFutureMeta {
+                    batches: vec![(seqno_desc(0, 3), "".into())],
+                    ..Default::default()
+                },
+            )],
+            traces: vec![(Id(0), Default::default())],
+            ..Default::default()
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "id Id(0) future seqno_upper Antichain { elements: [SeqNo(3)] } is not less than the blob's future_seqno_upper SeqNo(2)"
             ))
         );
     }

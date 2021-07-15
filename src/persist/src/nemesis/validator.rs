@@ -127,16 +127,17 @@ impl Validator {
                 self.check_success(req_id, &res, true);
                 if let Ok(res) = res {
                     let mut actual = res.contents;
-                    actual.sort();
                     let mut expected: Vec<((String, ()), u64, isize)> = self
                         .writes_by_seqno
                         .range((stream.clone(), SeqNo(0))..(stream, SeqNo(res.seqno)))
                         .map(|(_, v)| v)
                         .cloned()
                         .collect();
-                    expected.sort();
-                    // TODO: We need to consolidate and account for since here once
-                    // that's supported in persist.
+                    // TODO: This is also used by the implementation. Write a
+                    // slower but more obvious impl of consolidation here and
+                    // use it for validation.
+                    differential_dataflow::consolidation::consolidate_updates(&mut actual);
+                    differential_dataflow::consolidation::consolidate_updates(&mut expected);
                     if actual != expected {
                         self.errors.push(format!(
                             "incorrect snapshot {:?} expected {:?} got: {:?}",
