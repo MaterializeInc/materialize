@@ -13,50 +13,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Result utilities.
+//! Display utilities.
 
-use crate::display::DisplayExt;
+use std::fmt::Display;
 
-/// Extension methods for [`std::result::Result`].
-pub trait ResultExt<T, E> {
-    /// Applies [`Into::into`] to a contained [`Err`] value, leaving an [`Ok`]
-    /// value untouched.
-    fn err_into<E2>(self) -> Result<T, E2>
-    where
-        E: Into<E2>;
-
-    /// Formats an [`Err`] value as a detailed error message, preserving any context information.
-    ///
-    /// This is equivalent to `format!("{:#}", err)`, except that it's easier to type.
-    fn err_to_string(&self) -> Option<String>
-    where
-        E: std::fmt::Display;
+/// Extension methods for [`std::fmt::Display`].
+pub trait DisplayExt {
+    /// Formats an object with the "alternative" format (`{:#}`) and returns it.
+    fn to_string_alt(&self) -> String;
 }
 
-impl<T, E> ResultExt<T, E> for Result<T, E> {
-    fn err_into<E2>(self) -> Result<T, E2>
-    where
-        E: Into<E2>,
-    {
-        self.map_err(|e| e.into())
-    }
-
-    fn err_to_string(&self) -> Option<String>
-    where
-        E: std::fmt::Display,
-    {
-        self.as_ref().err().map(DisplayExt::to_string_alt)
+impl<T: Display> DisplayExt for T {
+    fn to_string_alt(&self) -> String {
+        format!("{:#}", self)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::fmt::Display;
-
     use super::*;
 
     #[test]
-    fn prints_err_alternate_repr() {
+    fn prints_alternate_repr() {
         struct Foo;
         impl Display for Foo {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,7 +46,6 @@ mod test {
             }
         }
 
-        let res: Result<(), Foo> = Err(Foo);
-        assert_eq!("success", res.err_to_string().unwrap());
+        assert_eq!(Foo.to_string_alt(), "success");
     }
 }
