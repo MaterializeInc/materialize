@@ -842,6 +842,7 @@ mod tests {
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![(Id(0), Default::default()), (Id(0), Default::default())],
             traces: vec![(Id(0), Default::default())],
+            ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("duplicate future: Id(0)")));
 
@@ -852,6 +853,7 @@ mod tests {
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![(Id(0), Default::default())],
             traces: vec![(Id(0), Default::default()), (Id(0), Default::default())],
+            ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("duplicate trace: Id(0)")));
 
