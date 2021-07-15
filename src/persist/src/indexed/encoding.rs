@@ -194,20 +194,35 @@ impl BlobMeta {
             }
             ids.insert(*id);
         }
+
+        let mut futures = HashMap::new();
         for (id, f) in self.futures.iter() {
             if !ids.contains(id) {
                 return Err(format!("futures id {:?} not present in id_mapping", id).into());
             }
+
+            if futures.contains_key(id) {
+                return Err(format!("duplicate future: {:?}", id).into());
+            }
+            futures.insert(*id, f);
+
             f.validate()?;
         }
+
+        let mut traces = HashMap::new();
         for (id, t) in self.traces.iter() {
             if !ids.contains(id) {
                 return Err(format!("traces id {:?} not present in id_mapping", id).into());
             }
+
+            if traces.contains_key(id) {
+                return Err(format!("duplicate trace: {:?}", id).into());
+            }
+            traces.insert(*id, t);
+
             t.validate()?;
         }
-        let futures: HashMap<_, _> = self.futures.iter().map(|(id, m)| (*id, m)).collect();
-        let traces: HashMap<_, _> = self.traces.iter().map(|(id, m)| (*id, m)).collect();
+
         for id in ids.iter() {
             let future = futures.get(id).ok_or_else(|| {
                 Error::from(format!("id_mapping id {:?} not present in futures", id))
@@ -797,6 +812,26 @@ mod tests {
             b.validate(),
             Err(Error::from("traces id Id(0) not present in id_mapping"))
         );
+
+        // Duplicate in futures
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![("0".into(), Id(0))],
+            futures: vec![(Id(0), Default::default()), (Id(0), Default::default())],
+            traces: vec![(Id(0), Default::default())],
+        };
+        assert_eq!(b.validate(), Err(Error::from("duplicate future: Id(0)")));
+
+        // Duplicate in traces
+        let b = BlobMeta {
+            last_file_id: 1,
+            next_stream_id: Id(1),
+            id_mapping: vec![("0".into(), Id(0))],
+            futures: vec![(Id(0), Default::default())],
+            traces: vec![(Id(0), Default::default()), (Id(0), Default::default())],
+        };
+        assert_eq!(b.validate(), Err(Error::from("duplicate trace: Id(0)")));
 
         // Future ts_lower doesn't match trace ts_upper
         let b = BlobMeta {
