@@ -152,25 +152,24 @@ async fn download_objects_task(
                         .await;
 
                         match download_status {
-                            // Terminate ok OK
+                            // Exit retry loop
                             DownloadStatus::Ok => Ok((DownloadStatus::Ok, update)),
-                            // Retry for retry status
-                            DownloadStatus::Retry => {
-                                log::warn!(
+                            DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
+                            // Retriable error
+                            DownloadStatus::Retry(e) => {
+                                log::debug!(
                                     "Failed to download object: {}/{} (attempt {})",
                                     msg.bucket,
                                     msg.key,
                                     state.i
                                 );
-                                Err((DownloadStatus::Retry, update))
+                                Err((DownloadStatus::Retry(e), update))
                             }
-                            // Terminate for failed status
-                            DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
                         }
                     })
                     .await;
                 // We use Result to communicate with Retry, both variants have the same data
-                let (status, update) = match &result {
+                let (status, update) = match result {
                     Err((status, update)) | Ok((status, update)) => (status, update),
                 };
                 if let Some(update) = update {
@@ -182,7 +181,7 @@ async fn download_objects_task(
                 }
                 // Extract and handle status updates
                 match status {
-                    DownloadStatus::Retry => {
+                    DownloadStatus::Retry(e) => {
                         tx.send(Err(S3Error::RetryFailed)).unwrap_or_else(|e| {
                             log::debug!("unable to send error on retries failed: {}", e)
                         });
@@ -193,8 +192,8 @@ async fn download_objects_task(
                         break;
                     }
                     DownloadStatus::Ok => {
-                        log::trace!(
-                            "{} successfully downloaded {}/{}",
+                        log::debug!(
+                            "source_id={} successfully downloaded {}/{}",
                             source_id,
                             msg.bucket,
                             msg.key
@@ -553,10 +552,10 @@ struct DownloadMetricUpdate {
     messages: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 enum DownloadStatus {
     Ok,
-    Retry,
+    Retry(S3Error),
     SendFailed,
 }
 
@@ -606,13 +605,8 @@ async fn download_object(
         .await
     {
         Ok(obj) => obj,
-        Err(e) => {
-            if let Err(e) = tx.send(Err(S3Error::GetObjectError(e))) {
-                log::debug!("unable to send error on stream: {}", e);
-                return (DownloadStatus::SendFailed, None);
-            } else {
-                return (DownloadStatus::Retry, None);
-            }
+        Err(err) => {
+            return (DownloadStatus::Retry(S3Error::GetObjectError(err)), None);
         }
     };
 
@@ -654,12 +648,10 @@ async fn download_object(
                                     bytes: bytes_read,
                                     messages: 0,
                                 };
-                                if let Err(e) = tx.send(Err(S3Error::Decode(key.into(), e))) {
-                                    log::debug!("unable to send error on stream: {}", e);
-                                    return (DownloadStatus::SendFailed, Some(metrics));
-                                } else {
-                                    return (DownloadStatus::Retry, Some(metrics));
-                                }
+                                return (
+                                    DownloadStatus::Retry(S3Error::Decode(key.into(), e)),
+                                    Some(metrics),
+                                );
                             }
                         }
                         decoded
@@ -685,7 +677,7 @@ async fn download_object(
                     chunk_idx = chunk_bound;
                 }
                 log::trace!("sent {} chunks to reader", messages);
-                if download_status != DownloadStatus::SendFailed {
+                if !matches!(download_status, DownloadStatus::SendFailed) {
                     if let Err(e) = tx.send(Ok(InternalMessage {
                         record: MessagePayload::EOF,
                     })) {
@@ -703,21 +695,14 @@ async fn download_object(
                 )
             }
             Err(e) => {
-                if let Err(e) = tx.send(Err(S3Error::Read(e))) {
-                    log::debug!("unable to send error on stream: {}", e);
-                    (DownloadStatus::SendFailed, None)
-                } else {
-                    (DownloadStatus::Retry, None)
-                }
+                return (DownloadStatus::Retry(S3Error::Read(e)), None);
             }
         }
     } else {
-        if let Err(e) = tx.send(Err(S3Error::BodyMissing(key.into()))) {
-            log::debug!("unable to send error on stream: {}", e);
-            (DownloadStatus::SendFailed, None)
-        } else {
-            (DownloadStatus::Retry, None)
-        }
+        return (
+            DownloadStatus::Retry(S3Error::BodyMissing(key.into())),
+            None,
+        );
     }
 }
 
