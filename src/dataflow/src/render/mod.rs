@@ -590,7 +590,7 @@ pub mod plan {
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
         OptimizedMirRelationExpr, TableFunc,
     };
-    use repr::{Datum, Row};
+    use repr::{Datum, Diff, Row};
 
     /// A rendering plan with all conditional logic removed.
     ///
@@ -604,7 +604,7 @@ pub mod plan {
         /// A collection containing a pre-determined collection.
         Constant {
             /// Explicit update triples for the collection.
-            rows: Result<Vec<(Row, repr::Timestamp, isize)>, EvalError>,
+            rows: Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>,
         },
         /// A reference to a bound collection.
         ///

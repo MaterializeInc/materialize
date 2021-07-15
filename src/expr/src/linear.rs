@@ -1069,7 +1069,7 @@ pub mod plan {
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc};
     use repr::adt::numeric::Numeric;
-    use repr::{Datum, Row, RowArena, ScalarType};
+    use repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug)]
@@ -1323,10 +1323,9 @@ pub mod plan {
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             time: repr::Timestamp,
-            diff: isize,
-        ) -> impl Iterator<
-            Item = Result<(Row, repr::Timestamp, isize), (EvalError, repr::Timestamp, isize)>,
-        > {
+            diff: Diff,
+        ) -> impl Iterator<Item = Result<(Row, repr::Timestamp, Diff), (EvalError, repr::Timestamp, Diff)>>
+        {
             match self.mfp.evaluate_inner(datums, &arena) {
                 Err(e) => {
                     return Some(Err((e, time, diff)))

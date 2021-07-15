@@ -83,7 +83,7 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
     R: ReduceCore<G, Row, Row, Diff>,
-    L: Fn(&isize) -> bool + 'static,
+    L: Fn(&Diff) -> bool + 'static,
 {
     arrangement.reduce_abelian(name, move |_k, s, t| {
         for (record, count) in s.iter() {
