@@ -22,7 +22,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::BlobTraceMeta;
-use crate::indexed::{BlobTraceBatch, Snapshot};
+use crate::indexed::{BlobTraceBatch, Id, Snapshot};
 use crate::storage::Blob;
 use crate::Data;
 
@@ -37,6 +37,9 @@ use crate::Data;
 /// - TODO: Explain since and logical compactions.
 /// - TODO: Space usage.
 pub struct BlobTrace<K, V> {
+    id: Id,
+    // The next ID used to assign a Blob key for this trace.
+    next_blob_id: u64,
     since: Antichain<u64>,
     // NB: The Descriptions here are sorted and contiguous half-open intervals
     // `[lower, upper)`.
@@ -44,31 +47,35 @@ pub struct BlobTrace<K, V> {
     _phantom: PhantomData<(K, V)>,
 }
 
-impl<K: Data, V: Data> Default for BlobTrace<K, V> {
-    fn default() -> Self {
-        BlobTrace::new(BlobTraceMeta::default())
-    }
-}
-
 impl<K: Data, V: Data> BlobTrace<K, V> {
     /// Returns a BlobTrace re-instantiated with the previously serialized
     /// state.
-    pub fn new(meta: BlobTraceMeta) -> Self {
+    pub fn new(id: Id, meta: BlobTraceMeta) -> Self {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         for (desc, _) in meta.batches.iter() {
             since = since.join(desc.since());
         }
         BlobTrace {
+            id,
+            next_blob_id: meta.next_blob_id,
             since: since,
             batches: meta.batches,
             _phantom: PhantomData,
         }
     }
 
+    fn new_blob_key(&mut self) -> String {
+        let key = format!("{:?}-trace-{:?}", self.id, self.next_blob_id);
+        self.next_blob_id += 1;
+
+        key
+    }
+
     /// Serializes the state of this BlobTrace for later re-instantiation.
     pub fn meta(&self) -> BlobTraceMeta {
         BlobTraceMeta {
             batches: self.batches.clone(),
+            next_blob_id: self.next_blob_id,
         }
     }
 
@@ -86,11 +93,10 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
         self.since.clone()
     }
 
-    /// Writes the given batch to [Blob] storage at the given key and logically
-    /// adds the contained updates to this trace.
+    /// Writes the given batch to [Blob] storage and logically adds the contained
+    /// updates to this trace.
     pub fn append<L: Blob>(
         &mut self,
-        key: String,
         batch: BlobTraceBatch<K, V>,
         blob: &mut BlobCache<K, V, L>,
     ) -> Result<(), Error> {
@@ -102,6 +108,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
             )));
         }
         let desc = batch.desc.clone();
+        let key = self.new_blob_key();
         blob.set_trace_batch(key.clone(), batch)?;
         self.batches.push((desc, key));
         Ok(())

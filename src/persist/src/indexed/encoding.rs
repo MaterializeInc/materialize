@@ -50,8 +50,6 @@ pub struct BufferEntry<K, V> {
 ///   corresponding trace.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobMeta {
-    /// The most recently assigned key name.
-    pub last_file_id: u64,
     /// The next internal stream id to assign.
     pub next_stream_id: Id,
     /// The position of buffer the last time data was step'd into futures.
@@ -92,6 +90,8 @@ pub struct BlobFutureMeta {
     /// description and the key to retrieve the batch's data from the blob
     /// store. Note that Descriptions are half-open intervals `[lower, upper)`.
     pub batches: Vec<(Description<SeqNo>, String)>,
+    /// The next id used to assign a Blob key for this future.
+    pub next_blob_id: u64,
 }
 
 /// The metadata necessary to reconstruct a BlobTrace.
@@ -104,6 +104,8 @@ pub struct BlobTraceMeta {
     /// and the key to retrieve the batch's data from the blob store. Note that
     /// Descriptions are half-open intervals `[lower, upper)`.
     pub batches: Vec<(Description<u64>, String)>,
+    /// The next id used to assign a Blob key for this trace.
+    pub next_blob_id: u64,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -163,7 +165,6 @@ impl<K, V> BufferEntry<K, V> {
 impl Default for BlobMeta {
     fn default() -> Self {
         BlobMeta {
-            last_file_id: 0,
             next_stream_id: Id(0),
             futures_seqno_upper: SeqNo(0),
             id_mapping: Vec::new(),
@@ -256,6 +257,7 @@ impl Default for BlobFutureMeta {
         BlobFutureMeta {
             ts_lower: Antichain::from_elem(Timestamp::minimum()),
             batches: Vec::new(),
+            next_blob_id: 0,
         }
     }
 }
@@ -297,6 +299,7 @@ impl Default for BlobTraceMeta {
     fn default() -> Self {
         BlobTraceMeta {
             batches: Vec::new(),
+            next_blob_id: 0,
         }
     }
 }
@@ -643,24 +646,30 @@ mod tests {
     #[test]
     fn trace_meta_validate() {
         // Empty
-        let b = BlobTraceMeta { batches: vec![] };
+        let b = BlobTraceMeta {
+            batches: vec![],
+            next_blob_id: 0,
+        };
         assert_eq!(b.validate(), Ok(()));
 
         // Normal case
         let b = BlobTraceMeta {
             batches: vec![(u64_desc(0, 1), "".into()), (u64_desc(1, 2), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Gap
         let b = BlobTraceMeta {
             batches: vec![(u64_desc(0, 1), "".into()), (u64_desc(2, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [1] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
 
         // Overlapping
         let b = BlobTraceMeta {
             batches: vec![(u64_desc(0, 2), "".into()), (u64_desc(1, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
     }
@@ -671,6 +680,7 @@ mod tests {
         let b = BlobFutureMeta {
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -678,6 +688,7 @@ mod tests {
         let b = BlobFutureMeta {
             ts_lower: Antichain::from_elem(0),
             batches: vec![(seqno_desc(0, 1), "".into()), (seqno_desc(1, 2), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -685,6 +696,7 @@ mod tests {
         let b = BlobFutureMeta {
             ts_lower: Antichain::from_elem(0),
             batches: vec![(seqno_desc(0, 1), "".into()), (seqno_desc(2, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(
             b.validate(),
@@ -697,6 +709,7 @@ mod tests {
         let b = BlobFutureMeta {
             ts_lower: Antichain::from_elem(0),
             batches: vec![(seqno_desc(0, 2), "".into()), (seqno_desc(1, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(
             b.validate(),
@@ -817,7 +830,6 @@ mod tests {
 
         // Duplicate in futures
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![(Id(0), Default::default()), (Id(0), Default::default())],
@@ -828,7 +840,6 @@ mod tests {
 
         // Duplicate in traces
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![(Id(0), Default::default())],
@@ -846,12 +857,14 @@ mod tests {
                 BlobFutureMeta {
                     ts_lower: vec![2].into(),
                     batches: vec![],
+                    next_blob_id: 0,
                 },
             )],
             traces: vec![(
                 Id(0),
                 BlobTraceMeta {
                     batches: vec![(u64_desc(0, 1), "".into())],
+                    next_blob_id: 0,
                 },
             )],
             ..Default::default()

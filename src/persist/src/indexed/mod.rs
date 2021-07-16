@@ -27,7 +27,9 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch, BufferEntry, Id};
+use crate::indexed::encoding::{
+    BlobFutureBatch, BlobFutureMeta, BlobMeta, BlobTraceBatch, BlobTraceMeta, BufferEntry, Id,
+};
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
@@ -68,7 +70,6 @@ use crate::Data;
 /// for indexed use, instead of the current situation, which is more complicated
 /// to reason about.
 pub struct Indexed<K, V, U: Buffer, L: Blob> {
-    last_file_id: u64,
     next_stream_id: Id,
     futures_seqno_upper: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
@@ -90,15 +91,14 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let futures = meta
             .futures
             .into_iter()
-            .map(|(id, meta)| (id, BlobFuture::new(meta)))
+            .map(|(id, meta)| (id, BlobFuture::new(id, meta)))
             .collect();
         let traces = meta
             .traces
             .into_iter()
-            .map(|(id, meta)| (id, BlobTrace::new(meta)))
+            .map(|(id, meta)| (id, BlobTrace::new(id, meta)))
             .collect();
         let indexed = Indexed {
-            last_file_id: meta.last_file_id,
             next_stream_id: meta.next_stream_id,
             futures_seqno_upper: meta.futures_seqno_upper,
             id_mapping: meta.id_mapping,
@@ -123,12 +123,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         Ok(())
     }
 
-    fn new_blob_key(&mut self) -> String {
-        let file_id = self.last_file_id;
-        self.last_file_id = file_id + 1;
-        file_id.to_string()
-    }
-
     /// Creates, if necessary, a new future and trace with the given external
     /// stream name, returning the corresponding internal stream id.
     ///
@@ -144,8 +138,12 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                 id
             }
         };
-        self.futures.entry(id).or_default();
-        self.traces.entry(id).or_default();
+        self.futures
+            .entry(id)
+            .or_insert_with_key(|id| BlobFuture::new(*id, BlobFutureMeta::default()));
+        self.traces
+            .entry(id)
+            .or_insert_with_key(|id| BlobTrace::new(*id, BlobTraceMeta::default()));
         id
     }
 
@@ -281,8 +279,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             ),
             updates,
         };
-        let key = self.new_blob_key();
-        self.append_future(id, key, batch)?;
+        self.append_future(id, batch)?;
 
         Ok(())
     }
@@ -317,7 +314,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         // amortize the work of doing so across frequent seal calls? All the
         // physical movement could live in `step`.
 
-        let key = self.new_blob_key();
         let future = self
             .futures
             .get_mut(&id)
@@ -352,39 +348,29 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
         // ...and atomically swapping that snapshot's data into trace.
         let batch = BlobTraceBatch { desc, updates };
-        self.append_trace(id, key, batch)
+        self.append_trace(id, batch)
 
         // TODO: This is a good point to compact future. The data that's been
         // moved is still there but now irrelevant. It may also be a good time
         // to compact trace.
     }
 
-    /// Appends the given `batch` to the trace for `id`, writing the data at
-    /// `key` in the blob storage.
+    /// Appends the given `batch` to the future for `id`, writing the data into
+    /// blob storage.
     ///
     /// The caller is responsible for updating META after they've finished
     /// updating futures.
-    fn append_future(
-        &mut self,
-        id: Id,
-        key: String,
-        batch: BlobFutureBatch<K, V>,
-    ) -> Result<(), Error> {
+    fn append_future(&mut self, id: Id, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
         let future = self
             .futures
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        future.append(key, batch, &mut self.blob)
+        future.append(batch, &mut self.blob)
     }
 
-    /// Appends the given `batch` to the trace for `id`, writing the data at
-    /// `key` in the blob storage.
-    fn append_trace(
-        &mut self,
-        id: Id,
-        key: String,
-        batch: BlobTraceBatch<K, V>,
-    ) -> Result<(), Error> {
+    /// Appends the given `batch` to the trace for `id`, writing the data into
+    /// blob storage.
+    fn append_trace(&mut self, id: Id, batch: BlobTraceBatch<K, V>) -> Result<(), Error> {
         let trace = self
             .traces
             .get_mut(&id)
@@ -394,7 +380,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let new_future_ts_lower = batch.desc.upper().clone();
-        trace.append(key, batch, &mut self.blob)?;
+        trace.append(batch, &mut self.blob)?;
         future.truncate(new_future_ts_lower)?;
 
         // Atomically update the meta with both the trace and future changes.
@@ -406,7 +392,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     fn serialize_meta(&self) -> BlobMeta {
         BlobMeta {
-            last_file_id: self.last_file_id,
             next_stream_id: self.next_stream_id,
             futures_seqno_upper: self.futures_seqno_upper,
             id_mapping: self.id_mapping.clone(),
