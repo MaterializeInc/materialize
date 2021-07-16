@@ -408,8 +408,8 @@ where
                 };
 
                 // Force a shuffling of data in case sources are not uniformly distributed.
-                use differential_dataflow::operators::Consolidate;
-                collection = collection.consolidate();
+                use timely::dataflow::operators::Exchange;
+                collection = collection.inner.exchange(|x| x.hashed()).as_collection();
 
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
@@ -494,6 +494,10 @@ where
                             .as_collection();
                     }
                 }
+
+                // Consolidate the results, as there may now be cancellations.
+                use differential_dataflow::operators::consolidate::ConsolidateStream;
+                collection = collection.consolidate_stream();
 
                 // Introduce the stream by name, as an unarranged collection.
                 self.insert_id(
