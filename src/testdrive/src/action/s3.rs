@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
+use ore::result::ResultExt;
 use rusoto_core::{ByteStream, RusotoError};
 use rusoto_s3::{
     CreateBucketConfiguration, CreateBucketError, CreateBucketRequest,
@@ -156,7 +157,7 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
     let sqs_validation_timeout = cmd
         .args
         .opt_string("sqs-validation-timeout")
-        .map(|t| repr::util::parse_duration(&t).map_err(|e| e.to_string()))
+        .map(|t| repr::util::parse_duration(&t).map_err_to_string())
         .transpose()?;
     cmd.args.done()?;
     Ok(AddBucketNotifications {

@@ -15,6 +15,7 @@ use proc_macro2::TokenTree;
 use expr::explain::ViewExplanation;
 use expr::*;
 use lowertest::*;
+use ore::result::ResultExt;
 use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 use repr_test_util::{get_datum_from_str, get_scalar_type_or_default};
 
@@ -164,10 +165,7 @@ impl MirScalarExprDeserializeContext {
     fn build_column(&mut self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
         if let Some(TokenTree::Literal(literal)) = token {
             return Ok(MirScalarExpr::Column(
-                literal
-                    .to_string()
-                    .parse::<usize>()
-                    .map_err(|s| s.to_string())?,
+                literal.to_string().parse::<usize>().map_err_to_string()?,
             ));
         }
         Err(format!("Invalid column specification {:?}", token))
@@ -217,9 +215,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
             None
         };
         match result {
-            Some(result) => Ok(Some(
-                serde_json::to_string(&result).map_err(|e| e.to_string())?,
-            )),
+            Some(result) => Ok(Some(serde_json::to_string(&result).map_err_to_string()?)),
             None => Ok(None),
         }
     }
@@ -427,9 +423,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                     if let Some(result) =
                         self.build_special_mir_if_able(first_arg, rest_of_stream)?
                     {
-                        return Ok(Some(
-                            serde_json::to_string(&result).map_err(|e| e.to_string())?,
-                        ));
+                        return Ok(Some(serde_json::to_string(&result).map_err_to_string()?));
                     }
                 } else if type_name == "usize" {
                     if let TokenTree::Punct(punct) = first_arg {
