@@ -76,7 +76,7 @@ services:
       --data-directory=/share/mzdata
       -w1
       --disable-telemetry
-      --logical-compaction-window=off
+      --logical-compaction-window=1ms
       --experimental
     environment:
       - MZ_DEV=1
