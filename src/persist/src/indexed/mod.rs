@@ -338,11 +338,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             while snap.read(&mut updates) {}
         }
 
-        // Trace batches are required to be sorted by (k, v, ts).
-        updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
-            (k1, v1, t1).cmp(&(k2, v2, t2))
-        });
-
         // Trace batches are required to be sorted and consolidated by ((k, v), t)
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
