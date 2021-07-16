@@ -273,7 +273,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             .map(|(t, (k, v), d)| ((k, v), t, d))
             .collect();
         let batch = BlobFutureBatch {
-            id,
             desc: Description::new(
                 Antichain::from_elem(desc.start),
                 Antichain::from_elem(desc.end),
@@ -283,7 +282,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             updates,
         };
         let key = self.new_blob_key();
-        self.append_future(key, batch)?;
+        self.append_future(id, key, batch)?;
 
         Ok(())
     }
@@ -352,12 +351,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         // ...and atomically swapping that snapshot's data into trace.
-        let batch = BlobTraceBatch {
-            id: id,
-            desc,
-            updates,
-        };
-        self.append_trace(key, batch)
+        let batch = BlobTraceBatch { desc, updates };
+        self.append_trace(id, key, batch)
 
         // TODO: This is a good point to compact future. The data that's been
         // moved is still there but now irrelevant. It may also be a good time
@@ -369,25 +364,35 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     ///
     /// The caller is responsible for updating META after they've finished
     /// updating futures.
-    fn append_future(&mut self, key: String, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
+    fn append_future(
+        &mut self,
+        id: Id,
+        key: String,
+        batch: BlobFutureBatch<K, V>,
+    ) -> Result<(), Error> {
         let future = self
             .futures
-            .get_mut(&batch.id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         future.append(key, batch, &mut self.blob)
     }
 
     /// Appends the given `batch` to the trace for `id`, writing the data at
     /// `key` in the blob storage.
-    fn append_trace(&mut self, key: String, batch: BlobTraceBatch<K, V>) -> Result<(), Error> {
+    fn append_trace(
+        &mut self,
+        id: Id,
+        key: String,
+        batch: BlobTraceBatch<K, V>,
+    ) -> Result<(), Error> {
         let trace = self
             .traces
-            .get_mut(&batch.id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let future = self
             .futures
-            .get_mut(&batch.id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let new_future_ts_lower = batch.desc.upper().clone();
         trace.append(key, batch, &mut self.blob)?;
         future.truncate(new_future_ts_lower)?;

@@ -180,7 +180,6 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::indexed::encoding::Id;
     use crate::mem::MemBlob;
 
     use super::*;
@@ -195,7 +194,6 @@ mod tests {
 
         // ts < ts_lower.data()[0] is disallowed
         let batch = BlobFutureBatch {
-            id: Id(0),
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(1)),
@@ -212,7 +210,6 @@ mod tests {
 
         // ts == ts_lower.data()[0] is allowed
         let batch = BlobFutureBatch {
-            id: Id(0),
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(1)),

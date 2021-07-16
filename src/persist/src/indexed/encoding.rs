@@ -117,8 +117,6 @@ pub struct BlobTraceMeta {
 /// - The updates field is non-empty.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobFutureBatch<K, V> {
-    /// Id of the stream this batch belongs to.
-    pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
     /// The updates themselves.
@@ -143,8 +141,6 @@ pub struct BlobFutureBatch<K, V> {
 /// for checksum and encryption?
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobTraceBatch<K, V> {
-    /// Id of the trace this batch belongs to.
-    pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
     /// The updates themselves.
@@ -488,7 +484,6 @@ mod tests {
     fn future_batch_validate() {
         // Normal case
         let b = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(0), update_with_ts(1)],
         };
@@ -496,7 +491,6 @@ mod tests {
 
         // Empty
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![],
         };
@@ -504,7 +498,6 @@ mod tests {
 
         // Invalid desc
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(2, 0),
             updates: vec![],
         };
@@ -517,7 +510,6 @@ mod tests {
 
         // Empty desc
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 0),
             updates: vec![],
         };
@@ -530,7 +522,6 @@ mod tests {
 
         // Not sorted by time
         let b = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(1), update_with_ts(0)],
         };
@@ -543,7 +534,6 @@ mod tests {
 
         // Not consolidated
         let b = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(0), update_with_ts(0)],
         };
@@ -554,7 +544,6 @@ mod tests {
 
         // Invalid update
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
@@ -568,7 +557,6 @@ mod tests {
     fn trace_batch_validate() {
         // Normal case
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "0"), update_with_key(1, "1")],
         };
@@ -576,7 +564,6 @@ mod tests {
 
         // Empty
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![],
         };
@@ -584,7 +571,6 @@ mod tests {
 
         // Invalid desc
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(2, 0),
             updates: vec![],
         };
@@ -597,7 +583,6 @@ mod tests {
 
         // Empty desc
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 0),
             updates: vec![],
         };
@@ -610,7 +595,6 @@ mod tests {
 
         // Not sorted by key
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "1"), update_with_key(1, "0")],
         };
@@ -623,7 +607,6 @@ mod tests {
 
         // Not consolidated
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "0"), update_with_key(0, "0")],
         };
@@ -634,7 +617,6 @@ mod tests {
 
         // Update "before" desc
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(1, 2),
             updates: vec![update_with_key(0, "0")],
         };
@@ -642,7 +624,6 @@ mod tests {
 
         // Update "after" desc
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(1, 2),
             updates: vec![update_with_key(2, "0")],
         };
@@ -650,7 +631,6 @@ mod tests {
 
         // Invalid update
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
