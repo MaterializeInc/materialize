@@ -114,7 +114,7 @@ services:
       - 5432
     command: postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20
   debezium:
-    image: debezium/connect:1.5
+    image: debezium/connect:1.6
     hostname: debezium
     ports:
       - 8083
