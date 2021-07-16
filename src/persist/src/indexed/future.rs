@@ -49,9 +49,9 @@ pub struct BlobFuture<K, V> {
 impl<K: Data, V: Data> BlobFuture<K, V> {
     /// Returns a BlobFuture re-instantiated with the previously serialized
     /// state.
-    pub fn new(id: Id, meta: BlobFutureMeta) -> Self {
+    pub fn new(meta: BlobFutureMeta) -> Self {
         BlobFuture {
-            id,
+            id: meta.id,
             next_blob_id: meta.next_blob_id,
             ts_lower: meta.ts_lower,
             batches: meta.batches,
@@ -70,6 +70,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
     /// Serializes the state of this BlobFuture for later re-instantiation.
     pub fn meta(&self) -> BlobFutureMeta {
         BlobFutureMeta {
+            id: self.id,
             ts_lower: self.ts_lower.clone(),
             batches: self.batches.clone(),
             next_blob_id: self.next_blob_id,
@@ -195,14 +196,12 @@ mod tests {
     #[test]
     fn append_ts_lower_invariant() -> Result<(), Error> {
         let mut blob = BlobCache::new(MemBlob::new("append_ts_lower_invariant")?);
-        let mut f = BlobFuture::new(
-            Id(0),
-            BlobFutureMeta {
-                ts_lower: Antichain::from_elem(2),
-                batches: vec![],
-                next_blob_id: 0,
-            },
-        );
+        let mut f = BlobFuture::new(BlobFutureMeta {
+            id: Id(0),
+            ts_lower: Antichain::from_elem(2),
+            batches: vec![],
+            next_blob_id: 0,
+        });
 
         // ts < ts_lower.data()[0] is disallowed
         let batch = BlobFutureBatch {
@@ -236,14 +235,12 @@ mod tests {
 
     #[test]
     fn truncate_regress() {
-        let mut f: BlobFuture<String, String> = BlobFuture::new(
-            Id(0),
-            BlobFutureMeta {
-                ts_lower: Antichain::from_elem(2),
-                batches: vec![],
-                next_blob_id: 0,
-            },
-        );
+        let mut f: BlobFuture<String, String> = BlobFuture::new(BlobFutureMeta {
+            id: Id(0),
+            ts_lower: Antichain::from_elem(2),
+            batches: vec![],
+            next_blob_id: 0,
+        });
         assert_eq!(f.truncate(Antichain::from_elem(2)), Ok(()));
         assert_eq!(
             f.truncate(Antichain::from_elem(1)),

@@ -91,12 +91,12 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let futures = meta
             .futures
             .into_iter()
-            .map(|(id, meta)| (id, BlobFuture::new(id, meta)))
+            .map(|meta| (meta.id, BlobFuture::new(meta)))
             .collect();
         let traces = meta
             .traces
             .into_iter()
-            .map(|(id, meta)| (id, BlobTrace::new(id, meta)))
+            .map(|meta| (meta.id, BlobTrace::new(meta)))
             .collect();
         let indexed = Indexed {
             next_stream_id: meta.next_stream_id,
@@ -140,10 +140,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         };
         self.futures
             .entry(id)
-            .or_insert_with_key(|id| BlobFuture::new(*id, BlobFutureMeta::default()));
+            .or_insert_with_key(|id| BlobFuture::new(BlobFutureMeta::new(*id)));
         self.traces
             .entry(id)
-            .or_insert_with_key(|id| BlobTrace::new(*id, BlobTraceMeta::default()));
+            .or_insert_with_key(|id| BlobTrace::new(BlobTraceMeta::new(*id)));
         id
     }
 
@@ -398,13 +398,9 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             futures: self
                 .futures
                 .iter()
-                .map(|(id, future)| (*id, future.meta()))
+                .map(|(_, future)| future.meta())
                 .collect(),
-            traces: self
-                .traces
-                .iter()
-                .map(|(id, trace)| (*id, trace.meta()))
-                .collect(),
+            traces: self.traces.iter().map(|(_, trace)| trace.meta()).collect(),
         }
     }
 

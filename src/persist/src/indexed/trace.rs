@@ -50,13 +50,13 @@ pub struct BlobTrace<K, V> {
 impl<K: Data, V: Data> BlobTrace<K, V> {
     /// Returns a BlobTrace re-instantiated with the previously serialized
     /// state.
-    pub fn new(id: Id, meta: BlobTraceMeta) -> Self {
+    pub fn new(meta: BlobTraceMeta) -> Self {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         for (desc, _) in meta.batches.iter() {
             since = since.join(desc.since());
         }
         BlobTrace {
-            id,
+            id: meta.id,
             next_blob_id: meta.next_blob_id,
             since: since,
             batches: meta.batches,
@@ -74,6 +74,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
     /// Serializes the state of this BlobTrace for later re-instantiation.
     pub fn meta(&self) -> BlobTraceMeta {
         BlobTraceMeta {
+            id: self.id,
             batches: self.batches.clone(),
             next_blob_id: self.next_blob_id,
         }
