@@ -18,6 +18,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
+use ore::result::ResultExt as _;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
@@ -471,7 +472,8 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                             context.timeout = state.default_timeout;
                         } else {
                             context.timeout = repr::util::parse_duration(&duration)
-                                .map_err(|e| wrap_err(e.to_string()))?;
+                                .map_err_to_string()
+                                .map_err(wrap_err)?;
                         }
                         continue;
                     }

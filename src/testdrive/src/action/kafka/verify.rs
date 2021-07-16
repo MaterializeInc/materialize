@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
+use ore::result::ResultExt;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::pin;
@@ -77,7 +78,7 @@ fn avro_from_bytes(
     }
 
     let datum = avro::from_avro_datum(schema, &mut bytes)
-        .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?;
+        .map_err(|e| format!("from_avro_datum: {:#}", e))?;
     Ok(datum)
 }
 
@@ -138,10 +139,10 @@ impl Action for VerifyAction {
 
         let consumer: StreamConsumer = config
             .create()
-            .map_err(|e| format!("creating kafka consumer: {}", e))?;
+            .map_err(|e| format!("creating kafka consumer: {:#}", e))?;
         consumer
             .subscribe(&[&topic])
-            .map_err(|e| format!("subscribing: {}", e.to_string()))?;
+            .map_err(|e| format!("subscribing: {:#}", e))?;
 
         // Wait up to 15 seconds for each message.
         let message_stream = consumer
@@ -158,11 +159,11 @@ impl Action for VerifyAction {
         // instead get an error message about the expected messages that
         // were missing.
         while let Some(Ok(message)) = message_stream.next().await {
-            let message = message.map_err(|e| e.to_string())?;
+            let message = message.map_err_to_string()?;
 
             consumer
                 .store_offset(&message)
-                .map_err(|e| format!("storing message offset: {}", e.to_string()))?;
+                .map_err(|e| format!("storing message offset: {:#}", e))?;
 
             let bytes = message.payload();
 

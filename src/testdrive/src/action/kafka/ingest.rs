@@ -14,6 +14,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
+use ore::display::DisplayExt;
+use ore::result::ResultExt;
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 
@@ -73,9 +75,7 @@ impl Transcoder {
         let deserializer = serde_json::Deserializer::from_reader(row);
         match deserializer.into_iter().next() {
             None => Ok(None),
-            Some(r) => r
-                .map(Some)
-                .map_err(|e| format!("parsing json: {}", e.to_string())),
+            Some(r) => r.map(Some).map_err(|e| format!("parsing json: {:#}", e)),
         }
     }
 
@@ -107,7 +107,7 @@ impl Transcoder {
                         out.write_u8(0).unwrap();
                         out.write_i32::<NetworkEndian>(*schema_id).unwrap();
                     }
-                    out.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
+                    out.extend(avro::to_avro_datum(&schema, val).map_err_to_string()?);
                     if corrupt_buffer {
                         for x in &mut out {
                             // We need to corrupt zero-values for Avro, because 0 is always an okay default
@@ -147,7 +147,7 @@ impl Transcoder {
                 } else {
                     return Ok(None);
                 };
-                let mut out = val.write_to_bytes().map_err(|e| e.to_string())?;
+                let mut out = val.write_to_bytes().map_err_to_string()?;
                 if corrupt_buffer {
                     for x in &mut out {
                         // Zero-ing out bytes is sufficient to corrupt Protobuf data
@@ -160,11 +160,11 @@ impl Transcoder {
                 let mut out = vec![];
                 match terminator {
                     Some(t) => {
-                        row.read_until(*t, &mut out).map_err(|e| e.to_string())?;
+                        row.read_until(*t, &mut out).map_err_to_string()?;
                         out.pop();
                     }
                     None => {
-                        row.read_to_end(&mut out).map_err(|e| e.to_string())?;
+                        row.read_to_end(&mut out).map_err_to_string()?;
                     }
                 }
                 if corrupt_buffer {
@@ -327,7 +327,7 @@ impl Action for IngestAction {
             }
         }
         while let Some(res) = futs.next().await {
-            res.map_err(|(e, _message)| e.to_string())?;
+            res.map_err(|(e, _message)| e.to_string_alt())?;
         }
         Ok(())
     }

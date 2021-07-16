@@ -24,6 +24,7 @@ use mz_avro::{
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
+use ore::result::ResultExt;
 use repr::adt::jsonb::JsonbPacker;
 use repr::adt::numeric;
 use repr::{Datum, Row};
@@ -474,7 +475,8 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         })?;
 
         let n = numeric::twos_complement_be_to_numeric(&mut buf, scale)
-            .map_err(|e| DecodeError::Custom(e.to_string()))?;
+            .map_err_to_string()
+            .map_err(DecodeError::Custom)?;
 
         if n.is_special()
             || numeric::get_precision(&n) > numeric::NUMERIC_DATUM_MAX_PRECISION as u32
@@ -535,14 +537,16 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             ValueOrReader::Value(val) => {
                 *self.packer = JsonbPacker::new(std::mem::take(self.packer))
                     .pack_serde_json(val.clone())
-                    .map_err(|e| DecodeError::Custom(e.to_string()))?;
+                    .map_err_to_string()
+                    .map_err(DecodeError::Custom)?;
             }
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
                 *self.packer = JsonbPacker::new(std::mem::take(self.packer))
                     .pack_slice(&self.buf)
-                    .map_err(|e| DecodeError::Custom(e.to_string()))?;
+                    .map_err_to_string()
+                    .map_err(DecodeError::Custom)?;
             }
         }
         Ok(())

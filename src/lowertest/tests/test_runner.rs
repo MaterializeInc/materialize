@@ -14,6 +14,7 @@ mod tests {
     use std::collections::HashMap;
 
     use lazy_static::lazy_static;
+    use ore::result::ResultExt;
     use proc_macro2::{TokenStream, TokenTree};
     use serde::{Deserialize, Serialize};
 
@@ -136,10 +137,7 @@ mod tests {
                 }
             } else if type_name == "usize" {
                 if let TokenTree::Literal(literal) = first_arg {
-                    let litval = literal
-                        .to_string()
-                        .parse::<usize>()
-                        .map_err(|e| e.to_string())?;
+                    let litval = literal.to_string().parse::<usize>().map_err_to_string()?;
                     return Ok(Some(format!("{}", litval + 1)));
                 }
             }
@@ -148,10 +146,7 @@ mod tests {
     }
 
     fn build(s: &str, args: &HashMap<String, Vec<String>>) -> Result<String, String> {
-        let stream = s
-            .to_string()
-            .parse::<TokenStream>()
-            .map_err(|e| e.to_string())?;
+        let stream = s.to_string().parse::<TokenStream>().map_err_to_string()?;
         let result: Option<TestEnum> = if args.get("override").is_some() {
             deserialize_optional(
                 &mut stream.into_iter(),
