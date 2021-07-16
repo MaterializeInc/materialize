@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use tokio_postgres::config::Host;
-use tokio_postgres::Config;
+use tokio_postgres::{Client, Config, NoTls};
 use url::Url;
 
 use crate::error::{Error, ResultExt};
@@ -50,4 +50,15 @@ pub fn config_url(config: &Config) -> Result<Url, Error> {
     }
 
     Ok(url)
+}
+
+pub async fn postgres_client(url: &String) -> Result<Client, String> {
+    let (client, connection) = tokio_postgres::connect(url, NoTls)
+        .await
+        .map_err(|e| format!("connecting to postgres: {}", e))?;
+
+    println!("Connecting to PostgreSQL server at {}...", url);
+    tokio::spawn(connection);
+
+    Ok(client)
 }

@@ -35,6 +35,8 @@ use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
 use num_traits::Float as NumFloat;
+use ore::display::DisplayExt;
+use ore::result::ResultExt;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
@@ -476,8 +478,9 @@ pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     // [0]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.9
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
     if let Some(remainder) = s.strip_prefix(r"\x") {
-        parse_bytes_hex(remainder)
-            .map_err(|e| ParseError::invalid_input_syntax("bytea", s).with_details(e.to_string()))
+        parse_bytes_hex(remainder).map_err(|e| {
+            ParseError::invalid_input_syntax("bytea", s).with_details(e.to_string_alt())
+        })
     } else {
         parse_bytes_traditional(s)
     }
@@ -631,7 +634,7 @@ where
         bail!("malformed array literal: missing opening left brace");
     }
 
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut gen = |elem| gen_elem(elem).map_err_to_string();
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
     let is_end_of_literal = |c| matches!(c, ',' | '}');
 
@@ -706,7 +709,7 @@ where
     }
 
     // Simplifies calls to `gen_elem` by handling errors
-    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut gen = |elem| gen_elem(elem).map_err_to_string();
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
     let is_end_of_literal = |c| matches!(c, ',' | '}');
 
@@ -918,7 +921,7 @@ where
             None => Err("expected key".to_owned()),
         }
     };
-    let mut gen_value = |elem| gen_elem(elem).map_err(|e| e.to_string());
+    let mut gen_value = |elem| gen_elem(elem).map_err_to_string();
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '"' | '=' | '>' | '\\');
     let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
 

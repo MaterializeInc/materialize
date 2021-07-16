@@ -9,6 +9,10 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:11.4
+FROM postgres:10
+
+ENV POSTGRES_PASSWORD=postgres
+
 COPY --chown=postgres --from=certs /secrets/* /share/secrets/
+COPY pg_hba.conf /share/conf/pg_hba.conf
 COPY setup-postgres.sh /docker-entrypoint-initdb.d/setup-postgres.sh

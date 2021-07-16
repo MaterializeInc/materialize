@@ -187,7 +187,7 @@ pub fn build_dataflow<A: Allocate>(
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
-        scope.clone().region(|region| {
+        scope.clone().region_named(&name, |region| {
             let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
             let mut tokens = RelevantTokens::default();
 
@@ -590,7 +590,7 @@ pub mod plan {
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
         OptimizedMirRelationExpr, TableFunc,
     };
-    use repr::{Datum, Row};
+    use repr::{Datum, Diff, Row};
 
     /// A rendering plan with all conditional logic removed.
     ///
@@ -604,7 +604,7 @@ pub mod plan {
         /// A collection containing a pre-determined collection.
         Constant {
             /// Explicit update triples for the collection.
-            rows: Result<Vec<(Row, repr::Timestamp, isize)>, EvalError>,
+            rows: Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>,
         },
         /// A reference to a bound collection.
         ///

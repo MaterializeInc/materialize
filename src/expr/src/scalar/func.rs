@@ -367,18 +367,22 @@ fn cast_numeric_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn cast_numeric_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_numeric().0;
-    let mut cx = numeric::cx_datum();
-    match cx.try_into_f32(a) {
-        Ok(i) => Ok(Datum::from(i)),
-        Err(_) => Err(EvalError::Float32OutOfRange),
+    let i = a.to_string().parse::<f32>().unwrap();
+    if i.is_infinite() {
+        Err(EvalError::Float32OutOfRange)
+    } else {
+        Ok(Datum::from(i))
     }
 }
 
 fn cast_numeric_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_numeric().0;
-    let mut cx = numeric::cx_datum();
-    let i = cx.try_into_f64(a).unwrap();
-    Ok(Datum::from(i))
+    let i = a.to_string().parse::<f64>().unwrap();
+    if i.is_infinite() {
+        Err(EvalError::Float64OutOfRange)
+    } else {
+        Ok(Datum::from(i))
+    }
 }
 
 fn cast_numeric_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {

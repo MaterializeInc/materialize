@@ -19,9 +19,9 @@
 
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
-use std::num::TryFromIntError;
 
 use mz_avro::types::AvroMap;
+use ore::result::ResultExt;
 use regex::Regex;
 
 use serde_json::Value as JsonValue;
@@ -42,10 +42,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
         (JsonValue::Null, SchemaPiece::Null) => Ok(Value::Null),
         (JsonValue::Bool(b), SchemaPiece::Boolean) => Ok(Value::Boolean(*b)),
         (JsonValue::Number(ref n), SchemaPiece::Int) => Ok(Value::Int(
-            n.as_i64()
-                .unwrap()
-                .try_into()
-                .map_err(|e: TryFromIntError| e.to_string())?,
+            n.as_i64().unwrap().try_into().map_err_to_string()?,
         )),
         (JsonValue::Number(ref n), SchemaPiece::Long) => Ok(Value::Long(n.as_i64().unwrap())),
         (JsonValue::Number(ref n), SchemaPiece::Float) => {
@@ -116,11 +113,11 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
             }
         }
         (JsonValue::String(s), SchemaPiece::Json) => {
-            let j = serde_json::from_str(s).map_err(|e| e.to_string())?;
+            let j = serde_json::from_str(s).map_err_to_string()?;
             Ok(Value::Json(j))
         }
         (JsonValue::String(s), SchemaPiece::Uuid) => {
-            let u = uuid::Uuid::parse_str(&s).map_err(|e| e.to_string())?;
+            let u = uuid::Uuid::parse_str(&s).map_err_to_string()?;
             Ok(Value::Uuid(u))
         }
         (JsonValue::String(s), SchemaPiece::Enum { symbols, .. }) => {

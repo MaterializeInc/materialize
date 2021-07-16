@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
+use ore::result::ResultExt;
 use postgres_array::Array;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
@@ -167,17 +168,17 @@ impl Action for SqlAction {
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
                     let disk_state = Catalog::open_debug(path, ore::now::now_zero)
-                        .map_err(|e| e.to_string())?
+                        .map_err_to_string()?
                         .dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
                         state.materialized_addr,
                     ))
                     .await
-                    .map_err(|e| e.to_string())?
+                    .map_err_to_string()?
                     .text()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err_to_string()?;
                     if disk_state != mem_state {
                         return Err(format!(
                             "the on-disk state of the catalog does not match its in-memory state\n\
@@ -470,7 +471,7 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
             Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
             Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
             Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
-            _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
+            _ => return Err(format!("TESTDRIVE: unable to handle SQL type: {:?}", ty)),
         }
         .unwrap_or_else(|| "<null>".into());
 

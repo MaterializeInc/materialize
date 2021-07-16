@@ -125,7 +125,7 @@ services:
       - bash
     environment:
       - TMPDIR=/share/tmp
-      - MZ_LOG
+      - MZ_LOG_FILTER
     volumes:
       - .:/workdir
       - mzdata:/share/mzdata
@@ -144,7 +144,7 @@ services:
       - 6875
     environment:
       - MZ_DEV=1
-      - MZ_LOG=${MZ_LOG:-dataflow::source::s3=trace,info}
+      - MZ_LOG_FILTER=${MZ_LOG_FILTER:-dataflow::source::s3=trace,info}
     volumes:
       - mzdata:/share/mzdata
       - tmp:/share/tmp

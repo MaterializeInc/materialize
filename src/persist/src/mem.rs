@@ -18,6 +18,7 @@ use ore::cast::CastFrom;
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient};
 use crate::storage::{Blob, Buffer, SeqNo};
+use crate::unreliable::{UnreliableBlob, UnreliableBuffer, UnreliableHandle};
 use crate::Data;
 
 struct MemBufferCore {
@@ -297,6 +298,24 @@ impl MemRegistry {
         let buffer = self.buffer(path, lock_info)?;
         let blob = self.blob(path, lock_info)?;
         runtime::start(buffer, blob)
+    }
+
+    /// Open a [RuntimeClient] with unreliable storage associated with `path`.
+    pub fn open_unreliable<K, V>(
+        &mut self,
+        path: &str,
+        lock_info: &str,
+    ) -> Result<(RuntimeClient<K, V>, UnreliableHandle), Error>
+    where
+        K: Data + Send + Sync + 'static,
+        V: Data + Send + Sync + 'static,
+    {
+        let buffer = self.buffer(path, lock_info)?;
+        let (buffer, unreliable) = UnreliableBuffer::new(buffer);
+        let blob = self.blob(path, lock_info)?;
+        let blob = UnreliableBlob::from_handle(blob, unreliable.clone());
+        let client = runtime::start(buffer, blob)?;
+        Ok((client, unreliable))
     }
 }
 

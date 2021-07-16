@@ -1187,6 +1187,7 @@ dependencies = [
  "expr",
  "lazy_static",
  "lowertest",
+ "ore",
  "proc-macro2",
  "repr",
  "repr_test_util",

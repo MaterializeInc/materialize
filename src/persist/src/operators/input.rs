@@ -14,16 +14,15 @@ use std::sync::mpsc;
 
 use timely::dataflow::channels::pushers::buffer::AutoflushSession;
 use timely::dataflow::channels::pushers::{Counter, Tee};
-use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
-use timely::dataflow::operators::{ActivateCapability, Concat, ToStream, UnorderedInput};
+use timely::dataflow::operators::{ActivateCapability, Concat, Map, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
 use crate::error::Error;
 use crate::indexed::runtime::{CmdResponse, StreamReadHandle, StreamWriteHandle};
-use crate::indexed::Snapshot;
+use crate::operators;
 use crate::storage::SeqNo;
 use crate::Token;
 
@@ -39,6 +38,7 @@ pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
             ActivateCapability<G::Timestamp>,
         ),
         Stream<G, (K, u64, isize)>,
+        Stream<G, (String, u64, isize)>,
     );
 }
 
@@ -56,33 +56,25 @@ where
             ActivateCapability<G::Timestamp>,
         ),
         Stream<G, (K, u64, isize)>,
+        Stream<G, (String, u64, isize)>,
     ) {
-        let ((handle, cap), stream) = self.new_unordered_input();
-        let (write, meta) = token.into_inner();
+        let ((handle, cap), ok_new) = self.new_unordered_input();
+        let (write, read) = token.into_inner();
 
         // Replay the previously persisted data, if any.
-        //
-        // TODO: This currently works by only emitting the persisted data on
-        // worker 0 because that was the simplest thing to do initially.
-        // Instead, we should shard up the responsibility between all the
-        // workers.
-        let previously_persisted = if self.index() == 0 {
-            // TODO: Do this with a timely operator that reads the snapshot.
-            let mut snap = meta.snapshot().expect("TODO");
-            let mut buf = Vec::new();
-            while snap.read(&mut buf) {}
-            buf.into_iter()
-                .map(|((key, _), ts, diff)| (key, ts, diff))
-                .to_stream(self)
-        } else {
-            operator::empty(self)
-        };
+        let (ok_previous, err_previous) = operators::replay(self, &read);
+        let ok_previous = ok_previous.map(|((k, _), ts, diff)| (k, ts, diff));
 
         let handle = PersistentUnorderedHandle {
             write: Box::new(write),
             handle,
         };
-        ((handle, cap), previously_persisted.concat(&stream))
+        let ok_all = ok_previous.concat(&ok_new);
+        // In contrast to other operators, PersistentUnorderedInput returns
+        // errors persisting new data via the handle, so the only errors we can
+        // have are from trying to read the previously persisted data.
+        let err_all = err_previous;
+        ((handle, cap), ok_all, err_all)
     }
 }
 
@@ -157,8 +149,8 @@ mod tests {
 
         timely::execute_directly(move |worker| {
             let (mut handle, cap) = worker.dataflow(|scope| {
-                let persister = p.create_or_load("1").unwrap();
-                let (input, _stream) = scope.new_persistent_unordered_input(persister);
+                let token = p.create_or_load("1").unwrap();
+                let (input, _, _) = scope.new_persistent_unordered_input(token);
                 input
             });
             let mut session = handle.session(cap);
@@ -179,11 +171,11 @@ mod tests {
         let p = registry.open("1", "new_persistent_unordered_input_2")?;
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
-                let persister = p.create_or_load("1").unwrap();
-                let (input, stream) = scope.new_persistent_unordered_input(persister);
+                let token = p.create_or_load("1").unwrap();
+                let (input, ok_stream, _) = scope.new_persistent_unordered_input(token);
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
-                let recv = stream.capture();
+                let recv = ok_stream.capture();
                 (input, recv)
             });
             let mut session = handle.session(cap);
@@ -202,7 +194,7 @@ mod tests {
         let mut actual = recv
             .extract()
             .into_iter()
-            .flat_map(|(_, xs)| xs.into_iter().map(|x| x.0))
+            .flat_map(|(_, xs)| xs.into_iter().map(|(k, _, _)| k))
             .collect::<Vec<_>>();
         actual.sort();
         let expected = (1usize..=9usize).map(|x| x.to_string()).collect::<Vec<_>>();
@@ -219,8 +211,8 @@ mod tests {
         // Write some data using 3 workers.
         timely::execute(Config::process(3), move |worker| {
             worker.dataflow(|scope| {
-                let persister = p.create_or_load("multiple_workers").unwrap();
-                let ((mut handle, cap), _stream) = scope.new_persistent_unordered_input(persister);
+                let token = p.create_or_load("multiple_workers").unwrap();
+                let ((mut handle, cap), _, _) = scope.new_persistent_unordered_input(token);
                 // Write one thing from each worker.
                 let (tx, rx) = mpsc::channel();
                 handle
@@ -240,12 +232,12 @@ mod tests {
         let tx = Arc::new(Mutex::new(tx));
         timely::execute(Config::process(2), move |worker| {
             worker.dataflow(|scope| {
-                let persister = p.create_or_load("multiple_workers").unwrap();
-                let (_, stream) = scope.new_persistent_unordered_input(persister);
+                let token = p.create_or_load("multiple_workers").unwrap();
+                let (_, ok_stream, _) = scope.new_persistent_unordered_input(token);
                 // Send the data to be captured by a channel so that we can replay
                 // its contents outside of the dataflow and verify they are correct
                 let tx = tx.lock().expect("lock is not poisoned").clone();
-                stream.capture_into(tx);
+                ok_stream.capture_into(tx);
             });
         })?;
 
@@ -262,6 +254,36 @@ mod tests {
             ("worker-2".to_owned(), 1, 1),
         ];
         assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn error_stream() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        let (p, mut unreliable) = registry.open_unreliable::<(), ()>("1", "error_stream")?;
+        unreliable.make_unavailable();
+
+        let recv = timely::execute_directly(move |worker| {
+            worker.dataflow(|scope| {
+                let token = p.create_or_load("error_stream").unwrap();
+                let (_, _, err_stream) = scope.new_persistent_unordered_input(token);
+                err_stream.capture()
+            })
+        });
+
+        let actual = recv
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter())
+            .collect::<Vec<_>>();
+
+        let expected = vec![(
+            "replaying persisted data: unavailable: buffer snapshot".to_string(),
+            0,
+            1,
+        )];
+        assert_eq!(actual, expected);
 
         Ok(())
     }

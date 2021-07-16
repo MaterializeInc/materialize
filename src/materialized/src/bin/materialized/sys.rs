@@ -48,6 +48,7 @@ pub fn adjust_rlimits() {
 
     #[cfg(target_os = "macos")]
     let hard = {
+        use ore::result::ResultExt;
         use std::cmp;
         use std::convert::TryFrom;
         use sysctl::Sysctl;
@@ -58,7 +59,7 @@ pub fn adjust_rlimits() {
         // cause the call to setrlimit below to fail.
         let res = sysctl::Ctl::new("kern.maxfilesperproc")
             .and_then(|ctl| ctl.value())
-            .map_err(|e| e.to_string())
+            .map_err_to_string()
             .and_then(|v| match v {
                 sysctl::CtlValue::Int(v) => usize::try_from(v)
                     .map_err(|_| format!("kern.maxfilesperproc unexpectedly negative: {}", v)),

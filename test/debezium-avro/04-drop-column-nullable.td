@@ -29,8 +29,9 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_column DROP COLUMN col_null_default;
 INSERT INTO alter_drop_column VALUES (123);
 
-# The DEFAULT 999 clause is ignored, NULLs are returned for col_null_default
+# Prior to Debezium 1.6, NULLs would be returned for col_null_default in new rows.
+# Starting with Debezium 1.6, the 999 DEFAULT value will be returned instead.
 
 > SELECT * FROM alter_drop_column;
 123 234 345
-123 <null> <null>
+123 <null> 999

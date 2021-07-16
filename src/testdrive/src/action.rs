@@ -18,6 +18,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
+use ore::result::ResultExt as _;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
@@ -85,11 +86,14 @@ pub struct Config {
     pub default_timeout: Duration,
     /// A random number to distinguish each run of a testdrive script.
     pub seed: Option<u32>,
+    /// Force the use of a specific temporary directory
+    pub temp_dir: Option<String>,
 }
 
 pub struct State {
     seed: u32,
-    temp_dir: tempfile::TempDir,
+    temp_path: PathBuf,
+    _tempfile_handle: Option<tempfile::TempDir>,
     materialized_catalog_path: Option<PathBuf>,
     materialized_addr: String,
     materialized_user: String,
@@ -112,6 +116,7 @@ pub struct State {
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
     default_timeout: Duration,
+    postgres_clients: HashMap<String, tokio_postgres::Client>,
 }
 
 #[derive(Clone)]
@@ -334,7 +339,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     vars.insert("testdrive.seed".into(), state.seed.to_string());
     vars.insert(
         "testdrive.temp-dir".into(),
-        state.temp_dir.path().display().to_string(),
+        state.temp_path.display().to_string(),
     );
     {
         let protobuf_descriptors = crate::format::protobuf::gen::FILE_DESCRIPTOR_SET_DATA;
@@ -344,7 +349,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             out
         });
         vars.insert("testdrive.protobuf-descriptors-file".into(), {
-            let path = state.temp_dir.path().join("protobuf-descriptors");
+            let path = state.temp_path.join("protobuf-descriptors");
             fs::write(&path, &protobuf_descriptors).err_ctx("writing protobuf descriptors file")?;
             path.display().to_string()
         });
@@ -434,6 +439,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
+                    "postgres-connect" => {
+                        Box::new(postgres::build_connect(builtin).map_err(wrap_err)?)
+                    }
                     "postgres-execute" => {
                         Box::new(postgres::build_execute(builtin).map_err(wrap_err)?)
                     }
@@ -464,7 +472,8 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                             context.timeout = state.default_timeout;
                         } else {
                             context.timeout = repr::util::parse_duration(&duration)
-                                .map_err(|e| wrap_err(e.to_string()))?;
+                                .map_err_to_string()
+                                .map_err(wrap_err)?;
                         }
                         continue;
                     }
@@ -546,7 +555,19 @@ pub async fn create_state(
 ) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
     let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
 
-    let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory")?;
+    let (_tempfile_handle, temp_path) = match &config.temp_dir {
+        Some(temp_dir) => {
+            fs::create_dir_all(temp_dir).err_ctx("creating temporary directory")?;
+            (None, PathBuf::from(&temp_dir))
+        }
+        _ => {
+            // Stash the tempfile object so that it does not go out of scope and delete
+            // the tempdir prematurely
+            let tempfile_handle = tempfile::tempdir().err_ctx("creating temporary directory")?;
+            let temp_path = tempfile_handle.path().to_path_buf();
+            (Some(tempfile_handle), temp_path)
+        }
+    };
 
     let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
         match fs::metadata(&path) {
@@ -684,7 +705,8 @@ pub async fn create_state(
 
     let state = State {
         seed,
-        temp_dir,
+        temp_path,
+        _tempfile_handle,
         materialized_catalog_path,
         materialized_addr,
         materialized_user,
@@ -710,6 +732,7 @@ pub async fn create_state(
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
         default_timeout: config.default_timeout,
+        postgres_clients: HashMap::new(),
     };
     Ok((state, pgconn_task))
 }

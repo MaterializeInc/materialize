@@ -70,6 +70,7 @@ use crate::Data;
 pub struct Indexed<K, V, U: Buffer, L: Blob> {
     last_file_id: u64,
     next_stream_id: Id,
+    futures_seqno_upper: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
     // and this representation is optimized for the metadata serialization path,
     // which is less rare.
@@ -99,6 +100,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let indexed = Indexed {
             last_file_id: meta.last_file_id,
             next_stream_id: meta.next_stream_id,
+            futures_seqno_upper: meta.futures_seqno_upper,
             id_mapping: meta.id_mapping,
             buf,
             blob,
@@ -205,13 +207,37 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         })?;
 
         for (id, updates) in updates_by_id.drain() {
+            let future = self
+                .futures
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            // We maintain the invariant that futures_seqno_upper is >= every
+            // future's seqno_upper and that there is nothing for that future in
+            // [future.seqno_upper, self.futures_seqno_upper). Use this to make the
+            // seqnos of all the future batches line up.
+            debug_assert_eq!(desc.start, self.futures_seqno_upper);
+            let new_start = future.seqno_upper()[0];
+            debug_assert!(new_start <= desc.start);
+            let mut desc = desc.clone();
+            desc.start = new_start;
+
             self.drain_buf_inner(id, updates, &desc)?;
         }
+
+        self.futures_seqno_upper = desc.end;
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())?;
+
         self.buf.truncate(desc.end)
     }
 
     /// Construct a new [BlobFutureBatch] out of the provided `updates` and add
     /// it to the future for `id`.
+    ///
+    /// The caller is responsible for updating META after they've finished
+    /// updating futures.
     fn drain_buf_inner(
         &mut self,
         id: Id,
@@ -340,15 +366,15 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Appends the given `batch` to the trace for `id`, writing the data at
     /// `key` in the blob storage.
+    ///
+    /// The caller is responsible for updating META after they've finished
+    /// updating futures.
     fn append_future(&mut self, key: String, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
         let future = self
             .futures
             .get_mut(&batch.id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
-        future.append(key, batch, &mut self.blob)?;
-        // TODO: Instead of fully overwriting META each time, this should be
-        // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())
+        future.append(key, batch, &mut self.blob)
     }
 
     /// Appends the given `batch` to the trace for `id`, writing the data at
@@ -377,6 +403,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         BlobMeta {
             last_file_id: self.last_file_id,
             next_stream_id: self.next_stream_id,
+            futures_seqno_upper: self.futures_seqno_upper,
             id_mapping: self.id_mapping.clone(),
             futures: self
                 .futures

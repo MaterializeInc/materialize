@@ -432,12 +432,12 @@ SELECT 1.1::numeric::numeric;
 query R
 SELECT 1.2::double::numeric;
 ----
-1.2000000000000002
+1.2
 
 query R
 SELECT 1.3::real::numeric;
 ----
-1.3000001
+1.3
 
 query R
 SELECT 2::int::numeric;
@@ -733,12 +733,12 @@ SELECT 1.1::numeric::text;
 query T
 SELECT 1.2::double::text;
 ----
-1.2000000000000002
+1.2
 
 query T
 SELECT 1.3::real::text;
 ----
-1.3000001
+1.3
 
 query T
 SELECT 2::int::text;

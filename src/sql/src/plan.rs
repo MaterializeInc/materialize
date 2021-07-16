@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
-use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
+use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -254,7 +254,7 @@ pub struct ExplainPlan {
 #[derive(Debug)]
 pub struct SendDiffsPlan {
     pub id: GlobalId,
-    pub updates: Vec<(Row, isize)>,
+    pub updates: Vec<(Row, Diff)>,
     pub affected_rows: usize,
     pub kind: MutationKind,
 }

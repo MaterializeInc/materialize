@@ -36,7 +36,7 @@ use dataflow_types::{
     PeekResponse, SourceConnector, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
-use ore::now::NowFn;
+use ore::{now::NowFn, result::ResultExt};
 use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -1112,7 +1112,7 @@ impl PendingPeek {
                 if let Some(result) = self
                     .map_filter_project
                     .evaluate(&mut datums, &arena)
-                    .map_err(|e| e.to_string())?
+                    .map_err_to_string()?
                 {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {

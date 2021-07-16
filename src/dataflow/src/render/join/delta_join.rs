@@ -23,7 +23,7 @@ use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, MirScalarExpr};
-use repr::{Row, RowArena};
+use repr::{Diff, Row, RowArena};
 use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
@@ -506,7 +506,7 @@ fn build_halfjoin<G, Tr, CF>(
 )
 where
     G: Scope<Timestamp = repr::Timestamp>,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
@@ -577,7 +577,7 @@ fn build_update_stream<G, Tr>(
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope<Timestamp = repr::Timestamp>,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {

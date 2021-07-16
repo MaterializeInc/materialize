@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter;
 
 use expr::{AggregateExpr, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, Diff, Row, RowArena};
 
 use crate::{TransformArgs, TransformError};
 
@@ -370,8 +370,8 @@ impl FoldConstants {
     fn fold_reduce_constant(
         group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],
-        rows: &[(Row, isize)],
-    ) -> Result<Vec<(Row, isize)>, EvalError> {
+        rows: &[(Row, Diff)],
+    ) -> Result<Vec<(Row, Diff)>, EvalError> {
         // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
         // where `an` is the input to the nth aggregate function in
         // `aggregates`.
@@ -445,8 +445,8 @@ impl FoldConstants {
     fn fold_flat_map_constant(
         func: &TableFunc,
         exprs: &[MirScalarExpr],
-        rows: &[(Row, isize)],
-    ) -> Result<Vec<(Row, isize)>, EvalError> {
+        rows: &[(Row, Diff)],
+    ) -> Result<Vec<(Row, Diff)>, EvalError> {
         let mut new_rows = Vec::new();
         let mut row_packer = Row::default();
         for (input_row, diff) in rows {
@@ -469,8 +469,8 @@ impl FoldConstants {
 
     fn fold_filter_constant(
         predicates: &[MirScalarExpr],
-        rows: &[(Row, isize)],
-    ) -> Result<Vec<(Row, isize)>, EvalError> {
+        rows: &[(Row, Diff)],
+    ) -> Result<Vec<(Row, Diff)>, EvalError> {
         let mut new_rows = Vec::new();
         'outer: for (row, diff) in rows {
             let datums = row.unpack();

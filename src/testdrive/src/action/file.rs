@@ -12,6 +12,7 @@ use std::str::FromStr;
 
 use async_compression::tokio::write::GzipEncoder;
 use async_trait::async_trait;
+use ore::result::ResultExt;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -84,25 +85,23 @@ impl Action for AppendAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Appending to file {}", path.display());
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err_to_string()?;
 
         let mut file: Box<dyn AsyncWrite + Unpin + Send> = match self.compression {
             Compression::Gzip => Box::new(GzipEncoder::new(file)),
             Compression::None => Box::new(file),
         };
 
-        file.write_all(&self.contents)
-            .await
-            .map_err(|e| e.to_string())?;
+        file.write_all(&self.contents).await.map_err_to_string()?;
 
-        file.shutdown().await.map_err(|e| e.to_string())?;
+        file.shutdown().await.map_err_to_string()?;
         Ok(())
     }
 }
@@ -124,10 +123,8 @@ impl Action for DeleteAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Deleting file {}", path.display());
-        tokio::fs::remove_file(&path)
-            .await
-            .map_err(|e| e.to_string())
+        tokio::fs::remove_file(&path).await.map_err_to_string()
     }
 }
