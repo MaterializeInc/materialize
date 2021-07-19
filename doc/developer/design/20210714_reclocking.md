@@ -47,7 +47,7 @@ Records may not be in order of the gauge, but once a value is indicated to have 
 
 ### `remap`
 
-We are going to use a `remap` collection, which is a map from a target gauge `IntoTime` to an antichain of timestamps from the source gauge `FromTime`.
+We are going to use a `remap` collection, which is a map from a target gauge `IntoTime` to values from the source gauge `FromTime` that must themselves form an antichain.
 The easiest way for me to represent this is as a differential dataflow collection,
 ```rust
 // G's timestamp should be `IntoTime`.
