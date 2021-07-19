@@ -10,7 +10,7 @@ anyhow = "1.0.42"
 backtrace = "0.3.60"
 jemalloc-ctl = { version = "0.3.0", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
-pprof = "0.4.3"
+pprof = "0.4.4"
 serde = { version = "1.0.126", features = ["derive"] }
 tempfile = "3.2.0"
 tokio = { version = "1.8.1", features = ["time"] }
