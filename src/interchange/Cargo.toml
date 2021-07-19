@@ -26,7 +26,7 @@ lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
-ordered-float = { version = "2.6.0", features = ["serde"] }
+ordered-float = { version = "2.7.0", features = ["serde"] }
 ore = { path = "../ore" }
 protobuf = "2.23.0"
 repr = { path = "../repr" }
