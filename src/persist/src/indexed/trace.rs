@@ -15,9 +15,9 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
@@ -40,6 +40,8 @@ pub struct BlobTrace<K, V> {
     id: Id,
     // The next ID used to assign a Blob key for this trace.
     next_blob_id: u64,
+    // NB: We may at some point need to break this up into separate logical and
+    // physical compaction frontiers.
     since: Antichain<u64>,
     // NB: The Descriptions here are sorted and contiguous half-open intervals
     // `[lower, upper)`.
@@ -51,14 +53,10 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
     /// Returns a BlobTrace re-instantiated with the previously serialized
     /// state.
     pub fn new(meta: BlobTraceMeta) -> Self {
-        let mut since = Antichain::from_elem(Timestamp::minimum());
-        for (desc, _) in meta.batches.iter() {
-            since = since.join(desc.since());
-        }
         BlobTrace {
             id: meta.id,
             next_blob_id: meta.next_blob_id,
-            since: since,
+            since: meta.since,
             batches: meta.batches,
             _phantom: PhantomData,
         }
@@ -76,6 +74,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
         BlobTraceMeta {
             id: self.id,
             batches: self.batches.clone(),
+            since: self.since.clone(),
             next_blob_id: self.next_blob_id,
         }
     }
@@ -127,6 +126,27 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
         }
         Ok(TraceSnapshot { ts_upper, updates })
     }
+
+    /// Update the compaction frontier to `since`.
+    pub fn allow_compaction(&mut self, since: Antichain<u64>) -> Result<(), Error> {
+        if PartialOrder::less_equal(&self.ts_upper(), &since) {
+            return Err(Error::from(format!(
+                "invalid compaction at or in advance of trace upper {:?}: {:?}",
+                self.ts_upper(),
+                since,
+            )));
+        }
+
+        if PartialOrder::less_equal(&since, &self.since) {
+            return Err(Error::from(format!(
+                "invalid compaction less than or equal to trace since {:?}: {:?}",
+                self.since, since
+            )));
+        }
+
+        self.since = since;
+        Ok(())
+    }
 }
 
 /// A consistent snapshot of the data currently in a persistent [BlobTrace].
@@ -144,5 +164,48 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for TraceSnapshot<K, V> {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_allow_compaction() -> Result<(), Error> {
+        let mut t: BlobTrace<String, String> = BlobTrace::new(BlobTraceMeta {
+            id: Id(0),
+            batches: vec![(
+                Description::new(
+                    Antichain::from_elem(0),
+                    Antichain::from_elem(10),
+                    Antichain::from_elem(5),
+                ),
+                "key1".to_string(),
+            )],
+            since: Antichain::from_elem(5),
+            next_blob_id: 0,
+        });
+
+        // Normal case: advance since frontier.
+        t.allow_compaction(Antichain::from_elem(6))?;
+
+        // Allow compaction at the same since frontier.
+        assert_eq!(t.allow_compaction(Antichain::from_elem(6)),
+            Err(Error::from("invalid compaction less than or equal to trace since Antichain { elements: [6] }: Antichain { elements: [6] }")));
+
+        // Regress since frontier.
+        assert_eq!(t.allow_compaction(Antichain::from_elem(5)),
+            Err(Error::from("invalid compaction less than or equal to trace since Antichain { elements: [6] }: Antichain { elements: [5] }")));
+
+        // Advance since frontier to upper
+        assert_eq!(t.allow_compaction(Antichain::from_elem(10)),
+            Err(Error::from("invalid compaction at or in advance of trace upper Antichain { elements: [10] }: Antichain { elements: [10] }")));
+
+        // Advance since frontier beyond upper
+        assert_eq!(t.allow_compaction(Antichain::from_elem(11)),
+            Err(Error::from("invalid compaction at or in advance of trace upper Antichain { elements: [10] }: Antichain { elements: [11] }")));
+
+        Ok(())
     }
 }

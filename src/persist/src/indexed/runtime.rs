@@ -26,6 +26,7 @@ enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
     Write(Id, Vec<((K, V), u64, isize)>, CmdResponse<SeqNo>),
     Seal(Id, u64, CmdResponse<()>),
+    AllowCompaction(Id, u64, CmdResponse<()>),
     Snapshot(Id, CmdResponse<IndexedSnapshot<K, V>>),
     Stop(CmdResponse<()>),
 }
@@ -141,6 +142,9 @@ impl<K, V> RuntimeCore<K, V> {
                 Cmd::Seal(_, _, res) => {
                     res.send(Err(Error::from("seal cmd sent to stopped runtime")))
                 }
+                Cmd::AllowCompaction(_, _, res) => res.send(Err(Error::from(
+                    "allow_compaction cmd sent to stopped runtime",
+                ))),
                 Cmd::Snapshot(_, res) => {
                     res.send(Err(Error::from("snapshot cmd sent to stopped runtime")))
                 }
@@ -230,6 +234,16 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
         self.core.send(Cmd::Seal(id, ts, res))
     }
 
+    /// Asynchronously advances the compaction frontier for the stream with the given id,
+    /// which lets the stream discard historical detail for times not beyond the
+    /// compaction frontier. This also restricts what times the compaction frontier
+    /// can later be advanced to for this id.
+    ///
+    /// The id must have previously been registered.
+    fn allow_compaction(&self, id: Id, ts: u64, res: CmdResponse<()>) {
+        self.core.send(Cmd::AllowCompaction(id, ts, res))
+    }
+
     /// Asynchronously returns a [crate::indexed::Snapshot] for the stream
     /// with the given id.
     ///
@@ -314,10 +328,9 @@ impl<K: Clone, V: Clone> StreamReadHandle<K, V> {
             .and_then(std::convert::identity)
     }
 
-    /// Unblocks compaction for updates before a time.
-    pub fn allow_compaction(&mut self, _ts: u64) -> Result<(), Error> {
-        // No-op for now.
-        Ok(())
+    /// Unblocks compaction for updates at or before `since`.
+    pub fn allow_compaction(&mut self, since: u64, res: CmdResponse<()>) {
+        self.runtime.allow_compaction(self.id, since, res);
     }
 }
 
@@ -356,6 +369,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
             }
             Cmd::Seal(id, ts, res) => {
                 let r = self.indexed.seal(id, ts);
+                res.send(r);
+            }
+            Cmd::AllowCompaction(id, ts, res) => {
+                let r = self.indexed.allow_compaction(id, ts);
                 res.send(r);
             }
             Cmd::Snapshot(id, res) => {
