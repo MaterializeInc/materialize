@@ -1793,7 +1793,7 @@ impl Catalog {
                 depends_on,
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
-                let mut optimizer = Optimizer::default();
+                let mut optimizer = Optimizer::for_view();
                 let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
@@ -1807,7 +1807,7 @@ impl Catalog {
             Plan::CreateView(CreateViewPlan {
                 view, depends_on, ..
             }) => {
-                let mut optimizer = Optimizer::default();
+                let mut optimizer = Optimizer::for_view();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {

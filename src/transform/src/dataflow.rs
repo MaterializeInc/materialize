@@ -15,16 +15,19 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{Id, LocalId, MirRelationExpr};
+use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use std::collections::{HashMap, HashSet};
 
 /// Optimizes the implementation of each dataflow.
 ///
 /// This method is currently limited in scope to propagating filtering and
 /// projection information, though it could certainly generalize beyond.
-pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
+pub fn optimize_dataflow(
+    dataflow: &mut DataflowDesc,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
     // Inline views that are used in only one other view.
-    inline_views(dataflow);
+    inline_views(dataflow, indexes);
 
     optimize_dataflow_filters(dataflow);
     // TODO: when the linear operator contract ensures that propagated
@@ -38,7 +41,10 @@ pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
 }
 
 /// Inline views used in one other view, and in no exported objects.
-fn inline_views(dataflow: &mut DataflowDesc) {
+fn inline_views(
+    dataflow: &mut DataflowDesc,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
     // ability to name it.
@@ -134,24 +140,11 @@ fn inline_views(dataflow: &mut DataflowDesc) {
         }
     }
 
-    // Re-optimize each dataflow.
-    // TODO: We should attempt to minimize the number of re-optimizations, as each
-    // may introduce e.g. `ArrangeBy` operators that make sense at that optimization
-    // moment, but less sense later on (i.e. cost, but aren't needed). One candidate
-    // is to perform *logical* optimizations early (on view definition, when params
-    // are instatiated, here) and then *physical* optimization (e.g. join planning)
-    // only once (and probably in here).
+    // Re-optimize each dataflow and perform physical optimizations.
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
-    let mut indexes = HashMap::new();
-    for (global_id, (desc, _type)) in dataflow.index_imports.iter() {
-        indexes
-            .entry(desc.on_id)
-            .or_insert_with(Vec::new)
-            .push((*global_id, desc.keys.clone()));
-    }
-    let optimizer = crate::Optimizer::default();
+    let optimizer = crate::Optimizer::for_dataflow();
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.

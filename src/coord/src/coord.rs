@@ -2772,7 +2772,7 @@ impl Coordinator {
                     &optimized_plan,
                     &mut dataflow,
                 );
-                transform::optimize_dataflow(&mut dataflow);
+                transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
                 let catalog = self.catalog.for_session(session);
                 let mut explanation =
                     dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
@@ -3171,7 +3171,7 @@ impl Coordinator {
             }
 
             // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(&mut dataflow);
+            transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
             let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
                 .expect("Dataflow planning failed; unrecoverable error");
             dataflow_plans.push(dataflow_plan);
@@ -3400,7 +3400,7 @@ pub async fn serve(
             let mut coord = Coordinator {
                 worker_guards,
                 worker_txs,
-                optimizer: Default::default(),
+                optimizer: Optimizer::for_view(),
                 catalog,
                 symbiosis,
                 indexes: ArrangementFrontiers::default(),
@@ -3550,7 +3550,7 @@ pub fn serve_debug(
         let mut coord = Coordinator {
             worker_guards,
             worker_txs: vec![worker_tx],
-            optimizer: Default::default(),
+            optimizer: Optimizer::for_view(),
             catalog,
             symbiosis: None,
             indexes: ArrangementFrontiers::default(),
