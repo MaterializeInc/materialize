@@ -20,7 +20,7 @@ use timely::PartialOrder;
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::BlobFutureMeta;
-use crate::indexed::{BlobFutureBatch, Snapshot};
+use crate::indexed::{BlobFutureBatch, Id, Snapshot};
 use crate::storage::{Blob, SeqNo};
 use crate::Data;
 
@@ -34,6 +34,9 @@ use crate::Data;
 ///   [crate::indexed::trace::BlobTrace].
 /// - TODO: Space usage.
 pub struct BlobFuture<K, V> {
+    id: Id,
+    // The next id used to assign a Blob key for this future.
+    next_blob_id: u64,
     // NB: This is a closed lower bound. When Indexed seals a time, only data
     // strictly before that time gets moved into the trace.
     ts_lower: Antichain<u64>,
@@ -43,28 +46,34 @@ pub struct BlobFuture<K, V> {
     _phantom: PhantomData<(K, V)>,
 }
 
-impl<K: Data, V: Data> Default for BlobFuture<K, V> {
-    fn default() -> Self {
-        BlobFuture::new(BlobFutureMeta::default())
-    }
-}
-
 impl<K: Data, V: Data> BlobFuture<K, V> {
     /// Returns a BlobFuture re-instantiated with the previously serialized
     /// state.
     pub fn new(meta: BlobFutureMeta) -> Self {
         BlobFuture {
+            id: meta.id,
+            next_blob_id: meta.next_blob_id,
             ts_lower: meta.ts_lower,
             batches: meta.batches,
             _phantom: PhantomData,
         }
     }
 
+    // Get a new key to write to the Blob store for this future.
+    fn new_blob_key(&mut self) -> String {
+        let key = format!("{:?}-future-{:?}", self.id, self.next_blob_id);
+        self.next_blob_id += 1;
+
+        key
+    }
+
     /// Serializes the state of this BlobFuture for later re-instantiation.
     pub fn meta(&self) -> BlobFutureMeta {
         BlobFutureMeta {
+            id: self.id,
             ts_lower: self.ts_lower.clone(),
             batches: self.batches.clone(),
+            next_blob_id: self.next_blob_id,
         }
     }
 
@@ -76,11 +85,10 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
         )
     }
 
-    /// Writes the given batch to [Blob] storage at the given key and logically
-    /// adds the contained updates to this future.
+    /// Writes the given batch to [Blob] storage and logically adds the contained
+    /// updates to this future.
     pub fn append<L: Blob>(
         &mut self,
-        key: String,
         batch: BlobFutureBatch<K, V>,
         blob: &mut BlobCache<K, V, L>,
     ) -> Result<(), Error> {
@@ -108,6 +116,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
         }
 
         let desc = batch.desc.clone();
+        let key = self.new_blob_key();
         blob.set_future_batch(key.clone(), batch)?;
         self.batches.push((desc, key));
         Ok(())
@@ -180,7 +189,6 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::indexed::encoding::Id;
     use crate::mem::MemBlob;
 
     use super::*;
@@ -189,13 +197,14 @@ mod tests {
     fn append_ts_lower_invariant() -> Result<(), Error> {
         let mut blob = BlobCache::new(MemBlob::new("append_ts_lower_invariant")?);
         let mut f = BlobFuture::new(BlobFutureMeta {
+            id: Id(0),
             ts_lower: Antichain::from_elem(2),
             batches: vec![],
+            next_blob_id: 0,
         });
 
         // ts < ts_lower.data()[0] is disallowed
         let batch = BlobFutureBatch {
-            id: Id(0),
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(1)),
@@ -204,7 +213,7 @@ mod tests {
             updates: vec![(("k".to_string(), "v".to_string()), 1, 1)],
         };
         assert_eq!(
-            f.append("0".to_owned(), batch, &mut blob),
+            f.append(batch, &mut blob),
             Err(Error::from(
                 "batch contains timestamp 1 before ts_lower: Antichain { elements: [2] }"
             ))
@@ -212,7 +221,6 @@ mod tests {
 
         // ts == ts_lower.data()[0] is allowed
         let batch = BlobFutureBatch {
-            id: Id(0),
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(1)),
@@ -220,7 +228,7 @@ mod tests {
             ),
             updates: vec![(("k".to_string(), "v".to_string()), 2, 1)],
         };
-        assert_eq!(f.append("1".to_owned(), batch, &mut blob), Ok(()));
+        assert_eq!(f.append(batch, &mut blob), Ok(()));
 
         Ok(())
     }
@@ -228,8 +236,10 @@ mod tests {
     #[test]
     fn truncate_regress() {
         let mut f: BlobFuture<String, String> = BlobFuture::new(BlobFutureMeta {
+            id: Id(0),
             ts_lower: Antichain::from_elem(2),
             batches: vec![],
+            next_blob_id: 0,
         });
         assert_eq!(f.truncate(Antichain::from_elem(2)), Ok(()));
         assert_eq!(

@@ -50,8 +50,6 @@ pub struct BufferEntry<K, V> {
 ///   corresponding trace.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobMeta {
-    /// The most recently assigned key name.
-    pub last_file_id: u64,
     /// The next internal stream id to assign.
     pub next_stream_id: Id,
     /// The position of buffer the last time data was step'd into futures.
@@ -69,13 +67,13 @@ pub struct BlobMeta {
     /// Invariant: Each stream id is in here at most once. This would be more
     /// naturally be modeled as a map from Id to BlobFutureMeta, but that
     /// doesn't work with Abomonation.
-    pub futures: Vec<(Id, BlobFutureMeta)>,
+    pub futures: Vec<BlobFutureMeta>,
     /// BlobFutures indexed by stream id.
     ///
     /// Invariant: Each stream id is in here at most once. This would be more
     /// naturally be modeled as a map from Id to BlobTraceMeta, but that doesn't
     /// work with Abomonation.
-    pub traces: Vec<(Id, BlobTraceMeta)>,
+    pub traces: Vec<BlobTraceMeta>,
 }
 
 /// The metadata necessary to reconstruct a BlobFuture.
@@ -84,6 +82,8 @@ pub struct BlobMeta {
 /// - The batch SeqNo ranges are sorted, non-overlapping, and contiguous.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobFutureMeta {
+    /// The stream this future belongs to.
+    pub id: Id,
     /// A lower bound of data contained by this BlobFuture. Data before this may
     /// be present in the batches, but has been logically moved into the trace
     /// and should be ignored.
@@ -92,6 +92,8 @@ pub struct BlobFutureMeta {
     /// description and the key to retrieve the batch's data from the blob
     /// store. Note that Descriptions are half-open intervals `[lower, upper)`.
     pub batches: Vec<(Description<SeqNo>, String)>,
+    /// The next id used to assign a Blob key for this future.
+    pub next_blob_id: u64,
 }
 
 /// The metadata necessary to reconstruct a BlobTrace.
@@ -100,10 +102,14 @@ pub struct BlobFutureMeta {
 /// - The batch Descriptions are sorted, non-overlapping, and contiguous.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobTraceMeta {
+    /// The stream this trace belongs to.
+    pub id: Id,
     /// The batches that make up the BlobTrace, represented by their description
     /// and the key to retrieve the batch's data from the blob store. Note that
     /// Descriptions are half-open intervals `[lower, upper)`.
     pub batches: Vec<(Description<u64>, String)>,
+    /// The next id used to assign a Blob key for this trace.
+    pub next_blob_id: u64,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -117,8 +123,6 @@ pub struct BlobTraceMeta {
 /// - The updates field is non-empty.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobFutureBatch<K, V> {
-    /// Id of the stream this batch belongs to.
-    pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
     /// The updates themselves.
@@ -143,8 +147,6 @@ pub struct BlobFutureBatch<K, V> {
 /// for checksum and encryption?
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobTraceBatch<K, V> {
-    /// Id of the trace this batch belongs to.
-    pub id: Id,
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
     /// The updates themselves.
@@ -167,7 +169,6 @@ impl<K, V> BufferEntry<K, V> {
 impl Default for BlobMeta {
     fn default() -> Self {
         BlobMeta {
-            last_file_id: 0,
             next_stream_id: Id(0),
             futures_seqno_upper: SeqNo(0),
             id_mapping: Vec::new(),
@@ -202,29 +203,29 @@ impl BlobMeta {
         }
 
         let mut futures = HashMap::new();
-        for (id, f) in self.futures.iter() {
-            if !ids.contains(id) {
-                return Err(format!("futures id {:?} not present in id_mapping", id).into());
+        for f in self.futures.iter() {
+            if !ids.contains(&f.id) {
+                return Err(format!("futures id {:?} not present in id_mapping", f.id).into());
             }
 
-            if futures.contains_key(id) {
-                return Err(format!("duplicate future: {:?}", id).into());
+            if futures.contains_key(&f.id) {
+                return Err(format!("duplicate future: {:?}", f.id).into());
             }
-            futures.insert(*id, f);
+            futures.insert(f.id, f);
 
             f.validate()?;
         }
 
         let mut traces = HashMap::new();
-        for (id, t) in self.traces.iter() {
-            if !ids.contains(id) {
-                return Err(format!("traces id {:?} not present in id_mapping", id).into());
+        for t in self.traces.iter() {
+            if !ids.contains(&t.id) {
+                return Err(format!("traces id {:?} not present in id_mapping", t.id).into());
             }
 
-            if traces.contains_key(id) {
-                return Err(format!("duplicate trace: {:?}", id).into());
+            if traces.contains_key(&t.id) {
+                return Err(format!("duplicate trace: {:?}", t.id).into());
             }
-            traces.insert(*id, t);
+            traces.insert(t.id, t);
 
             t.validate()?;
         }
@@ -255,16 +256,16 @@ impl BlobMeta {
     }
 }
 
-impl Default for BlobFutureMeta {
-    fn default() -> Self {
+impl BlobFutureMeta {
+    /// Create a new [BlobFutureMeta] belonging to `id`.
+    pub fn new(id: Id) -> Self {
         BlobFutureMeta {
+            id,
             ts_lower: Antichain::from_elem(Timestamp::minimum()),
             batches: Vec::new(),
+            next_blob_id: 0,
         }
     }
-}
-
-impl BlobFutureMeta {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -297,15 +298,15 @@ impl BlobFutureMeta {
     }
 }
 
-impl Default for BlobTraceMeta {
-    fn default() -> Self {
+impl BlobTraceMeta {
+    /// Create a new [BlobTraceMeta] belonging to `id`.
+    pub fn new(id: Id) -> Self {
         BlobTraceMeta {
+            id,
             batches: Vec::new(),
+            next_blob_id: 0,
         }
     }
-}
-
-impl BlobTraceMeta {
     /// Returns an open upper bound on the timestamps of data contained in this
     /// trace.
     pub fn ts_upper(&self) -> Antichain<u64> {
@@ -488,7 +489,6 @@ mod tests {
     fn future_batch_validate() {
         // Normal case
         let b = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(0), update_with_ts(1)],
         };
@@ -496,7 +496,6 @@ mod tests {
 
         // Empty
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![],
         };
@@ -504,7 +503,6 @@ mod tests {
 
         // Invalid desc
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(2, 0),
             updates: vec![],
         };
@@ -517,7 +515,6 @@ mod tests {
 
         // Empty desc
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 0),
             updates: vec![],
         };
@@ -530,7 +527,6 @@ mod tests {
 
         // Not sorted by time
         let b = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(1), update_with_ts(0)],
         };
@@ -543,7 +539,6 @@ mod tests {
 
         // Not consolidated
         let b = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 2),
             updates: vec![update_with_ts(0), update_with_ts(0)],
         };
@@ -554,7 +549,6 @@ mod tests {
 
         // Invalid update
         let b: BlobFutureBatch<String, String> = BlobFutureBatch {
-            id: Id(0),
             desc: seqno_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
@@ -568,7 +562,6 @@ mod tests {
     fn trace_batch_validate() {
         // Normal case
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "0"), update_with_key(1, "1")],
         };
@@ -576,7 +569,6 @@ mod tests {
 
         // Empty
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![],
         };
@@ -584,7 +576,6 @@ mod tests {
 
         // Invalid desc
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(2, 0),
             updates: vec![],
         };
@@ -597,7 +588,6 @@ mod tests {
 
         // Empty desc
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 0),
             updates: vec![],
         };
@@ -610,7 +600,6 @@ mod tests {
 
         // Not sorted by key
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "1"), update_with_key(1, "0")],
         };
@@ -623,7 +612,6 @@ mod tests {
 
         // Not consolidated
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 2),
             updates: vec![update_with_key(0, "0"), update_with_key(0, "0")],
         };
@@ -634,7 +622,6 @@ mod tests {
 
         // Update "before" desc
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(1, 2),
             updates: vec![update_with_key(0, "0")],
         };
@@ -642,7 +629,6 @@ mod tests {
 
         // Update "after" desc
         let b = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(1, 2),
             updates: vec![update_with_key(2, "0")],
         };
@@ -650,7 +636,6 @@ mod tests {
 
         // Invalid update
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
-            id: Id(0),
             desc: u64_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
@@ -663,24 +648,34 @@ mod tests {
     #[test]
     fn trace_meta_validate() {
         // Empty
-        let b = BlobTraceMeta { batches: vec![] };
+        let b = BlobTraceMeta {
+            id: Id(0),
+            batches: vec![],
+            next_blob_id: 0,
+        };
         assert_eq!(b.validate(), Ok(()));
 
         // Normal case
         let b = BlobTraceMeta {
+            id: Id(0),
             batches: vec![(u64_desc(0, 1), "".into()), (u64_desc(1, 2), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Gap
         let b = BlobTraceMeta {
+            id: Id(0),
             batches: vec![(u64_desc(0, 1), "".into()), (u64_desc(2, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [1] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
 
         // Overlapping
         let b = BlobTraceMeta {
+            id: Id(0),
             batches: vec![(u64_desc(0, 2), "".into()), (u64_desc(1, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
     }
@@ -689,22 +684,28 @@ mod tests {
     fn future_meta_validate() {
         // Empty
         let b = BlobFutureMeta {
+            id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Normal case
         let b = BlobFutureMeta {
+            id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![(seqno_desc(0, 1), "".into()), (seqno_desc(1, 2), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Gap
         let b = BlobFutureMeta {
+            id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![(seqno_desc(0, 1), "".into()), (seqno_desc(2, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(
             b.validate(),
@@ -715,8 +716,10 @@ mod tests {
 
         // Overlapping
         let b = BlobFutureMeta {
+            id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![(seqno_desc(0, 2), "".into()), (seqno_desc(1, 3), "".into())],
+            next_blob_id: 0,
         };
         assert_eq!(
             b.validate(),
@@ -736,8 +739,8 @@ mod tests {
         let b = BlobMeta {
             next_stream_id: Id(2),
             id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
-            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
-            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
+            traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
         };
         assert_eq!(b.validate(), Ok(()));
@@ -746,8 +749,8 @@ mod tests {
         let b = BlobMeta {
             next_stream_id: Id(2),
             id_mapping: vec![("1".into(), Id(0)), ("1".into(), Id(1))],
-            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
-            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
+            traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
         };
         assert_eq!(
@@ -759,8 +762,8 @@ mod tests {
         let b = BlobMeta {
             next_stream_id: Id(2),
             id_mapping: vec![("0".into(), Id(1)), ("1".into(), Id(1))],
-            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
-            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
+            traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
         };
         assert_eq!(
@@ -772,8 +775,8 @@ mod tests {
         let b = BlobMeta {
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
-            futures: vec![(Id(0), Default::default()), (Id(1), Default::default())],
-            traces: vec![(Id(0), Default::default()), (Id(1), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
+            traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
         };
         assert_eq!(
@@ -788,7 +791,7 @@ mod tests {
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
             futures: vec![],
-            traces: vec![(Id(0), Default::default())],
+            traces: vec![BlobTraceMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(
@@ -800,7 +803,7 @@ mod tests {
         let b = BlobMeta {
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
-            futures: vec![(Id(0), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0))],
             traces: vec![],
             ..Default::default()
         };
@@ -813,7 +816,7 @@ mod tests {
         let b = BlobMeta {
             next_stream_id: Id(1),
             id_mapping: vec![],
-            futures: vec![(Id(0), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0))],
             traces: vec![],
             ..Default::default()
         };
@@ -827,7 +830,7 @@ mod tests {
             next_stream_id: Id(1),
             id_mapping: vec![],
             futures: vec![],
-            traces: vec![(Id(0), Default::default())],
+            traces: vec![BlobTraceMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(
@@ -837,22 +840,20 @@ mod tests {
 
         // Duplicate in futures
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
-            futures: vec![(Id(0), Default::default()), (Id(0), Default::default())],
-            traces: vec![(Id(0), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(0))],
+            traces: vec![BlobTraceMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("duplicate future: Id(0)")));
 
         // Duplicate in traces
         let b = BlobMeta {
-            last_file_id: 1,
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
-            futures: vec![(Id(0), Default::default())],
-            traces: vec![(Id(0), Default::default()), (Id(0), Default::default())],
+            futures: vec![BlobFutureMeta::new(Id(0))],
+            traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(b.validate(), Err(Error::from("duplicate trace: Id(0)")));
@@ -861,19 +862,17 @@ mod tests {
         let b = BlobMeta {
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
-            futures: vec![(
-                Id(0),
-                BlobFutureMeta {
-                    ts_lower: vec![2].into(),
-                    batches: vec![],
-                },
-            )],
-            traces: vec![(
-                Id(0),
-                BlobTraceMeta {
-                    batches: vec![(u64_desc(0, 1), "".into())],
-                },
-            )],
+            futures: vec![BlobFutureMeta {
+                id: Id(0),
+                ts_lower: vec![2].into(),
+                batches: vec![],
+                next_blob_id: 0,
+            }],
+            traces: vec![BlobTraceMeta {
+                id: Id(0),
+                batches: vec![(u64_desc(0, 1), "".into())],
+                next_blob_id: 0,
+            }],
             ..Default::default()
         };
         assert_eq!(
@@ -888,14 +887,13 @@ mod tests {
             next_stream_id: Id(1),
             id_mapping: vec![("0".into(), Id(0))],
             futures_seqno_upper: SeqNo(2),
-            futures: vec![(
-                Id(0),
-                BlobFutureMeta {
-                    batches: vec![(seqno_desc(0, 3), "".into())],
-                    ..Default::default()
-                },
-            )],
-            traces: vec![(Id(0), Default::default())],
+            futures: vec![BlobFutureMeta {
+                id: Id(0),
+                batches: vec![(seqno_desc(0, 3), "".into())],
+                next_blob_id: 0,
+                ts_lower: vec![0].into(),
+            }],
+            traces: vec![BlobTraceMeta::new(Id(0))],
             ..Default::default()
         };
         assert_eq!(
