@@ -130,16 +130,15 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   - [ ] "link to test run"
 
-- [ ] **cloud engineer** Start the load tests according to [the same instructions][load-instr],
-  using your release tag as the `git-ref` value for the release benchmarks. You can use [This
-  commit][] as an example to follow.
+- [ ] Wait for the docker build of the tag to complete and then start the load tests according to
+  [these instructions][load-instr], using your release tag as the `git-ref` value for the release
+  benchmarks. You can use [This commit][] as an example to follow.
 
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
-- [ ] **cloud engineer** Find the load tests in
-  https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them in #release, validating
-  that data is present. Note that the default view of that dashboard is of a full day, so it may
-  look like the test started and aborted suddenly:
+- [ ] Find the load tests in https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them
+  in #release, validating that data is present. Note that the default view of that dashboard is of
+  a full day, so it may look like the test started and aborted suddenly:
 
   - [ ] chbench
   - [ ] billing-demo
@@ -165,13 +164,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
 
-- [ ] **cloud engineer** Let the chaos test run for 24 hours. The test's `chaos_run` container
-  should complete with a `0` exit code. To check this, SSH into the EC2 instance running the chaos
-  test and run `docker ps -a`. You can ssh in using our [teleport cluster][], the chaos test has a
-  `purpose=chaos` label.
+- [ ] Let the chaos test run for 24 hours. The test's `chaos_run` container should complete with a
+  `0` exit code. To check this, SSH into the EC2 instance running the chaos test and run `docker ps
+  -a`. You can ssh in using our [teleport cluster][], the chaos test has a `purpose=chaos` label.
 
-- [ ] **cloud engineer** Remove all load test machines, [documented
-  here][load-instr].
+- [ ] Remove all load test machines, [documented here][load-instr].
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
 
