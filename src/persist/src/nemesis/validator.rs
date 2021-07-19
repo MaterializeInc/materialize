@@ -22,9 +22,11 @@ pub struct Validator {
     writes_by_seqno: BTreeMap<(String, SeqNo), ((String, ()), u64, isize)>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
+    storage_available: bool,
+    runtime_available: bool,
 }
 
-// TODO: Unit tests for Validator. This is already fairly complicatd and it's
+// TODO: Unit tests for Validator. This is already fairly complicated and it's
 // only going to get more complicated as we add more checks for API invariants.
 impl Validator {
     pub fn validate<I: IntoIterator<Item = Step>>(history: I) -> Result<(), Vec<String>> {
@@ -44,6 +46,8 @@ impl Validator {
             writes_by_seqno: BTreeMap::new(),
             available_snapshots: HashMap::new(),
             errors: Vec::new(),
+            storage_available: true,
+            runtime_available: true,
         }
     }
 
@@ -64,6 +68,12 @@ impl Validator {
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
             Res::ReadSnapshot(req, res) => self.step_read_snapshot(s.req_id, req, res),
             Res::Restart(res) => self.step_restart(s.req_id, res),
+            Res::StorageUnavailable => {
+                self.storage_available = false;
+            }
+            Res::StorageAvailable => {
+                self.storage_available = true;
+            }
         }
     }
 
@@ -87,8 +97,9 @@ impl Validator {
     }
 
     fn step_write(&mut self, req_id: ReqId, req: WriteReq, res: Result<WriteRes, Error>) {
-        let should_succeed =
-            req.update.1 >= self.sealed.get(&req.stream).copied().unwrap_or_default();
+        let should_succeed = self.runtime_available
+            && self.storage_available
+            && req.update.1 >= self.sealed.get(&req.stream).copied().unwrap_or_default();
         self.check_success(req_id, &res, should_succeed);
         if let Ok(res) = res {
             self.writes_by_seqno
@@ -97,7 +108,9 @@ impl Validator {
     }
 
     fn step_seal(&mut self, req_id: ReqId, req: SealReq, res: Result<(), Error>) {
-        let should_succeed = req.ts > self.sealed.get(&req.stream).copied().unwrap_or_default();
+        let should_succeed = self.runtime_available
+            && self.storage_available
+            && req.ts > self.sealed.get(&req.stream).copied().unwrap_or_default();
         self.check_success(req_id, &res, should_succeed);
         if let Ok(_) = res {
             self.sealed.insert(req.stream, req.ts);
@@ -105,9 +118,7 @@ impl Validator {
     }
 
     fn step_take_snapshot(&mut self, req_id: ReqId, req: TakeSnapshotReq, res: Result<(), Error>) {
-        // At the moment, there are no nemeses that would prevent a snapshot
-        // from working, so we shouldn't see any errors.
-        let should_succeed = true;
+        let should_succeed = self.runtime_available && self.storage_available;
         self.check_success(req_id, &res, should_succeed);
         if let Ok(_) = res {
             self.available_snapshots.insert(req.snap, req.stream);
@@ -151,9 +162,17 @@ impl Validator {
     }
 
     fn step_restart(&mut self, req_id: ReqId, res: Result<(), Error>) {
-        // At the moment, there are no nemeses that would prevent a restart
-        // from working, so we shouldn't see any errors.
-        let should_succeed = true;
+        // The semantics of Req::Restart are pretty blunt. It unconditionally
+        // stops the currently running persister and then attempts to start a
+        // new one. If the storage is down, the new one won't be able to read
+        // metadata and will fail to start. This will cause all operations on
+        // the persister to fail until it gets another Req::Restart with storage
+        // available. This ends up being a pretty uninteresting state to test,
+        // but it's not clear what else we should do. Perhaps we should rework
+        // the weights so that StorageAvailable and Restart are both much more
+        // likely while the runtime is down.
+        let should_succeed = self.storage_available;
         self.check_success(req_id, &res, should_succeed);
+        self.runtime_available = res.is_ok();
     }
 }

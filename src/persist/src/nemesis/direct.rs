@@ -18,10 +18,12 @@ use crate::nemesis::{
     Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId, Step,
     TakeSnapshotReq, WriteReq, WriteRes,
 };
+use crate::unreliable::UnreliableHandle;
 
 pub struct Direct {
-    start_fn: Box<dyn FnMut() -> Result<RuntimeClient<String, ()>, Error>>,
+    start_fn: Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient<String, ()>, Error>>,
     persister: RuntimeClient<String, ()>,
+    unreliable: UnreliableHandle,
     streams: HashMap<String, (StreamWriteHandle<String, ()>, StreamReadHandle<String, ()>)>,
     snapshots: HashMap<SnapshotId, IndexedSnapshot<String, ()>>,
 }
@@ -34,6 +36,14 @@ impl Runtime for Direct {
             Req::TakeSnapshot(req) => Res::TakeSnapshot(req.clone(), self.take_snapshot(req)),
             Req::ReadSnapshot(req) => Res::ReadSnapshot(req.clone(), self.read_snapshot(req)),
             Req::Restart => Res::Restart(self.restart()),
+            Req::StorageUnavailable => {
+                self.unreliable.make_unavailable();
+                Res::StorageUnavailable
+            }
+            Req::StorageAvailable => {
+                self.unreliable.make_available();
+                Res::StorageAvailable
+            }
         };
         Step {
             req_id: i.req_id,
@@ -45,13 +55,15 @@ impl Runtime for Direct {
 }
 
 impl Direct {
-    pub fn new<F: FnMut() -> Result<RuntimeClient<String, ()>, Error> + 'static>(
+    pub fn new<F: FnMut(UnreliableHandle) -> Result<RuntimeClient<String, ()>, Error> + 'static>(
         mut start_fn: F,
     ) -> Result<Self, Error> {
-        let persister = start_fn()?;
+        let unreliable = UnreliableHandle::default();
+        let persister = start_fn(unreliable.clone())?;
         Ok(Direct {
             start_fn: Box::new(start_fn),
             persister,
+            unreliable,
             streams: HashMap::new(),
             snapshots: HashMap::new(),
         })
@@ -120,7 +132,7 @@ impl Direct {
         let stop_res = self.persister.stop();
         // The handles from the previous persister cannot be used after stop.
         self.streams.clear();
-        let persister = (self.start_fn)()?;
+        let persister = (self.start_fn)(self.unreliable.clone())?;
         self.persister = persister;
         stop_res
     }
@@ -132,26 +144,30 @@ mod tests {
     use crate::mem::MemRegistry;
     use crate::nemesis;
     use crate::nemesis::generator::GeneratorConfig;
+    use crate::unreliable::{UnreliableBlob, UnreliableBuffer};
 
     use super::*;
 
     #[test]
     fn direct_mem() {
         let mut registry = MemRegistry::new();
-        let direct = Direct::new(move || registry.open("direct_mem", "direct_mem"))
-            .expect("initial start failed");
+        let direct = Direct::new(move |unreliable| {
+            registry.open_unreliable("direct_mem", "direct_mem", unreliable)
+        })
+        .expect("initial start failed");
         nemesis::run(100, GeneratorConfig::default(), direct)
     }
 
     #[test]
     fn direct_file() {
         let temp_dir = tempfile::tempdir().expect("tempdir creation failed");
-        let direct = Direct::new(move || {
-            let (buffer_dir, blob_dir) =
-                (temp_dir.path().join("buffer"), temp_dir.path().join("blob"));
-            let buffer = FileBuffer::new(buffer_dir, "direct_file")?;
+        let direct = Direct::new(move |unreliable| {
+            let (buf_dir, blob_dir) = (temp_dir.path().join("buf"), temp_dir.path().join("blob"));
+            let buf = FileBuffer::new(buf_dir, "direct_file")?;
+            let buf = UnreliableBuffer::from_handle(buf, unreliable.clone());
             let blob = FileBlob::new(blob_dir, "direct_file")?;
-            runtime::start(buffer, blob)
+            let blob = UnreliableBlob::from_handle(blob, unreliable);
+            runtime::start(buf, blob)
         })
         .expect("initial start failed");
         // TODO: At the moment, running this for 100 steps takes a bit over a
@@ -173,8 +189,10 @@ mod tests {
             ..Default::default()
         };
         let mut registry = MemRegistry::new();
-        let direct = Direct::new(move || registry.open("direct_mzlike", "direct_mzlike"))
-            .expect("initial start failed");
+        let direct = Direct::new(move |unreliable| {
+            registry.open_unreliable("direct_mzlike", "direct_mzlike", unreliable)
+        })
+        .expect("initial start failed");
         nemesis::run(100, config, direct)
     }
 }

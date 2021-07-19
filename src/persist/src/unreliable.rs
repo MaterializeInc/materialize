@@ -20,16 +20,18 @@ struct UnreliableCore {
     // TODO: Delays, what else?
 }
 
-impl Default for UnreliableCore {
-    fn default() -> Self {
-        UnreliableCore { unavailable: false }
-    }
-}
-
 /// A handle for controlling the behavior of an unreliable delegate.
 #[derive(Clone)]
 pub struct UnreliableHandle {
     core: Arc<Mutex<UnreliableCore>>,
+}
+
+impl Default for UnreliableHandle {
+    fn default() -> Self {
+        UnreliableHandle {
+            core: Arc::new(Mutex::new(UnreliableCore { unavailable: false })),
+        }
+    }
 }
 
 impl UnreliableHandle {
@@ -74,9 +76,7 @@ pub struct UnreliableBuffer<U> {
 impl<U: Buffer> UnreliableBuffer<U> {
     /// Returns a new [UnreliableBuffer] and a handle for controlling it.
     pub fn new(buf: U) -> (Self, UnreliableHandle) {
-        let h = UnreliableHandle {
-            core: Arc::new(Mutex::new(Default::default())),
-        };
+        let h = UnreliableHandle::default();
         let buf = Self::from_handle(buf, h.clone());
         (buf, h)
     }
@@ -121,9 +121,7 @@ pub struct UnreliableBlob<L> {
 impl<L: Blob> UnreliableBlob<L> {
     /// Returns a new [UnreliableBlob] and a handle for controlling it.
     pub fn new(blob: L) -> (Self, UnreliableHandle) {
-        let h = UnreliableHandle {
-            core: Arc::new(Mutex::new(Default::default())),
-        };
+        let h = UnreliableHandle::default();
         let blob = Self::from_handle(blob, h.clone());
         (blob, h)
     }

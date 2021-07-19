@@ -139,6 +139,7 @@ mod tests {
 
     use crate::error::Error;
     use crate::mem::MemRegistry;
+    use crate::unreliable::UnreliableHandle;
 
     use super::*;
 
@@ -261,7 +262,8 @@ mod tests {
     #[test]
     fn error_stream() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        let (p, mut unreliable) = registry.open_unreliable::<(), ()>("1", "error_stream")?;
+        let mut unreliable = UnreliableHandle::default();
+        let p = registry.open_unreliable::<(), ()>("1", "error_stream", unreliable.clone())?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {

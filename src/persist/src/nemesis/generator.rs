@@ -27,6 +27,8 @@ pub struct GeneratorConfig {
     pub take_snapshot_weight: u32,
     pub read_snapshot_weight: u32,
     pub restart_weight: u32,
+    pub storage_unavailable: u32,
+    pub storage_available: u32,
 }
 
 impl GeneratorConfig {
@@ -38,13 +40,20 @@ impl GeneratorConfig {
             take_snapshot_weight: 1,
             read_snapshot_weight: 1,
             restart_weight: 1,
+            storage_unavailable: 1,
+            storage_available: 1,
         }
     }
 }
 
 impl Default for GeneratorConfig {
     fn default() -> Self {
-        Self::all_operations()
+        let mut config = Self::all_operations();
+        // TODO: These catch various bugs so disable them until the bugs are
+        // fixed.
+        config.storage_available = 0;
+        config.storage_unavailable = 0;
+        config
     }
 }
 
@@ -52,6 +61,7 @@ struct GeneratorState {
     sealed_by_stream: HashMap<String, u64>,
     snap_id: SnapshotId,
     outstanding_snaps: HashMap<SnapshotId, String>,
+    storage_available: bool,
 }
 
 impl Default for GeneratorState {
@@ -60,6 +70,7 @@ impl Default for GeneratorState {
             sealed_by_stream: HashMap::new(),
             snap_id: SnapshotId(0),
             outstanding_snaps: HashMap::new(),
+            storage_available: true,
         }
     }
 }
@@ -71,6 +82,8 @@ enum ReqGenerator {
     TakeSnapshot,
     ReadSnapshot,
     Restart,
+    StorageUnavailable,
+    StorageAvailable,
 }
 
 fn rng_stream(rng: &mut SmallRng) -> String {
@@ -163,6 +176,14 @@ impl ReqGenerator {
             ReqGenerator::TakeSnapshot => ReqGenerator::take_snapshot(rng, state),
             ReqGenerator::ReadSnapshot => ReqGenerator::read_snapshot(rng, state),
             ReqGenerator::Restart => Req::Restart,
+            ReqGenerator::StorageUnavailable => {
+                state.storage_available = false;
+                Req::StorageUnavailable
+            }
+            ReqGenerator::StorageAvailable => {
+                state.storage_available = true;
+                Req::StorageAvailable
+            }
         }
     }
 }
@@ -214,6 +235,15 @@ impl Generator {
                     .filter(|_| !self.state.outstanding_snaps.is_empty()),
             ),
             (self.config.restart_weight, Some(ReqGenerator::Restart)),
+            (
+                self.config.storage_unavailable,
+                Some(ReqGenerator::StorageUnavailable).filter(|_| self.state.storage_available),
+            ),
+            (
+                self.config.storage_available,
+                Some(ReqGenerator::StorageAvailable)
+                    .filter(|_| self.state.storage_available == false),
+            ),
         ];
         for (weight, req) in req_weights {
             if let Some(req) = req {
@@ -291,6 +321,12 @@ mod tests {
             Req::Restart => {
                 counts.restart_weight += 1;
             }
+            Req::StorageUnavailable => {
+                counts.storage_unavailable += 1;
+            }
+            Req::StorageAvailable => {
+                counts.storage_available += 1;
+            }
         };
 
         let mut counts = GeneratorConfig {
@@ -300,6 +336,8 @@ mod tests {
             take_snapshot_weight: 0,
             read_snapshot_weight: 0,
             restart_weight: 0,
+            storage_unavailable: 0,
+            storage_available: 0,
         };
 
         const MIN_EACH_TYPE: u32 = 5;

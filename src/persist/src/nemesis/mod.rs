@@ -62,10 +62,10 @@
 
 // TODO
 // - Variant with S3Blob
+// - Impl of Runtime directly using Indexed
 // - Impl of Runtime with Timely workers running in threads
 // - Impl of Runtime with Timely workers running in processes
 // - Advancing the compaction frontier
-// - Storage (buffer/blob) downtime via a shim implementation
 // - Storage (buffer/blob) with variable latency/slow requests
 // - Vary key size
 // - Non-uniform (zipfian) distribution of keys (any other distributions?)
@@ -121,6 +121,8 @@ pub enum Req {
     TakeSnapshot(TakeSnapshotReq),
     ReadSnapshot(ReadSnapshotReq),
     Restart,
+    StorageUnavailable,
+    StorageAvailable,
 }
 
 #[derive(Debug)]
@@ -130,6 +132,8 @@ pub enum Res {
     TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
     ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
     Restart(Result<(), Error>),
+    StorageUnavailable,
+    StorageAvailable,
 }
 
 #[derive(Clone, Debug)]
