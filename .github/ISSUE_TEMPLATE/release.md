@@ -170,7 +170,8 @@ in the infrastructure repository. All of these tests can be run in parallel.
   test and run `docker ps -a`. You can ssh in using our [teleport cluster][], the chaos test has a
   `purpose=chaos` label.
 
-- [ ] **cloud engineer** Remove all load test machines, documented on [the same page][load-instr].
+- [ ] **cloud engineer** Remove all load test machines, [documented
+  here][load-instr].
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
 
