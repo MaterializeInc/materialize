@@ -106,9 +106,15 @@ impl<U: Buffer> Buffer for UnreliableBuffer<U> {
         self.buf.truncate(upper)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
+        // TODO: This check_unavailable is a different order from the others
+        // mostly for convenience in the nemesis tests. While we do want to
+        // prevent a normal read/write from going though when the storage is
+        // unavailable, it makes for a very uninteresting test if we can't clean
+        // up LOCK files. OTOH this feels like a smell, revisit.
+        let did_work = self.buf.close()?;
         self.handle.check_unavailable("buffer close")?;
-        self.buf.close()
+        Ok(did_work)
     }
 }
 
@@ -143,9 +149,15 @@ impl<L: Blob> Blob for UnreliableBlob<L> {
         self.blob.set(key, value, allow_overwrite)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
+        // TODO: This check_unavailable is a different order from the others
+        // mostly for convenience in the nemesis tests. While we do want to
+        // prevent a normal read/write from going though when the storage is
+        // unavailable, it makes for a very uninteresting test if we can't clean
+        // up LOCK files. OTOH this feels like a smell, revisit.
+        let did_work = self.blob.close()?;
         self.handle.check_unavailable("blob close")?;
-        self.blob.close()
+        Ok(did_work)
     }
 }
 

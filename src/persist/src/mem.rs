@@ -46,9 +46,8 @@ impl MemBufferCore {
         Ok(())
     }
 
-    fn close(&mut self) -> Result<(), Error> {
-        self.lock = None;
-        Ok(())
+    fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.lock.take().is_some())
     }
 
     fn ensure_open(&self) -> Result<(), Error> {
@@ -126,7 +125,12 @@ impl MemBuffer {
 
 impl Drop for MemBuffer {
     fn drop(&mut self) {
-        self.close().expect("closing MemBuffer cannot fail");
+        let did_work = self.close().expect("closing MemBuffer cannot fail");
+        // MemBuffer should have been closed gracefully; this drop is only here
+        // as a failsafe. If it actually did anything, that's surprising.
+        if did_work {
+            log::warn!("MemBuffer dropped without close");
+        }
     }
 }
 
@@ -146,7 +150,7 @@ impl Buffer for MemBuffer {
         self.core.lock()?.truncate(upper)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
         self.core.lock()?.close()
     }
 }
@@ -174,9 +178,8 @@ impl MemBlobCore {
         Ok(())
     }
 
-    fn close(&mut self) -> Result<(), Error> {
-        self.lock = None;
-        Ok(())
+    fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.lock.take().is_some())
     }
 
     fn ensure_open(&self) -> Result<(), Error> {
@@ -227,7 +230,12 @@ impl MemBlob {
 
 impl Drop for MemBlob {
     fn drop(&mut self) {
-        self.close().expect("closing MemBlob cannot fail");
+        let did_work = self.close().expect("closing MemBlob cannot fail");
+        // MemBuffer should have been closed gracefully; this drop is only here
+        // as a failsafe. If it actually did anything, that's surprising.
+        if did_work {
+            log::warn!("MemBlob dropped without close");
+        }
     }
 }
 
@@ -240,7 +248,7 @@ impl Blob for MemBlob {
         self.core.lock()?.set(key, value, allow_overwrite)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
         self.core.lock()?.close()
     }
 }

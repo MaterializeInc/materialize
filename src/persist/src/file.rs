@@ -258,15 +258,15 @@ impl Buffer for FileBuffer {
         Ok(())
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
         if let Ok(base_dir) = self.ensure_open() {
             let lockfile_path = Self::lockfile_path(&base_dir);
             fs::remove_file(lockfile_path)?;
             self.base_dir = None;
-            Ok(())
+            Ok(true)
         } else {
             // Already closed. Close implementations must be idempotent.
-            Ok(())
+            Ok(false)
         }
     }
 }
@@ -346,15 +346,15 @@ impl Blob for FileBlob {
         Ok(())
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
         if let Some(base_dir) = self.base_dir.as_ref() {
             let lockfile_path = Self::lockfile_path(&base_dir);
             fs::remove_file(lockfile_path)?;
             self.base_dir = None;
-            Ok(())
+            Ok(true)
         } else {
             // Already closed. Close implementations must be idempotent.
-            Ok(())
+            Ok(false)
         }
     }
 }

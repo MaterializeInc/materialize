@@ -85,9 +85,26 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
 impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// Returns a new Indexed, initializing each Future and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(buf: U, blob: L) -> Result<Self, Error> {
-        let blob = BlobCache::new(blob);
-        let meta = blob.get_meta()?.unwrap_or_default();
+    pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
+        let mut blob = BlobCache::new(blob);
+        let meta = blob
+            .get_meta()
+            .map_err(|err| {
+                // Indexed is expected to close the buffer and blob it's handed.
+                // Usually that happens when close is called on Indexed itself,
+                // but if there's an error constructing it, we never get to that
+                // point and have to clean up ourselves.
+                //
+                // TODO: Regression test for this.
+                if let Err(err) = buf.close() {
+                    log::warn!("error closing buffer: {}", err);
+                }
+                if let Err(err) = blob.close() {
+                    log::warn!("error closing blob: {}", err);
+                }
+                err
+            })?
+            .unwrap_or_default();
         let futures = meta
             .futures
             .into_iter()

@@ -64,8 +64,9 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
     /// Synchronously closes the cache, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// This method is idempotent.
-    pub fn close(&mut self) -> Result<(), Error> {
+    /// This method is idempotent. Returns true if the buffer had not
+    /// previously been closed.
+    pub fn close(&mut self) -> Result<bool, Error> {
         self.blob.lock()?.close()
     }
 

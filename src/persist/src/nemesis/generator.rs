@@ -48,12 +48,7 @@ impl GeneratorConfig {
 
 impl Default for GeneratorConfig {
     fn default() -> Self {
-        let mut config = Self::all_operations();
-        // TODO: These catch various bugs so disable them until the bugs are
-        // fixed.
-        config.storage_available = 0;
-        config.storage_unavailable = 0;
-        config
+        Self::all_operations()
     }
 }
 

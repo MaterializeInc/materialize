@@ -72,18 +72,18 @@ impl Direct {
     fn stream(
         &mut self,
         name: &str,
-    ) -> &mut (StreamWriteHandle<String, ()>, StreamReadHandle<String, ()>) {
+    ) -> Result<&mut (StreamWriteHandle<String, ()>, StreamReadHandle<String, ()>), Error> {
         let (streams, persister) = (&mut self.streams, &mut self.persister);
-        streams.entry(name.to_string()).or_insert_with(|| {
-            persister
+        match streams.entry(name.to_string()) {
+            Entry::Occupied(x) => Ok(x.into_mut()),
+            Entry::Vacant(x) => persister
                 .create_or_load(name)
-                .expect("we only ever register once")
-                .into_inner()
-        })
+                .map(|token| x.insert(token.into_inner())),
+        }
     }
 
     fn write(&mut self, req: WriteReq) -> Result<WriteRes, Error> {
-        let (write, _) = self.stream(&req.stream);
+        let (write, _) = self.stream(&req.stream)?;
         let (tx, rx) = mpsc::channel();
         write.write(&[req.update], tx.into());
         let seqno = rx.recv().map_err(|_| Error::RuntimeShutdown)??.0;
@@ -91,14 +91,14 @@ impl Direct {
     }
 
     fn seal(&mut self, req: SealReq) -> Result<(), Error> {
-        let (write, _) = self.stream(&req.stream);
+        let (write, _) = self.stream(&req.stream)?;
         let (tx, rx) = mpsc::channel();
         write.seal(req.ts, tx.into());
         rx.recv().map_err(|_| Error::RuntimeShutdown)?
     }
 
     fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), Error> {
-        let (_, meta) = self.stream(&req.stream);
+        let (_, meta) = self.stream(&req.stream)?;
         let snap = meta.snapshot()?;
         match self.snapshots.entry(req.snap) {
             Entry::Occupied(x) => {
