@@ -93,7 +93,7 @@ const TELEMETRY_QUERY: &str = "SELECT jsonb_build_object(
             FROM (SELECT connector_type, count(*) FROM mz_sinks WHERE id LIKE 'u%' GROUP BY connector_type)
         )
     )
-)::text";
+)";
 
 /// The response returned by the telemetry server.
 #[derive(Deserialize)]
