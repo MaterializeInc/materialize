@@ -71,6 +71,7 @@
 
 use std::env;
 
+use ore::test::init_logging;
 use rand::rngs::OsRng;
 use rand::RngCore;
 
@@ -232,16 +233,17 @@ impl<R: Runtime> Runner<R> {
 }
 
 pub fn run<R: Runtime>(steps: usize, config: GeneratorConfig, runtime: R) {
+    init_logging();
     let seed =
         env::var("MZ_NEMESIS_SEED").map_or_else(|_| OsRng.next_u64(), |s| s.parse().unwrap());
     let steps = env::var("MZ_NEMESIS_STEPS").map_or(steps, |s| s.parse().unwrap());
-    eprintln!("MZ_NEMESIS_SEED={} MZ_NEMESIS_STEPS={}", seed, steps);
+    log::info!("MZ_NEMESIS_SEED={} MZ_NEMESIS_STEPS={}", seed, steps);
     let generator = Generator::new(seed, config);
     let runner = Runner::new(generator, runtime);
     let history = runner.run(steps);
     if let Err(errors) = Validator::validate(history) {
         for err in errors.iter() {
-            eprintln!("invariant violation: {}", err)
+            log::warn!("invariant violation: {}", err)
         }
         assert!(errors.is_empty());
     }
