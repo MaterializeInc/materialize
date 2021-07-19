@@ -356,6 +356,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// to call this function with a since argument that is less than or equal to
     /// the current compaction frontier. It is also an error to advance the
     /// compaction frontier beyond the current sealed frontier.
+    ///
     /// TODO: it's unclear whether this function needs to be so restrictive about
     /// calls with a frontier <= current_compaction_frontier. We chose to mirror
     /// the `seal` API here but if that doesn't make sense, remove the restrictions.

@@ -103,14 +103,15 @@ pub struct BlobFutureMeta {
 /// - The since frontier is either 0 or < the trace's upper (the largest upper
 ///   amongst all of the batches).
 /// - Every batch's since frontier is <= the overall trace's since frontier.
+/// - The compaction level of batches is weakly decreasing when iterating from oldest
+///   to most recent time intervals.
+/// - TODO: key uniqueness invariants?
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobTraceMeta {
     /// The stream this trace belongs to.
     pub id: Id,
-    /// The batches that make up the BlobTrace, represented by their description
-    /// and the key to retrieve the batch's data from the blob store. Note that
-    /// Descriptions are half-open intervals `[lower, upper)`.
-    pub batches: Vec<(Description<u64>, String)>,
+    /// Metadata about he batches that make up the BlobTrace.
+    pub batches: Vec<BlobTraceBatchMeta>,
     /// Compaction frontier for the batches contained in this trace.
     /// There may still be batches containing updates at times < since, but the
     /// the trace only contains correct answers for times at or in advance of this
@@ -119,6 +120,22 @@ pub struct BlobTraceMeta {
     pub since: Antichain<u64>,
     /// The next id used to assign a Blob key for this trace.
     pub next_blob_id: u64,
+}
+
+/// The metadata necessary to reconstruct a [BlobTraceBatch].
+///
+/// Invariants:
+/// - The Description's time interval is non-empty.
+/// - TODO: key invariants?
+#[derive(Clone, Debug, Abomonation)]
+pub struct BlobTraceBatchMeta {
+    /// The key to retrieve the batch's data from the blob store.
+    pub key: String,
+    /// The half-open time interval `[lower, upper)` this batch contains data
+    /// for.
+    pub desc: Description<u64>,
+    /// The compaction level of each batch.
+    pub level: u64,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -333,7 +350,7 @@ impl BlobTraceMeta {
     pub fn ts_upper(&self) -> Antichain<u64> {
         self.batches.last().map_or_else(
             || Antichain::from_elem(Timestamp::minimum()),
-            |(d, _)| d.upper().clone(),
+            |meta| meta.desc.upper().clone(),
         )
     }
 
@@ -351,26 +368,52 @@ impl BlobTraceMeta {
             .into());
         }
 
-        let mut prev: Option<&Description<u64>> = None;
-        for (desc, _) in self.batches.iter() {
-            if !PartialOrder::less_equal(desc.since(), &self.since) {
+        let mut prev: Option<&BlobTraceBatchMeta> = None;
+        for meta in self.batches.iter() {
+            if !PartialOrder::less_equal(meta.desc.since(), &self.since) {
                 return Err(format!(
                     "invalid batch since: {:?} in advance of trace since {:?}",
-                    desc, self.since
+                    meta.desc, self.since
                 )
                 .into());
             }
+
+            meta.validate()?;
+
             if let Some(prev) = prev {
-                if prev.upper() != desc.lower() {
+                if prev.desc.upper() != meta.desc.lower() {
                     return Err(format!(
                         "invalid batch sequence: {:?} followed by {:?}",
-                        prev, desc,
+                        prev.desc, meta.desc,
+                    )
+                    .into());
+                }
+
+                if prev.level < meta.level {
+                    return Err(format!(
+                        "invalid batch sequence: compaction level {} followed by {}",
+                        prev.level, meta.level
                     )
                     .into());
                 }
             }
-            prev = Some(desc)
+            prev = Some(&meta)
         }
+        Ok(())
+    }
+}
+
+impl BlobTraceBatchMeta {
+    /// Asserts Self's documented invariants, returning an error if any are
+    /// violated.
+    pub fn validate(&self) -> Result<(), Error> {
+        // TODO: It's unclear if the equal case (an empty desc) is
+        // useful/harmful. Feel free to make this a less_than if empty descs end
+        // up making sense.
+        if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
+            return Err(format!("invalid desc: {:?}", &self.desc).into());
+        }
+
         Ok(())
     }
 }
@@ -506,6 +549,22 @@ mod tests {
             Antichain::from_elem(upper),
             Antichain::from_elem(0),
         )
+    }
+
+    fn batch_meta(lower: u64, upper: u64) -> BlobTraceBatchMeta {
+        BlobTraceBatchMeta {
+            key: "".to_string(),
+            desc: u64_desc(lower, upper),
+            level: 1,
+        }
+    }
+
+    fn batch_meta_full(lower: u64, upper: u64, since: u64, level: u64) -> BlobTraceBatchMeta {
+        BlobTraceBatchMeta {
+            key: "".to_string(),
+            desc: u64_desc_since(lower, upper, since),
+            level,
+        }
     }
 
     fn u64_desc_since(lower: u64, upper: u64, since: u64) -> Description<u64> {
@@ -723,6 +782,29 @@ mod tests {
     }
 
     #[test]
+    fn trace_batch_meta_validate() {
+        // Normal case
+        let b = batch_meta(0, 1);
+        assert_eq!(b.validate(), Ok(()));
+
+        // Empty interval
+        let b = batch_meta(0, 0);
+        assert_eq!(b.validate(),
+            Err(Error::from(
+                "invalid desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [0] }, since: Antichain { elements: [0] } }"
+            )),
+        );
+
+        // Invalid interval
+        let b = batch_meta(2, 0);
+        assert_eq!(b.validate(),
+            Err(Error::from(
+                "invalid desc: Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [0] }, since: Antichain { elements: [0] } }"
+            )),
+        );
+    }
+
+    #[test]
     fn trace_meta_validate() {
         // Empty
         let b = BlobTraceMeta {
@@ -736,7 +818,7 @@ mod tests {
         // Normal case
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![(u64_desc(0, 1), "".into()), (u64_desc(1, 2), "".into())],
+            batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(0),
             next_blob_id: 0,
         };
@@ -745,7 +827,7 @@ mod tests {
         // Gap
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![(u64_desc(0, 1), "".into()), (u64_desc(2, 3), "".into())],
+            batches: vec![batch_meta(0, 1), batch_meta(2, 3)],
             since: Antichain::from_elem(0),
             next_blob_id: 0,
         };
@@ -754,7 +836,7 @@ mod tests {
         // Overlapping
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![(u64_desc(0, 2), "".into()), (u64_desc(1, 3), "".into())],
+            batches: vec![batch_meta(0, 2), batch_meta(1, 3)],
             since: Antichain::from_elem(0),
             next_blob_id: 0,
         };
@@ -763,7 +845,7 @@ mod tests {
         // Normal case: trace since before nonzero trace upper
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![(u64_desc(0, 1), "".into()), (u64_desc(1, 2), "".into())],
+            batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(1),
             next_blob_id: 0,
         };
@@ -772,7 +854,7 @@ mod tests {
         // Trace since at nonzero trace upper
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![(u64_desc(0, 2), "".into()), (u64_desc(2, 3), "".into())],
+            batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
             since: Antichain::from_elem(3),
             next_blob_id: 0,
         };
@@ -781,7 +863,7 @@ mod tests {
         // Trace since in advance of nonzero trace upper
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![(u64_desc(0, 2), "".into()), (u64_desc(2, 3), "".into())],
+            batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
             since: Antichain::from_elem(4),
             next_blob_id: 0,
         };
@@ -790,10 +872,7 @@ mod tests {
         // Normal case: batch since at or before trace since
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![
-                (u64_desc(0, 1), "".into()),
-                (u64_desc_since(1, 2, 1), "".into()),
-            ],
+            batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 1, 1)],
             since: Antichain::from_elem(1),
             next_blob_id: 0,
         };
@@ -802,14 +881,38 @@ mod tests {
         // Batch since in advance of trace since
         let b = BlobTraceMeta {
             id: Id(0),
-            batches: vec![
-                (u64_desc(0, 1), "".into()),
-                (u64_desc_since(1, 2, 2), "".into()),
-            ],
+            batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 2, 1)],
             since: Antichain::from_elem(1),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [2] } } in advance of trace since Antichain { elements: [1] }")));
+
+        // Normal case: decreasing or constant compaction levels
+        let b = BlobTraceMeta {
+            id: Id(0),
+            batches: vec![
+                batch_meta_full(0, 1, 0, 2),
+                batch_meta_full(1, 2, 0, 2),
+                batch_meta_full(2, 3, 0, 1),
+            ],
+            since: Antichain::from_elem(0),
+            next_blob_id: 0,
+        };
+        assert_eq!(b.validate(), Ok(()));
+
+        // Increasing compaction level.
+        let b = BlobTraceMeta {
+            id: Id(0),
+            batches: vec![batch_meta_full(0, 1, 0, 1), batch_meta_full(1, 2, 0, 2)],
+            since: Antichain::from_elem(0),
+            next_blob_id: 0,
+        };
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "invalid batch sequence: compaction level 1 followed by 2"
+            ))
+        );
     }
 
     #[test]
@@ -1002,7 +1105,7 @@ mod tests {
             }],
             traces: vec![BlobTraceMeta {
                 id: Id(0),
-                batches: vec![(u64_desc(0, 1), "".into())],
+                batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
                 next_blob_id: 0,
             }],
