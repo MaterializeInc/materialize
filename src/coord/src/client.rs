@@ -19,7 +19,7 @@ use dataflow_types::PeekResponse;
 use expr::GlobalId;
 use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
-use repr::{ColumnType, Datum, Row};
+use repr::{Datum, Row};
 use sql::ast::{Raw, Statement};
 
 use crate::command::{
@@ -378,7 +378,7 @@ impl SessionClient {
             }
         }
 
-        fn datum_to_json(datum: &Datum, idx: usize, col_types: &[ColumnType]) -> serde_json::Value {
+        fn datum_to_json(datum: &Datum) -> serde_json::Value {
             match datum {
                 // Convert some common things to a native JSON value. This doesn't need to be
                 // too exhaustive because the SQL-over-HTTP interface is currently not hooked
@@ -402,8 +402,11 @@ impl SessionClient {
                 }
                 Datum::String(s) => serde_json::Value::String(s.to_string()),
                 Datum::List(list) => serde_json::Value::Array(
-                    list.iter()
-                        .map(|entry| datum_to_json(&entry, idx, col_types))
+                    list.iter().map(|entry| datum_to_json(&entry)).collect(),
+                ),
+                Datum::Map(map) => serde_json::Value::Object(
+                    map.iter()
+                        .map(|(k, v)| (k.to_owned(), datum_to_json(&v)))
                         .collect(),
                 ),
                 _ => serde_json::Value::String(datum.to_string()),
@@ -440,24 +443,16 @@ impl SessionClient {
                 PeekResponse::Canceled => coord_bail!("execution canceled"),
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-            let (col_names, col_types) = match desc.relation_desc {
-                Some(desc) => (
-                    desc.iter_names()
-                        .map(|name| name.map(|name| name.to_string()))
-                        .collect(),
-                    desc.typ().column_types.clone(),
-                ),
-                None => (vec![], vec![]),
+            let col_names = match desc.relation_desc {
+                Some(desc) => desc
+                    .iter_names()
+                    .map(|name| name.map(|name| name.to_string()))
+                    .collect(),
+                None => vec![],
             };
             for row in rows {
                 let datums = row.unpack();
-                sql_rows.push(
-                    datums
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, datum)| datum_to_json(datum, idx, &col_types))
-                        .collect(),
-                );
+                sql_rows.push(datums.iter().map(|datum| datum_to_json(datum)).collect());
             }
             results.push(SimpleResult {
                 rows: sql_rows,
