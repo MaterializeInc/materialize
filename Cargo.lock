@@ -2741,6 +2741,7 @@ dependencies = [
  "log",
  "ore",
  "rand",
+ "serde",
  "tempfile",
  "timely",
 ]

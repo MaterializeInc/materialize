@@ -62,12 +62,10 @@
 
 // TODO
 // - Variant with S3Blob
-// - Variant with mz-like traffic distribution (write-heavy/snapshot-light)
 // - Impl of Runtime with Timely workers running in threads
 // - Impl of Runtime with Timely workers running in processes
 // - Restarting workers
 // - Advancing the compaction frontier
-// - Configurable Generator
 // - Storage (buffer/blob) downtime via a shim implementation
 // - Storage (buffer/blob) with variable latency/slow requests
 // - Vary key size
@@ -80,7 +78,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::error::Error;
-use crate::nemesis::generator::Generator;
+use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
 
 mod direct;
@@ -174,16 +172,16 @@ pub trait Runtime {
 
 pub struct Runner<R: Runtime> {
     generator: Generator,
-    steps: Vec<Step>,
     runtime: R,
+    steps: Vec<Step>,
 }
 
 impl<R: Runtime> Runner<R> {
-    pub fn new(seed: u64, runtime: R) -> Self {
+    pub fn new(generator: Generator, runtime: R) -> Self {
         Runner {
-            generator: Generator::from_seed(seed),
-            steps: Vec::new(),
+            generator,
             runtime,
+            steps: Vec::new(),
         }
     }
 
@@ -196,11 +194,12 @@ impl<R: Runtime> Runner<R> {
     }
 }
 
-pub fn run<R: Runtime>(steps: usize, runtime: R) {
+pub fn run<R: Runtime>(steps: usize, config: GeneratorConfig, runtime: R) {
     let seed =
         env::var("MZ_NEMESIS_SEED").map_or_else(|_| OsRng.next_u64(), |s| s.parse().unwrap());
     eprintln!("MZ_NEMESIS_SEED={}", seed);
-    let runner = Runner::new(seed, runtime);
+    let generator = Generator::new(seed, config);
+    let runner = Runner::new(generator, runtime);
     let history = runner.run(steps);
     if let Err(errors) = Validator::validate(history) {
         for err in errors.iter() {

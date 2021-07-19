@@ -119,6 +119,7 @@ mod tests {
     use crate::file::{FileBlob, FileBuffer};
     use crate::mem::MemRegistry;
     use crate::nemesis;
+    use crate::nemesis::generator::GeneratorConfig;
 
     use super::*;
 
@@ -127,7 +128,7 @@ mod tests {
         let mut registry = MemRegistry::new();
         let direct = Direct::new(|| registry.open("direct_mem", "direct_mem"))
             .expect("initial start failed");
-        nemesis::run(100, direct)
+        nemesis::run(100, GeneratorConfig::default(), direct)
     }
 
     #[test]
@@ -144,6 +145,24 @@ mod tests {
         // TODO: At the moment, running this for 100 steps takes a bit over a
         // second, so run this one for fewer steps than the other tests. Revisit
         // once we pipeline write calls in Buffer.
-        nemesis::run(10, direct);
+        nemesis::run(10, GeneratorConfig::default(), direct);
+    }
+
+    // A variant with a traffic pattern vaguely like production usage of
+    // Materialize.
+    #[test]
+    fn direct_mzlike() {
+        let config = GeneratorConfig {
+            // Writes are likely to outnumber other operations.
+            write_unsealed_weight: 20,
+            // Writes to sealed timestamps are errors that we don't expect in
+            // production usage.
+            write_sealed_weight: 0,
+            ..Default::default()
+        };
+        let mut registry = MemRegistry::new();
+        let direct = Direct::new(|| registry.open("direct_mzlike", "direct_mzlike"))
+            .expect("initial start failed");
+        nemesis::run(100, config, direct)
     }
 }
