@@ -20,6 +20,7 @@ use crate::nemesis::{
 };
 
 pub struct Direct {
+    start_fn: Box<dyn FnMut() -> Result<RuntimeClient<String, ()>, Error>>,
     persister: RuntimeClient<String, ()>,
     streams: HashMap<String, (StreamWriteHandle<String, ()>, StreamReadHandle<String, ()>)>,
     snapshots: HashMap<SnapshotId, IndexedSnapshot<String, ()>>,
@@ -32,6 +33,7 @@ impl Runtime for Direct {
             Req::Seal(req) => Res::Seal(req.clone(), self.seal(req)),
             Req::TakeSnapshot(req) => Res::TakeSnapshot(req.clone(), self.take_snapshot(req)),
             Req::ReadSnapshot(req) => Res::ReadSnapshot(req.clone(), self.read_snapshot(req)),
+            Req::Restart => Res::Restart(self.restart()),
         };
         Step {
             req_id: i.req_id,
@@ -43,11 +45,12 @@ impl Runtime for Direct {
 }
 
 impl Direct {
-    pub fn new<F: FnMut() -> Result<RuntimeClient<String, ()>, Error>>(
+    pub fn new<F: FnMut() -> Result<RuntimeClient<String, ()>, Error> + 'static>(
         mut start_fn: F,
     ) -> Result<Self, Error> {
         let persister = start_fn()?;
         Ok(Direct {
+            start_fn: Box::new(start_fn),
             persister,
             streams: HashMap::new(),
             snapshots: HashMap::new(),
@@ -112,6 +115,15 @@ impl Direct {
             contents,
         })
     }
+
+    fn restart(&mut self) -> Result<(), Error> {
+        let stop_res = self.persister.stop();
+        // The handles from the previous persister cannot be used after stop.
+        self.streams.clear();
+        let persister = (self.start_fn)()?;
+        self.persister = persister;
+        stop_res
+    }
 }
 
 #[cfg(test)]
@@ -126,7 +138,7 @@ mod tests {
     #[test]
     fn direct_mem() {
         let mut registry = MemRegistry::new();
-        let direct = Direct::new(|| registry.open("direct_mem", "direct_mem"))
+        let direct = Direct::new(move || registry.open("direct_mem", "direct_mem"))
             .expect("initial start failed");
         nemesis::run(100, GeneratorConfig::default(), direct)
     }
@@ -134,7 +146,7 @@ mod tests {
     #[test]
     fn direct_file() {
         let temp_dir = tempfile::tempdir().expect("tempdir creation failed");
-        let direct = Direct::new(|| {
+        let direct = Direct::new(move || {
             let (buffer_dir, blob_dir) =
                 (temp_dir.path().join("buffer"), temp_dir.path().join("blob"));
             let buffer = FileBuffer::new(buffer_dir, "direct_file")?;
@@ -161,7 +173,7 @@ mod tests {
             ..Default::default()
         };
         let mut registry = MemRegistry::new();
-        let direct = Direct::new(|| registry.open("direct_mzlike", "direct_mzlike"))
+        let direct = Direct::new(move || registry.open("direct_mzlike", "direct_mzlike"))
             .expect("initial start failed");
         nemesis::run(100, config, direct)
     }

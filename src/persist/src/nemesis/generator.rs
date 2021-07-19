@@ -26,6 +26,7 @@ pub struct GeneratorConfig {
     pub seal_weight: u32,
     pub take_snapshot_weight: u32,
     pub read_snapshot_weight: u32,
+    pub restart_weight: u32,
 }
 
 impl GeneratorConfig {
@@ -36,6 +37,7 @@ impl GeneratorConfig {
             seal_weight: 1,
             take_snapshot_weight: 1,
             read_snapshot_weight: 1,
+            restart_weight: 1,
         }
     }
 }
@@ -68,6 +70,7 @@ enum ReqGenerator {
     Seal,
     TakeSnapshot,
     ReadSnapshot,
+    Restart,
 }
 
 fn rng_stream(rng: &mut SmallRng) -> String {
@@ -159,6 +162,7 @@ impl ReqGenerator {
             ReqGenerator::Seal => ReqGenerator::seal(rng, state),
             ReqGenerator::TakeSnapshot => ReqGenerator::take_snapshot(rng, state),
             ReqGenerator::ReadSnapshot => ReqGenerator::read_snapshot(rng, state),
+            ReqGenerator::Restart => Req::Restart,
         }
     }
 }
@@ -209,6 +213,7 @@ impl Generator {
                 Some(ReqGenerator::ReadSnapshot)
                     .filter(|_| !self.state.outstanding_snaps.is_empty()),
             ),
+            (self.config.restart_weight, Some(ReqGenerator::Restart)),
         ];
         for (weight, req) in req_weights {
             if let Some(req) = req {
@@ -283,6 +288,9 @@ mod tests {
             Req::ReadSnapshot(_) => {
                 counts.read_snapshot_weight += 1;
             }
+            Req::Restart => {
+                counts.restart_weight += 1;
+            }
         };
 
         let mut counts = GeneratorConfig {
@@ -291,6 +299,7 @@ mod tests {
             seal_weight: 0,
             take_snapshot_weight: 0,
             read_snapshot_weight: 0,
+            restart_weight: 0,
         };
 
         const MIN_EACH_TYPE: u32 = 5;

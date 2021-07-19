@@ -64,7 +64,6 @@
 // - Variant with S3Blob
 // - Impl of Runtime with Timely workers running in threads
 // - Impl of Runtime with Timely workers running in processes
-// - Restarting workers
 // - Advancing the compaction frontier
 // - Storage (buffer/blob) downtime via a shim implementation
 // - Storage (buffer/blob) with variable latency/slow requests
@@ -121,6 +120,7 @@ pub enum Req {
     Seal(SealReq),
     TakeSnapshot(TakeSnapshotReq),
     ReadSnapshot(ReadSnapshotReq),
+    Restart,
 }
 
 #[derive(Debug)]
@@ -129,6 +129,7 @@ pub enum Res {
     Seal(SealReq, Result<(), Error>),
     TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
     ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
+    Restart(Result<(), Error>),
 }
 
 #[derive(Clone, Debug)]

@@ -63,6 +63,7 @@ impl Validator {
             Res::Seal(req, res) => self.step_seal(s.req_id, req, res),
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
             Res::ReadSnapshot(req, res) => self.step_read_snapshot(s.req_id, req, res),
+            Res::Restart(res) => self.step_restart(s.req_id, res),
         }
     }
 
@@ -147,5 +148,12 @@ impl Validator {
                 }
             }
         }
+    }
+
+    fn step_restart(&mut self, req_id: ReqId, res: Result<(), Error>) {
+        // At the moment, there are no nemeses that would prevent a restart
+        // from working, so we shouldn't see any errors.
+        let should_succeed = true;
+        self.check_success(req_id, &res, should_succeed);
     }
 }
