@@ -132,8 +132,19 @@ pub struct BlobFutureBatch<K, V> {
 /// The structure serialized and stored as a value in [crate::storage::Blob]
 /// storage for data keys corresponding to trace data.
 ///
+/// This batch represents the data that was originally written at some time in
+/// [lower, upper) (more precisely !< lower and < upper). The individual record
+/// times may have later been advanced by compaction to something <= since.
+/// This means the ability to reconstruct the state of the collection at times < since
+/// has been lost. However, there may still be records present in the batch whose
+/// times are < since. Users iterating through updates must take care to advance
+/// records with times < since to since in order to correctly answer queries at
+/// times >= since.
+///
 /// Invariants:
-/// - The timestamp of each update is >= to desc.lower() and < desc.upper().
+/// - The timestamp of each update is >= to desc.lower().
+/// - The timestamp of each update is < desc.upper() iff desc.upper() > desc.since().
+///   Otherwise the timestamp of each update is <= desc.since().
 /// - The values in updates are sorted by (key, value, time).
 /// - The values in updates are "consolidated", i.e. (key, value, time) is
 ///   unique.
@@ -408,10 +419,19 @@ where
                 )
                 .into());
             }
-            if self.desc.upper().less_equal(ts) {
+
+            if PartialOrder::less_than(self.desc.since(), self.desc.upper()) {
+                if self.desc.upper().less_equal(ts) {
+                    return Err(format!(
+                        "timestamp {} is greater than or equal to the batch upper: {:?}",
+                        ts, self.desc
+                    )
+                    .into());
+                }
+            } else if self.desc.since().less_than(ts) {
                 return Err(format!(
-                    "timestamp {} is greater than or equal to the batch upper: {:?}",
-                    ts, self.desc
+                    "timestamp {} is greater than the batch since: {:?}",
+                    ts, self.desc,
                 )
                 .into());
             }
@@ -457,6 +477,14 @@ mod tests {
             Antichain::from_elem(lower),
             Antichain::from_elem(upper),
             Antichain::from_elem(0),
+        )
+    }
+
+    fn u64_desc_since(lower: u64, upper: u64, since: u64) -> Description<u64> {
+        Description::new(
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(since),
         )
     }
 
@@ -633,6 +661,27 @@ mod tests {
             updates: vec![update_with_key(2, "0")],
         };
         assert_eq!(b.validate(), Err(Error::from("timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
+
+        // Normal case: update "after" desc and within since
+        let b = BlobTraceBatch {
+            desc: u64_desc_since(1, 2, 4),
+            updates: vec![update_with_key(2, "0")],
+        };
+        assert_eq!(b.validate(), Ok(()));
+
+        // Normal case: update "after" desc and at since
+        let b = BlobTraceBatch {
+            desc: u64_desc_since(1, 2, 4),
+            updates: vec![update_with_key(4, "0")],
+        };
+        assert_eq!(b.validate(), Ok(()));
+
+        // Update "after" desc since
+        let b = BlobTraceBatch {
+            desc: u64_desc_since(1, 2, 4),
+            updates: vec![update_with_key(5, "0")],
+        };
+        assert_eq!(b.validate(), Err(Error::from("timestamp 5 is greater than the batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [4] } }")));
 
         // Invalid update
         let b: BlobTraceBatch<String, String> = BlobTraceBatch {
