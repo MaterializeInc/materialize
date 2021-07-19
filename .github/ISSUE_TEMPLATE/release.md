@@ -26,10 +26,6 @@ about: >
     a list here, or state that there are none:
 
   > unknown number of milestone blockers or release blockers
-- [ ] Link to this issue in the #release Slack channel and be sure to directly notify the @relnotes-team.
-
-  If there are open blockers, clarify if they should block this release until they're
-  merged when you link to this issue.
 
 [rel-blockers]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-release-blocker
 [blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-milestone-blocker
@@ -104,12 +100,12 @@ Release notes should be updated by engineers as they merge PRs. The release note
 team is responsible for reviewing release notes and the release announcement before
 a release is published.
 
-- [ ] Post the following message to the `#release` channel in slack:
+- [ ] Post the following message to the `#release` channel in slack, modifying the link to the issue to point to this one:
 
   > @relnotes-team the release is in progress, now's a great time to verify or
-  > prepare the release notes
-  > (https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md)
-  > and any announcement posts
+  > prepare the release notes and any announcement posts.
+  > * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
+  > * release issue: https://github.com/MaterializeInc/materialize/issues/
 
 ### Test the release candidate
 
