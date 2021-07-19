@@ -417,15 +417,14 @@ where
             } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
-                let collection = self
+                let mut collection = self
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
                 if mfp.is_identity() {
                     // Assert that each of `keys` are present in `collection`.
                     assert!(keys.iter().all(|key| collection.arranged.contains_key(key)));
                     // Retain only those keys we want to import.
-                    // TODO: This stabilized in 1.53 and is not yet available to us.
-                    // collection.arranged.retain(|key, _value| keys.contains(key));
+                    collection.arranged.retain(|key, _value| keys.contains(key));
                     collection
                 } else {
                     let (oks, errs) = collection.as_collection_core(mfp, key_val);
