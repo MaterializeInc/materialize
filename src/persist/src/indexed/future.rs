@@ -194,8 +194,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn append_ts_lower_invariant() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new("append_ts_lower_invariant")?);
+    fn append_ts_lower_invariant() {
+        let mut blob = BlobCache::new(MemBlob::new("append_ts_lower_invariant"));
         let mut f = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(2),
@@ -229,8 +229,6 @@ mod tests {
             updates: vec![(("k".to_string(), "v".to_string()), 2, 1)],
         };
         assert_eq!(f.append(batch, &mut blob), Ok(()));
-
-        Ok(())
     }
 
     #[test]

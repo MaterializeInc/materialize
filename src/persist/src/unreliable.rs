@@ -156,8 +156,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn buffer() -> Result<(), Error> {
-        let (mut buffer, mut handle) = UnreliableBuffer::new(MemBuffer::new("unreliable")?);
+    fn buffer() {
+        let (mut buffer, mut handle) = UnreliableBuffer::new(MemBuffer::new("unreliable"));
 
         // Initially starts reliable.
         assert!(buffer.write_sync(vec![]).is_ok());
@@ -175,13 +175,11 @@ mod tests {
         assert!(buffer.write_sync(vec![]).is_ok());
         assert!(buffer.snapshot(|_, _| { Ok(()) }).is_ok());
         assert!(buffer.truncate(SeqNo(2)).is_ok());
-
-        Ok(())
     }
 
     #[test]
-    fn blob() -> Result<(), Error> {
-        let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new("unreliable")?);
+    fn blob() {
+        let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new("unreliable"));
 
         // Initially starts reliable.
         assert!(blob.set("a", b"1".to_vec(), true).is_ok());
@@ -196,7 +194,5 @@ mod tests {
         handle.make_available();
         assert!(blob.set("a", b"3".to_vec(), true).is_ok());
         assert!(blob.get("a").is_ok());
-
-        Ok(())
     }
 }

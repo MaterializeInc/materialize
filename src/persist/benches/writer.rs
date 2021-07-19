@@ -26,8 +26,7 @@ fn bench_write_sync<U: Buffer>(writer: &mut U, data: Vec<u8>, b: &mut Bencher) {
 pub fn bench_writes(c: &mut Criterion) {
     let data = "entry0".as_bytes().to_vec();
 
-    let mut mem_buffer =
-        MemBuffer::new("mem_buffer_bench").expect("creating a MemBuffer cannot fail");
+    let mut mem_buffer = MemBuffer::new("mem_buffer_bench");
     c.bench_function("mem_write_sync", |b| {
         bench_write_sync(&mut mem_buffer, data.clone(), b)
     });

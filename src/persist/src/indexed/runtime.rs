@@ -387,8 +387,8 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let buffer = MemBuffer::new("runtime")?;
-        let blob = MemBlob::new("runtime")?;
+        let buffer = MemBuffer::new("runtime");
+        let blob = MemBlob::new("runtime");
         let mut runtime = start(buffer, blob)?;
 
         let (mut write, meta) = runtime.create_or_load("0")?.into_inner();
@@ -412,8 +412,8 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let buffer = MemBuffer::new("concurrent")?;
-        let blob = MemBlob::new("concurrent")?;
+        let buffer = MemBuffer::new("concurrent");
+        let blob = MemBlob::new("concurrent");
         let client1 = start(buffer, blob)?;
         let _ = client1.create_or_load("0")?;
 

@@ -517,8 +517,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("single_stream")?,
-            MemBlob::new("single_stream")?,
+            MemBuffer::new("single_stream"),
+            MemBlob::new("single_stream"),
         )?;
         let id = i.register("0");
 
@@ -573,8 +573,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("batch_sorting")?,
-            MemBlob::new("batch_sorting")?,
+            MemBuffer::new("batch_sorting"),
+            MemBlob::new("batch_sorting"),
         )?;
         let id = i.register("0");
 
@@ -600,8 +600,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("batch_consolidation")?,
-            MemBlob::new("batch_consolidation")?,
+            MemBuffer::new("batch_consolidation"),
+            MemBlob::new("batch_consolidation"),
         )?;
         let id = i.register("0");
 
@@ -629,8 +629,8 @@ mod tests {
     #[test]
     fn batch_future_empty() -> Result<(), Box<dyn Error>> {
         let mut i = Indexed::new(
-            MemBuffer::new("batch_future_empty")?,
-            MemBlob::new("batch_future_empty")?,
+            MemBuffer::new("batch_future_empty"),
+            MemBlob::new("batch_future_empty"),
         )?;
         let id = i.register("0");
 
@@ -659,8 +659,8 @@ mod tests {
     #[test]
     fn drain_buf_validate() -> Result<(), IndexedError> {
         let mut i = Indexed::new(
-            MemBuffer::new("drain_buf_validate")?,
-            MemBlob::new("drain_buf_validate")?,
+            MemBuffer::new("drain_buf_validate"),
+            MemBlob::new("drain_buf_validate"),
         )?;
         let id = i.register("0");
 

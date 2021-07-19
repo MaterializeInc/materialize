@@ -28,11 +28,11 @@ struct MemBufferCore {
 }
 
 impl MemBufferCore {
-    fn new() -> Self {
+    fn new(lock_info: &str) -> Self {
         MemBufferCore {
             seqno: SeqNo(0)..SeqNo(0),
             dataz: Vec::new(),
-            lock: None,
+            lock: Some(lock_info.to_string()),
         }
     }
 
@@ -111,12 +111,10 @@ pub struct MemBuffer {
 
 impl MemBuffer {
     /// Constructs a new, empty MemBuffer.
-    pub fn new(lock_info: &str) -> Result<Self, Error> {
-        let mut core = MemBufferCore::new();
-        core.open(lock_info)?;
-        Ok(Self {
-            core: Arc::new(Mutex::new(core)),
-        })
+    pub fn new(lock_info: &str) -> Self {
+        Self {
+            core: Arc::new(Mutex::new(MemBufferCore::new(lock_info))),
+        }
     }
 
     /// Open a pre-existing MemBuffer.
@@ -159,10 +157,10 @@ struct MemBlobCore {
 }
 
 impl MemBlobCore {
-    fn new() -> Self {
+    fn new(lock_info: &str) -> Self {
         MemBlobCore {
             dataz: HashMap::new(),
-            lock: None,
+            lock: Some(lock_info.to_string()),
         }
     }
 
@@ -214,12 +212,10 @@ pub struct MemBlob {
 
 impl MemBlob {
     /// Constructs a new, empty MemBlob.
-    pub fn new(lock_info: &str) -> Result<Self, Error> {
-        let mut core = MemBlobCore::new();
-        core.open(lock_info)?;
-        Ok(MemBlob {
-            core: Arc::new(Mutex::new(core)),
-        })
+    pub fn new(lock_info: &str) -> Self {
+        MemBlob {
+            core: Arc::new(Mutex::new(MemBlobCore::new(lock_info))),
+        }
     }
 
     /// Open a pre-existing MemBlob.
@@ -252,41 +248,38 @@ impl Blob for MemBlob {
 /// An in-memory representation of a set of [Buffer]s and [Blob]s that can be reused
 /// across dataflows
 pub struct MemRegistry {
-    by_path: HashMap<String, (Arc<Mutex<MemBufferCore>>, Arc<Mutex<MemBlobCore>>)>,
+    buf_by_path: HashMap<String, Arc<Mutex<MemBufferCore>>>,
+    blob_by_path: HashMap<String, Arc<Mutex<MemBlobCore>>>,
 }
 
 impl MemRegistry {
     /// Constructs a new, empty MemRegistry
     pub fn new() -> Self {
         MemRegistry {
-            by_path: HashMap::new(),
+            buf_by_path: HashMap::new(),
+            blob_by_path: HashMap::new(),
         }
     }
 
     fn buffer(&mut self, path: &str, lock_info: &str) -> Result<MemBuffer, Error> {
-        let buffer = if let Some((buffer, _)) = self.by_path.get(path) {
-            buffer.clone()
+        if let Some(buf) = self.buf_by_path.get(path) {
+            MemBuffer::open(buf.clone(), lock_info)
         } else {
-            let buffer = Arc::new(Mutex::new(MemBufferCore::new()));
-            let blob = Arc::new(Mutex::new(MemBlobCore::new()));
-            self.by_path
-                .insert(path.to_string(), (buffer.clone(), blob));
-            buffer
-        };
-        MemBuffer::open(buffer, lock_info)
+            let buf = MemBuffer::new(lock_info);
+            self.buf_by_path.insert(path.to_string(), buf.core.clone());
+            Ok(buf)
+        }
     }
 
     fn blob(&mut self, path: &str, lock_info: &str) -> Result<MemBlob, Error> {
-        let blob = if let Some((_, blob)) = self.by_path.get(path) {
-            blob.clone()
+        if let Some(blob) = self.blob_by_path.get(path) {
+            MemBlob::open(blob.clone(), lock_info)
         } else {
-            let buffer = Arc::new(Mutex::new(MemBufferCore::new()));
-            let blob = Arc::new(Mutex::new(MemBlobCore::new()));
-            self.by_path
-                .insert(path.to_string(), (buffer, blob.clone()));
-            blob
-        };
-        MemBlob::open(blob, lock_info)
+            let blob = MemBlob::new(lock_info);
+            self.blob_by_path
+                .insert(path.to_string(), blob.core.clone());
+            Ok(blob)
+        }
     }
 
     /// Open a [RuntimeClient] associated with `path`.

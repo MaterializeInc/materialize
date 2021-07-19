@@ -77,7 +77,7 @@ where
 pub fn bench_mem_snapshots(c: &mut Criterion) {
     bench_indexed_snapshots(c, "mem", |path| {
         let name = format!("snapshot_bench_{}", path);
-        Indexed::new(MemBuffer::new(&name)?, MemBlob::new(&name)?)
+        Indexed::new(MemBuffer::new(&name), MemBlob::new(&name))
     });
 }
 
