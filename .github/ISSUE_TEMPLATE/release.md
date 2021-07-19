@@ -13,7 +13,11 @@ about: >
 
 ## Announce the imminent release internally
 
-- [x] Create this release issue.
+- [x] Create this release issue. Determine whether this is a feature release or
+  a patch release by checking the [milestones
+  page](https://github.com/MaterializeInc/materialize/milestones) -- if the date
+  is correct for the next feature release double check with the PMs in the
+  #release slack channel and use that version, otherwise it's a patch release.
 - [ ] Check for open blocking issues:
   - [ ] For any release, check if there are any open [`M-release-blocker`][rel-blockers]
     issues or PRs
