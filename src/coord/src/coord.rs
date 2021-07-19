@@ -3172,7 +3172,9 @@ impl Coordinator {
 
             // Optimize the dataflow across views, and any other ways that appeal.
             transform::optimize_dataflow(&mut dataflow);
-            dataflow_plans.push(dataflow::Plan::finalize_dataflow(dataflow));
+            let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
+                .expect("Dataflow planning failed; unrecoverable error");
+            dataflow_plans.push(dataflow_plan);
         }
 
         // Finalize the dataflow by broadcasting its construction to all workers.
