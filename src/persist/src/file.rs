@@ -61,7 +61,7 @@ impl FileBuffer {
     /// Additionally, the metadata about the last truncated sequence number is stored in a
     /// metadata file, which only ever contains a single 64 bit unsigned integer (also little-endian)
     /// that indicates the most recently truncated offset (ie all offsets less than this are truncated).
-    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: &[u8]) -> Result<Self, Error> {
+    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: &str) -> Result<Self, Error> {
         let base_dir = base_dir.as_ref();
         fs::create_dir_all(&base_dir)?;
         {
@@ -70,7 +70,7 @@ impl FileBuffer {
                 .write(true)
                 .create_new(true)
                 .open(lockfile_path)?;
-            lockfile.write_all(&lock_info)?;
+            lockfile.write_all(lock_info.as_bytes())?;
             lockfile.sync_all()?;
         }
         let buffer_path = Self::buffer_path(&base_dir);
@@ -289,7 +289,7 @@ impl FileBlob {
     /// The contents of `lock_info` are stored in the LOCK file and should
     /// include anything that would help debug an unexpected LOCK file, such as
     /// version, ip, worker number, etc.
-    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: &[u8]) -> Result<Self, Error> {
+    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: &str) -> Result<Self, Error> {
         let base_dir = base_dir.as_ref();
         fs::create_dir_all(&base_dir)?;
         {
@@ -298,7 +298,7 @@ impl FileBlob {
                 .write(true)
                 .create_new(true)
                 .open(lockfile_path)?;
-            lockfile.write_all(&lock_info)?;
+            lockfile.write_all(lock_info.as_bytes())?;
             lockfile.sync_all()?;
         }
         Ok(FileBlob {
@@ -370,7 +370,7 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         blob_impl_test(move |idx| {
             let instance_dir = temp_dir.path().join(idx);
-            FileBlob::new(instance_dir, &"file_blob_test".as_bytes())
+            FileBlob::new(instance_dir, &"file_blob_test")
         })
     }
 
@@ -379,7 +379,7 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         buffer_impl_test(move |idx| {
             let instance_dir = temp_dir.path().join(idx);
-            FileBuffer::new(instance_dir, &"file_buffer_test".as_bytes())
+            FileBuffer::new(instance_dir, &"file_buffer_test")
         })
     }
 }

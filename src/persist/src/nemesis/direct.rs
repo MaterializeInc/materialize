@@ -14,7 +14,6 @@ use std::sync::mpsc;
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
 use crate::indexed::{IndexedSnapshot, Snapshot};
-use crate::mem::{MemBlob, MemBuffer};
 use crate::nemesis::{
     Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId, Step,
     TakeSnapshotReq, WriteReq, WriteRes,
@@ -44,10 +43,10 @@ impl Runtime for Direct {
 }
 
 impl Direct {
-    pub fn new(lock_info: &str) -> Result<Self, Error> {
-        let buffer = MemBuffer::new(lock_info)?;
-        let blob = MemBlob::new(lock_info)?;
-        let persister = runtime::start(buffer, blob)?;
+    pub fn new<F: FnMut() -> Result<RuntimeClient<String, ()>, Error>>(
+        mut start_fn: F,
+    ) -> Result<Self, Error> {
+        let persister = start_fn()?;
         Ok(Direct {
             persister,
             streams: HashMap::new(),
@@ -117,14 +116,34 @@ impl Direct {
 
 #[cfg(test)]
 mod tests {
+    use crate::file::{FileBlob, FileBuffer};
+    use crate::mem::MemRegistry;
     use crate::nemesis;
 
     use super::*;
 
     #[test]
     fn direct_mem() {
-        nemesis::run(100, || {
-            Direct::new("direct_mem").expect("new empty persist runtime is infallible")
+        let mut registry = MemRegistry::new();
+        let direct = Direct::new(|| registry.open("direct_mem", "direct_mem"))
+            .expect("initial start failed");
+        nemesis::run(100, direct)
+    }
+
+    #[test]
+    fn direct_file() {
+        let temp_dir = tempfile::tempdir().expect("tempdir creation failed");
+        let direct = Direct::new(|| {
+            let (buffer_dir, blob_dir) =
+                (temp_dir.path().join("buffer"), temp_dir.path().join("blob"));
+            let buffer = FileBuffer::new(buffer_dir, "direct_file")?;
+            let blob = FileBlob::new(blob_dir, "direct_file")?;
+            runtime::start(buffer, blob)
         })
+        .expect("initial start failed");
+        // TODO: At the moment, running this for 100 steps takes a bit over a
+        // second, so run this one for fewer steps than the other tests. Revisit
+        // once we pipeline write calls in Buffer.
+        nemesis::run(10, direct);
     }
 }

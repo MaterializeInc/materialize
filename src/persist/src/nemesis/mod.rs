@@ -61,7 +61,6 @@
 //! ```
 
 // TODO
-// - Variant with FileBuffer and FileBlob
 // - Variant with S3Blob
 // - Variant with mz-like traffic distribution (write-heavy/snapshot-light)
 // - Impl of Runtime with Timely workers running in threads
@@ -197,11 +196,10 @@ impl<R: Runtime> Runner<R> {
     }
 }
 
-pub fn run<R: Runtime, F: FnOnce() -> R>(steps: usize, new_runtime: F) {
+pub fn run<R: Runtime>(steps: usize, runtime: R) {
     let seed =
         env::var("MZ_NEMESIS_SEED").map_or_else(|_| OsRng.next_u64(), |s| s.parse().unwrap());
     eprintln!("MZ_NEMESIS_SEED={}", seed);
-    let runtime = new_runtime();
     let runner = Runner::new(seed, runtime);
     let history = runner.run(steps);
     if let Err(errors) = Validator::validate(history) {
