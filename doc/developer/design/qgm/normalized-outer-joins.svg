@@ -9,7 +9,7 @@
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 665.99)">
 <title>G</title>
 <polygon fill="white" stroke="transparent" points="-4,4 -4,-665.99 818,-665.99 818,4 -4,4"/>
-<text text-anchor="middle" x="372" y="-7.8" font-family="Times,serif" font-size="14.00">select * from t1 inner join t3 on t1.f1 = t3.f1 left join t2 on t1.f1 = t2.f1; (with normalized outer joins)</text>
+<text text-anchor="middle" x="372" y="-7.8" font-family="Times,serif" font-size="14.00">select * from t1 left join t3 on t1.f1 = t3.f1 left join t2 on t1.f1 = t2.f1; (with normalized outer joins)</text>
 <g id="clust1" class="cluster">
 <title>cluster0</title>
 <polygon fill="none" stroke="black" points="245,-383.99 245,-653.99 683,-653.99 683,-383.99 245,-383.99"/>
