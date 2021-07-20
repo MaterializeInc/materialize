@@ -35,7 +35,7 @@ use dataflow_types::{
     SourceEnvelope, Timeline,
 };
 use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
-use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
+use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
@@ -1312,15 +1312,15 @@ fn kafka_sink_builder(
         Vec::new()
     };
 
-    let encoder = Encoder::new(
+    let schema_generator = AvroSchemaGenerator::new(
         key_desc_and_indices
             .as_ref()
             .map(|(desc, _indices)| desc.clone()),
         value_desc.clone(),
         consistency_topic.is_some(),
     );
-    let value_schema = encoder.value_writer_schema().to_string();
-    let key_schema = encoder
+    let value_schema = schema_generator.value_writer_schema().to_string();
+    let key_schema = schema_generator
         .key_writer_schema()
         .map(|key_schema| key_schema.to_string());
 

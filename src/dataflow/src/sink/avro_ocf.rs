@@ -19,7 +19,7 @@ use timely::dataflow::Scope;
 
 use dataflow_types::AvroOcfSinkConnector;
 use expr::GlobalId;
-use interchange::avro::{encode_datums_as_avro, Encoder};
+use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
 use repr::{RelationDesc, Row, Timestamp};
 
 pub fn avro_ocf<G>(
@@ -36,9 +36,9 @@ pub fn avro_ocf<G>(
         v
     });
     let (schema, columns) = {
-        let encoder = Encoder::new(None, desc, false);
-        let schema = encoder.value_writer_schema().clone();
-        let columns = encoder.value_columns().to_vec();
+        let schema_generator = AvroSchemaGenerator::new(None, desc, false);
+        let schema = schema_generator.value_writer_schema().clone();
+        let columns = schema_generator.value_columns().to_vec();
         (schema, columns)
     };
 

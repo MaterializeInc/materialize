@@ -20,7 +20,7 @@ pub use envelope_cdc_v2 as cdc_v2;
 pub use self::decode::{Decoder, DiffPair};
 pub use self::encode::{
     column_names_and_types, encode_datums_as_avro, encode_debezium_transaction_unchecked,
-    get_debezium_transaction_schema, Encoder,
+    get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
 };
 pub use self::envelope_debezium::{DebeziumDecodeState, DebeziumDeduplicationStrategy};
 pub use self::schema::{
@@ -28,8 +28,8 @@ pub use self::schema::{
 };
 
 use self::decode::{AvroFlatDecoder, AvroStringDecoder, OptionalRecordDecoder, RowWrapper};
-use self::encode::build_row_schema_json;
 use self::envelope_debezium::{AvroDebeziumDecoder, RowCoordinates};
+use crate::json::build_row_schema_json;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EnvelopeType {
@@ -162,8 +162,9 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_named_column("column1", typ.nullable(false));
-            let encoder = Encoder::new(None, desc, false);
-            let avro_value = encode_datums_as_avro(std::iter::once(datum), encoder.value_columns());
+            let schema_generator = AvroSchemaGenerator::new(None, desc, false);
+            let avro_value =
+                encode_datums_as_avro(std::iter::once(datum), schema_generator.value_columns());
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value

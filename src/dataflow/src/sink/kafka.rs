@@ -41,7 +41,8 @@ use timely::scheduling::Activator;
 
 use dataflow_types::{KafkaSinkConnector, KafkaSinkConsistencyConnector, SinkAsOf};
 use expr::GlobalId;
-use interchange::avro::{self, Encoder};
+use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
+use interchange::encode::Encode;
 use repr::{Diff, RelationDesc, Row, Timestamp};
 use timely::progress::frontier::AntichainRef;
 
@@ -460,9 +461,13 @@ where
 
     let stream = &collection.inner;
 
-    let encoder = Encoder::new(key_desc, value_desc, connector.consistency.is_some());
-    let key_schema_id = connector.key_schema_id;
-    let value_schema_id = connector.value_schema_id;
+    let schema_generator =
+        AvroSchemaGenerator::new(key_desc, value_desc, connector.consistency.is_some());
+    let encoder = AvroEncoder::new(
+        schema_generator,
+        connector.key_schema_id,
+        connector.value_schema_id,
+    );
 
     let encoded_stream = avro_encode_stream(
         stream,
@@ -472,8 +477,6 @@ where
             .clone()
             .and_then(|consistency| consistency.gate_ts),
         encoder,
-        key_schema_id,
-        value_schema_id,
         connector.fuel,
         name.clone(),
     );
@@ -846,7 +849,7 @@ where
 /// This operator will only encode `fuel` number of updates per invocation. If necessary, it will
 /// stash updates and use an [`timely::scheduling::Activator`] to re-schedule future invocations.
 ///
-/// Input [`Row`] updates must me compatible with the given [`Encoder`].
+/// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
 ///
 /// Updates that are not beyond the given [`SinkAsOf`] and/or the `gate_ts` will be discarded
 /// without encoding them.
@@ -862,16 +865,14 @@ fn avro_encode_stream<G>(
     input_stream: &Stream<G, ((Option<Row>, Option<Row>), Timestamp, Diff)>,
     as_of: SinkAsOf,
     gate_ts: Option<Timestamp>,
-    encoder: Encoder,
-    key_schema_id: Option<i32>,
-    value_schema_id: i32,
+    encoder: impl Encode + 'static,
     fuel: usize,
     name_prefix: String,
 ) -> Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let name = format!("{}-avro_encode", name_prefix);
+    let name = format!("{}-{}_encode", name_prefix, encoder.get_format_name());
 
     let mut builder = OperatorBuilder::new(name, input_stream.scope());
     let mut input = builder.new_input(&input_stream, Pipeline);
@@ -937,10 +938,8 @@ where
             records
                 .drain(..num_records_to_drain)
                 .for_each(|((key, value), time, diff)| {
-                    let key =
-                        key.map(|key| encoder.encode_key_unchecked(key_schema_id.unwrap(), key));
-                    let value =
-                        value.map(|value| encoder.encode_value_unchecked(value_schema_id, value));
+                    let key = key.map(|key| encoder.encode_key_unchecked(key));
+                    let value = value.map(|value| encoder.encode_value_unchecked(value));
                     session.give(((key, value), time, diff));
                 });
 

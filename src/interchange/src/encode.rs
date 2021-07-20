@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Translations for various data serialization formats.
+use repr::Row;
 
-#![deny(missing_debug_implementations)]
+pub trait Encode {
+    fn get_format_name(&self) -> &str;
 
-pub mod avro;
-pub mod encode;
-pub mod envelopes;
-pub mod json;
-pub mod protobuf;
+    fn encode_key_unchecked(&self, row: Row) -> Vec<u8>;
+
+    fn encode_value_unchecked(&self, row: Row) -> Vec<u8>;
+}
