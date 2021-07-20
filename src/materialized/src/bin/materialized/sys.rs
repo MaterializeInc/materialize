@@ -30,7 +30,7 @@ pub fn adjust_rlimits() {
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
 pub fn adjust_rlimits() {
     use log::warn;
-    use rlimit::{Resource, Rlim};
+    use rlimit::Resource;
 
     // getrlimit/setrlimit can have surprisingly different behavior across
     // platforms, even with the rlimit wrapper crate that we use. This function
@@ -61,14 +61,14 @@ pub fn adjust_rlimits() {
             .and_then(|ctl| ctl.value())
             .map_err_to_string()
             .and_then(|v| match v {
-                sysctl::CtlValue::Int(v) => usize::try_from(v)
+                sysctl::CtlValue::Int(v) => u64::try_from(v)
                     .map_err(|_| format!("kern.maxfilesperproc unexpectedly negative: {}", v)),
                 o => Err(format!("unexpected sysctl value type: {:?}", o)),
             });
         match res {
             Ok(v) => {
                 trace!("sysctl kern.maxfilesperproc hard limit: {}", v);
-                cmp::min(Rlim::from_usize(v), hard)
+                cmp::min(v, hard)
             }
             Err(e) => {
                 trace!("error while reading sysctl: {}", e);
@@ -94,11 +94,11 @@ pub fn adjust_rlimits() {
     };
     trace!("adjusted nofile rlimit: ({}, {})", soft, hard);
 
-    let recommended_soft = Rlim::from_usize(1024);
-    if soft < recommended_soft {
+    const RECOMMENDED_SOFT: u64 = 1024;
+    if soft < RECOMMENDED_SOFT {
         warn!(
             "soft nofile rlimit ({}) is dangerously low; at least {} is recommended",
-            soft, recommended_soft
+            soft, RECOMMENDED_SOFT
         )
     }
 }
