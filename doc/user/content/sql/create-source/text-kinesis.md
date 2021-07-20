@@ -6,11 +6,11 @@ menu:
     parent: 'create-source'
 ---
 
+{{< beta />}}
+
 {{% create-source/intro %}}
 This document details how to connect Materialize to a text- or byte–formatted
 Kinesis stream.
-
-{{< kinesis-alpha >}}
 
 {{< volatility-warning >}}Kinesis{{< /volatility-warning >}}
 

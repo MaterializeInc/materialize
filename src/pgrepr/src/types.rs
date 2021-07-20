@@ -57,8 +57,6 @@ pub enum Type {
     TimestampTz,
     /// A universally unique identifier.
     Uuid,
-    /// Refactored numeric type using `rust-dec`
-    APD,
 }
 
 lazy_static! {
@@ -82,24 +80,11 @@ lazy_static! {
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
-
-    /// Placeholder for `rust-dec`-backed numeric implementation.
-    pub static ref APD: postgres_types::Type = postgres_types::Type::new(
-        "apd".to_owned(),
-        oid::TYPE_APD_OID,
-        postgres_types::Kind::Simple,
-        "mz_catalog".to_owned(),
-    );
 }
 
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.
     pub fn from_oid(oid: u32) -> Option<Type> {
-        match oid {
-            oid::TYPE_APD_OID => return Some(Type::APD),
-            _ => {}
-        }
-
         let ty = postgres_types::Type::from_oid(oid)?;
         match ty {
             postgres_types::Type::BOOL => Some(Type::Bool),
@@ -150,7 +135,6 @@ impl Type {
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
-                Type::APD => unreachable!(),
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -171,7 +155,6 @@ impl Type {
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
-            Type::APD => &APD,
         }
     }
 
@@ -238,16 +221,14 @@ impl Type {
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::Uuid => 16,
-            Type::APD => 16,
         }
     }
 
     /// Provides a [`ScalarType`] from `self`, but without necessarily
     /// associating any meaningful values within the returned type.
     ///
-    /// For example `Type::Numeric` returns `ScalarType::Decimal(0,0)`, meaning
-    /// that its precision and scale need to be associated with values from
-    /// elsewhere.
+    /// For example `Type::Numeric` returns `SScalarType::Numeric { scale: None }`,
+    /// meaning that its scale might need values from elsewhere.
     pub fn to_scalar_type_lossy(&self) -> ScalarType {
         match self {
             Type::Array(t) => ScalarType::Array(Box::new(t.to_scalar_type_lossy())),
@@ -268,7 +249,7 @@ impl Type {
                 value_type: Box::new(value_type.to_scalar_type_lossy()),
                 custom_oid: None,
             },
-            Type::Numeric => ScalarType::Decimal(0, 0),
+            Type::Numeric => ScalarType::Numeric { scale: None },
             Type::Oid => ScalarType::Oid,
             Type::Record(_) => ScalarType::Record {
                 fields: vec![],
@@ -280,7 +261,6 @@ impl Type {
             Type::Timestamp => ScalarType::Timestamp,
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
-            Type::APD => ScalarType::APD { scale: None },
         }
     }
 }
@@ -292,7 +272,6 @@ impl From<&ScalarType> for Type {
             ScalarType::Bool => Type::Bool,
             ScalarType::Bytes => Type::Bytea,
             ScalarType::Date => Type::Date,
-            ScalarType::Decimal(_, _) => Type::Numeric,
             ScalarType::Float64 => Type::Float8,
             ScalarType::Float32 => Type::Float4,
             ScalarType::Int32 => Type::Int4,
@@ -317,7 +296,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Timestamp => Type::Timestamp,
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
-            ScalarType::APD { .. } => Type::APD,
+            ScalarType::Numeric { .. } => Type::Numeric,
         }
     }
 }

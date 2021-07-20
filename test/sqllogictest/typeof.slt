@@ -35,7 +35,7 @@ integer
 query T
 SELECT pg_typeof(1.0)
 ----
-numeric(38,1)
+numeric
 
 # Custom types
 

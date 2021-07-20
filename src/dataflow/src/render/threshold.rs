@@ -36,7 +36,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 
 /// A plan describing how to compute a threshold operation.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
@@ -44,8 +44,31 @@ pub enum ThresholdPlan {
     Retractions(RetractionsThresholdPlan),
 }
 
+impl ThresholdPlan {
+    /// Reports all keys of produced arrangements.
+    ///
+    /// This is likely either an empty vector, for no arrangement,
+    /// or a singleton vector containing the list of expressions
+    /// that key a single arrangement.
+    pub fn keys(&self) -> Vec<Vec<expr::MirScalarExpr>> {
+        // Accumulate keys into this vector, and return it.
+        let mut keys = Vec::new();
+        match self {
+            ThresholdPlan::Basic(plan) => {
+                keys.push(
+                    (0..plan.arity)
+                        .map(|column| expr::MirScalarExpr::Column(column))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            ThresholdPlan::Retractions(_plan) => {}
+        }
+        keys
+    }
+}
+
 /// A plan to maintain all inputs with positive counts.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BasicThresholdPlan {
     /// The number of columns in the input and output.
     arity: usize,
@@ -53,7 +76,7 @@ pub struct BasicThresholdPlan {
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
 /// in order to maintain an equivalent collection compared to [BasicThresholdPlan].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RetractionsThresholdPlan {
     /// The number of columns in the input and output.
     arity: usize,
@@ -83,7 +106,7 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
     R: ReduceCore<G, Row, Row, Diff>,
-    L: Fn(&isize) -> bool + 'static,
+    L: Fn(&Diff) -> bool + 'static,
 {
     arrangement.reduce_abelian(name, move |_k, s, t| {
         for (record, count) in s.iter() {

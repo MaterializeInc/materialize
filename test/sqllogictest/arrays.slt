@@ -105,7 +105,7 @@ SELECT 'hi'::text = ANY(ARRAY[]::text[])
 ----
 false
 
-query error ARRAY expression cannot be cast to uniform type: integer vs text
+query error ARRAY expression cannot be cast to uniform type: integer vs boolean
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
 query B

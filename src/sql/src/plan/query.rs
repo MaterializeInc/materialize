@@ -42,8 +42,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::apd::{self, APD_DATUM_MAX_PRECISION};
-use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
+use repr::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION};
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
     Timestamp,
@@ -764,13 +763,9 @@ pub fn eval_as_of<'a>(
     let evaled = ex.eval(&[], temp_storage)?;
 
     Ok(match ex.typ(desc.typ()).scalar_type {
-        ScalarType::APD { .. } => apd::cx_datum()
-            .try_into_i128(evaled.unwrap_apd().0)?
+        ScalarType::Numeric { .. } => numeric::cx_datum()
+            .try_into_i128(evaled.unwrap_numeric().0)?
             .try_into()?,
-        ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
-        ScalarType::Decimal(_, _) => {
-            bail!("decimal with fractional component is not a valid timestamp")
-        }
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
         ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
@@ -2970,24 +2965,18 @@ fn plan_case<'a>(
 fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
-            let d: Decimal = s.parse()?;
-            if d.scale() == 0 {
-                let significand = d.significand();
-                if let Ok(n) = significand.try_into() {
+            let d = strconv::parse_numeric(s.as_str())?;
+            if !s.contains(&['E', '.'][..]) {
+                // Maybe representable as an int?
+                if let Ok(n) = d.0.try_into() {
                     (Datum::Int32(n), ScalarType::Int32)
-                } else if let Ok(n) = significand.try_into() {
+                } else if let Ok(n) = d.0.try_into() {
                     (Datum::Int64(n), ScalarType::Int64)
                 } else {
-                    (
-                        Datum::from(significand),
-                        ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                    )
+                    (Datum::Numeric(d), ScalarType::Numeric { scale: None })
                 }
             } else {
-                (
-                    Datum::from(d.significand()),
-                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                )
+                (Datum::Numeric(d), ScalarType::Numeric { scale: None })
             }
         }
         Value::HexString(_) => unsupported!(3114, "hex string literals"),
@@ -3092,18 +3081,13 @@ pub fn scalar_type_from_sql(
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
-                    ScalarType::APD { .. } => {
-                        let (_, scale) =
-                            unwrap_numeric_typ_mod(typ_mod, APD_DATUM_MAX_PRECISION as u8, "apd")?;
-                        ScalarType::APD { scale }
-                    }
-                    ScalarType::Decimal(..) => {
-                        let (precision, scale) =
-                            unwrap_numeric_typ_mod(typ_mod, MAX_DECIMAL_PRECISION, "numeric")?;
-                        ScalarType::Decimal(
-                            precision.unwrap_or(MAX_DECIMAL_PRECISION),
-                            scale.unwrap_or(0),
-                        )
+                    ScalarType::Numeric { .. } => {
+                        let (_, scale) = unwrap_numeric_typ_mod(
+                            typ_mod,
+                            NUMERIC_DATUM_MAX_PRECISION as u8,
+                            "numeric",
+                        )?;
+                        ScalarType::Numeric { scale }
                     }
                     ScalarType::String => {
                         // TODO(justin): we should look up in the catalog to see
@@ -3132,11 +3116,11 @@ pub fn scalar_type_from_sql(
 }
 
 /// Returns the first two values provided as typ_mods as `u8`, which are
-/// appropriate values to associate with `ScalarType::Decimal`'s values,
+/// appropriate values to associate with `ScalarType::Numeric`'s values,
 /// precision and scale.
 ///
 /// Note that this function assumes you have already determined that
-/// `data_type.name` should resolve to `ScalarType::Decimal`.
+/// `data_type.name` should resolve to `ScalarType::Numeric`.
 pub fn unwrap_numeric_typ_mod(
     typ_mod: &[u64],
     max: u8,
@@ -3203,7 +3187,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         pgrepr::Type::Int8 => Ok(ScalarType::Int64),
         pgrepr::Type::Float4 => Ok(ScalarType::Float32),
         pgrepr::Type::Float8 => Ok(ScalarType::Float64),
-        pgrepr::Type::Numeric => Ok(ScalarType::Decimal(0, 0)),
+        pgrepr::Type::Numeric => Ok(ScalarType::Numeric { scale: None }),
         pgrepr::Type::Date => Ok(ScalarType::Date),
         pgrepr::Type::Time => Ok(ScalarType::Time),
         pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
@@ -3226,7 +3210,6 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),
-        pgrepr::Type::APD => Ok(ScalarType::APD { scale: None }),
     }
 }
 

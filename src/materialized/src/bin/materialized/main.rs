@@ -39,7 +39,7 @@ use backtrace::Backtrace;
 use clap::AppSettings;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{info, warn};
+use log::info;
 use prometheus::{register_int_counter_vec, IntCounterVec};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
@@ -156,8 +156,13 @@ struct Args {
     /// in a directive to suppress all log messages, even errors.
     ///
     /// The default value for this option is "info".
-    #[structopt(long, env = "MZ_LOG_FILTER", value_name = "FILTER")]
-    log_filter: Option<String>,
+    #[structopt(
+        long,
+        env = "MZ_LOG_FILTER",
+        value_name = "FILTER",
+        default_value = "info"
+    )]
+    log_filter: String,
 
     // == Connection options.
     /// The address on which to listen for connections.
@@ -403,14 +408,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
         use crate::tracing::FilterLayer;
 
-        // TODO(benesch): remove the MZ_LOG fallback and move the default into
-        // structopt when sufficient time has passed (say, June 2021).
-        let directives = args
-            .log_filter
-            .or_else(|| env::var("MZ_LOG").ok())
-            .unwrap_or_else(|| "info".into());
-
-        let env_filter = EnvFilter::try_new(directives)
+        let env_filter = EnvFilter::try_new(args.log_filter)
             .context("parsing --log-filter option")?
             // Ensure panics are logged, even if the user has specified
             // otherwise.
@@ -501,7 +499,13 @@ swap: {swap_total}KB total, {swap_used}KB used",
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
-            env::vars()
+            env::vars_os()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
                 .filter(|(name, _value)| name.starts_with("MZ_"))
                 .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
                 .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
@@ -601,16 +605,6 @@ longer be started in non-experimental/regular mode.
 For more details, see https://materialize.com/docs/cli#experimental-mode
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 "
-        );
-    }
-
-    // TODO(benesch): remove this message when sufficient time has passed
-    // (say, June 2021).
-    if env::var_os("MZ_LOG").is_some() {
-        warn!(
-            "The MZ_LOG environment variable is deprecated and will be removed \
-            in a future release. Use the MZ_LOG_FILTER environment variable or \
-            the --log-filter command-line option instead."
         );
     }
 

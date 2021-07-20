@@ -50,12 +50,10 @@ impl ToSql for Apd {
         _: &Type,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + 'static + Send + Sync>> {
-        if self.0 .0.is_infinite() {
-            return Err("ToSQL incompatible with infinite APD values".into());
-        }
         let mut d = self.0 .0.clone();
         let scale = u16::from(apd::get_scale(&d));
         let is_nan = d.is_nan();
+        let is_infinite = d.is_infinite();
         let is_neg = d.is_negative();
 
         let mut cx = apd::cx_datum();
@@ -107,7 +105,7 @@ impl ToSql for Apd {
         };
 
         let mut w = d.clone();
-        while !d.is_zero() && !d.is_nan() {
+        while !d.is_zero() && !d.is_special() {
             d_i -= 1;
             // Get unit value, i.e. d % 10,000
             cx.rem(&mut d, &TO_SQL_BASER);
@@ -125,7 +123,13 @@ impl ToSql for Apd {
         out.put_u16(units);
         out.put_i16(weight);
         // sign
-        out.put_u16(if is_nan {
+        out.put_u16(if is_infinite {
+            if is_neg {
+                0xF000
+            } else {
+                0xD000
+            }
+        } else if is_nan {
             0xC000
         } else if is_neg {
             0x4000
@@ -133,10 +137,8 @@ impl ToSql for Apd {
             0
         });
         out.put_u16(scale);
-        if !is_nan {
-            for digit in digits[d_i..].iter() {
-                out.put_u16(*digit);
-            }
+        for digit in digits[d_i..].iter() {
+            out.put_u16(*digit);
         }
 
         Ok(IsNull::No)
@@ -173,7 +175,18 @@ impl<'a> FromSql<'a> for Apd {
 
         match sign {
             0 => (),
+            // Infinity
+            0xD000 => return Ok(Apd(OrderedDecimal(AdtApd::infinity()))),
+            // -Infinity
+            0xF000 => {
+                let mut cx = apd::cx_datum();
+                let mut d = AdtApd::infinity();
+                cx.neg(&mut d);
+                return Ok(Apd(OrderedDecimal(d)));
+            }
+            // Negative
             0x4000 => cx.neg(&mut d),
+            // NaN
             0xC000 => return Ok(Apd(OrderedDecimal(AdtApd::nan()))),
             _ => return Err("bad sign in numeric".into()),
         }
@@ -251,4 +264,26 @@ fn test_to_from_sql_roundtrip() {
     inner(".00009876");
     inner("-.00009876");
     inner("NaN");
+
+    // Test infinity, which is a valid value in aggregations over APD
+    let mut cx = apd::cx_datum();
+    let mut v = vec![];
+    v.push(
+        cx.parse("-999999999999999999999999999999999999999")
+            .unwrap(),
+    );
+    v.push(
+        cx.parse("-999999999999999999999999999999999999999")
+            .unwrap(),
+    );
+    // -Infinity
+    let s = cx.sum(v.iter());
+    assert!(s.is_infinite());
+    let r = Apd(OrderedDecimal(s));
+    let mut out = BytesMut::new();
+
+    let _ = r.to_sql(&Type::NUMERIC, &mut out).unwrap();
+
+    let d_from_sql = Apd::from_sql(&Type::NUMERIC, &out).unwrap();
+    assert_eq!(r.0, d_from_sql.0);
 }

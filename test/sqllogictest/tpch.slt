@@ -164,11 +164,11 @@ ORDER BY
 | Reduce group=(#8, #9)
 | | agg sum(#4)
 | | agg sum(#5)
-| | agg sum((#5 * (100dec - #6)))
-| | agg sum(((#5 * (100dec - #6)) * (100dec + #7)))
+| | agg sum((#5 * (1 - #6)))
+| | agg sum(((#5 * (1 - #6)) * (1 + #7)))
 | | agg count(true)
 | | agg sum(#6)
-| Map i64todec(if (#6 = 0) then {null} else {#6}), (((#2 * 10000000dec) / #8) / 10dec), (((#3 * 10000000dec) / #8) / 10dec), (((#7 * 10000000dec) / #8) / 10dec)
+| Map i64tof64(if (#6 = 0) then {null} else {#6}), (numerictof64(#2) / #8), (numerictof64(#3) / #8), (numerictof64(#7) / #8)
 | Project (#0..#5, #9..#11, #6)
 
 Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0..#9)
@@ -336,7 +336,7 @@ ORDER BY
 | | demand = (#6, #8, #12, #15, #22, #23, #27)
 | Filter (#6 = "BUILDING"), (#12 < 1995-03-15), (#27 > 1995-03-15)
 | Reduce group=(#8, #12, #15)
-| | agg sum((#22 * (100dec - #23)))
+| | agg sum((#22 * (1 - #23)))
 | Project (#0, #3, #1, #2)
 
 Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..#3)
@@ -459,7 +459,7 @@ ORDER BY
 | | demand = (#12, #22, #23, #41, #45)
 | Filter (#45 = "ASIA"), (#12 < 1995-01-01), (#12 >= 1994-01-01)
 | Reduce group=(#41)
-| | agg sum((#22 * (100dec - #23)))
+| | agg sum((#22 * (1 - #23)))
 
 Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
 
@@ -480,7 +480,7 @@ WHERE
 ----
 %0 = Let l0 =
 | Get materialize.public.lineitem (u21)
-| Filter (#4 < 2400dec), (datetots(#10) < 1995-01-01 00:00:00), (#6 <= 7dec), (#6 >= 5dec), (#10 >= 1994-01-01)
+| Filter (#4 < 24), (datetots(#10) < 1995-01-01 00:00:00), (#6 <= 0.07), (#6 >= 0.05), (#10 >= 1994-01-01)
 | Reduce group=()
 | | agg sum((#5 * #6))
 
@@ -580,7 +580,7 @@ ORDER BY
 | | demand = (#12, #13, #17, #41, #45)
 | Filter (((#41 = "FRANCE") && (#45 = "GERMANY")) || ((#41 = "GERMANY") && (#45 = "FRANCE"))), (#17 <= 1996-12-31), (#17 >= 1995-01-01)
 | Reduce group=(#41, #45, date_part_year_tstz(datetotstz(#17)))
-| | agg sum((#12 * (100dec - #13)))
+| | agg sum((#12 * (1 - #13)))
 
 Finish order_by=(#0 asc, #1 asc, #2 asc) limit=none offset=0 project=(#0..#3)
 
@@ -673,9 +673,9 @@ ORDER BY
 | | demand = (#4, #21, #22, #36, #54, #58)
 | Filter (#4 = "ECONOMY ANODIZED STEEL"), (#58 = "AMERICA"), (#36 <= 1996-12-31), (#36 >= 1995-01-01)
 | Reduce group=(date_part_year_tstz(datetotstz(#36)))
-| | agg sum(if (#54 = "BRAZIL") then {(#21 * (100dec - #22))} else {0dec})
-| | agg sum((#21 * (100dec - #22)))
-| Map (((#1 * 10000000dec) / #2) * 1000dec)
+| | agg sum(if (#54 = "BRAZIL") then {(#21 * (1 - #22))} else {0})
+| | agg sum((#21 * (1 - #22)))
+| Map (#1 / #2)
 | Project (#0, #3)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
@@ -754,7 +754,7 @@ ORDER BY
 | | demand = (#1, #20..#22, #35, #41, #47)
 | Filter "^.*green.*$" ~(#1)
 | Reduce group=(#47, date_part_year_tstz(datetotstz(#41)))
-| | agg sum(((#21 * (100dec - #22)) - (#35 * #20)))
+| | agg sum(((#21 * (1 - #22)) - (#35 * #20)))
 
 Finish order_by=(#0 asc, #1 desc) limit=none offset=0 project=(#0..#2)
 
@@ -822,7 +822,7 @@ ORDER BY
 | | demand = (#0..#2, #4, #5, #7, #12, #22, #23, #25, #34)
 | Filter (#25 = "R"), (#12 < 1994-01-01), (datetots(#12) < 1994-01-01 00:00:00), (#12 >= 1993-10-01)
 | Reduce group=(#0, #1, #5, #4, #34, #2, #7)
-| | agg sum((#22 * (100dec - #23)))
+| | agg sum((#22 * (1 - #23)))
 | Project (#0, #1, #7, #2, #4, #5, #3, #6)
 
 Finish order_by=(#2 desc) limit=none offset=0 project=(#0..#7)
@@ -881,7 +881,7 @@ ORDER BY
 | | demand = (#0, #2, #3, #13)
 | Filter (#13 = "GERMANY")
 | Reduce group=(#0)
-| | agg sum((#3 * i32todec(#2)))
+| | agg sum((#3 * i32tonumeric(#2)))
 
 %4 =
 | Get materialize.public.partsupp (u11)
@@ -904,15 +904,15 @@ ORDER BY
 | | demand = (#2, #3, #13)
 | Filter (#13 = "GERMANY")
 | Reduce group=()
-| | agg sum((#3 * i32todec(#2)))
-| Map (#0 * 1dec)
+| | agg sum((#3 * i32tonumeric(#2)))
+| Map (#0 * 0.0001)
 | ArrangeBy ()
 
 %8 =
 | Join %3 %7
 | | implementation = Differential %3 %7.()
 | | demand = (#0, #1, #3)
-| Filter ((#1 * 10000dec) > #3)
+| Filter (#1 > #3)
 | Project (#0, #1)
 
 Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
@@ -1070,8 +1070,8 @@ WHERE
 | | demand = (#5, #6, #10, #20)
 | Filter (datetots(#10) < 1995-10-01 00:00:00), (#10 >= 1995-09-01)
 | Reduce group=()
-| | agg sum(if "^PROMO.*$" ~(#20) then {(#5 * (100dec - #6))} else {0dec})
-| | agg sum((#5 * (100dec - #6)))
+| | agg sum(if "^PROMO.*$" ~(#20) then {(#5 * (1 - #6))} else {0})
+| | agg sum((#5 * (1 - #6)))
 
 %3 =
 | Get %2 (l0)
@@ -1087,7 +1087,7 @@ WHERE
 
 %6 =
 | Union %2 %5
-| Map ((((10000dec * #0) * 10000000dec) / #1) * 1000dec)
+| Map ((100 * #0) / #1)
 | Project (#2)
 
 EOF
@@ -1132,7 +1132,7 @@ ORDER BY
 | Get materialize.public.lineitem (u21)
 | Filter (datetots(#10) < 1996-04-01 00:00:00), (#10 >= 1996-01-01)
 | Reduce group=(#2)
-| | agg sum((#5 * (100dec - #6)))
+| | agg sum((#5 * (1 - #6)))
 
 %1 =
 | Get materialize.public.supplier (u8)
@@ -1306,14 +1306,14 @@ WHERE
 | Reduce group=(#0)
 | | agg sum(#5)
 | | agg count(true)
-| Map (2dec * (((#1 * 10000000dec) / i64todec(if (#2 = 0) then {null} else {#2})) / 10dec))
+| Map (0.2 * (numerictof64(#1) / i64tof64(if (#2 = 0) then {null} else {#2})))
 | ArrangeBy (#0)
 
 %6 = Let l1 =
 | Join %2 %5 (= #1 #25)
 | | implementation = Differential %2 %5.(#0)
 | | demand = (#4, #5, #28)
-| Filter ((#4 * 10000000dec) < #28)
+| Filter (numerictof64(#4) < #28)
 | Reduce group=()
 | | agg sum(#5)
 
@@ -1331,7 +1331,7 @@ WHERE
 
 %10 =
 | Union %6 %9
-| Map ((#0 * 10000000dec) / 70dec)
+| Map (#0 / 7)
 | Project (#1)
 
 EOF
@@ -1415,7 +1415,7 @@ ORDER BY
 | Join %3 %6 (= #8 #33)
 | | implementation = Differential %3 %6.(#0)
 | | demand = (#0, #1, #8, #11, #12, #21, #34)
-| Filter (#34 > 30000dec)
+| Filter (#34 > 300)
 | Reduce group=(#1, #0, #8, #12, #11)
 | | agg sum(#21)
 
@@ -1476,9 +1476,9 @@ WHERE
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
 | | demand = (#4..#6, #13, #14, #19, #21, #22)
-| Filter (((((((((#22 = "LG BOX") || (#22 = "LG CASE")) || (#22 = "LG PACK")) || (#22 = "LG PKG")) && (#19 = "Brand#34")) && (#4 >= 2000dec)) && (#4 <= 3000dec)) && (#21 <= 15)) || (((((((((#22 = "SM BOX") || (#22 = "SM CASE")) || (#22 = "SM PACK")) || (#22 = "SM PKG")) && (#19 = "Brand#12")) && (#4 >= 100dec)) && (#4 <= 1100dec)) && (#21 <= 5)) || ((((((((#22 = "MED BAG") || (#22 = "MED BOX")) || (#22 = "MED PKG")) || (#22 = "MED PACK")) && (#19 = "Brand#23")) && (#4 >= 1000dec)) && (#4 <= 2000dec)) && (#21 <= 10)))), ((#14 = "AIR") || (#14 = "AIR REG")), (#13 = "DELIVER IN PERSON"), (#21 >= 1)
+| Filter (((((((((#22 = "LG BOX") || (#22 = "LG CASE")) || (#22 = "LG PACK")) || (#22 = "LG PKG")) && (#19 = "Brand#34")) && (#4 >= 20)) && (#4 <= 30)) && (#21 <= 15)) || (((((((((#22 = "SM BOX") || (#22 = "SM CASE")) || (#22 = "SM PACK")) || (#22 = "SM PKG")) && (#19 = "Brand#12")) && (#4 >= 1)) && (#4 <= 11)) && (#21 <= 5)) || ((((((((#22 = "MED BAG") || (#22 = "MED BOX")) || (#22 = "MED PKG")) || (#22 = "MED PACK")) && (#19 = "Brand#23")) && (#4 >= 10)) && (#4 <= 20)) && (#21 <= 10)))), ((#14 = "AIR") || (#14 = "AIR REG")), (#13 = "DELIVER IN PERSON"), (#21 >= 1)
 | Reduce group=()
-| | agg sum((#5 * (100dec - #6)))
+| | agg sum((#5 * (1 - #6)))
 
 %3 =
 | Get %2 (l0)
@@ -1594,14 +1594,14 @@ ORDER BY
 | Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
 | Reduce group=(#0, #1)
 | | agg sum(#6)
-| Map (5dec * #2)
+| Map (0.5 * #2)
 | ArrangeBy (#0, #1)
 
 %11 =
 | Join %7 %10 (= #0 #26) (= #11 #25)
 | | implementation = Differential %7 %10.(#0, #1)
 | | demand = (#0, #13, #28)
-| Filter ((i32todec(#13) * 1000dec) > #28)
+| Filter (i32tonumeric(#13) > #28)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -1696,7 +1696,7 @@ ORDER BY
 | Join %5 %6 (= #0 #2)
 | | implementation = Differential %5 %6.(#0)
 | | demand = (#0, #1, #4)
-| Filter (#4 != #1)
+| Filter (#1 != #4)
 | Distinct group=(#0, #1)
 | ArrangeBy (#0, #1)
 
@@ -1721,7 +1721,7 @@ ORDER BY
 | Join %9 %11 (= #0 #2)
 | | implementation = Differential %9 %11.(#0)
 | | demand = (#0, #1, #4, #13, #14)
-| Filter (#4 != #1), (#14 > #13)
+| Filter (#1 != #4), (#14 > #13)
 | Distinct group=(#0, #1)
 | Negate
 
@@ -1796,18 +1796,18 @@ ORDER BY
 
 %1 =
 | Get materialize.public.customer (u15)
-| Filter ((((((("13" = substr(#4, 1, 2)) || ("31" = substr(#4, 1, 2))) || ("23" = substr(#4, 1, 2))) || ("29" = substr(#4, 1, 2))) || ("30" = substr(#4, 1, 2))) || ("18" = substr(#4, 1, 2))) || ("17" = substr(#4, 1, 2))), (#5 > 0dec)
+| Filter ((((((("13" = substr(#4, 1, 2)) || ("31" = substr(#4, 1, 2))) || ("23" = substr(#4, 1, 2))) || ("29" = substr(#4, 1, 2))) || ("30" = substr(#4, 1, 2))) || ("18" = substr(#4, 1, 2))) || ("17" = substr(#4, 1, 2))), (#5 > 0)
 | Reduce group=()
 | | agg sum(#5)
 | | agg count(true)
-| Map (((#0 * 10000000dec) / i64todec(if (#1 = 0) then {null} else {#1})) / 10dec)
+| Map (numerictof64(#0) / i64tof64(if (#1 = 0) then {null} else {#1}))
 | ArrangeBy ()
 
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
 | | demand = (#0, #4, #5, #10)
-| Filter ((#5 * 1000000dec) > #10)
+| Filter (numerictof64(#5) > #10)
 
 %3 =
 | Get %2 (l0)
@@ -1905,7 +1905,7 @@ ORDER BY
 | |
 | | %3 =
 | | | Get materialize.public.partsupp (u11)
-| | | Filter (select(%4) && ((i32todec(#2) * 1000dec) > select(%5)))
+| | | Filter (select(%4) && (i32tonumeric(#2) > select(%5)))
 | | | |
 | | | | %4 =
 | | | | | Get materialize.public.part (u6)
@@ -1918,7 +1918,7 @@ ORDER BY
 | | | | | Get materialize.public.lineitem (u21)
 | | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= strtodate("1995-01-01"))) && (datetots(#10) < (strtodate("1995-01-01") + 1 year)))
 | | | | | Reduce group=() sum(#4)
-| | | | | Map (5dec * #0)
+| | | | | Map (0.5 * #0)
 | | | | | Project (#1)
 | | | |
 | | | Project (#1)

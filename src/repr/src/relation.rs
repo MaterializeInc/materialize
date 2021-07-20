@@ -40,7 +40,7 @@ pub struct ColumnType {
 /// default in unit tests. The default value of a bool is false, and the only
 /// way to make an object take on any other value by default is to pass it a
 /// function that returns the desired default value. See
-/// https://github.com/serde-rs/serde/issues/1030
+/// <https://github.com/serde-rs/serde/issues/1030>
 #[inline(always)]
 fn return_true() -> bool {
     true

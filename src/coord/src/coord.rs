@@ -55,6 +55,7 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
+use repr::adt::numeric;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -3073,10 +3074,8 @@ impl Coordinator {
             if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
                 if let ExprPrepStyle::OneShot { logical_time } = style {
-                    *e = MirScalarExpr::literal_ok(
-                        Datum::from(i128::from(logical_time)),
-                        f.output_type().scalar_type,
-                    );
+                    let ts = numeric::Numeric::from(logical_time);
+                    *e = MirScalarExpr::literal_ok(Datum::from(ts), f.output_type().scalar_type);
                 }
             }
         });
@@ -3105,13 +3104,17 @@ impl Coordinator {
     /// # Panics
     ///
     /// Panics if as_of is < the `since` frontiers.
-    async fn ship_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) {
+    ///
+    /// Panics if the dataflow descriptions contain an invalid plan.
+    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
         // state if we do not correctly clean up the catalog.
 
-        for dataflow in &mut dataflows {
+        // Each dataflow description will be planned into a `render::Plan` dataflow.
+        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
+        for mut dataflow in dataflows.into_iter() {
             // The identity for `join` is the minimum element.
             let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -3168,11 +3171,14 @@ impl Coordinator {
             }
 
             // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(dataflow);
+            transform::optimize_dataflow(&mut dataflow);
+            let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
+                .expect("Dataflow planning failed; unrecoverable error");
+            dataflow_plans.push(dataflow_plan);
         }
 
         // Finalize the dataflow by broadcasting its construction to all workers.
-        self.broadcast(SequencedCommand::CreateDataflows(dataflows));
+        self.broadcast(SequencedCommand::CreateDataflows(dataflow_plans));
     }
 
     fn broadcast(&self, cmd: SequencedCommand) {

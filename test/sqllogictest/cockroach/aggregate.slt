@@ -773,7 +773,7 @@ NULL
 query RRR
 SELECT variance(x)::FLOAT, variance(y::decimal)::FLOAT, variance(z)::DECIMAL(38, 14) FROM xyz
 ----
-9 4.5 6.33333333333333
+9  4.5  6.33333333333334
 
 query R
 SELECT variance(x) FROM xyz WHERE x = 10
@@ -788,7 +788,7 @@ NULL
 query RRR
 SELECT stddev(x)::FLOAT, stddev(y::decimal)::FLOAT, stddev(z)::DECIMAL(38, 14) FROM xyz
 ----
-3  2.121320343559 2.51661147842358
+3  2.1213203435596424  2.51661147842358
 
 query R
 SELECT stddev(x) FROM xyz WHERE x = 1

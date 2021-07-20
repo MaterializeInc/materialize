@@ -6,11 +6,11 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.41"
+anyhow = "1.0.42"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
-env_logger = "0.8.4"
+env_logger = "0.9.0"
 futures = "0.3.15"
 futures-channel = "0.3.15"
 hex = "0.4.3"
@@ -23,7 +23,7 @@ rand_distr = "0.4.1"
 repr = { path = "../../src/repr" }
 structopt = "0.3.22"
 test-util = { path = "../../test/test-util" }
-tokio = "1.6.1"
+tokio = "1.8.1"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 uuid = { version = "0.8.2", features = ["v4"] }
 

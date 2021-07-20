@@ -20,7 +20,7 @@
 //! definitions of existing builtins!
 //!
 //! More information about builtin system tables and types can be found in
-//! https://materialize.com/docs/sql/system-tables/.
+//! <https://materialize.com/docs/sql/system-tables/>.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -423,11 +423,6 @@ pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
 };
 
 lazy_static! {
-    pub static ref TYPE_APD: BuiltinType = BuiltinType {
-        schema: PG_CATALOG_SCHEMA,
-        id: GlobalId::System(1997),
-        pgtype: &pgrepr::APD,
-    };
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
         id: GlobalId::System(1998),
@@ -1280,7 +1275,6 @@ lazy_static! {
             Builtin::Type(&TYPE_INTERVAL_ARRAY),
             Builtin::Type(&TYPE_JSONB),
             Builtin::Type(&TYPE_JSONB_ARRAY),
-            Builtin::Type(&TYPE_APD),
             Builtin::Type(&TYPE_LIST),
             Builtin::Type(&TYPE_MAP),
             Builtin::Type(&TYPE_NUMERIC),

@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::ops::Add;
 
 use chrono::TimeZone;
 use proptest::prelude::*;
 use uuid::Uuid;
 
-use repr::adt::decimal::Significand;
+use repr::adt::numeric::Numeric as AdtNumeric;
 use repr::adt::{array::ArrayDimension, interval::Interval};
 use repr::{Datum, Row};
 
@@ -33,7 +34,7 @@ enum PropertizedDatum {
     TimestampTz(chrono::DateTime<chrono::Utc>),
 
     Interval(Interval),
-    Decimal(Significand),
+    Numeric(AdtNumeric),
 
     Bytes(Vec<u8>),
     String(String),
@@ -62,7 +63,7 @@ fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
             .prop_map(PropertizedDatum::Timestamp),
         add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropertizedDatum::TimestampTz),
         arb_interval().prop_map(PropertizedDatum::Interval),
-        arb_significand().prop_map(PropertizedDatum::Decimal),
+        arb_numeric().prop_map(PropertizedDatum::Numeric),
         prop::collection::vec(any::<u8>(), 1024).prop_map(PropertizedDatum::Bytes),
         ".*".prop_map(PropertizedDatum::String),
         Just(PropertizedDatum::JsonNull),
@@ -165,8 +166,10 @@ where
         .boxed()
 }
 
-fn arb_significand() -> BoxedStrategy<Significand> {
-    any::<i128>().prop_map(|v| Significand::new(v)).boxed()
+fn arb_numeric() -> BoxedStrategy<AdtNumeric> {
+    any::<i128>()
+        .prop_map(|v| AdtNumeric::try_from(v).unwrap())
+        .boxed()
 }
 
 impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
@@ -184,7 +187,7 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Timestamp(t) => Datum::from(*t),
             TimestampTz(t) => Datum::from(*t),
             Interval(i) => Datum::from(*i),
-            Decimal(s) => Datum::from(*s),
+            Numeric(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
             String(s) => Datum::from(s.as_str()),
             Array(PropertizedArray(row, _)) => {

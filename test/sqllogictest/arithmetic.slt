@@ -54,7 +54,7 @@ SELECT mod(0.34, 1.1)
 query R
 SELECT mod(4.2, 2.1)
 ----
-0.0
+0
 
 # negative dividend
 query I
@@ -85,7 +85,7 @@ SELECT mod(-2.254, 2.2)
 query R
 SELECT mod(-4, 1.75)
 ----
--0.50
+-0.5
 
 query R
 SELECT mod(-0.3234, 200)
@@ -95,7 +95,7 @@ SELECT mod(-0.3234, 200)
 query R
 SELECT mod(-7.5, 1.5)
 ----
-0.0
+0
 
 # negative divisor
 
@@ -137,7 +137,7 @@ SELECT mod(0.0019, -0.013)
 query R
 SELECT mod(14.4, -0.002)
 ----
-0.000
+0
 
 # negative dividend and negative divisor
 
@@ -179,7 +179,7 @@ SELECT mod(-2.45, -45.6)
 query R
 SELECT mod(-12.15, -4.05)
 ----
-0.00
+0
 
 # special values: 0/NULL dividend and/or divisor
 
@@ -191,12 +191,12 @@ SELECT mod(0, 4)
 query R
 SELECT mod(0.000, 2)
 ----
-0.000
+0
 
 query R
 SELECT mod(0, 1.23)
 ----
-0.00
+0
 
 query error division by zero
 SELECT mod(4, 0.0)
@@ -282,12 +282,12 @@ false  true
 query TTTTT
 SELECT 1::smallint::text, 1::bigint::text, 1.0::text, 1.0::float::text, 1.0::double::text
 ----
-1  1  1.0  1  1
+1  1  1  1  1
 
 query TTTTT
 SELECT (-1)::smallint::text, (-1)::bigint::text, (-1.0)::text, (-1.0)::float::text, (-1.0)::double::text
 ----
--1  -1  -1.0  -1  -1
+-1  -1  -1  -1  -1
 
 query TTT
 SELECT 1.1::text, 1.1::float::text, 1.1::double::text
@@ -338,17 +338,17 @@ SELECT floor(1.5678)
 query R
 SELECT round(1.5678, 3)
 ----
-1.5680
+1.568
 
 query R
 SELECT round(1.5678, 2)
 ----
-1.5700
+1.57
 
 query R
 SELECT round(1.5678, 1)
 ----
-1.6000
+1.6
 
 query R
 SELECT round(1.5678, 0)
@@ -388,17 +388,17 @@ SELECT round(CAST (515 AS decimal), -3), round(515, -3), round(CAST (515 AS deci
 query R
 SELECT round(748.58, -4)
 ----
-0.00
+0
 
 query RR
 SELECT round(123.9994, 3), round(123.9995, 3)
 ----
-123.9990  124
+123.999  124
 
 query RR
 SELECT round(123.4545, 2), round(123.45, -2)
 ----
-123.4500  100
+123.45  100
 
 query R
 SELECT round(150.75, 0)
@@ -472,7 +472,7 @@ SELECT round((SELECT * FROM nums), 2)
 query error Cannot call function round\(double precision, double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
 
-query error Cannot call function round\(numeric\(38,1\), double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(numeric, double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(5.0, (SELECT * FROM nums))
 
 query R
@@ -492,7 +492,7 @@ SELECT round(true, 3)
 query error
 SELECT round(true)
 
-query error Cannot call function round\(double precision, numeric\(38,1\)\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(double precision, numeric\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), 3.0)
 
 query error Cannot call function round\(double precision, double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts

@@ -81,7 +81,7 @@ use dataflow_types::DataflowError;
 use dec::OrderedDecimal;
 use expr::{AggregateExpr, AggregateFunc};
 use ore::cast::CastFrom;
-use repr::adt::apd::{self, Apd, ApdAgg};
+use repr::adt::numeric::{self, Numeric, NumericAgg};
 use repr::{Datum, DatumList, Row, RowArena};
 
 use super::context::Context;
@@ -447,6 +447,27 @@ impl ReducePlan {
         }
     }
 
+    /// Reports all keys of produced arrangements.
+    ///
+    /// This is likely either an empty vector, for no arrangement,
+    /// or a singleton vector containing the list of expressions
+    /// that key a single arrangement.
+    pub fn keys(&self, key_arity: usize) -> Vec<Vec<expr::MirScalarExpr>> {
+        // Accumulate keys into this vector, and return it.
+        let mut keys = Vec::new();
+        match self {
+            ReducePlan::DistinctNegated => {}
+            _ => {
+                keys.push(
+                    (0..key_arity)
+                        .map(|column| expr::MirScalarExpr::Column(column))
+                        .collect(),
+                );
+            }
+        }
+        keys
+    }
+
     /// Render a dataflow based on the provided plan.
     ///
     /// The output will be an arrangements that looks the same as if
@@ -584,7 +605,7 @@ where
 }
 
 /// Plan for extracting keys and values in preparation for a reduction.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
     key_plan: expr::SafeMfpPlan,
@@ -660,8 +681,8 @@ where
         let key_arity = key_plan.projection.len();
         let mut row_packer = Row::default();
         let mut datums = DatumVec::new();
-        let (key_val_input, mut err_input): (
-            timely::dataflow::Stream<_, Result<((Row, Row), _, _), (DataflowError, _, _)>>,
+        let (key_val_input, err_input): (
+            timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
         ) = input.flat_map(None, move |row, time, diff| {
             let temp_storage = RowArena::new();
@@ -676,14 +697,14 @@ where
             // Evaluate the key expressions.
             row_packer.clear();
             let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
-                Err(e) => return Some(Err((DataflowError::from(e), time.clone(), diff.clone()))),
+                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
                 Ok(key) => key.expect("Row expected as no predicate was used"),
             };
             // Evaluate the value expressions.
             // The prior evaluation may have left additional columns we should delete.
             datums_local.truncate(skips.len());
             let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                Err(e) => return Some(Err((DataflowError::from(e), time.clone(), diff.clone()))),
+                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
                 Ok(val) => val.expect("Row expected as no predicate was used"),
             };
             row_packer.extend(val);
@@ -701,18 +722,21 @@ where
                     std::mem::take(row)
                 }
             };
-            return Some(Ok(((key, row), time.clone(), diff.clone())));
+            return Some((Ok((key, row)), time.clone(), diff.clone()));
         });
 
         // Demux out the potential errors from key and value selector evaluation.
-        use timely::dataflow::operators::ok_err::OkErr;
-        let (ok, err) = key_val_input.ok_err(|x| x);
+        use crate::operator::CollectionExt;
+        use differential_dataflow::operators::consolidate::ConsolidateStream;
+        let (ok, mut err) = key_val_input
+            .as_collection()
+            .consolidate_stream()
+            .flat_map_fallible("OkErrDemux", |x| Some(x));
 
-        let ok_input = ok.as_collection();
-        err_input = err.as_collection().concat(&err_input);
+        err = err.concat(&err_input);
 
         // Render the reduce plan
-        reduce_plan.render(ok_input, err_input, key_arity)
+        reduce_plan.render(ok, err, key_arity)
     }
 }
 
@@ -1179,9 +1203,9 @@ enum AccumInner {
         non_nulls: isize,
     },
     /// Accumulates arbitrary precision decimals.
-    APD {
+    Numeric {
         /// Accumulates non-special values
-        accum: OrderedDecimal<ApdAgg>,
+        accum: OrderedDecimal<NumericAgg>,
         /// Counts +inf
         pos_infs: isize,
         /// Counts -inf
@@ -1198,7 +1222,7 @@ impl Semigroup for AccumInner {
         match self {
             AccumInner::Bool { trues, falses } => trues.is_zero() && falses.is_zero(),
             AccumInner::SimpleNumber { accum, non_nulls } => accum.is_zero() && non_nulls.is_zero(),
-            AccumInner::APD {
+            AccumInner::Numeric {
                 accum,
                 pos_infs,
                 neg_infs,
@@ -1237,14 +1261,14 @@ impl Semigroup for AccumInner {
                 *non_nulls += other_non_nulls;
             }
             (
-                AccumInner::APD {
+                AccumInner::Numeric {
                     accum,
                     pos_infs,
                     neg_infs,
                     nans,
                     non_nulls,
                 },
-                AccumInner::APD {
+                AccumInner::Numeric {
                     accum: other_accum,
                     pos_infs: other_pos_infs,
                     neg_infs: other_neg_infs,
@@ -1252,19 +1276,19 @@ impl Semigroup for AccumInner {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                let mut cx_agg = apd::cx_agg();
+                let mut cx_agg = numeric::cx_agg();
                 cx_agg.add(&mut accum.0, &other_accum.0);
                 // `rounded` signals we have exceeded the aggregator's max
                 // precision, which means we've lost commutativity and
                 // associativity; nothing to be done here, so panic. For more
                 // context, see the DEC_Rounded definition at
                 // http://speleotrove.com/decimal/dncont.html
-                assert!(!cx_agg.status().rounded(), "AccumInner::APD overflow");
+                assert!(!cx_agg.status().rounded(), "AccumInner::Numeric overflow");
                 // Reduce to reclaim unused decimal precision. Note that this
                 // reduction must happen somewhere to make the following
                 // invertible:
                 // ```
-                // CREATE TABLE a (a apd);
+                // CREATE TABLE a (a numeric);
                 // CREATE MATERIALIZED VIEW t as SELECT sum(a) FROM a;
                 // INSERT INTO a VALUES ('9e39'), ('9e-39');
                 // ```
@@ -1306,15 +1330,15 @@ impl Multiply<isize> for AccumInner {
                 accum: accum * i128::cast_from(factor),
                 non_nulls: non_nulls * factor,
             },
-            AccumInner::APD {
+            AccumInner::Numeric {
                 accum,
                 pos_infs,
                 neg_infs,
                 nans,
                 non_nulls,
             } => {
-                let mut cx = apd::cx_agg();
-                let mut f = ApdAgg::from(factor);
+                let mut cx = numeric::cx_agg();
+                let mut f = NumericAgg::from(factor);
                 // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
                 // always be an integer, i.e. we are never increasing the
                 // values' scale.
@@ -1324,8 +1348,11 @@ impl Multiply<isize> for AccumInner {
                 // associativity; nothing to be done here, so panic. For more
                 // context, see the DEC_Rounded definition at
                 // http://speleotrove.com/decimal/dncont.html
-                assert!(!cx.status().rounded(), "AccumInner::APD multiply overflow");
-                AccumInner::APD {
+                assert!(
+                    !cx.status().rounded(),
+                    "AccumInner::Numeric multiply overflow"
+                );
+                AccumInner::Numeric {
                     accum: OrderedDecimal(f),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
@@ -1415,8 +1442,8 @@ where
                     trues: 0,
                     falses: 0,
                 },
-                AggregateFunc::SumAPD => AccumInner::APD {
-                    accum: OrderedDecimal(ApdAgg::zero()),
+                AggregateFunc::SumNumeric => AccumInner::Numeric {
+                    accum: OrderedDecimal(NumericAgg::zero()),
                     pos_infs: 0,
                     neg_infs: 0,
                     nans: 0,
@@ -1460,24 +1487,24 @@ where
                 },
                 x => panic!("Invalid argument to AggregateFunc::Dummy: {:?}", x),
             },
-            AggregateFunc::SumAPD => match datum {
-                Datum::APD(n) => {
+            AggregateFunc::SumNumeric => match datum {
+                Datum::Numeric(n) => {
                     let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
                         if n.0.is_negative() {
-                            (ApdAgg::zero(), 0, 1, 0)
+                            (NumericAgg::zero(), 0, 1, 0)
                         } else {
-                            (ApdAgg::zero(), 1, 0, 0)
+                            (NumericAgg::zero(), 1, 0, 0)
                         }
                     } else if n.0.is_nan() {
-                        (ApdAgg::zero(), 0, 0, 1)
+                        (NumericAgg::zero(), 0, 0, 1)
                     } else {
                         // Take a narrow decimal (datum) into a wide decimal
                         // (aggregator).
-                        let mut cx_agg = apd::cx_agg();
+                        let mut cx_agg = numeric::cx_agg();
                         (cx_agg.to_width(n.0), 0, 0, 0)
                     };
 
-                    AccumInner::APD {
+                    AccumInner::Numeric {
                         accum: OrderedDecimal(accum),
                         pos_infs,
                         neg_infs,
@@ -1485,14 +1512,14 @@ where
                         non_nulls: 1,
                     }
                 }
-                Datum::Null => AccumInner::APD {
-                    accum: OrderedDecimal(ApdAgg::zero()),
+                Datum::Null => AccumInner::Numeric {
+                    accum: OrderedDecimal(NumericAgg::zero()),
                     pos_infs: 0,
                     neg_infs: 0,
                     nans: 0,
                     non_nulls: 0,
                 },
-                x => panic!("Invalid argument to AggregateFunc::SumAPD: {:?}", x),
+                x => panic!("Invalid argument to AggregateFunc::SumNumeric: {:?}", x),
             },
             _ => {
                 // Other accumulations need to disentangle the accumulable
@@ -1515,10 +1542,6 @@ where
                         accum: (*f * float_scale) as i128,
                         non_nulls: 1,
                     },
-                    Datum::Decimal(d) => AccumInner::SimpleNumber {
-                        accum: d.as_i128(),
-                        non_nulls: 1,
-                    },
                     Datum::Null => AccumInner::SimpleNumber {
                         accum: 0,
                         non_nulls: 0,
@@ -1532,7 +1555,7 @@ where
 
     let mut to_aggregate = Vec::new();
     // First, collect all non-distinct aggregations in one pass.
-    let easy_cases = collection.inner.as_collection().explode({
+    let easy_cases = collection.explode({
         let zero_diffs = zero_diffs.clone();
         move |(key, row)| {
             let mut diffs = zero_diffs.clone();
@@ -1565,8 +1588,6 @@ where
                 (key, packer.finish_and_reuse())
             })
             .distinct()
-            .inner
-            .as_collection()
             .explode({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
@@ -1653,12 +1674,9 @@ where
                             (AggregateFunc::SumFloat64, AccumInner::SimpleNumber { accum, .. }) => {
                                 Datum::Float64(((*accum as f64) / float_scale).into())
                             }
-                            (AggregateFunc::SumDecimal, AccumInner::SimpleNumber { accum, .. }) => {
-                                Datum::from(*accum)
-                            }
                             (
-                                AggregateFunc::SumAPD,
-                                AccumInner::APD {
+                                AggregateFunc::SumNumeric,
+                                AccumInner::Numeric {
                                     accum,
                                     pos_infs,
                                     neg_infs,
@@ -1666,7 +1684,7 @@ where
                                     non_nulls,
                                 },
                             ) => {
-                                let mut cx_datum = apd::cx_datum();
+                                let mut cx_datum = numeric::cx_datum();
                                 let d = cx_datum.to_width(accum.0);
                                 // Take a wide decimal (aggregator) into a
                                 // narrow decimal (datum). If this operation
@@ -1682,13 +1700,16 @@ where
                                 } else if *nans > 0 || (pos_inf && neg_inf) {
                                     // NaNs are NaNs and cases where we've seen a
                                     // mixture of positive and negative infinities.
-                                    Datum::APD(OrderedDecimal(Apd::nan()))
+                                    Datum::from(Numeric::nan())
                                 } else if pos_inf {
-                                    Datum::APD(OrderedDecimal(Apd::infinity()))
+                                    Datum::from(Numeric::infinity())
                                 } else if neg_inf {
-                                    Datum::APD(OrderedDecimal(-Apd::infinity()))
+                                    let mut cx = numeric::cx_datum();
+                                    let mut d = Numeric::infinity();
+                                    cx.neg(&mut d);
+                                    Datum::from(d)
                                 } else {
-                                    Datum::APD(OrderedDecimal(d))
+                                    Datum::from(d)
                                 }
                             }
                             _ => panic!(
@@ -1750,29 +1771,26 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::SumInt64
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
-        | AggregateFunc::SumDecimal
-        | AggregateFunc::SumAPD
+        | AggregateFunc::SumNumeric
         | AggregateFunc::Count
         | AggregateFunc::Any
         | AggregateFunc::All
         | AggregateFunc::Dummy => ReductionType::Accumulable,
-        AggregateFunc::MaxApd
+        AggregateFunc::MaxNumeric
         | AggregateFunc::MaxInt32
         | AggregateFunc::MaxInt64
         | AggregateFunc::MaxFloat32
         | AggregateFunc::MaxFloat64
-        | AggregateFunc::MaxDecimal
         | AggregateFunc::MaxBool
         | AggregateFunc::MaxString
         | AggregateFunc::MaxDate
         | AggregateFunc::MaxTimestamp
         | AggregateFunc::MaxTimestampTz
-        | AggregateFunc::MinApd
+        | AggregateFunc::MinNumeric
         | AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
-        | AggregateFunc::MinDecimal
         | AggregateFunc::MinBool
         | AggregateFunc::MinString
         | AggregateFunc::MinDate
@@ -1858,23 +1876,21 @@ pub mod monoids {
     // all hierarchical aggregation functions need to supply a monoid implementation.
     pub fn get_monoid(row: Row, func: &AggregateFunc) -> Option<ReductionMonoid> {
         match func {
-            AggregateFunc::MaxApd
+            AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
-            | AggregateFunc::MaxDecimal
             | AggregateFunc::MaxBool
             | AggregateFunc::MaxString
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz => Some(ReductionMonoid::Max(row)),
-            AggregateFunc::MinApd
+            AggregateFunc::MinNumeric
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
-            | AggregateFunc::MinDecimal
             | AggregateFunc::MinBool
             | AggregateFunc::MinString
             | AggregateFunc::MinDate
@@ -1884,8 +1900,7 @@ pub mod monoids {
             | AggregateFunc::SumInt64
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
-            | AggregateFunc::SumDecimal
-            | AggregateFunc::SumAPD
+            | AggregateFunc::SumNumeric
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All

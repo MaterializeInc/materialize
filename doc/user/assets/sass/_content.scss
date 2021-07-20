@@ -219,13 +219,13 @@ a {
   }
 
   .note {
-  background-color: rgba(255, 222, 11, 0.1);
-  border: 1px dashed rgb(255, 222, 11);
-  margin: 16px 0;
-  padding: 16px;
+    background-color: rgba(255, 222, 11, 0.1);
+    border: 1px dashed rgb(255, 222, 11);
+    margin: 16px 0;
+    padding: 16px;
   }
 
-  .experimental {
+  .beta {
     background-color: $purple-1;
     border: 1px dashed $purple-60;
     margin: 16px 0;

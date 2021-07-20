@@ -93,7 +93,7 @@ const TELEMETRY_QUERY: &str = "SELECT jsonb_build_object(
             FROM (SELECT connector_type, count(*) FROM mz_sinks WHERE id LIKE 'u%' GROUP BY connector_type)
         )
     )
-)::text";
+)";
 
 /// The response returned by the telemetry server.
 #[derive(Deserialize)]
@@ -110,7 +110,7 @@ async fn report_one(config: &Config) -> Result<semver::Version, anyhow::Error> {
                 .coord_client
                 .system_execute_one(&TELEMETRY_QUERY)
                 .await?;
-            let response = http_util::reqwest_client()?
+            let response = http_util::reqwest::client()
                 .post(format!(
                     "https://{}/api/telemetry/{}",
                     config.domain, config.cluster_id

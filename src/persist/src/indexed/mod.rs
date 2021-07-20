@@ -18,6 +18,7 @@ pub mod runtime;
 pub mod trace;
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use abomonation::abomonated::Abomonated;
 use differential_dataflow::trace::Description;
@@ -26,7 +27,9 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch, BufferEntry, Id};
+use crate::indexed::encoding::{
+    BlobFutureBatch, BlobFutureMeta, BlobMeta, BlobTraceBatch, BlobTraceMeta, BufferEntry, Id,
+};
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
@@ -67,8 +70,8 @@ use crate::Data;
 /// for indexed use, instead of the current situation, which is more complicated
 /// to reason about.
 pub struct Indexed<K, V, U: Buffer, L: Blob> {
-    last_file_id: u128,
     next_stream_id: Id,
+    futures_seqno_upper: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
     // and this representation is optimized for the metadata serialization path,
     // which is less rare.
@@ -88,16 +91,16 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let futures = meta
             .futures
             .into_iter()
-            .map(|(id, meta)| (id, BlobFuture::new(meta)))
+            .map(|meta| (meta.id, BlobFuture::new(meta)))
             .collect();
         let traces = meta
             .traces
             .into_iter()
-            .map(|(id, meta)| (id, BlobTrace::new(meta)))
+            .map(|meta| (meta.id, BlobTrace::new(meta)))
             .collect();
         let indexed = Indexed {
-            last_file_id: meta.last_file_id,
             next_stream_id: meta.next_stream_id,
+            futures_seqno_upper: meta.futures_seqno_upper,
             id_mapping: meta.id_mapping,
             buf,
             blob,
@@ -120,17 +123,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         Ok(())
     }
 
-    fn new_blob_key(&mut self) -> String {
-        // TODO: Use meaningful file names? Something like id+desc might be
-        // useful when debugging.
-        let mut file_id = BlobMeta::now_millis();
-        if file_id <= self.last_file_id {
-            file_id = self.last_file_id + 1;
-        }
-        self.last_file_id = file_id;
-        file_id.to_string()
-    }
-
     /// Creates, if necessary, a new future and trace with the given external
     /// stream name, returning the corresponding internal stream id.
     ///
@@ -146,8 +138,12 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                 id
             }
         };
-        self.futures.entry(id).or_default();
-        self.traces.entry(id).or_default();
+        self.futures
+            .entry(id)
+            .or_insert_with_key(|id| BlobFuture::new(BlobFutureMeta::new(*id)));
+        self.traces
+            .entry(id)
+            .or_insert_with_key(|id| BlobTrace::new(BlobTraceMeta::new(*id)));
         id
     }
 
@@ -164,7 +160,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
     /// with the given id.
-    pub fn write_sync(&mut self, id: Id, updates: &[((K, V), u64, isize)]) -> Result<(), Error> {
+    pub fn write_sync(&mut self, id: Id, updates: &[((K, V), u64, isize)]) -> Result<SeqNo, Error> {
         let sealed_frontier = self.sealed_frontier(id)?;
         for update in updates.iter() {
             if !sealed_frontier.less_equal(&update.1) {
@@ -183,8 +179,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let mut entry_bytes = Vec::new();
         unsafe { abomonation::encode(&entry, &mut entry_bytes) }
             .expect("write to Vec is infallible");
-        self.buf.write_sync(entry_bytes)?;
-        Ok(())
+        self.buf.write_sync(entry_bytes)
     }
 
     /// Atomically moves all writes currently in the buffer into the future.
@@ -205,27 +200,88 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                     .iter()
                     .map(|((key, val), ts, diff)| (seqno, (key.clone(), val.clone()), *ts, *diff)),
             );
+
             Ok(())
         })?;
-        for (id, mut updates) in updates_by_id.drain() {
-            // Future batches are required to be sorted by (ts, k, v).
-            updates.sort_unstable_by(|(_, (k1, v1), t1, _), (_, (k2, v2), t2, _)| {
-                (t1, k1, v1).cmp(&(t2, k2, v2))
-            });
-            let batch = BlobFutureBatch {
-                id,
-                desc: Description::new(
-                    Antichain::from_elem(desc.start),
-                    Antichain::from_elem(desc.end),
-                    // We never compact BlobFuture, so since is always the minimum.
-                    Antichain::from_elem(SeqNo(0)),
-                ),
-                updates: updates,
-            };
-            let key = self.new_blob_key();
-            self.append_future(key, batch)?;
+
+        for (id, updates) in updates_by_id.drain() {
+            let future = self
+                .futures
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            // We maintain the invariant that futures_seqno_upper is >= every
+            // future's seqno_upper and that there is nothing for that future in
+            // [future.seqno_upper, self.futures_seqno_upper). Use this to make the
+            // seqnos of all the future batches line up.
+            debug_assert_eq!(desc.start, self.futures_seqno_upper);
+            let new_start = future.seqno_upper()[0];
+            debug_assert!(new_start <= desc.start);
+            let mut desc = desc.clone();
+            desc.start = new_start;
+
+            self.drain_buf_inner(id, updates, &desc)?;
         }
+
+        self.futures_seqno_upper = desc.end;
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())?;
+
         self.buf.truncate(desc.end)
+    }
+
+    /// Construct a new [BlobFutureBatch] out of the provided `updates` and add
+    /// it to the future for `id`.
+    ///
+    /// The caller is responsible for updating META after they've finished
+    /// updating futures.
+    fn drain_buf_inner(
+        &mut self,
+        id: Id,
+        mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
+        desc: &Range<SeqNo>,
+    ) -> Result<(), Error> {
+        if cfg!(any(debug, test)) {
+            // Sanity check that all received sequence numbers fall within the stated
+            // [lower, upper) range
+            for (seqno, _, _, _) in &updates {
+                if seqno < &desc.start || seqno >= &desc.end {
+                    return Err(Error::from(format!(
+                            "invalid sequence number in snapshot {:?}, expected value greater than or equal to {:?} and less than {:?}",
+                                                   seqno, desc.start, desc.end)));
+                }
+            }
+        }
+
+        let mut updates: Vec<_> = updates
+            .drain(..)
+            .map(|(_, (k, v), t, d)| (t, (k, v), d))
+            .collect();
+        // Future batches are required to be sorted and consolidated by ((ts, (k, v)).
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        // Reshape updates back to the desired type.
+        let updates: Vec<_> = updates
+            .drain(..)
+            .map(|(t, (k, v), d)| ((k, v), t, d))
+            .collect();
+        let batch = BlobFutureBatch {
+            desc: Description::new(
+                Antichain::from_elem(desc.start),
+                Antichain::from_elem(desc.end),
+                // We never compact BlobFuture, so since is always the minimum.
+                Antichain::from_elem(SeqNo(0)),
+            ),
+            updates,
+        };
+        self.append_future(id, batch)?;
+
+        Ok(())
     }
 
     /// Returns the current "sealed" frontier for an id.
@@ -258,7 +314,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         // amortize the work of doing so across frequent seal calls? All the
         // physical movement could live in `step`.
 
-        let key = self.new_blob_key();
         let future = self
             .futures
             .get_mut(&id)
@@ -274,7 +329,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             return Err(format!("invalid batch bounds: {:?}", desc).into());
         }
 
-        // Atomically move a batch of data from future into trace by reading a
+        // Move a batch of data from future into trace by reading a
         // snapshot from future...
         let mut updates = Vec::new();
         {
@@ -283,50 +338,48 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             while snap.read(&mut updates) {}
         }
 
-        // Trace batches are required to be sorted by (k, v, ts).
-        updates.sort_unstable_by(|((k1, v1), t1, _), ((k2, v2), t2, _)| {
-            (k1, v1, t1).cmp(&(k2, v2, t2))
-        });
+        // Trace batches are required to be sorted and consolidated by ((k, v), t)
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
-        // ...writing that snapshot's data into trace...
-        let batch = BlobTraceBatch {
-            id: id,
-            desc: desc.clone(),
-            updates,
-        };
-        self.append_trace(key, batch)?;
+        // ...and atomically swapping that snapshot's data into trace.
+        let batch = BlobTraceBatch { desc, updates };
+        self.append_trace(id, batch)
+
+        // TODO: This is a good point to compact future. The data that's been
+        // moved is still there but now irrelevant. It may also be a good time
+        // to compact trace.
+    }
+
+    /// Appends the given `batch` to the future for `id`, writing the data into
+    /// blob storage.
+    ///
+    /// The caller is responsible for updating META after they've finished
+    /// updating futures.
+    fn append_future(&mut self, id: Id, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
         let future = self
             .futures
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-
-        // .. and removing the data from future once that's successful.
-        future.truncate(desc.upper().clone())
-
-        // TODO: Incrementally compact trace.
+        future.append(batch, &mut self.blob)
     }
 
-    /// Appends the given `batch` to the trace for `id`, writing the data at
-    /// `key` in the blob storage.
-    fn append_future(&mut self, key: String, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
-        let future = self
-            .futures
-            .get_mut(&batch.id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
-        future.append(key, batch, &mut self.blob)?;
-        // TODO: Instead of fully overwriting META each time, this should be
-        // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())
-    }
-
-    /// Appends the given `batch` to the trace for `id`, writing the data at
-    /// `key` in the blob storage.
-    fn append_trace(&mut self, key: String, batch: BlobTraceBatch<K, V>) -> Result<(), Error> {
+    /// Appends the given `batch` to the trace for `id`, writing the data into
+    /// blob storage.
+    fn append_trace(&mut self, id: Id, batch: BlobTraceBatch<K, V>) -> Result<(), Error> {
         let trace = self
             .traces
-            .get_mut(&batch.id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", batch.id)))?;
-        trace.append(key, batch, &mut self.blob)?;
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let future = self
+            .futures
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let new_future_ts_lower = batch.desc.upper().clone();
+        trace.append(batch, &mut self.blob)?;
+        future.truncate(new_future_ts_lower)?;
+
+        // Atomically update the meta with both the trace and future changes.
+        //
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
         self.blob.set_meta(self.serialize_meta())
@@ -334,19 +387,15 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     fn serialize_meta(&self) -> BlobMeta {
         BlobMeta {
-            last_file_id: self.last_file_id,
             next_stream_id: self.next_stream_id,
+            futures_seqno_upper: self.futures_seqno_upper,
             id_mapping: self.id_mapping.clone(),
             futures: self
                 .futures
                 .iter()
-                .map(|(id, future)| (*id, future.meta()))
+                .map(|(_, future)| future.meta())
                 .collect(),
-            traces: self
-                .traces
-                .iter()
-                .map(|(id, trace)| (*id, trace.meta()))
-                .collect(),
+            traces: self.traces.iter().map(|(_, trace)| trace.meta()).collect(),
         }
     }
 
@@ -366,19 +415,23 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         // A closed lower bound on the updates we should include in `buffer` (i.e.
         // the ones not included in `future`).
         let buf_lower = &future.seqno_upper;
-        let mut buffer = BufferSnapshot(Vec::new());
-        {
-            self.buf.snapshot(|seqno, buf| {
-                let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
-                    unsafe { Abomonated::new(buf.to_owned()) }
-                        .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
-                if entry.id != id || !buf_lower.less_equal(&seqno) {
-                    return Ok(());
-                }
-                buffer.0.extend(entry.updates.iter().cloned());
-                Ok(())
-            })?;
-        }
+        let buffer = {
+            let mut data = Vec::new();
+            let seqno = self
+                .buf
+                .snapshot(|seqno, buf| {
+                    let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
+                        unsafe { Abomonated::new(buf.to_owned()) }
+                            .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
+                    if entry.id != id || !buf_lower.less_equal(&seqno) {
+                        return Ok(());
+                    }
+                    data.extend(entry.updates.iter().cloned());
+                    Ok(())
+                })?
+                .end;
+            BufferSnapshot(seqno, data)
+        };
 
         Ok(IndexedSnapshot(buffer, future, trace))
     }
@@ -410,11 +463,11 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 /// A consistent snapshot of the data currently in a [Buffer].
 #[derive(Debug)]
-struct BufferSnapshot<K, V>(Vec<((K, V), u64, isize)>);
+struct BufferSnapshot<K, V>(SeqNo, Vec<((K, V), u64, isize)>);
 
 impl<K, V> Snapshot<K, V> for BufferSnapshot<K, V> {
     fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
-        buf.extend(self.0.drain(..));
+        buf.extend(self.1.drain(..));
         false
     }
 }
@@ -427,6 +480,15 @@ pub struct IndexedSnapshot<K, V>(
     TraceSnapshot<K, V>,
 );
 
+impl<K, V> IndexedSnapshot<K, V> {
+    /// Returns the SeqNo at which this snapshot was run.
+    ///
+    /// All writes assigned a seqno < this are included.
+    pub fn seqno(&self) -> SeqNo {
+        self.0 .0
+    }
+}
+
 impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
     fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         self.0.read(buf) || self.1.read(buf) || self.2.read(buf)
@@ -437,10 +499,15 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
 mod tests {
     use std::error::Error;
 
+    use crate::error::Error as IndexedError;
     use crate::mem::MemBlob;
     use crate::mem::MemBuffer;
 
     use super::*;
+
+    fn record_with_seqno(seqno: u64) -> (SeqNo, (String, String), u64, isize) {
+        (SeqNo(seqno), ("".to_string(), "".to_string()), 1, 1)
+    }
 
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
@@ -522,6 +589,117 @@ mod tests {
         // given the data is not ordered by key, so again this should fire a
         // validations error if the sort code doesn't work.
         i.seal(id, 3)?;
+        Ok(())
+    }
+
+    #[test]
+    fn batch_consolidation() -> Result<(), Box<dyn Error>> {
+        let updates = vec![
+            (("1".to_string(), "".to_string()), 1, 1),
+            (("1".to_string(), "".to_string()), 1, 1),
+        ];
+
+        let mut i = Indexed::new(
+            MemBuffer::new("batch_consolidation")?,
+            MemBlob::new("batch_consolidation")?,
+        )?;
+        let id = i.register("0");
+
+        // Write the data and move it into the future part of the index, which
+        // consolidates updates to identical ((k, v), t). Since the writes are
+        // not already consolidated this test will fail if the consolidation
+        // code does not work.
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Add another set of identical updates and place into another future
+        // batch.
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Now move the data to the trace part of the index, which consolidates
+        // updates at identical ((k, v), t). Since the writes are only consolidated
+        // within individual future batches this test will fail if trace batch
+        // consolidation does not work.
+        i.seal(id, 2)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn batch_future_empty() -> Result<(), Box<dyn Error>> {
+        let mut i = Indexed::new(
+            MemBuffer::new("batch_future_empty")?,
+            MemBlob::new("batch_future_empty")?,
+        )?;
+        let id = i.register("0");
+
+        // Write an empty set of updates and try to move it into the future part
+        // of the index.
+        i.write_sync(id, &[])?;
+        i.step()?;
+
+        // Sending updates with dif = 0.
+        let updates = vec![(("1".to_string(), "".to_string()), 1, 0)];
+        i.write_sync(id, &updates)?;
+        i.step()?;
+
+        // Now try again with a set of updates that consolidates down to the empty
+        // set.
+        let updates = vec![
+            (("1".to_string(), "".to_string()), 1, 2),
+            (("1".to_string(), "".to_string()), 1, -2),
+        ];
+
+        i.write_sync(id, &updates)?;
+        i.step()?;
+        Ok(())
+    }
+
+    #[test]
+    fn drain_buf_validate() -> Result<(), IndexedError> {
+        let mut i = Indexed::new(
+            MemBuffer::new("drain_buf_validate")?,
+            MemBlob::new("drain_buf_validate")?,
+        )?;
+        let id = i.register("0");
+
+        // Normal case (equals lower)
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(0)], &(SeqNo(0)..SeqNo(2))),
+            Ok(())
+        );
+
+        // Normal case (between (lower, upper))
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(3)], &(SeqNo(2)..SeqNo(4))),
+            Ok(())
+        );
+
+        // Less than lower
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(3)], &(SeqNo(4)..SeqNo(6))),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(3), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
+            ))
+        );
+
+        // Equal to upper
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(6)], &(SeqNo(4)..SeqNo(6))),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(6), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
+            ))
+        );
+
+        // Greater than upper
+        assert_eq!(
+            i.drain_buf_inner(id, vec![record_with_seqno(7)], &(SeqNo(4)..SeqNo(6))),
+            Err(IndexedError::from(
+                "invalid sequence number in snapshot SeqNo(7), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
+            ))
+        );
+
         Ok(())
     }
 }

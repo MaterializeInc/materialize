@@ -92,6 +92,10 @@ struct Args {
     #[structopt(long)]
     shuffle_tests: bool,
 
+    /// Force the use of the specfied temporary directory rather than creating one with a random name
+    #[structopt(long)]
+    temp_dir: Option<String>,
+
     // === Positional arguments. ===
     /// Paths to testdrive scripts to run.
     files: Vec<String>,
@@ -167,6 +171,7 @@ async fn main() {
         ci_output: args.ci_output,
         default_timeout,
         seed: args.seed,
+        temp_dir: args.temp_dir,
     };
 
     let mut errors = Vec::new();

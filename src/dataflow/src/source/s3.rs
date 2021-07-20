@@ -122,22 +122,24 @@ async fn download_objects_task(
         match msg {
             Ok(msg) => {
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
-                    let is_new = bi.keys.insert(msg.key.clone());
-                    if !is_new {
+                    if bi.keys.contains(&msg.key) {
                         bi.metrics.objects_duplicate.inc();
+                        log::debug!(
+                            "skipping object because it was already seen: {}/{}",
+                            msg.bucket,
+                            msg.key
+                        );
                         continue;
                     }
                 } else {
-                    let mut keys = HashSet::new();
-                    keys.insert(msg.key.clone());
                     let bi = BucketInfo {
-                        keys,
+                        keys: HashSet::new(),
                         metrics: BucketMetrics::new(&source_id, &msg.bucket),
                     };
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
 
-                let (tx, activator, client, msg) = (&tx, &activator, &client, &msg);
+                let (tx, activator, client, msg_ref) = (&tx, &activator, &client, &msg);
 
                 let result = Retry::default()
                     .retry(|state| async move {
@@ -145,56 +147,64 @@ async fn download_objects_task(
                             tx,
                             &activator,
                             &client,
-                            &msg.bucket,
-                            &msg.key,
+                            &msg_ref.bucket,
+                            &msg_ref.key,
                             compression,
                         )
                         .await;
 
                         match download_status {
-                            // Terminate ok OK
+                            // Exit retry loop
                             DownloadStatus::Ok => Ok((DownloadStatus::Ok, update)),
-                            // Retry for retry status
-                            DownloadStatus::Retry => {
-                                log::warn!(
+                            DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
+                            // Retriable error
+                            DownloadStatus::Retry(e) => {
+                                log::debug!(
                                     "Failed to download object: {}/{} (attempt {})",
-                                    msg.bucket,
-                                    msg.key,
+                                    msg_ref.bucket,
+                                    msg_ref.key,
                                     state.i
                                 );
-                                Err((DownloadStatus::Retry, update))
+                                Err((DownloadStatus::Retry(e), update))
                             }
-                            // Terminate for failed status
-                            DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
                         }
                     })
                     .await;
-                // Extract metrics updates
-                match &result {
-                    Err((_, Some(update))) | Ok((_, Some(update))) => seen_buckets
-                        .get_mut(&msg.bucket)
-                        .expect("just inserted")
-                        .metrics
-                        .inc(1, update.bytes, update.messages),
-                    _ => (),
+                // We use Result to communicate with Retry, both variants have the same data
+                let (status, update) = match result {
+                    Err((status, update)) | Ok((status, update)) => (status, update),
                 };
+                let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
+                if let Some(update) = update {
+                    bucket_info.metrics.inc(1, update.bytes, update.messages);
+                }
                 // Extract and handle status updates
-                match result {
-                    Err((DownloadStatus::Retry, _)) => {
-                        tx.send(Err(S3Error::RetryFailed)).unwrap_or_else(|e| {
-                            log::debug!("unable to send error on retries failed: {}", e)
-                        });
-                        break;
+                match status {
+                    // Retry making it out of the retry loop means retries failed
+                    DownloadStatus::Retry(e) => {
+                        if tx.send(Err(e)).is_err() {
+                            rx.close();
+                            break;
+                        };
                     }
-                    Ok((DownloadStatus::SendFailed, _)) => {
+                    DownloadStatus::SendFailed => {
                         rx.close();
                         break;
                     }
-                    _ => (),
+                    DownloadStatus::Ok => {
+                        log::debug!(
+                            "source_id={} successfully downloaded {}/{}",
+                            source_id,
+                            msg.bucket,
+                            msg.key
+                        );
+                        bucket_info.keys.insert(msg.key);
+                    }
                 };
             }
             Err(e) => {
                 if tx.send(Err(e)).is_err() {
+                    rx.close();
                     break;
                 }
             }
@@ -544,10 +554,10 @@ struct DownloadMetricUpdate {
     messages: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 enum DownloadStatus {
     Ok,
-    Retry,
+    Retry(S3Error),
     SendFailed,
 }
 
@@ -556,7 +566,11 @@ enum S3Error {
     BodyMissing(String),
     ClientConstructionFailed(anyhow::Error),
     Decode(String, std::io::Error),
-    GetObjectError(RusotoError<rusoto_s3::GetObjectError>),
+    GetObjectError {
+        bucket: String,
+        key: String,
+        err: RusotoError<rusoto_s3::GetObjectError>,
+    },
     ListObjectsFailed(RusotoError<rusoto_s3::ListObjectsV2Error>),
     Read(std::io::Error),
     RetryFailed,
@@ -570,7 +584,9 @@ impl std::fmt::Display for S3Error {
             S3Error::Decode(key, err) => {
                 write!(f, "Failed to decode object {} using gzip: {}", key, err)
             }
-            S3Error::GetObjectError(err) => err.fmt(f),
+            S3Error::GetObjectError { bucket, key, err } => {
+                write!(f, "getting object {}/{}: {}", bucket, key, err)
+            }
             S3Error::ListObjectsFailed(err) => err.fmt(f),
             S3Error::Read(err) => err.fmt(f),
             S3Error::RetryFailed => write!(f, "Retry failed to produce result"),
@@ -590,31 +606,32 @@ async fn download_object(
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
     let obj = match client
         .get_object(GetObjectRequest {
-            bucket: bucket.into(),
+            bucket: bucket.to_string(),
             key: key.to_string(),
             ..Default::default()
         })
         .await
     {
         Ok(obj) => obj,
-        Err(e) => {
-            if let Err(e) = tx.send(Err(S3Error::GetObjectError(e))) {
-                log::debug!("unable to send error on stream: {}", e);
-                return (DownloadStatus::SendFailed, None);
-            } else {
-                return (DownloadStatus::Retry, None);
-            }
+        Err(err) => {
+            return (
+                DownloadStatus::Retry(S3Error::GetObjectError {
+                    bucket: bucket.to_string(),
+                    key: key.to_string(),
+                    err,
+                }),
+                None,
+            );
         }
     };
 
     // If the Content-Type does not match the compression specified for this
-    // source, emit a debug warning messages and ignore this object
+    // source, emit a debug message and trust the user-specified compression
     if let Some(s) = obj.content_encoding.as_deref() {
         match (s, compression) {
             ("gzip", Compression::Gzip) => (),
             ("identity", Compression::None) => (),
-            // TODO: switch to `("identity" | "gzip", _)` when or_patterns stabilizes
-            ("identity", _) | ("gzip", _) => {
+            ("identity" | "gzip", _) => {
                 log::debug!("object {} has mismatched Content-Type: {}", key, s)
             }
             _ => log::debug!("object {} has unrecognized Content-Type: {}", key, s),
@@ -628,7 +645,9 @@ async fn download_object(
 
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
-                let activate = !buf.is_empty();
+                if buf.is_empty() {
+                    return (DownloadStatus::Ok, None);
+                }
 
                 let bytes_read = buf.len() as u64;
 
@@ -644,12 +663,10 @@ async fn download_object(
                                     bytes: bytes_read,
                                     messages: 0,
                                 };
-                                if let Err(e) = tx.send(Err(S3Error::Decode(key.into(), e))) {
-                                    log::debug!("unable to send error on stream: {}", e);
-                                    return (DownloadStatus::SendFailed, Some(metrics));
-                                } else {
-                                    return (DownloadStatus::Retry, Some(metrics));
-                                }
+                                return (
+                                    DownloadStatus::Retry(S3Error::Decode(key.into(), e)),
+                                    Some(metrics),
+                                );
                             }
                         }
                         decoded
@@ -675,7 +692,7 @@ async fn download_object(
                     chunk_idx = chunk_bound;
                 }
                 log::trace!("sent {} chunks to reader", messages);
-                if download_status != DownloadStatus::SendFailed {
+                if !matches!(download_status, DownloadStatus::SendFailed) {
                     if let Err(e) = tx.send(Ok(InternalMessage {
                         record: MessagePayload::EOF,
                     })) {
@@ -683,9 +700,7 @@ async fn download_object(
                         download_status = DownloadStatus::SendFailed;
                     }
                 }
-                if activate {
-                    activator.activate().expect("s3 reader activation failed");
-                }
+                activator.activate().expect("s3 reader activation failed");
                 (
                     download_status,
                     Some(DownloadMetricUpdate {
@@ -695,21 +710,14 @@ async fn download_object(
                 )
             }
             Err(e) => {
-                if let Err(e) = tx.send(Err(S3Error::Read(e))) {
-                    log::debug!("unable to send error on stream: {}", e);
-                    (DownloadStatus::SendFailed, None)
-                } else {
-                    (DownloadStatus::Retry, None)
-                }
+                return (DownloadStatus::Retry(S3Error::Read(e)), None);
             }
         }
     } else {
-        if let Err(e) = tx.send(Err(S3Error::BodyMissing(key.into()))) {
-            log::debug!("unable to send error on stream: {}", e);
-            (DownloadStatus::SendFailed, None)
-        } else {
-            (DownloadStatus::Retry, None)
-        }
+        return (
+            DownloadStatus::Retry(S3Error::BodyMissing(key.into())),
+            None,
+        );
     }
 }
 
@@ -757,6 +765,7 @@ impl SourceReader for S3SourceReader {
                         ));
                     }
                     S3KeySource::SqsNotifications { queue } => {
+                        log::debug!("reading sqs queue={} worker={}", queue, worker_id);
                         tokio::spawn(read_sqs_task(
                             source_id.to_string(),
                             glob.clone(),
@@ -807,7 +816,7 @@ impl SourceReader for S3SourceReader {
                     S3Error::RetryFailed => Err(anyhow!("Retry failed")),
                     S3Error::BodyMissing(_)
                     | S3Error::Decode(_, _)
-                    | S3Error::GetObjectError(_)
+                    | S3Error::GetObjectError { .. }
                     | S3Error::ListObjectsFailed(_)
                     | S3Error::Read(_) => Ok(NextMessage::Pending),
                 }

@@ -30,6 +30,7 @@ pub mod cast;
 pub mod cli;
 pub mod codegen;
 pub mod collections;
+pub mod display;
 pub mod env;
 pub mod fmt;
 #[cfg(feature = "network")]

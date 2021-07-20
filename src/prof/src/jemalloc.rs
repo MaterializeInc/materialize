@@ -183,6 +183,13 @@ impl JemallocProfCtl {
         Ok(f.into_file())
     }
 
+    pub fn dump_stats(&mut self) -> anyhow::Result<String> {
+        // Try to avoid allocations within `stats_print`
+        let mut buf = Vec::with_capacity(1 << 20);
+        jemalloc_ctl::stats_print::stats_print(&mut buf, Default::default())?;
+        Ok(String::from_utf8(buf)?)
+    }
+
     pub fn stats(&self) -> anyhow::Result<JemallocStats> {
         epoch::advance()?;
         Ok(JemallocStats {

@@ -350,6 +350,21 @@ Using these parameters correctly requires substantial knowledge about how
 the underlying Timely and Differential Dataflow engines work. Typically you
 should only set these parameters in consultation with Materialize engineers.
 
+## Special environment variables
+
+Materialize respects several environment variables that have conventional
+meanings in Unix systems.
+
+### HTTP proxies
+
+The `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` environment
+variables specify a proxy to use for outgoing HTTP and HTTPS traffic. There is
+no precise specification of how these variables behave, but Materialize's
+behavior generally matches the behavior of other HTTP clients.
+
+For precise details of Materialize's behavior, consult our
+[developer docs](https://dev.materialize.com/api/rust/http_util/index.html#System_proxy_configuration).
+
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source

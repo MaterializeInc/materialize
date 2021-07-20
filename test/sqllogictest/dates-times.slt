@@ -1084,3 +1084,19 @@ SELECT '"2020!03-17 #?~T~02:36:56#"'::timestamp;
 
 query error invalid input syntax for type timestamp: have unprocessed tokens 56
 select TIMESTAMP '"2020-03-17 ~02:36:~56~"';
+
+# Regression for #6272. These match postgres.
+query TTT
+select '9::60'::time, '9:59:60'::time, '9::59.999999'::time
+----
+09:01:00 10:00:00 09:00:59.999999
+
+# TODO: Postgres returns 09:01:00 for this.
+query T
+select '9::59.999999999'::time
+----
+09:00:59.999999
+
+# TODO: Postgres supports this as 09:01:00.1.
+statement error invalid input syntax for type time: NANOSECOND
+select '9::60.1'::time

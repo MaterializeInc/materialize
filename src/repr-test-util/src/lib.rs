@@ -53,7 +53,7 @@ pub fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Da
     }
     match littyp {
         ScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
-        ScalarType::Decimal(_, _) => Ok(Datum::from(parse_litval::<i128>(litval, "i128")?)),
+        ScalarType::Numeric { .. } => Ok(Datum::from(parse_litval::<i128>(litval, "i128")?)),
         ScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
         ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
         ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),

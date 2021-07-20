@@ -102,7 +102,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Partial matches are not optimized
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (3, 4);
-"%0 =| Get t1| Filter ((#1 = 2) || (#1 = 3)), ((#1 = 3) || (#1 = 4))"
+"%0 =| Get t1| Filter (((#1 = 2) && (#1 = 4)) || (#1 = 3))"
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
 "%0 =| Get t1| Filter ((#1 = 2) || (#1 = 3)), ((#1 = 4) || (#1 = 5))"

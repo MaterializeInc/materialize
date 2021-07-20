@@ -203,6 +203,28 @@ fn replace_subexpr_and_reduce(
             if e == replace_if_equal_to {
                 *e = replace_with.clone();
                 changed = true;
+            } else if let MirScalarExpr::CallBinary {
+                func: r_func,
+                expr1: r_expr1,
+                expr2: r_expr2,
+            } = replace_if_equal_to
+            {
+                if let Some(negation) = r_func.negate() {
+                    if let MirScalarExpr::CallBinary {
+                        func: l_func,
+                        expr1: l_expr1,
+                        expr2: l_expr2,
+                    } = e
+                    {
+                        if negation == *l_func && l_expr1 == r_expr1 && l_expr2 == r_expr2 {
+                            *e = MirScalarExpr::CallUnary {
+                                func: UnaryFunc::Not,
+                                expr: Box::new(replace_with.clone()),
+                            };
+                            changed = true;
+                        }
+                    }
+                }
             }
         },
     );

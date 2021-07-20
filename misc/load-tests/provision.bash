@@ -22,4 +22,8 @@ apt update && apt install -y docker-ce docker-ce-cli containerd.io docker-compos
 # Allow using docker as non-root.
 usermod -aG docker ubuntu
 
+# Install prerequisites for building Materialize
+sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y"
+apt install -y cmake
+
 touch /DONE

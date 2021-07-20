@@ -27,17 +27,15 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use dataflow_types::{DataflowDesc, DataflowError};
+use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
-use repr::{Row, RowArena};
+use repr::{Diff, Row, RowArena};
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-
-pub type Diff = isize;
 
 // Local type definition to avoid the horror in signatures.
 pub type Arrangement<S, V> = Arranged<S, TraceValHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
@@ -89,7 +87,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Creates a new empty Context.
-    pub fn for_dataflow(dataflow: &DataflowDesc, dataflow_id: usize) -> Self {
+    pub fn for_dataflow<Plan>(dataflow: &DataflowDescription<Plan>, dataflow_id: usize) -> Self {
         let as_of_frontier = dataflow
             .as_of
             .clone()
@@ -392,17 +390,6 @@ where
     pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, V, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
-
-    /// Reports the keys for any arrangement which evaluate to a literal under `key_selector`.
-    pub fn constrained_keys<K>(&self, mut key_selector: K) -> Vec<(Vec<MirScalarExpr>, V)>
-    where
-        K: FnMut(&[MirScalarExpr]) -> Option<V>,
-    {
-        self.arranged
-            .keys()
-            .filter_map(|key| key_selector(key).map(|val| (key.clone(), val)))
-            .collect::<Vec<_>>()
-    }
 }
 
 impl<S: Scope, T: Lattice> CollectionBundle<S, repr::Row, T>
@@ -457,9 +444,13 @@ where
     ///
     /// This operator is able to apply the logic of `mfp` early, which can substantially
     /// reduce the amount of data produced when `mfp` is non-trivial.
+    ///
+    /// The `key_val` argument, when present, indicates that a specific arrangement should
+    /// be used, and that we can seek to the supplied row.
     pub fn as_collection_core(
         &self,
         mut mfp: MapFilterProject,
+        key_val: Option<(Vec<MirScalarExpr>, Row)>,
     ) -> (
         Collection<S, repr::Row, Diff>,
         Collection<S, DataflowError, Diff>,
@@ -468,12 +459,7 @@ where
             self.as_collection()
         } else {
             mfp.optimize();
-            let mfp2 = mfp.clone();
             let mfp_plan = mfp.into_plan().unwrap();
-            // TODO: Improve key selection heuristic.
-            let key_val = self
-                .constrained_keys(move |exprs| mfp2.literal_constraints(exprs))
-                .pop();
             let (stream, errors) = self.flat_map(key_val, {
                 let mut datums = crate::render::datum_vec::DatumVec::new();
                 move |data, time, diff| {

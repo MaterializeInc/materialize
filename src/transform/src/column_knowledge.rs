@@ -227,7 +227,6 @@ impl ColumnKnowledge {
                         | AggregateFunc::MaxInt64
                         | AggregateFunc::MaxFloat32
                         | AggregateFunc::MaxFloat64
-                        | AggregateFunc::MaxDecimal
                         | AggregateFunc::MaxBool
                         | AggregateFunc::MaxString
                         | AggregateFunc::MaxDate
@@ -237,7 +236,6 @@ impl ColumnKnowledge {
                         | AggregateFunc::MinInt64
                         | AggregateFunc::MinFloat32
                         | AggregateFunc::MinFloat64
-                        | AggregateFunc::MinDecimal
                         | AggregateFunc::MinBool
                         | AggregateFunc::MinString
                         | AggregateFunc::MinDate
@@ -248,8 +246,12 @@ impl ColumnKnowledge {
                             // These methods propagate constant values exactly.
                             knowledge
                         }
+                        AggregateFunc::Count => DatumKnowledge {
+                            value: None,
+                            nullable: false,
+                        },
                         _ => {
-                            // All aggregates are non-null if their inputs are non-null.
+                            // The remaining aggregates are non-null if their inputs are non-null.
                             DatumKnowledge {
                                 value: None,
                                 nullable: knowledge.nullable,

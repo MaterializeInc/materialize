@@ -19,7 +19,7 @@ use derivative::Derivative;
 use futures::Stream;
 
 use expr::GlobalId;
-use repr::{Datum, Row, ScalarType, Timestamp};
+use repr::{Datum, Diff, Row, ScalarType, Timestamp};
 use sql::ast::{Raw, Statement};
 use sql::plan::{Params, PlanContext, StatementDesc};
 
@@ -456,7 +456,7 @@ pub struct WriteOp {
     /// The target table.
     pub id: GlobalId,
     /// The data rows.
-    pub rows: Vec<(Row, isize)>,
+    pub rows: Vec<(Row, Diff)>,
 }
 
 /// The action to take during end_transaction.

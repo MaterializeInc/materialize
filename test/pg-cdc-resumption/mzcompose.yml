@@ -196,13 +196,12 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG
+    - MZ_LOG_FILTER
 
   postgres:
-    image: postgres:11.4
+    mzbuild: postgres
     ports:
       - 5432
-    command: postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20
 
   toxiproxy:
     image: shopify/toxiproxy:2.1.4

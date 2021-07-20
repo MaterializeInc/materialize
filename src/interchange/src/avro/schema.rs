@@ -9,6 +9,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
@@ -20,7 +21,7 @@ use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use ore::retry::Retry;
-use repr::adt::decimal::MAX_DECIMAL_PRECISION;
+use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 
 use super::{cdc_v2, is_null, EnvelopeType};
@@ -248,13 +249,15 @@ fn validate_schema_2(
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {
-            if *precision > MAX_DECIMAL_PRECISION as usize {
+            if *precision > NUMERIC_DATUM_MAX_PRECISION {
                 bail!(
                     "decimals with precision greater than {} are not supported",
-                    MAX_DECIMAL_PRECISION
+                    NUMERIC_DATUM_MAX_PRECISION
                 )
             }
-            ScalarType::Decimal(*precision as u8, *scale as u8)
+            ScalarType::Numeric {
+                scale: Some(u8::try_from(*scale).unwrap()),
+            }
         }
         SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
         SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,

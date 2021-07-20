@@ -34,7 +34,7 @@ use crate::plan::expr::{
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::transform_ast;
-use crate::plan::typeconv::{self, rescale_decimal, CastContext};
+use crate::plan::typeconv::{self, CastContext};
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -95,13 +95,12 @@ impl TypeCategory {
             | ScalarType::Time
             | ScalarType::Timestamp
             | ScalarType::TimestampTz => Self::DateTime,
-            ScalarType::Decimal(..)
-            | ScalarType::Float32
+            ScalarType::Float32
             | ScalarType::Float64
             | ScalarType::Int32
             | ScalarType::Int64
             | ScalarType::Oid
-            | ScalarType::APD { .. } => Self::Numeric,
+            | ScalarType::Numeric { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
@@ -118,7 +117,6 @@ impl TypeCategory {
             | ParamType::ListElementAny
             | ParamType::NonVecAny
             | ParamType::MapAny => Self::Pseudo,
-            ParamType::DecimalAny => Self::Numeric,
             ParamType::Plain(t) => Self::from_type(t),
         }
     }
@@ -372,16 +370,6 @@ impl ParamList {
 
         for (i, typ) in typs.iter().enumerate() {
             let param = &self[i];
-
-            // Require explicitly cast APD values to prevent confusion
-            // w/ current decimal impls
-            // todo(apd): remove this when merging with decimal
-            if param == &ParamType::Plain(ScalarType::APD { scale: None })
-                && !matches!(typ, Some(ScalarType::APD { .. }))
-            {
-                return false;
-            }
-
             if let Some(typ) = typ {
                 // Ensures either `typ` can at least be implicitly cast to a
                 // type `param` accepts. Implicit in this check is that unknown
@@ -506,9 +494,7 @@ impl ParamList {
     /// type consistency.
     fn resolve_polymorphic_types(&self, typs: &[Option<ScalarType>]) -> Option<ScalarType> {
         // Determines if types have the same [`ScalarBaseType`], and if complex
-        // types' elements do, as well. This function's primary use is allowing
-        // matches between `ScalarType::Decimal` values with different scales,
-        // and doing so for complex objects that embed them, as well.
+        // types' elements do, as well.
         fn complex_base_eq(l: &ScalarType, r: &ScalarType) -> bool {
             match (l, r) {
                 (ScalarType::Array(l), ScalarType::Array(r))
@@ -524,52 +510,6 @@ impl ParamList {
                     complex_base_eq(l, r)
                 }
                 (l, r) => ScalarBaseType::from(l) == ScalarBaseType::from(r),
-            }
-        }
-
-        // Returns a commmon form of `self` and `other` using the "greatest
-        // common" `ScalarType::Decimal`, or `None` if one does not exist.
-        //
-        // This computation includes complex types such as lists whose element
-        // types are `ScalarType::Decimal`.
-        //
-        // This is necesssary because in PostgreSQL, the numeric type does not
-        // preserve scale information, so polymorphic type resolution will
-        // always treat two numeric types as equivalent. To match this behavior
-        // in Materialize, we special-case equality here so that we can consider
-        // decimals with different scales to be equivalent and resolve the
-        // polymorphic constraint to the decimal type with the larger scale.
-        fn find_greatest_common_decimal(l: &ScalarType, r: &ScalarType) -> Option<ScalarType> {
-            match (l, r) {
-                (ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => Some(
-                    ScalarType::Decimal(std::cmp::max(*p1, *p2), std::cmp::max(*s1, *s2)),
-                ),
-                (ScalarType::Array(l), ScalarType::Array(r)) => {
-                    let common = find_greatest_common_decimal(l, r)?;
-                    Some(ScalarType::Array(Box::new(common)))
-                }
-                (
-                    ScalarType::List {
-                        element_type: l, ..
-                    },
-                    ScalarType::List {
-                        element_type: r, ..
-                    },
-                ) => {
-                    let common = find_greatest_common_decimal(l, r)?;
-                    Some(ScalarType::List {
-                        element_type: Box::new(common),
-                        custom_oid: None,
-                    })
-                }
-                (ScalarType::Map { value_type: l, .. }, ScalarType::Map { value_type: r, .. }) => {
-                    let common = find_greatest_common_decimal(l, r)?;
-                    Some(ScalarType::Map {
-                        value_type: Box::new(common),
-                        custom_oid: None,
-                    })
-                }
-                _ => None,
             }
         }
 
@@ -615,15 +555,6 @@ impl ParamList {
                         constrained_type = Some(typ.clone());
                         custom_oid_lock = true;
                         element_lock = true;
-                    } else if !element_lock {
-                        if let Some(d) = find_greatest_common_decimal(typ, constrained) {
-                            // `d` should never be a custom type because it is a
-                            // system-generated type. If users want to control
-                            // the resultant type's OID, they can provide
-                            // explicit casts to the desired OID.
-                            assert!(!d.is_custom_type());
-                            *constrained = d;
-                        }
                     }
                 }
                 (ParamType::ListElementAny, Some(t), None) => {
@@ -646,19 +577,6 @@ impl ParamList {
                             element_type: Box::new(t.clone()),
                         });
                         element_lock = true;
-                    } else if !element_lock {
-                        if let Some(d) = find_greatest_common_decimal(t, &constrained_element_type)
-                        {
-                            // `d` should never be a custom type because it is a
-                            // system-generated type. If users want to control
-                            // the resultant type's OID, they can provide
-                            // explicit casts to the desired OID.
-                            assert!(!d.is_custom_type());
-                            *constrained_list = ScalarType::List {
-                                custom_oid: None,
-                                element_type: Box::new(d),
-                            };
-                        }
                     }
                 }
                 (ParamType::NonVecAny, Some(t), None) => {
@@ -726,28 +644,22 @@ impl From<Vec<ParamType>> for ParamList {
 pub enum ParamType {
     /// A pseudotype permitting any type.
     Any,
-    /// A special, Materialize-specific parameter type permitting a decimal of
-    /// any precision and scale. Note that while `DecimalAny` matches the
-    /// conceptual definition of the word "pseudotype", it does not match the
-    /// PostgreSQL definition, as parameters of type `DecimalAny` are considered
-    /// to exactly match arguments of decimal type.
-    DecimalAny,
     /// A polymorphic pseudotype permitting any array type.  For more details,
-    /// see [`ParamList::resolve_polymorphic_types`].
+    /// see `ParamList::resolve_polymorphic_types`.
     ArrayAny,
     /// A polymorphic pseudotype permitting a `ScalarType::List` of any element
-    /// type.  For more details, see [`ParamList::resolve_polymorphic_types`].
+    /// type.  For more details, see `ParamList::resolve_polymorphic_types`.
     ListAny,
     /// A polymorphic pseudotype permitting all types, with more constraints
     /// than `Any`, i.e. it is subject to polymorphic constraints. For more
-    /// details, see [`ParamList::resolve_polymorphic_types`].
+    /// details, see `ParamList::resolve_polymorphic_types`.
     ListElementAny,
     /// A polymorphic pseudotype with the same behavior as `ListElementAny`,
     /// except it does not permit either `ScalarType::Array` or
     /// `ScalarType::List`.
     NonVecAny,
     /// A polymorphic pseudotype permitting a `ScalarType::Map` of any non-nested
-    /// value type. For more details, see [`ParamList::resolve_polymorphic_types`].
+    /// value type. For more details, see `ParamList::resolve_polymorphic_types`.
     MapAny,
     /// A standard parameter that accepts arguments that match its embedded
     /// `ScalarType`.
@@ -766,9 +678,6 @@ impl ParamType {
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
-            DecimalAny => {
-                typeconv::can_cast(ecx, CastContext::Implicit, t, &ScalarType::Decimal(0, 0))
-            }
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
         }
     }
@@ -796,7 +705,7 @@ impl ParamType {
         use ParamType::*;
         match self {
             ArrayAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
-            Any | DecimalAny | Plain(_) => false,
+            Any | Plain(_) => false,
         }
     }
 
@@ -815,7 +724,6 @@ impl ParamType {
             },
             ParamType::Any => postgres_types::Type::ANY.oid(),
             ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
-            ParamType::DecimalAny => postgres_types::Type::NUMERIC.oid(),
             ParamType::ListAny => pgrepr::LIST.oid(),
             ParamType::ListElementAny => postgres_types::Type::ANYELEMENT.oid(),
             ParamType::MapAny => pgrepr::MAP.oid(),
@@ -828,9 +736,7 @@ impl PartialEq<ScalarType> for ParamType {
     fn eq(&self, other: &ScalarType) -> bool {
         match self {
             ParamType::Plain(s) => s == other,
-            ParamType::DecimalAny => matches!(other, ScalarType::Decimal(_, _)),
-            // All other types are pseudotypes, which do not equal concrete
-            // types.
+            // Pseudotypes never equal concrete types
             _ => false,
         }
     }
@@ -1176,17 +1082,6 @@ fn coerce_args_to_types(
                 do_convert(arg, &ty)?
             }
 
-            // Arbitrary decimal parameter. Converts to decimal but suppresses
-            // decimal -> decimal casts, to avoid casting to the default scale
-            // of 0.
-            ParamType::DecimalAny => match (arg, &types[i]) {
-                (CoercibleScalarExpr::Coerced(arg), Some(ScalarType::Decimal(_, _))) => arg,
-                (arg, _) => {
-                    let ty = ScalarType::Decimal(0, 0);
-                    do_convert(arg, &ty)?
-                }
-            },
-
             // Special "any" psuedotype. Per PostgreSQL, uncoerced literals
             // are accepted, but uncoerced parameters are rejected.
             ParamType::Any => match arg {
@@ -1288,8 +1183,7 @@ lazy_static! {
             "abs" => Scalar {
                 params!(Int32) => UnaryFunc::AbsInt32, 1397;
                 params!(Int64) => UnaryFunc::AbsInt64, 1396;
-                params!(DecimalAny) => UnaryFunc::AbsDecimal, 1398;
-                params!(APD{scale:None}) => UnaryFunc::AbsAPD, 13980;
+                params!(Numeric { scale: None }) => UnaryFunc::AbsNumeric, 1398;
                 params!(Float32) => UnaryFunc::AbsFloat32, 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64, 1395;
             },
@@ -1312,7 +1206,6 @@ lazy_static! {
             "avg" => Scalar {
                 params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2100;
                 params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2101;
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2103;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2104;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105;
                 params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2106;
@@ -1331,11 +1224,7 @@ lazy_static! {
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID;
                 params!(Float64) => UnaryFunc::CeilFloat64, 2308;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::CeilDecimal(s)))
-                }), 1711;
-                params!(APD{scale:None}) => UnaryFunc::CeilAPD, 17110;
+                params!(Numeric { scale: None }) => UnaryFunc::CeilNumeric, 1711;
             },
             "char_length" => Scalar {
                 params!(String) => UnaryFunc::CharLength, 1381;
@@ -1410,20 +1299,12 @@ lazy_static! {
             },
             "exp" => Scalar {
                 params!(Float64) => UnaryFunc::Exp, 1347;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::ExpDecimal(s)))
-                }), 1732;
-                params!(APD{scale:None}) => UnaryFunc::ExpAPD, 17320;
+                params!(Numeric { scale: None }) => UnaryFunc::ExpNumeric, 1732;
             },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
                 params!(Float64) => UnaryFunc::FloorFloat64, 2309;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
-                }), 1712;
-                params!(APD{scale:None}) => UnaryFunc::FloorAPD, 17120;
+                params!(Numeric { scale: None }) => UnaryFunc::FloorNumeric, 1712;
             },
             "format_type" => Scalar {
                 params!(Oid, Int32) => sql_op!(
@@ -1472,6 +1353,9 @@ lazy_static! {
             "jsonb_typeof" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbTypeof, 3210;
             },
+            "left" => Scalar {
+                params!(String, Int32) => BinaryFunc::Left, 3060;
+            },
             "length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
                 params!(String) => UnaryFunc::CharLength, 1317;
@@ -1479,31 +1363,16 @@ lazy_static! {
             },
             "ln" => Scalar {
                 params!(Float64) => UnaryFunc::Ln, 1341;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::LnDecimal(s)))
-                }), 1734;
-                params!(APD{scale:None}) => UnaryFunc::LnAPD, 17340;
+                params!(Numeric { scale: None }) => UnaryFunc::LnNumeric, 1734;
             },
             "log10" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1194;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
-                }), 1481;
+                params!(Numeric { scale: None }) => UnaryFunc::Log10Numeric, 1481;
             },
             "log" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1340;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
-                }), 1741;
-                params!(APD{scale:None}) => UnaryFunc::Log10APD, 17410;
-                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
-                    let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
-                    Ok(lhs.call_binary(rhs, BinaryFunc::LogDecimal(s)))
-                }), 1736;
-                params!(APD{scale:None},APD{scale:None}) => BinaryFunc::LogAPD, 17360;
+                params!(Numeric { scale: None }) => UnaryFunc::Log10Numeric, 1741;
+                params!(Numeric { scale: None },Numeric { scale: None }) => BinaryFunc::LogNumeric, 1736;
             },
             "lower" => Scalar {
                 params!(String) => UnaryFunc::Lower, 870;
@@ -1520,8 +1389,7 @@ lazy_static! {
                 params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp, 3461;
             },
             "mod" => Scalar {
-                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
-                params!(APD{scale:None}, APD{scale:None}) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
                 params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 941;
                 params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947;
             },
@@ -1595,15 +1463,10 @@ lazy_static! {
             },
             "pow" => Scalar {
                 params!(Float64, Float64) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1346;
-                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1738;
             },
             "power" => Scalar {
                 params!(Float64, Float64) => BinaryFunc::Power, 1368;
-                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
-                    let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
-                    Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
-                }), 2169;
-                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::PowerAPD, 21690;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::PowerNumeric, 2169;
             },
             "repeat" => Scalar {
                 params!(String, Int32) => BinaryFunc::RepeatString, 1622;
@@ -1621,16 +1484,8 @@ lazy_static! {
             "round" => Scalar {
                 params!(Float32) => UnaryFunc::RoundFloat32, oid::FUNC_ROUND_F32_OID;
                 params!(Float64) => UnaryFunc::RoundFloat64, 1342;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::RoundDecimal(s)))
-                }), 1708;
-                params!(APD{scale:None}) => UnaryFunc::RoundAPD, 17080;
-                params!(DecimalAny, Int64) => Operation::binary(|ecx, lhs, rhs| {
-                    let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
-                    Ok(lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s)))
-                }), 1707;
-                params!(APD{scale:None}, Int32) => BinaryFunc::RoundAPD, 17070;
+                params!(Numeric { scale: None }) => UnaryFunc::RoundNumeric, 1708;
+                params!(Numeric { scale: None }, Int32) => BinaryFunc::RoundNumeric, 1707;
             },
             "rtrim" => Scalar {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
@@ -1646,21 +1501,18 @@ lazy_static! {
                 params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
             },
             "stddev" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2159;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2157;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2158;
                 params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2155;
                 params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2154;
             },
             "stddev_pop" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2729;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2727;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2728;
                 params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2725;
                 params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2724;
             },
             "stddev_samp" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2717;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2715;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2716;
                 params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2713;
@@ -1676,11 +1528,7 @@ lazy_static! {
             },
             "sqrt" => Scalar {
                 params!(Float64) => UnaryFunc::SqrtFloat64, 1344;
-                params!(DecimalAny) => Operation::unary(|ecx, e| {
-                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
-                }), 1730;
-                params!(APD{scale:None}) => UnaryFunc::SqrtAPD, 17300;
+                params!(Numeric { scale: None }) => UnaryFunc::SqrtNumeric, 1730;
             },
             "tan" => Scalar {
                 params!(Float64) => UnaryFunc::Tan, 1606;
@@ -1730,21 +1578,18 @@ lazy_static! {
                 params!(String) => UnaryFunc::Upper, 871;
             },
             "variance" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2153;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2151;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2152;
                 params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2149;
                 params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2148;
             },
             "var_pop" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2723;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2721;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2722;
                 params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2719;
                 params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2718;
             },
             "var_samp" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2646;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2644;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2645;
                 params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2642;
@@ -1784,12 +1629,11 @@ lazy_static! {
                 params!(Int64) => AggregateFunc::MaxInt64, 2115;
                 params!(Float32) => AggregateFunc::MaxFloat32, 2119;
                 params!(Float64) => AggregateFunc::MaxFloat64, 2120;
-                params!(DecimalAny) => AggregateFunc::MaxDecimal, 2130;
                 params!(String) => AggregateFunc::MaxString, 2129;
                 params!(Date) => AggregateFunc::MaxDate, 2122;
                 params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126;
                 params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127;
-                params!(APD{scale: None}) => AggregateFunc::MaxApd, oid::FUNC_MAX_APD_OID;
+                params!(Numeric{scale: None}) => AggregateFunc::MaxNumeric, oid::FUNC_MAX_NUMERIC_OID;
             },
             "min" => Aggregate {
                 params!(Bool) => AggregateFunc::MinBool, oid::FUNC_MIN_BOOL_OID;
@@ -1797,12 +1641,11 @@ lazy_static! {
                 params!(Int64) => AggregateFunc::MinInt64, 2131;
                 params!(Float32) => AggregateFunc::MinFloat32, 2135;
                 params!(Float64) => AggregateFunc::MinFloat64, 2136;
-                params!(DecimalAny) => AggregateFunc::MinDecimal, 2146;
                 params!(String) => AggregateFunc::MinString, 2145;
                 params!(Date) => AggregateFunc::MinDate, 2138;
                 params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
-                params!(APD{scale: None}) => AggregateFunc::MinApd, oid::FUNC_MIN_APD_OID;
+                params!(Numeric{scale: None}) => AggregateFunc::MinNumeric, oid::FUNC_MIN_NUMERIC_OID;
             },
             "json_agg" => Aggregate {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175;
@@ -1843,8 +1686,7 @@ lazy_static! {
                 params!(Int64) => AggregateFunc::SumInt64, 2107;
                 params!(Float32) => AggregateFunc::SumFloat32, 2110;
                 params!(Float64) => AggregateFunc::SumFloat64, 2111;
-                params!(DecimalAny) => AggregateFunc::SumDecimal, 2114;
-                params!(APD{scale:None}) => AggregateFunc::SumAPD, 21140;
+                params!(Numeric { scale: None }) => AggregateFunc::SumNumeric, 2114;
                 params!(Interval) => Operation::unary(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
@@ -2065,11 +1907,10 @@ lazy_static! {
                 // users (#549).
                 params!(Float32) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_F32_OID;
                 params!(Float64) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_F64_OID;
-                params!(DecimalAny) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_DECIMAL_OID;
                 params!(Int32) => Operation::unary(|ecx, e| {
                       typeconv::plan_cast(
                           "internal.avg_promotion", ecx, CastContext::Explicit,
-                          e, &ScalarType::Decimal(10, 0),
+                          e, &ScalarType::Numeric {scale: None},
                       )
                 }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
             },
@@ -2205,12 +2046,6 @@ lazy_static! {
                 params!(Int64, Int64) => AddInt64, 684;
                 params!(Float32, Float32) => AddFloat32, 586;
                 params!(Float64, Float64) => AddFloat64, 591;
-                params!(DecimalAny, DecimalAny) => {
-                    Operation::binary(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        Ok(lexpr.call_binary(rexpr, AddDecimal))
-                    })
-                }, 1758;
                 params!(Interval, Interval) => AddInterval, 1337;
                 params!(Timestamp, Interval) => AddTimestampInterval, 2066;
                 params!(Interval, Timestamp) => {
@@ -2232,25 +2067,20 @@ lazy_static! {
                 params!(Interval, Time) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
-                params!(APD{scale:None}, APD{scale:None}) => AddAPD, 17581;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => AddNumeric, 1758;
             },
             "-" => Scalar {
                 params!(Int32) => UnaryFunc::NegInt32, 558;
                 params!(Int64) => UnaryFunc::NegInt64, 484;
                 params!(Float32) => UnaryFunc::NegFloat32, 584;
                 params!(Float64) => UnaryFunc::NegFloat64, 585;
-                params!(DecimalAny) => UnaryFunc::NegDecimal, 1751;
-                params!(APD{scale: None}) => UnaryFunc::NegAPD, 17510;
+                params!(Numeric{scale: None}) => UnaryFunc::NegNumeric, 17510;
                 params!(Interval) => UnaryFunc::NegInterval, 1336;
                 params!(Int32, Int32) => SubInt32, 555;
                 params!(Int64, Int64) => SubInt64, 685;
                 params!(Float32, Float32) => SubFloat32, 587;
                 params!(Float64, Float64) => SubFloat64, 592;
-                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
-                    let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                    Ok(lexpr.call_binary(rexpr, SubDecimal))
-                }), 1759;
-                params!(APD{scale: None}, APD{scale: None}) => SubAPD, 17590;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => SubNumeric, 17590;
                 params!(Interval, Interval) => SubInterval, 1338;
                 params!(Timestamp, Timestamp) => SubTimestamp, 2067;
                 params!(TimestampTz, TimestampTz) => SubTimestampTz, 1328;
@@ -2274,16 +2104,7 @@ lazy_static! {
                 params!(Float64, Interval) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
                 }, 1584;
-                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
-                    use std::cmp::*;
-                    let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
-                    let (_, s2) = ecx.scalar_type(&rhs).unwrap_decimal_parts();
-                    let so = max(max(min(s1 + s2, 12), s1), s2);
-                    let si = s1 + s2;
-                    let expr = lhs.call_binary(rhs, MulDecimal);
-                    Ok(rescale_decimal(expr, si, so))
-                }), 1760;
-                params!(APD { scale: None }, APD { scale: None }) => MulAPD, 17600;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => MulNumeric, 1760;
             },
             "/" => Scalar {
                 params!(Int32, Int32) => DivInt32, 528;
@@ -2291,31 +2112,14 @@ lazy_static! {
                 params!(Float32, Float32) => DivFloat32, 588;
                 params!(Float64, Float64) => DivFloat64, 593;
                 params!(Interval, Float64) => DivInterval, 1585;
-                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
-                    use std::cmp::*;
-                    let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
-                    let (_, s2) = ecx.scalar_type(&rhs).unwrap_decimal_parts();
-                    // Pretend all 0-scale numerators were of the same scale as
-                    // their denominators for improved accuracy.
-                    let s1_mod = if s1 == 0 { s2 } else { s1 };
-                    let s = max(min(12, s1_mod + 6), s1_mod);
-                    let si = max(s + 1, s2);
-                    let lhs = rescale_decimal(lhs, s1, si);
-                    let expr = lhs.call_binary(rhs, DivDecimal);
-                    Ok(rescale_decimal(expr, si - s2, s))
-                }), 1761;
-                params!(APD{scale:None}, APD{scale:None}) => DivAPD, 17610;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => DivNumeric, 1761;
             },
             "%" => Scalar {
                 params!(Int32, Int32) => ModInt32, 530;
                 params!(Int64, Int64) => ModInt64, 439;
                 params!(Float32, Float32) => ModFloat32, oid::OP_MOD_F32_OID;
                 params!(Float64, Float64) => ModFloat64, oid::OP_MOD_F64_OID;
-                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
-                    let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                    Ok(lexpr.call_binary(rexpr, ModDecimal))
-                }), 1762;
-                params!(APD{scale:None}, APD{scale:None}) => ModAPD, 17620;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => ModNumeric, 1762;
             },
 
             // ILIKE
@@ -2459,16 +2263,8 @@ lazy_static! {
                 params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAnyKeys, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
             },
             // COMPARISON OPS
-            // n.b. Decimal impls are separated from other types because they
-            // require a function pointer, which you cannot dynamically generate.
             "<" => Scalar {
-                params!(DecimalAny, DecimalAny) => {
-                    Operation::binary(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Lt))
-                    })
-                }, 1754;
-                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Lt, 17540;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Lt, 1754;
                 params!(Bool, Bool) => BinaryFunc::Lt, 58;
                 params!(Int32, Int32) => BinaryFunc::Lt, 97;
                 params!(Int64, Int64) => BinaryFunc::Lt, 412;
@@ -2487,13 +2283,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lt, 1072;
             },
             "<=" => Scalar {
-                params!(DecimalAny, DecimalAny) => {
-                    Operation::binary(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Lte))
-                    })
-                }, 1755;
-                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Lte, 17550;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Lte, 1755;
                 params!(Bool, Bool) => BinaryFunc::Lte, 1694;
                 params!(Int32, Int32) => BinaryFunc::Lte, 523;
                 params!(Int64, Int64) => BinaryFunc::Lte, 414;
@@ -2512,13 +2302,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lte, 1074;
             },
             ">" => Scalar {
-                params!(DecimalAny, DecimalAny) => {
-                    Operation::binary(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Gt))
-                    })
-                }, 1756;
-                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Gt, 17560;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Gt, 1756;
                 params!(Bool, Bool) => BinaryFunc::Gt, 59;
                 params!(Int32, Int32) => BinaryFunc::Gt, 521;
                 params!(Int64, Int64) => BinaryFunc::Gt, 413;
@@ -2537,13 +2321,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gt, 1073;
             },
             ">=" => Scalar {
-                params!(DecimalAny, DecimalAny) => {
-                    Operation::binary(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Gte))
-                    })
-                }, 1757;
-                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Gte, 17570;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Gte, 1757;
                 params!(Bool, Bool) => BinaryFunc::Gte, 1695;
                 params!(Int32, Int32) => BinaryFunc::Gte, 525;
                 params!(Int64, Int64) => BinaryFunc::Gte, 415;
@@ -2562,13 +2340,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte, 1075;
             },
             "=" => Scalar {
-                params!(DecimalAny, DecimalAny) => {
-                    Operation::binary(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Eq))
-                    })
-                }, 1752;
-                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Eq, 17520;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::Eq, 1752;
                 params!(Bool, Bool) => BinaryFunc::Eq, 91;
                 params!(Int32, Int32) => BinaryFunc::Eq, 96;
                 params!(Int64, Int64) => BinaryFunc::Eq, 410;
@@ -2588,13 +2360,7 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
             },
             "<>" => Scalar {
-                params!(DecimalAny, DecimalAny) => {
-                    Operation::binary(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        Ok(lexpr.call_binary(rexpr, BinaryFunc::NotEq))
-                    })
-                }, 1753;
-                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::NotEq, 17530;
+                params!(Numeric { scale: None }, Numeric { scale: None }) => BinaryFunc::NotEq, 1753;
                 params!(Bool, Bool) => BinaryFunc::NotEq, 85;
                 params!(Int32, Int32) => BinaryFunc::NotEq, 518;
                 params!(Int64, Int64) => BinaryFunc::NotEq, 411;
@@ -2614,20 +2380,6 @@ lazy_static! {
             }
         }
     };
-}
-
-/// Rescales two decimals to have the same scale.
-fn rescale_decimals_to_same(
-    ecx: &ExprContext,
-    lhs: HirScalarExpr,
-    rhs: HirScalarExpr,
-) -> (HirScalarExpr, HirScalarExpr) {
-    let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
-    let (_, s2) = ecx.scalar_type(&rhs).unwrap_decimal_parts();
-    let so = std::cmp::max(s1, s2);
-    let lexpr = rescale_decimal(lhs, s1, so);
-    let rexpr = rescale_decimal(rhs, s2, so);
-    (lexpr, rexpr)
 }
 
 /// Resolves the operator to a set of function implementations.

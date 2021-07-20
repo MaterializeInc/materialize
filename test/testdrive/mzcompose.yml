@@ -77,11 +77,20 @@ mzworkflows:
 
   ci-proxy-failure:
     env:
-      ALL_PROXY: '#nonsense'
+      ALL_PROXY: http://localhost:1234
       TD_TEST: 'proxy/proxy-failure.td'
     steps:
       - step: workflow
         workflow: testdrive
+
+  ci-proxy-no-proxy:
+    env:
+      ALL_PROXY: http://localhost:1234
+      NO_PROXY: schema-registry, amazonaws.com
+      TD_TEST: 'avro-registry.td esoteric/s3.td'
+    steps:
+      - step: workflow
+        workflow: ci
 
   start-deps:
     steps:
@@ -112,7 +121,7 @@ services:
       - bash
     environment:
     - TMPDIR=/share/tmp
-    - MZ_LOG
+    - MZ_LOG_FILTER
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
@@ -135,11 +144,12 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG
+    - MZ_LOG_FILTER
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
     - ALL_PROXY
+    - NO_PROXY
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp

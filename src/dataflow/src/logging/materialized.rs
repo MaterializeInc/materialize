@@ -39,7 +39,7 @@ pub enum MaterializedEvent {
         source: GlobalId,
     },
     /// Tracks RTT statistics for a Kafka broker, by consumer
-    /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
+    /// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
     /// This structure containe splatted metrics from the rdkafka::statistics::Window struct
     /// Window cannot be used as it does not satisfy several of the traits required
     KafkaBrokerRtt {
@@ -75,7 +75,7 @@ pub enum MaterializedEvent {
         p99_99: i64,
     },
     /// Tracks statistics for a particular Kafka consumer / partition pair
-    /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
+    /// Reference: <https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md>
     KafkaConsumerPartition {
         /// Kafka name for the consumer
         consumer_name: String,

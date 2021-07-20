@@ -786,7 +786,7 @@ impl ParsedDateTime {
         }
         Ok(())
     }
-    pub fn check_datelike_bounds(&self) -> Result<(), String> {
+    pub fn check_datelike_bounds(&mut self) -> Result<(), String> {
         if let Some(month) = self.month {
             if month.unit < 1 || month.unit > 12 {
                 return Err(format!("MONTH must be [1, 12], got {}", month.unit));
@@ -808,7 +808,15 @@ impl ParsedDateTime {
             };
         }
 
-        if let Some(second) = self.second {
+        if let Some(second) = &mut self.second {
+            // Chrono supports leap seconds by moving them into nanos:
+            // https://docs.rs/chrono/0.4.19/chrono/naive/struct.NaiveTime.html#leap-second-handling
+            // See also Tom Lane saying that leap seconds are not well handled:
+            // https://www.postgresql.org/message-id/23016.1327976502@sss.pgh.pa.us
+            if second.unit == 60 {
+                second.unit = 59;
+                second.fraction = second.fraction.saturating_add(1_000_000_000);
+            }
             if second.unit < 0 || second.unit > 60 {
                 return Err(format!("SECOND must be [0, 60], got {}", second.unit));
             };

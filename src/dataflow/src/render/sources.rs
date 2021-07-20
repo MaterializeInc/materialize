@@ -19,7 +19,7 @@ use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, ScopeParent};
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
@@ -28,6 +28,7 @@ use ore::now::NowFn;
 use repr::RelationDesc;
 use repr::ScalarType;
 use repr::{Datum, Row, Timestamp};
+use timely::progress::timestamp::Refines;
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -112,6 +113,7 @@ where
                 connector,
                 encoding,
                 envelope,
+                key_envelope,
                 consistency,
                 ts_frequency,
                 timeline: _,
@@ -340,9 +342,8 @@ where
                                         src.bare_desc.typ().arity(),
                                     ),
                                     _ => {
-                                        let (stream, errors) = results
-                                            .flat_map(|DecodeResult { key: _, value, .. }| value)
-                                            .ok_err(std::convert::identity);
+                                        let (stream, errors) =
+                                            flatten_results(key_envelope, results);
                                         let stream =
                                             stream.pass_through("decode-ok").as_collection();
                                         let errors =
@@ -407,8 +408,8 @@ where
                 };
 
                 // Force a shuffling of data in case sources are not uniformly distributed.
-                use differential_dataflow::operators::Consolidate;
-                collection = collection.consolidate();
+                use timely::dataflow::operators::Exchange;
+                collection = collection.inner.exchange(|x| x.hashed()).as_collection();
 
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
@@ -494,6 +495,10 @@ where
                     }
                 }
 
+                // Consolidate the results, as there may now be cancellations.
+                use differential_dataflow::operators::consolidate::ConsolidateStream;
+                collection = collection.consolidate_stream();
+
                 // Introduce the stream by name, as an unarranged collection.
                 self.insert_id(
                     Id::Global(src_id),
@@ -512,5 +517,72 @@ where
                     .push(Rc::downgrade(&token));
             }
         }
+    }
+}
+
+/// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
+fn flatten_results<G, T>(
+    key_envelope: KeyEnvelope,
+    results: timely::dataflow::Stream<Child<G, T>, DecodeResult>,
+) -> (
+    timely::dataflow::Stream<Child<G, T>, Row>,
+    timely::dataflow::Stream<Child<G, T>, DataflowError>,
+)
+where
+    G: ScopeParent,
+    T: Refines<<G as ScopeParent>::Timestamp>,
+{
+    match key_envelope {
+        KeyEnvelope::None => results
+            .flat_map(|DecodeResult { key: _, value, .. }| value)
+            .ok_err(std::convert::identity),
+        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
+            .flat_map(flatten_key_value)
+            .map(|maybe_kv| {
+                maybe_kv.map(|(mut key, value)| {
+                    key.extend_by_row(&value);
+                    key
+                })
+            })
+            .ok_err(std::convert::identity),
+        KeyEnvelope::Named(_) => results
+            .flat_map(flatten_key_value)
+            .map(|maybe_kv| match maybe_kv {
+                Ok((mut key, value)) => {
+                    // Named semantics rename a key that is a single column, and encode a
+                    // multi-column field as a struct with that name
+                    match key.iter().count() {
+                        1 => {
+                            key.extend_by_row(&value);
+                            Ok(key)
+                        }
+                        _ => {
+                            let mut new_row = Row::default();
+                            new_row.push_list(key.iter());
+                            new_row.extend_by_row(&value);
+                            Ok(new_row)
+                        }
+                    }
+                }
+                Err(e) => Err(e),
+            })
+            .ok_err(std::convert::identity),
+    }
+}
+
+/// Handle possibly missing key or value portions of messages
+fn flatten_key_value(result: DecodeResult) -> Option<Result<(Row, Row), DataflowError>> {
+    let DecodeResult { key, value, .. } = result;
+    match (key, value) {
+        (Some(key), Some(value)) => match (key, value) {
+            (Ok(key), Ok(value)) => Some(Ok((key, value))),
+            // always prioritize the value error if either or both have an error
+            (_, Err(e)) => Some(Err(e)),
+            (Err(e), _) => Some(Err(e)),
+        },
+        (None, None) => None,
+        _ => Some(Err(DataflowError::DecodeError(DecodeError::Text(
+            "Key and/or Value are not present for message".to_string(),
+        )))),
     }
 }

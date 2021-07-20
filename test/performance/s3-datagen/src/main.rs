@@ -70,7 +70,8 @@ async fn main() {
 
 async fn run() -> anyhow::Result<()> {
     let args: Args = ore::cli::parse_args();
-    let env_filter = EnvFilter::try_from_env("MZ_LOG").or_else(|_| EnvFilter::try_new("info"))?;
+    let env_filter =
+        EnvFilter::try_from_env("MZ_LOG_FILTER").or_else(|_| EnvFilter::try_new("info"))?;
     tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt::layer().with_writer(io::stderr))

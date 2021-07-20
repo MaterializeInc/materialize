@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::MzEnumReflect;
 use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, RelationType, Row};
+use repr::{ColumnType, Datum, Diff, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
@@ -41,7 +41,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Constant {
         /// Rows of the constant collection and their multiplicities.
-        rows: Result<Vec<(Row, isize)>, EvalError>,
+        rows: Result<Vec<(Row, Diff)>, EvalError>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -639,7 +639,7 @@ impl MirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row can have an arbitrary multiplicity.
-    pub fn constant_diff(rows: Vec<(Vec<Datum>, isize)>, typ: RelationType) -> Self {
+    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: RelationType) -> Self {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
@@ -1328,7 +1328,9 @@ impl MirRelationExpr {
     /// Return:
     /// * every row in keys_and_values
     /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
-    /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
+    /// (This is LEFT OUTER JOIN if:
+    /// 1) `default` is a row of null
+    /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
     pub fn lookup(
         self,
         id_gen: &mut IdGen,
@@ -1423,7 +1425,6 @@ impl AggregateExpr {
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
-            | AggregateFunc::MaxDecimal
             | AggregateFunc::MaxBool
             | AggregateFunc::MaxString
             | AggregateFunc::MaxDate
@@ -1433,7 +1434,6 @@ impl AggregateExpr {
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
-            | AggregateFunc::MinDecimal
             | AggregateFunc::MinBool
             | AggregateFunc::MinString
             | AggregateFunc::MinDate

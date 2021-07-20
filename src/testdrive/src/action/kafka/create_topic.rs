@@ -12,6 +12,7 @@ use std::convert::TryFrom;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use ore::result::ResultExt;
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::error::RDKafkaErrorCode;
 use rdkafka::producer::Producer;
@@ -54,7 +55,7 @@ impl Action for CreateTopicAction {
                 None,
                 Some(cmp::max(Duration::from_secs(1), state.default_timeout)),
             )
-            .map_err(|e| e.to_string())?;
+            .map_err_to_string()?;
 
         let stale_kafka_topics: Vec<_> = metadata
             .topics()
@@ -171,7 +172,7 @@ impl Action for CreateTopicAction {
         .set("compression.type", &self.compression);
         kafka_util::admin::create_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err_to_string()?;
         state.kafka_topics.insert(topic_name, self.partitions);
         Ok(())
     }

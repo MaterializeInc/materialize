@@ -125,7 +125,8 @@ the [release notes](/release-notes).
 There are several aspects of the product that are not considered part of
 Materialize's stable interface:
 
-  * Features that requires [experimental mode](/cli/#experimental-mode)
+  * Features that require [experimental mode](/cli/#experimental-mode)
+  * Features that are in beta (labeled as such in their documentation)
   * The [Grafana monitoring dashboard](/ops/monitoring)
   * Any HTTP interfaces, including:
     * Memory profiling tools

@@ -614,3 +614,29 @@ EXPLAIN SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
 | | demand = (#0..#3)
 
 EOF
+
+statement ok
+create table double_table(double_col DOUBLE);
+
+statement ok
+create table int_table(int_col integer NOT NULL);
+
+# TODO: get rid of the unnecessary !isnull at the end of this plan
+
+query T multiline
+explain select * from int_table, double_table where int_table.int_col = double_table.double_col;
+----
+%0 =
+| Get materialize.public.int_table (u11)
+
+%1 =
+| Get materialize.public.double_table (u9)
+| ArrangeBy (#0)
+
+%2 =
+| Join %0 %1 (= #1 i32tof64(#0))
+| | implementation = Differential %0 %1.(#0)
+| | demand = (#0, #1)
+| Filter !(isnull(#1))
+
+EOF
