@@ -64,11 +64,24 @@ fn push_coords(coords: Option<DebeziumSourceCoordinates>, packer: &mut Row) -> R
             if coords.snapshot {
                 packer.push(Datum::Null)
             } else {
-                let coords = match coords.row {
-                    RowCoordinates::MySql { file_idx, pos, row } => Some((file_idx, pos, row)),
-                    RowCoordinates::Postgres { lsn, total_order } => {
-                        Some((0, lsn, total_order.unwrap_or(0)))
-                    }
+                // Downstream in the deduplication logic, we pack these into rows,
+                // and aren't too careful to avoid cloning them. Thus
+                // it's important not to go over the 24-byte smallvec inline capacity.
+                let data = match coords.row {
+                    RowCoordinates::Postgres {
+                        last_commit_lsn,
+                        lsn,
+                        total_order,
+                    } => Some(vec![
+                        Datum::Int64(last_commit_lsn.unwrap_or(0) as i64),
+                        Datum::Int64(lsn as i64),
+                        Datum::Int64(total_order.unwrap_or(0) as i64),
+                    ]),
+                    RowCoordinates::MySql { file_idx, pos, row } => Some(vec![
+                        Datum::Int32(file_idx as i32),
+                        Datum::Int64(pos as i64),
+                        Datum::Int64(row as i64),
+                    ]),
                     RowCoordinates::MSSql {
                         change_lsn,
                         event_serial_no,
@@ -76,26 +89,23 @@ fn push_coords(coords: Option<DebeziumSourceCoordinates>, packer: &mut Row) -> R
                         // Consider everything but the file ID to be the offset within the file.
                         let offset_in_file = ((change_lsn.log_block_offset as usize) << 16)
                             | (change_lsn.slot_num as usize);
-                        Some((
-                            change_lsn.file_seq_num as usize,
-                            offset_in_file,
-                            event_serial_no,
-                        ))
+                        Some(vec![
+                            Datum::Int32(change_lsn.file_seq_num as i32),
+                            Datum::Int64(offset_in_file as i64),
+                            Datum::Int64(event_serial_no as i64),
+                        ])
                     }
                     RowCoordinates::Unknown => {
                         is_unknown = true;
                         None
                     }
                 };
-                match coords {
-                    Some((file, pos, row)) => {
+                match data {
+                    Some(data) => {
                         packer.push_list_with(|packer| {
-                            // downstream in the deduplication logic, we pack these into rows,
-                            // and aren't too careful to avoid cloning them. Thus
-                            // it's important not to go over the 24-byte
-                            packer.push(Datum::Int32(file as i32));
-                            packer.push(Datum::Int64(pos as i64));
-                            packer.push(Datum::Int64(row as i64));
+                            for datum in data {
+                                packer.push(datum);
+                            }
                         });
                     }
                     None => {
