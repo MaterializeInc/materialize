@@ -39,3 +39,11 @@ code block
 Diagrams from [bottlecaps.de/rr/ui](https://www.bottlecaps.de/rr/ui):
 
 {{< diagram "join-type.svg" >}}
+
+{{< note >}}
+This is a note.
+{{</ note >}}
+
+{{< warning >}}
+This is a warning.
+{{</ warning >}}
