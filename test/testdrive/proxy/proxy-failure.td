@@ -13,7 +13,7 @@
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-doesntmatter-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-Creating HTTP client for schema registry: builder error: builder error: relative URL without a base
+error trying to connect: tcp connect error: Cannot assign requested address (os error 99)
 
 ! CREATE MATERIALIZED SOURCE s3_all
   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'doesnt-matter'
@@ -25,4 +25,4 @@ Creating HTTP client for schema registry: builder error: builder error: relative
     token = '${testdrive.aws-token}'
   )
   FORMAT TEXT;
-Using statically provided credentials: creating HTTP client for AWS STS Account verification: invalid format
+Using statically provided credentials: retrieving AWS account ID: Error during dispatch: error trying to connect: tcp connect error: Cannot assign requested address (os error 99)
