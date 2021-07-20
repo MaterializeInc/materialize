@@ -40,8 +40,6 @@ def check_required_vars() -> None:
 SPEAKER = ui.speaker("scratch> ")
 ROOT = os.environ["MZ_ROOT"]
 
-EC2: Any  # "boto3.resources.factory.ec2.ServiceResource"
-
 
 def launch(
     *,
@@ -66,7 +64,7 @@ def launch(
     SPEAKER(f"launching instance {display_name or '(unnamed)'}")
     with open(ROOT + "/misc/load-tests/provision.bash") as f:
         provisioning_script = f.read()
-    i = EC2.create_instances(
+    i = boto3.resource("ec2").create_instances(
         MinCount=1,
         MaxCount=1,
         ImageId=ami,
@@ -278,8 +276,6 @@ def main() -> None:
             )
 
     check_required_vars()
-    global EC2
-    EC2 = boto3.resource("ec2")
 
     descs = [
         MachineDesc(
