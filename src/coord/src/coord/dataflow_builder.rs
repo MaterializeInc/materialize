@@ -134,15 +134,16 @@ impl<'a> DataflowBuilder<'a> {
 
             // TODO: indexes should be imported after the optimization process, and only those
             // actually used by the optimized plan
-            let indexes = &self.catalog.indexes()[&get_id];
-            for (id, keys) in indexes.iter() {
-                let on_entry = self.catalog.get_by_id(&get_id);
-                let on_type = on_entry.desc().unwrap().typ().clone();
-                let index_desc = IndexDesc {
-                    on_id: get_id,
-                    keys: keys.clone(),
-                };
-                dataflow.import_index(*id, index_desc, on_type, *view_id);
+            if let Some(indexes) = self.catalog.indexes().get(&get_id) {
+                for (id, keys) in indexes.iter() {
+                    let on_entry = self.catalog.get_by_id(&get_id);
+                    let on_type = on_entry.desc().unwrap().typ().clone();
+                    let index_desc = IndexDesc {
+                        on_id: get_id,
+                        keys: keys.clone(),
+                    };
+                    dataflow.import_index(*id, index_desc, on_type, *view_id);
+                }
             }
         }
         dataflow.insert_view(*view_id, view.clone());
