@@ -55,7 +55,6 @@ Wrap your release notes at the 80 character mark.
   certain hosts from the configured HTTP/HTTPS proxy, if any.
 
 {{% version-header v0.8.3 %}}
-
 - The `MZ_LOG` environment variable is no longer recognized. Setting the log
   level can be done using the `--log-filter` command line parameter or the
   `MZ_LOG_FILTER` environment variable.
@@ -63,6 +62,14 @@ Wrap your release notes at the 80 character mark.
 - Refactor the [`numeric`](/sql/types/numeric) type's backing implementation.
   With this change comes more PostgreSQL-like semantics for unscaled values, as
   well as bug fixes. {{% gh 7312 %}}
+
+- Add support for including Kafka keys in dataflows via new `INCLUDE KEY`
+  syntax. {{% gh 6661 %}}
+
+- The `FORMAT` argument to `UPSERT` to specify Kafka key formats has been
+  deprecated, use the new `KEY FORMAT .. VALUE FORMAT ..` syntax
+  ([documentation](/sql/create-source/avro-kafka)). The `UPSERT FORMAT ..`
+  syntax will be removed in a future release.
 
 {{% version-header v0.8.2 %}}
 
