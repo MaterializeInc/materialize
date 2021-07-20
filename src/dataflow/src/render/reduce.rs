@@ -786,7 +786,10 @@ where
                 // never happen so for now just log an error if it does.
                 for (val, cnt) in input.iter() {
                     if cnt < &0 {
+                        #[cfg(not(debug_assertions))]
                         log::error!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
+                        #[cfg(debug_assertions)]
+                        panic!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
                     }
                 }
 
@@ -887,7 +890,10 @@ where
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
     if aggrs.len() <= 1 {
+        #[cfg(not(debug_assertions))]
         log::error!("Unexpectedly computing {} basic aggregations together but we expected to be doing more than one", aggrs.len());
+        #[cfg(debug_assertions)]
+        panic!("Unexpectedly computing {} basic aggregations together but we expected to be doing more than one", aggrs.len());
     }
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
@@ -946,7 +952,10 @@ where
         // whole reduce, and only one value in the values row. Let's complain if
         // we're trying to aggregate over anything else.
         if index != 0 {
+            #[cfg(not(debug_assertions))]
             log::error!("Computing single basic aggregate on index {} with prepend-keys=true. Expected index 0", index);
+            #[cfg(debug_assertions)]
+            panic!("Computing single basic aggregate on index {} with prepend-keys=true. Expected index 0", index);
         }
         input
     };
@@ -966,7 +975,10 @@ where
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
                     if cnt < &0 {
+                        #[cfg(not(debug_assertions))]
                         log::error!("[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
+                        #[cfg(debug_assertions)]
+                        panic!("[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
                     }
                 }
             } else {
@@ -1045,7 +1057,10 @@ where
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
                     if cnt < &0 {
+                        #[cfg(not(debug_assertions))]
                         log::error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
+                        #[cfg(debug_assertions)]
+                        panic!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
                     }
                 }
             } else {
@@ -1090,7 +1105,10 @@ where
                     for (val, cnt) in source.iter() {
                         if cnt <= &0 {
                             // XXX: This reports user data, which we perhaps should not do!
+                            #[cfg(not(debug_assertions))]
                             log::error!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
+                            #[cfg(debug_assertions)]
+                            panic!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
                         }
                     }
                 } else {
@@ -1619,11 +1637,18 @@ where
                     // suppress the output for inputs without net-positive records, which *should* avoid
                     // that panic.
                     if accum.total == 0 && !accum.inner.is_zero() {
+                        #[cfg(not(debug_assertions))]
                         log::error!(
                             "[customer-data] ReduceAccumulable observed net-zero records \
                             with non-zero accumulation: {:?}: {:?}",
                             aggr,
                             accum,
+                        );
+                        #[cfg(debug_assertions)]
+                        panic!(
+                            "[customer-data] ReduceAccumulable observed net-zero records \
+                            with non-zero accumulation: {:?}: {:?}",
+                            aggr, accum,
                         );
                     }
 
@@ -1735,7 +1760,13 @@ where
 fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
     for i in 1..indexes.len() {
         if indexes[i - 1] >= indexes[i] {
+            #[cfg(not(debug_assertions))]
             log::error!(
+                "convert_indexes_to_skip needs indexes to be strictly increasing. Received: {:?}",
+                indexes,
+            );
+            #[cfg(debug_assertions)]
+            panic!(
                 "convert_indexes_to_skip needs indexes to be strictly increasing. Received: {:?}",
                 indexes,
             );
@@ -1859,11 +1890,19 @@ pub mod monoids {
                         lhs.clone_from(&rhs);
                     }
                 }
-                (lhs, rhs) => log::error!(
-                    "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
-                    lhs,
-                    rhs
-                ),
+                (lhs, rhs) => {
+                    #[cfg(not(debug_assertions))]
+                    log::error!(
+                        "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
+                        lhs,
+                        rhs
+                    );
+                    #[cfg(debug_assertions)]
+                    panic!(
+                        "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
+                        lhs, rhs
+                    );
+                }
             }
         }
 
