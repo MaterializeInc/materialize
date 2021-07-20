@@ -39,6 +39,10 @@ production readiness.
 
 - [ ] Choose the commit for the release. Unless there are open release blockers above,
   this should just be the head commit of the main branch. Checkout that commit.
+
+- [ ] Review all PRs in the release that were not reviewed by another engineer
+  prior to being merged into main.
+
 - [ ] Choose the name for the release candidate following the format
   `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
   v0.2.3 would be called v0.2.3-rc1. Use that to run the `bin/mkrelease`
