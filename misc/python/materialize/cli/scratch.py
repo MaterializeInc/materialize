@@ -62,9 +62,6 @@ def launch(
     tags["scratch-created"] = str(datetime.now().timestamp())
     tags["nonce"] = nonce
     tags["git_ref"] = git.describe()
-    import pprint
-
-    pprint.pprint(tags)
 
     SPEAKER(f"launching instance {display_name or '(unnamed)'}")
     with open(ROOT + "/misc/load-tests/provision.bash") as f:
@@ -111,9 +108,7 @@ async def setup(i: Any, subnet_id: Optional[str]) -> None:
         )
 
     done = False
-    print("In setup")
     async for remaining in ui.async_timeout_loop(60, 5):
-        print("In loop")
         SPEAKER(f"Waiting for instance to become ready: {remaining}s remaining")
         i.reload()
         if is_ready(i):
