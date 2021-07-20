@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::bail;
 use serde_json::value::Value;
 use structopt::StructOpt;
 
@@ -22,17 +23,11 @@ enum PostgresType {
     Other,
 }
 
-#[derive(thiserror::Error, Debug)]
-enum Error {
-    #[error("Sample json was not a serde_json::Value::Object.")]
-    NotAnObject,
-}
-
 /// Flatten a serde_json::Value::Object into a vector of column names and the Postgres type to use
 /// for that column.
 ///
 /// This will return an error if the provided Value is not an Object variant.
-fn flatten_object(map: Value) -> Result<Vec<(String, PostgresType)>, Error> {
+fn flatten_object(map: Value) -> Result<Vec<(String, PostgresType)>, anyhow::Error> {
     if let Value::Object(m) = map {
         let mut flattened = Vec::new();
         for (key, val) in m.into_iter() {
@@ -40,7 +35,7 @@ fn flatten_object(map: Value) -> Result<Vec<(String, PostgresType)>, Error> {
         }
         Ok(flattened)
     } else {
-        Err(Error::NotAnObject)
+        bail!("sample JSON is not an object");
     }
 }
 
@@ -67,12 +62,10 @@ fn flatten_single_value(flattened: &mut Vec<(String, PostgresType)>, key: String
     }
 }
 
+/// Generates SQL commands to create views on json sources, flattened for easier
+/// access. String fields will be converted to text to avoid extra quotes.
 #[derive(Debug, StructOpt)]
-#[structopt(
-    name = "json-flattened-view-gen",
-    about = "Generates SQL commands to create views on json sources, flattened for easier access.\nString fields will be converted to text to avoid extra quotes."
-)]
-struct Opt {
+struct Args {
     /// Sample json object
     #[structopt(parse(try_from_str = serde_json::from_str))]
     sample_json: Value,
@@ -94,9 +87,9 @@ struct Opt {
     output_view_name: String,
 }
 
-fn main() -> Result<(), Error> {
-    let opt = Opt::from_args();
-    let flattened = flatten_object(opt.sample_json)?;
+fn main() -> Result<(), anyhow::Error> {
+    let args: Args = ore::cli::parse_args();
+    let flattened = flatten_object(args.sample_json)?;
     let selections: Vec<String> = flattened
         .iter()
         .map(|(k, v)| match v {
@@ -120,9 +113,9 @@ CREATE MATERIALIZED VIEW {output} AS
     SELECT
 {selections}
     FROM {intermediate};",
-        intermediate = opt.intermediate_view_name,
-        source = opt.source_name,
-        output = opt.output_view_name,
+        intermediate = args.intermediate_view_name,
+        source = args.source_name,
+        output = args.output_view_name,
         selections = selections.join(",\n"),
     );
     Ok(())
