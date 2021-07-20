@@ -116,9 +116,21 @@ lazy_static! {
             (Bool, Int32) => Explicit: CastBoolToInt32,
             (Bool, String) => Assignment: CastBoolToString,
 
+            //INT16
+            (Int16, Int32) => Implicit: CastInt16ToInt32,
+            (Int16, Int64) => Implicit: CastInt16ToInt64,
+            (Int16, Float32) => Implicit: CastInt16ToFloat32,
+            (Int16, Float64) => Implicit: CastInt16ToFloat64,
+            (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(s)))
+            }),
+            (Int16, String) => Assignment: CastInt16ToString,
+
             //INT32
             (Int32, Bool) => Explicit: CastInt32ToBool,
             (Int32, Oid) => Implicit: CastInt32ToOid,
+            (Int32, Int16) => Assignment: CastInt32ToInt16,
             (Int32, Int64) => Implicit: CastInt32ToInt64,
             (Int32, Float32) => Implicit: CastInt32ToFloat32,
             (Int32, Float64) => Implicit: CastInt32ToFloat64,
@@ -130,6 +142,7 @@ lazy_static! {
 
             // INT64
             (Int64, Bool) => Explicit: CastInt64ToBool,
+            (Int64, Int16) => Assignment: CastInt64ToInt16,
             (Int64, Int32) => Assignment: CastInt64ToInt32,
             (Int64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
@@ -144,6 +157,7 @@ lazy_static! {
             (Oid, String) => Explicit: CastInt32ToString,
 
             // FLOAT32
+            (Float32, Int16) => Assignment: CastFloat32ToInt16,
             (Float32, Int32) => Assignment: CastFloat32ToInt32,
             (Float32, Int64) => Assignment: CastFloat32ToInt64,
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
@@ -154,6 +168,7 @@ lazy_static! {
             (Float32, String) => Assignment: CastFloat32ToString,
 
             // FLOAT64
+            (Float64, Int16) => Assignment: CastFloat64ToInt16,
             (Float64, Int32) => Assignment: CastFloat64ToInt32,
             (Float64, Int64) => Assignment: CastFloat64ToInt64,
             (Float64, Float32) => Assignment: CastFloat64ToFloat32,
@@ -191,6 +206,7 @@ lazy_static! {
 
             // STRING
             (String, Bool) => Explicit: CastStringToBool,
+            (String, Int16) => Explicit: CastStringToInt16,
             (String, Int32) => Explicit: CastStringToInt32,
             (String, Int64) => Explicit: CastStringToInt64,
             (String, Oid) => Explicit: CastStringToInt32,
@@ -272,6 +288,7 @@ lazy_static! {
 
             // JSONB
             (Jsonb, Bool) => Explicit: CastJsonbToBool,
+            (Jsonb, Int16) => Explicit: CastJsonbToInt16,
             (Jsonb, Int32) => Explicit: CastJsonbToInt32,
             (Jsonb, Int64) => Explicit: CastJsonbToInt64,
             (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
@@ -293,6 +310,7 @@ lazy_static! {
             }),
             (Numeric, Float32) => Implicit: CastNumericToFloat32,
             (Numeric, Float64) => Implicit: CastNumericToFloat64,
+            (Numeric, Int16) => Assignment: CastNumericToInt16,
             (Numeric, Int32) => Assignment: CastNumericToInt32,
             (Numeric, Int64) => Assignment: CastNumericToInt64,
             (Numeric, String) => Assignment: CastNumericToString
@@ -394,7 +412,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
     match ecx.scalar_type(&expr) {
         Bool | Jsonb | Int64 | Float64 => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
+        Int16 | Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
             .expect("cast known to exist")
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
         Float32 | Numeric { .. } => {
@@ -476,16 +494,17 @@ pub fn guess_best_common_type(
             // Strings can be cast to any type, so should be given lowest priority.
             ScalarType::String => 0,
             // TypeCategory::Numeric
-            ScalarType::Int32 => 1,
-            ScalarType::Int64 => 2,
-            ScalarType::Numeric { scale: None } => 3,
-            ScalarType::Float32 => 4,
-            ScalarType::Float64 => 5,
+            ScalarType::Int16 => 1,
+            ScalarType::Int32 => 2,
+            ScalarType::Int64 => 3,
+            ScalarType::Numeric { scale: None } => 4,
+            ScalarType::Float32 => 5,
+            ScalarType::Float64 => 6,
             // TypeCategory::DateTime
-            ScalarType::Date => 6,
-            ScalarType::Timestamp => 7,
-            ScalarType::TimestampTz => 8,
-            _ => 9,
+            ScalarType::Date => 7,
+            ScalarType::Timestamp => 8,
+            ScalarType::TimestampTz => 9,
+            _ => 10,
         })
         .cloned()
 }

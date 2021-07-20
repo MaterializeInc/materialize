@@ -33,6 +33,8 @@ pub enum Datum<'a> {
     False,
     /// The `true` boolean value.
     True,
+    /// A 16-bit signed integer.
+    Int16(i16),
     /// A 32-bit signed integer.
     Int32(i32),
     /// A 64-bit signed integer.
@@ -116,6 +118,19 @@ impl<'a> Datum<'a> {
             Datum::False => false,
             Datum::True => true,
             _ => panic!("Datum::unwrap_bool called on {:?}", self),
+        }
+    }
+
+    /// Unwraps the 16-bit integer value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Int16`].
+    #[track_caller]
+    pub fn unwrap_int16(&self) -> i16 {
+        match self {
+            Datum::Int16(i) => *i,
+            _ => panic!("Datum::unwrap_int16 called on {:?}", self),
         }
     }
 
@@ -372,6 +387,8 @@ impl<'a> Datum<'a> {
                     (Datum::False, _) => false,
                     (Datum::True, ScalarType::Bool) => true,
                     (Datum::True, _) => false,
+                    (Datum::Int16(_), ScalarType::Int16) => true,
+                    (Datum::Int16(_), _) => false,
                     (Datum::Int32(_), ScalarType::Int32) => true,
                     (Datum::Int32(_), ScalarType::Oid) => true,
                     (Datum::Int32(_), _) => false,
@@ -440,6 +457,12 @@ impl From<bool> for Datum<'static> {
         } else {
             Datum::False
         }
+    }
+}
+
+impl From<i16> for Datum<'static> {
+    fn from(i: i16) -> Datum<'static> {
+        Datum::Int16(i)
     }
 }
 
@@ -591,6 +614,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Null => f.write_str("null"),
             Datum::True => f.write_str("true"),
             Datum::False => f.write_str("false"),
+            Datum::Int16(num) => write!(f, "{}", num),
             Datum::Int32(num) => write!(f, "{}", num),
             Datum::Int64(num) => write!(f, "{}", num),
             Datum::Float32(num) => write!(f, "{}", num),
@@ -650,6 +674,8 @@ impl fmt::Display for Datum<'_> {
 pub enum ScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
+    /// The type of [`Datum::Int16`].
+    Int16,
     /// The type of [`Datum::Int32`].
     Int32,
     /// The type of [`Datum::Int64`].
@@ -868,6 +894,7 @@ impl PartialEq for ScalarType {
         use ScalarType::*;
         match (self, other) {
             (Bool, Bool)
+            | (Int16, Int16)
             | (Int32, Int32)
             | (Int64, Int64)
             | (Float32, Float32)
@@ -919,6 +946,7 @@ impl PartialEq for ScalarType {
             ) => value_l.eq(value_r) && oid_l == oid_r,
 
             (Bool, _)
+            | (Int16, _)
             | (Int32, _)
             | (Int64, _)
             | (Float32, _)
@@ -947,28 +975,29 @@ impl Hash for ScalarType {
         use ScalarType::*;
         match self {
             Bool => state.write_u8(0),
-            Int32 => state.write_u8(1),
-            Int64 => state.write_u8(2),
-            Float32 => state.write_u8(3),
-            Float64 => state.write_u8(4),
-            Numeric { .. } => state.write_u8(5),
-            Date => state.write_u8(6),
-            Time => state.write_u8(7),
-            Timestamp => state.write_u8(8),
-            TimestampTz => state.write_u8(9),
-            Interval => state.write_u8(10),
-            Bytes => state.write_u8(11),
-            String => state.write_u8(12),
-            Jsonb => state.write_u8(13),
+            Int16 => state.write_u8(1),
+            Int32 => state.write_u8(2),
+            Int64 => state.write_u8(3),
+            Float32 => state.write_u8(4),
+            Float64 => state.write_u8(5),
+            Numeric { .. } => state.write_u8(6),
+            Date => state.write_u8(7),
+            Time => state.write_u8(8),
+            Timestamp => state.write_u8(9),
+            TimestampTz => state.write_u8(10),
+            Interval => state.write_u8(11),
+            Bytes => state.write_u8(12),
+            String => state.write_u8(13),
+            Jsonb => state.write_u8(14),
             Array(t) => {
-                state.write_u8(14);
+                state.write_u8(15);
                 t.hash(state);
             }
             List {
                 element_type,
                 custom_oid,
             } => {
-                state.write_u8(15);
+                state.write_u8(16);
                 element_type.hash(state);
                 custom_oid.hash(state);
             }
@@ -977,18 +1006,18 @@ impl Hash for ScalarType {
                 custom_oid,
                 custom_name,
             } => {
-                state.write_u8(16);
+                state.write_u8(17);
                 fields.hash(state);
                 custom_oid.hash(state);
                 custom_name.hash(state);
             }
-            Uuid => state.write_u8(16),
-            Oid => state.write_u8(17),
+            Uuid => state.write_u8(18),
+            Oid => state.write_u8(19),
             Map {
                 value_type,
                 custom_oid,
             } => {
-                state.write_u8(18);
+                state.write_u8(20);
                 value_type.hash(state);
                 custom_oid.hash(state);
             }

@@ -448,6 +448,7 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
                 let s = x.into_iter().map(ascii::escape_default).flatten().collect();
                 String::from_utf8(s).unwrap()
             }),
+            Type::INT2 => row.get::<_, Option<i16>>(i).map(|x| x.to_string()),
             Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
             Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
             Type::OID => row.get::<_, Option<u32>>(i).map(|x| x.to_string()),

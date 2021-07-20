@@ -1421,7 +1421,8 @@ impl AggregateExpr {
     /// Returns whether the expression has a constant result.
     pub fn is_constant(&self) -> bool {
         match self.func {
-            AggregateFunc::MaxInt32
+            AggregateFunc::MaxInt16
+            | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
@@ -1430,6 +1431,7 @@ impl AggregateExpr {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32

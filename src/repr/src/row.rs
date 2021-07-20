@@ -191,6 +191,7 @@ enum Tag {
     Null,
     False,
     True,
+    Int16,
     Int32,
     Int64,
     Float32,
@@ -295,6 +296,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
+        Tag::Int16 => {
+            let i = read_copy::<i16>(data, offset);
+            Datum::Int16(i)
+        }
         Tag::Int32 => {
             let i = read_copy::<i32>(data, offset);
             Datum::Int32(i)
@@ -453,6 +458,10 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
         Datum::Null => data.push(Tag::Null as u8),
         Datum::False => data.push(Tag::False as u8),
         Datum::True => data.push(Tag::True as u8),
+        Datum::Int16(i) => {
+            data.push(Tag::Int16 as u8);
+            push_copy!(data, i, i16);
+        }
         Datum::Int32(i) => {
             data.push(Tag::Int32 as u8);
             push_copy!(data, i, i32);
@@ -586,6 +595,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Null => 1,
         Datum::False => 1,
         Datum::True => 1,
+        Datum::Int16(_) => 1 + size_of::<i16>(),
         Datum::Int32(_) => 1 + size_of::<i32>(),
         Datum::Int64(_) => 1 + size_of::<i64>(),
         Datum::Float32(_) => 1 + size_of::<u32>(),
@@ -1360,6 +1370,7 @@ mod tests {
             Datum::Null,
             Datum::False,
             Datum::True,
+            Datum::Int16(-21),
             Datum::Int32(-42),
             Datum::Int64(-2_147_483_648 - 42),
             Datum::Float32(OrderedFloat::from(-42.12)),
@@ -1569,6 +1580,7 @@ mod tests {
         let values_of_interest = vec![
             Datum::Null,
             Datum::False,
+            Datum::Int16(0),
             Datum::Int32(0),
             Datum::Int64(0),
             Datum::Float32(OrderedFloat(0.0)),

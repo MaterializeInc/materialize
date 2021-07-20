@@ -386,6 +386,7 @@ impl SessionClient {
                 Datum::Null | Datum::JsonNull => serde_json::Value::Null,
                 Datum::False => serde_json::Value::Bool(false),
                 Datum::True => serde_json::Value::Bool(true),
+                Datum::Int16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Float32(n) => float_to_json(n.into_inner() as f64),

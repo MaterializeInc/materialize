@@ -66,6 +66,11 @@ impl ReduceElision {
                             )
                         }
 
+                        // SumInt16 takes Int16s as input, but outputs Int64s.
+                        AggregateFunc::SumInt16 => {
+                            a.expr.clone().call_unary(UnaryFunc::CastInt16ToInt64)
+                        }
+
                         // SumInt32 takes Int32s as input, but outputs Int64s.
                         AggregateFunc::SumInt32 => {
                             a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64)

@@ -421,6 +421,10 @@ fn push_column(
                 let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
                 row.push(Datum::from(f));
             }
+            "pg_catalog.int2" => {
+                let i = get_column_inner::<i16>(postgres_row, i, nullable)?;
+                row.push(Datum::from(i));
+            }
             "pg_catalog.int4" => {
                 let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
                 row.push(Datum::from(i));
@@ -456,10 +460,6 @@ fn push_column(
                         row.push(Datum::Numeric(d.0));
                     }
                 }
-            }
-            "pg_catalog.int2" | "pg_catalog.smallint" => {
-                let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
-                row.push(Datum::from(i));
             }
             "pg_catalog.timestamp" => {
                 let d: chrono::NaiveDateTime =

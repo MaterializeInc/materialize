@@ -766,6 +766,7 @@ pub fn eval_as_of<'a>(
         ScalarType::Numeric { .. } => numeric::cx_datum()
             .try_into_i128(evaled.unwrap_numeric().0)?
             .try_into()?,
+        ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
         ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
@@ -3183,6 +3184,7 @@ fn validate_typ_mod(
 pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Error> {
     match ty {
         pgrepr::Type::Bool => Ok(ScalarType::Bool),
+        pgrepr::Type::Int2 => Ok(ScalarType::Int16),
         pgrepr::Type::Int4 => Ok(ScalarType::Int32),
         pgrepr::Type::Int8 => Ok(ScalarType::Int64),
         pgrepr::Type::Float4 => Ok(ScalarType::Float32),

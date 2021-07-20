@@ -23,6 +23,7 @@ use repr::{Datum, Row};
 enum PropertizedDatum {
     Null,
     Bool(bool),
+    Int16(i16),
     Int32(i32),
     Int64(i64),
     Float32(f32),
@@ -52,6 +53,7 @@ fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
     let leaf = prop_oneof![
         Just(PropertizedDatum::Null),
         any::<bool>().prop_map(PropertizedDatum::Bool),
+        any::<i16>().prop_map(PropertizedDatum::Int16),
         any::<i32>().prop_map(PropertizedDatum::Int32),
         any::<i64>().prop_map(PropertizedDatum::Int64),
         any::<f32>().prop_map(PropertizedDatum::Float32),
@@ -178,6 +180,7 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
         match self {
             Null => Datum::Null,
             Bool(b) => Datum::from(*b),
+            Int16(i) => Datum::from(*i),
             Int32(i) => Datum::from(*i),
             Int64(i) => Datum::from(*i),
             Float32(f) => Datum::from(*f),

@@ -99,6 +99,25 @@ where
     Nestable::Yes
 }
 
+/// Parses an [`i16`] from `s`.
+///
+/// Valid values are whatever the [`std::str::FromStr`] implementation on `i16` accepts,
+/// plus leading and trailing whitespace.
+pub fn parse_int16(s: &str) -> Result<i16, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("smallint", s).with_details(e))
+}
+
+/// Writes an [`i16`] to `buf`.
+pub fn format_int16<F>(buf: &mut F, i: i16) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", i);
+    Nestable::Yes
+}
+
 /// Parses an [`i32`] from `s`.
 ///
 /// Valid values are whatever the [`std::str::FromStr`] implementation on `i32` accepts,
