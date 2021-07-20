@@ -37,4 +37,3 @@ query III
 SELECT * FROM a, b left join c on b = c;
 ----
 1  2  NULL
-
