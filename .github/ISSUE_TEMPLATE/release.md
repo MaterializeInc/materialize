@@ -280,9 +280,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
     > channel and publish any appropriate blog posts
 
   - Post a link to the release tag in the `#general` channel, something like the
-    following, substituting in the correct version:
+    following, substituting in the correct version for the X and Y:
 
-    > 🎉🤘 Release v0.X.Y is complete! https://github.com/MaterializeInc/materialize/releases/tag/v0.X.Y 🤘🎉
+    > `🎉🤘 Release v0.X.Y is complete! https://github.com/MaterializeInc/materialize/releases/tag/v0.X.Y 🤘🎉`
 
 ## Finish
 
