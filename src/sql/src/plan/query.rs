@@ -999,7 +999,9 @@ fn plan_set_expr(
             let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
             let (right_expr, _right_scope) = plan_set_expr(qcx, right)?;
 
-            // TODO(jamii) this type-checking is redundant with HirRelationExpr::typ, but currently it seems that we need both because HirRelationExpr::typ is not allowed to return errors
+            // TODO(jamii) this type-checking is redundant with
+            // HirRelationExpr::typ, but currently it seems that we need both
+            // because HirRelationExpr::typ is not allowed to return errors
             let left_types = qcx.relation_type(&left_expr).column_types;
             let right_types = qcx.relation_type(&right_expr).column_types;
             if left_types.len() != right_types.len() {

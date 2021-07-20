@@ -2140,9 +2140,9 @@ SELECT ('{1.2,2.3}'::numeric_list_c)::text;
 {1.2,2.3}
 
 query T
-SELECT ('{1.2,2.3}'::numeric_list_c::numeric(38,5) list)::text;
+SELECT ('{1.2,2.34567890}'::numeric_list_c::numeric(38,5) list)::text;
 ----
-{1.20000,2.30000}
+{1.2,2.34568}
 
 query T
 SELECT ('{1.2,2.3}'::numeric(38,5) list::numeric_list_c)::text;

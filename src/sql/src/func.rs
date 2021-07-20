@@ -736,7 +736,7 @@ impl ParamType {
 impl PartialEq<ScalarType> for ParamType {
     fn eq(&self, other: &ScalarType) -> bool {
         match self {
-            ParamType::Plain(s) => s == other,
+            ParamType::Plain(s) => s.base_eq(other),
             // Pseudotypes never equal concrete types
             _ => false,
         }
@@ -1100,7 +1100,7 @@ fn coerce_args_to_types(
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
     ($p:ident...) => { ParamList::Variadic($p.into())};
-    ($($p:expr),*)      => { ParamList::Exact(vec![$($p.into(),)*]) };
+    ($($p:expr),*) => { ParamList::Exact(vec![$($p.into(),)*]) };
 }
 
 /// Constructs builtin function map.

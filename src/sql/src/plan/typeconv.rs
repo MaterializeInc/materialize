@@ -329,7 +329,7 @@ fn get_cast(
     use CastContext::*;
 
     if match (from, to) {
-        // APD values are only rescaled if:
+        // Numeric values pass through and are only rescaled if:
         // - CastContext is either Assignment or Explicit
         // - `to` has a specified scale that differs from `from`'s
         (
@@ -338,7 +338,7 @@ fn get_cast(
                 scale: to_scale @ Some(..),
             },
         ) if ccx != Implicit => from_scale == to_scale,
-        _ => from == to,
+        _ => from.base_eq(to),
     } {
         return Some(Box::new(|expr| expr));
     }
@@ -478,7 +478,7 @@ pub fn guess_best_common_type(
         return Some(ScalarType::String);
     }
 
-    if known_types.iter().all(|t| *t == known_types[0]) {
+    if known_types.iter().all(|t| t.base_eq(&known_types[0])) {
         return Some(known_types[0].clone());
     }
 
@@ -497,7 +497,7 @@ pub fn guess_best_common_type(
             ScalarType::Int16 => 1,
             ScalarType::Int32 => 2,
             ScalarType::Int64 => 3,
-            ScalarType::Numeric { scale: None } => 4,
+            ScalarType::Numeric { .. } => 4,
             ScalarType::Float32 => 5,
             ScalarType::Float64 => 6,
             // TypeCategory::DateTime
