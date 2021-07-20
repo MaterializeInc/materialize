@@ -231,7 +231,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
     materialized --version
     EOF
     ```
-  - [ ] `docker run --rm materialize/materialized:latest --version`
+  - [ ] `docker pull materialize/materialized:latest && docker run --rm materialize/materialized:latest --version`
   - [ ] substitute in the correct version in this one: `docker run --rm materialize/materialized:v0.X.Y --version`
 
 [bintray]: https://bintray.com/beta/#/materialize/apt/materialized
