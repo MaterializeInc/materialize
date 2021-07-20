@@ -104,7 +104,7 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
-    storage: Arc<Mutex<storage::Connection>>,
+    pub storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     config: sql::catalog::CatalogConfig,
 }

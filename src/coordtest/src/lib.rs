@@ -136,9 +136,8 @@ impl CoordTest {
         loop {
             if let Some(Some(mut msg)) = self.dataflow_feedback_rx.recv().now_or_never() {
                 // Filter out requested ids.
-                if let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message {
-                    uppers.retain(|(id, _data)| !exclude.contains(id));
-                }
+                let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message;
+                uppers.retain(|(id, _data)| !exclude.contains(id));
                 self.coord_feedback_tx.send(msg).unwrap();
             } else {
                 return;

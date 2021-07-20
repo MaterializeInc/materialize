@@ -10,6 +10,7 @@
 //! Types related to the creation of dataflow sources.
 
 use dataflow_types::{DataflowError, SourceErrorDetails};
+use itertools::Itertools;
 use mz_avro::types::Value;
 use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
@@ -360,30 +361,6 @@ impl fmt::Debug for SourceMessage {
     }
 }
 
-/// Distinguish between offset bindings that are final and agreed upon (Fixed)
-/// and still being negotiated (Tentative).
-#[derive(Copy, Clone, Debug)]
-enum TimestampUpperBound {
-    Fixed(MzOffset),
-    Tentative(MzOffset),
-}
-
-impl TimestampUpperBound {
-    fn inner(&self) -> MzOffset {
-        match self {
-            TimestampUpperBound::Fixed(o) => *o,
-            TimestampUpperBound::Tentative(o) => *o,
-        }
-    }
-
-    fn is_fixed(&self) -> bool {
-        match self {
-            TimestampUpperBound::Fixed(_) => true,
-            TimestampUpperBound::Tentative(_) => false,
-        }
-    }
-}
-
 /// Per-partition consistency information. This effectively acts a cache of
 /// timestamp binding information that needs to be refreshed every time
 /// the source operator is invoked.
@@ -395,7 +372,7 @@ struct ConsInfo {
     current_ts: Timestamp,
     /// Current upper bound for the current timestamp. All offsets < upper_bound
     /// are assigned to current_ts.
-    current_upper_bound: TimestampUpperBound,
+    current_upper_bound: MzOffset,
     /// The last processed offset
     offset: MzOffset,
 }
@@ -404,7 +381,7 @@ impl ConsInfo {
     fn new(timestamp: Timestamp) -> Self {
         Self {
             current_ts: timestamp,
-            current_upper_bound: TimestampUpperBound::Fixed(MzOffset { offset: 0 }),
+            current_upper_bound: MzOffset { offset: 0 },
             offset: MzOffset { offset: 0 },
         }
     }
@@ -413,75 +390,38 @@ impl ConsInfo {
     ///
     /// This code assumes we will be ingesting offsets in order.
     fn is_valid(&self, offset: MzOffset) -> bool {
-        if !self.current_upper_bound.is_fixed() || self.current_upper_bound.inner() > offset {
-            true
-        } else {
-            false
-        }
+        self.current_upper_bound > offset
     }
 
-    fn update_timestamp_fixed(&mut self, timestamp: Timestamp, upper: MzOffset) {
+    fn update_timestamp(&mut self, timestamp: Timestamp, upper: MzOffset) {
         assert!(timestamp >= self.current_ts);
-        assert!(upper >= self.current_upper_bound.inner());
+        assert!(upper >= self.current_upper_bound);
 
-        self.current_upper_bound = TimestampUpperBound::Fixed(upper);
+        self.current_upper_bound = upper;
         self.current_ts = timestamp;
-    }
-
-    /// Store a new (time, offset) binding in the cache. If no such binding is
-    /// available, we will start proposing our own.
-    fn update_timestamp(&mut self, timestamp: Timestamp, offset: Option<MzOffset>) {
-        if offset.is_some() {
-            self.update_timestamp_fixed(timestamp, offset.expect("known to exist"));
-        } else {
-            // We only got a new timestamp, and no new upper bound. Let's declare the
-            // upper bound to be equal to the current maximum processed offset and go
-            // from there.
-            assert!(timestamp >= self.current_ts);
-            let old_upper = self.current_upper_bound.inner();
-            self.current_upper_bound = TimestampUpperBound::Tentative(old_upper);
-            self.current_ts = timestamp;
-        }
     }
 
     /// Update the last read offset.
     fn update_offset(&mut self, offset: MzOffset) {
         assert!(offset >= self.offset);
-
-        if self.current_upper_bound.is_fixed() {
-            assert!(offset < self.current_upper_bound.inner())
-        } else if offset > self.current_upper_bound.inner() {
-            self.current_upper_bound = TimestampUpperBound::Tentative(offset);
-        }
+        assert!(offset < self.current_upper_bound);
 
         self.offset = offset;
     }
 
-    /// Return the maximum timestamp for which we will not receive any more updates.
-    fn get_closed_timestamp(&self) -> Timestamp {
-        if self.current_ts == 0
-            || (self.current_upper_bound.is_fixed()
-                && self.current_upper_bound.inner().offset - 1 == self.offset.offset)
-        {
-            return self.current_ts;
+    /// Returns `Some(Timestamp)` if the current timestamp is still open, `None`
+    /// otherwise.
+    fn get_open_timestamp(&self) -> Option<Timestamp> {
+        if self.current_ts == 0 || (self.current_upper_bound.offset - 1 == self.offset.offset) {
+            None
+        } else {
+            Some(self.current_ts)
         }
-
-        self.current_ts - 1
     }
 
     /// The most recently read offset.
     fn offset(&self) -> MzOffset {
         self.offset
-    }
-
-    /// Return a (time, offset) binding if we think we have a new one to contribute.
-    fn proposal(&self) -> Option<(Timestamp, MzOffset)> {
-        // Need to be careful here to make sure we are not echoing a prior proposal.
-        if !self.current_upper_bound.is_fixed() && self.current_upper_bound.inner() == self.offset {
-            Some((self.current_ts, self.current_upper_bound.inner()))
-        } else {
-            None
-        }
     }
 }
 
@@ -622,6 +562,7 @@ impl ConsistencyInfo {
 
     fn downgrade_capability(
         &mut self,
+        worker_index: usize,
         cap: &mut Capability<Timestamp>,
         timestamp_bindings: &mut TimestampBindingRc,
     ) {
@@ -632,7 +573,7 @@ impl ConsistencyInfo {
         timestamp_bindings.read_upper(&mut upper);
 
         let mut min: Option<Timestamp> = if let Some(time) = upper.elements().get(0) {
-            Some(time.saturating_sub(1))
+            Some(*time)
         } else {
             None
         };
@@ -644,53 +585,66 @@ impl ConsistencyInfo {
         // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
         // in next_partition_ts
 
+        let min_before_partitions = min.clone();
+
+        let mut open_ts_count = 0;
         for (pid, cons_info) in self.partition_metadata.iter_mut() {
-            let closed_ts = cons_info.get_closed_timestamp();
-            let metrics = self
-                .source_metrics
-                .partition_metrics
-                .get_mut(&pid)
-                .expect("partition known to exist");
+            let open_ts = cons_info.get_open_timestamp();
+            if let Some(open_ts) = open_ts {
+                open_ts_count += 1;
 
-            metrics.closed_ts.set(closed_ts);
+                let metrics = self
+                    .source_metrics
+                    .partition_metrics
+                    .get_mut(&pid)
+                    .expect("partition known to exist");
 
-            min = match min.as_mut() {
-                Some(min) => Some(std::cmp::min(closed_ts, *min)),
-                None => Some(closed_ts),
-            };
+                metrics.closed_ts.set(open_ts);
+
+                min = match min.as_mut() {
+                    Some(min) => Some(std::cmp::min(open_ts, *min)),
+                    None => Some(open_ts),
+                };
+            }
+
+            // See if there's any binding for right after the latest read data.
+            // We have to make sure to not downgrade beyond that.
+            let lowest_covering_binding_ts =
+                timestamp_bindings.get_binding(pid, cons_info.offset + 1);
+            if let Some((lowest_covering_binding_ts, _offset)) = lowest_covering_binding_ts {
+                min = match min.as_mut() {
+                    Some(min) => Some(std::cmp::min(lowest_covering_binding_ts, *min)),
+                    None => Some(lowest_covering_binding_ts),
+                };
+            }
         }
         let min = min.unwrap_or(0);
 
-        // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
+        // Downgrade capability to new minimum open timestamp
         if min > self.last_closed_ts {
             self.source_metrics.capability.set(min);
-            cap.downgrade(&(&min + 1));
+            cap.downgrade(&(&min));
             self.last_closed_ts = min;
 
-            let new_compaction_frontier = Antichain::from_elem(min + 1);
-            timestamp_bindings.set_compaction_frontier(new_compaction_frontier.borrow());
-        }
-    }
+            let partition_cons_infos = self
+                .partition_metadata
+                .iter()
+                .map(|(pid, cons_info)| {
+                    let lowest_binding = timestamp_bindings.get_binding(pid, cons_info.offset);
+                    format!(
+                        "(pid: {}, current_ts: {}, current_upper_bound: {}, offset: {}, lowest_binding: {:?})",
+                        pid, cons_info.current_ts, cons_info.current_upper_bound, cons_info.offset, lowest_binding
+                    )
+                })
+                .join(",");
 
-    /// Potentially propose new timestamp bindings to peers.
-    ///
-    /// Does nothing for BYO sources. This function needs to be called
-    /// at the end of source operator execution to make sure all source
-    /// instances assign the same timestamps.
-    fn propose(&self, timestamp_bindings: &mut TimestampBindingRc) {
-        if self.source_type == Consistency::RealTime {
-            for (pid, cons_info) in self.partition_metadata.iter() {
-                if let Some((time, offset)) = cons_info.proposal() {
-                    timestamp_bindings.add_binding(
-                        pid.clone(),
-                        time,
-                        MzOffset {
-                            offset: offset.offset + 1,
-                        },
-                        true,
-                    );
-                }
-            }
+            println!(
+                "{}  -  {:?}, {}, downgrading, open_ts: {}, partitions: {}",
+                worker_index, min_before_partitions, min, open_ts_count, partition_cons_infos
+            );
+
+            let new_compaction_frontier = Antichain::from_elem(min);
+            timestamp_bindings.set_compaction_frontier(new_compaction_frontier.borrow());
         }
     }
 
@@ -1203,6 +1157,7 @@ where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
 {
+    let worker_index = config.scope.index();
     let SourceConfig {
         name,
         sql_name,
@@ -1289,7 +1244,7 @@ where
             // Refresh any consistency info from the worker that we need to
             consistency_info.refresh(source_reader, &mut timestamp_histories);
             // Downgrade capability (if possible)
-            consistency_info.downgrade_capability(cap, &mut timestamp_histories);
+            consistency_info.downgrade_capability(worker_index, cap, &mut timestamp_histories);
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
@@ -1320,6 +1275,7 @@ where
                         &timer,
                         &mut buffer,
                         &timestamp_histories,
+                        worker_index,
                     )
                 } else {
                     match source_reader.get_next_message() {
@@ -1333,6 +1289,7 @@ where
                             &timer,
                             &mut buffer,
                             &timestamp_histories,
+                            worker_index,
                         ),
                         Ok(NextMessage::TransientDelay) => {
                             // There was a temporary hiccup in getting messages, check again asap.
@@ -1365,9 +1322,7 @@ where
                 .record_partition_offsets(metric_updates);
 
             // Downgrade capability (if possible) before exiting
-            consistency_info.downgrade_capability(cap, &mut timestamp_histories);
-            // Propose any new timestamp bindings we need to.
-            consistency_info.propose(&mut timestamp_histories);
+            consistency_info.downgrade_capability(worker_index, cap, &mut timestamp_histories);
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
@@ -1414,6 +1369,7 @@ fn handle_message(
     timer: &std::time::Instant,
     buffer: &mut Option<SourceMessage>,
     timestamp_bindings: &TimestampBindingRc,
+    worker_index: usize,
 ) -> (SourceStatus, MessageProcessing)
 where
 {
@@ -1435,6 +1391,7 @@ where
     let ts = consistency_info.find_matching_timestamp(&partition, offset, timestamp_bindings);
     match ts {
         None => {
+            // println!("{} - BUFFERING", offset.offset);
             // We have not yet decided on a timestamp for this message,
             // we need to buffer the message
             *buffer = Some(message);
@@ -1453,6 +1410,24 @@ where
                 MessagePayload::Data(bytes) => bytes.len(),
                 MessagePayload::EOF => 0,
             };
+            if !(*cap.time() <= ts) {
+                let partition_info = consistency_info
+                    .partition_metadata
+                    .get(&partition)
+                    .expect("must be there");
+
+                let open_ts = partition_info.get_open_timestamp();
+
+                panic!(
+                    "Cap is not <= ts, worker_index: {}, partition: {}, ts: {}, cap: {}, raw_binding: {:?}, open_ts: {:?}",
+                    worker_index,
+                    partition,
+                    ts,
+                    cap.time(),
+                    timestamp_bindings.get_binding(&partition, offset),
+                    open_ts
+                );
+            }
             let ts_cap = cap.delayed(&ts);
 
             output.session(&ts_cap).give(Ok(SourceOutput::new(

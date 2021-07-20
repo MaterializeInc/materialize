@@ -207,20 +207,6 @@ where
 
         match sink.connector.clone() {
             SinkConnector::Kafka(c) => {
-                // Extract handles to the relevant source timestamp histories the sink
-                // needs to hear from before it can write data out to Kafka.
-                let mut source_ts_histories = Vec::new();
-
-                for id in &c.transitive_source_dependencies {
-                    if let Some(history) = render_state.ts_histories.get(id) {
-                        let mut history_bindings = history.clone();
-                        // We don't want these to block compaction
-                        // ever.
-                        history_bindings.set_compaction_frontier(Antichain::new().borrow());
-                        source_ts_histories.push(history_bindings);
-                    }
-                }
-
                 // TODO: this is a brittle way to indicate the worker that will write to the sink
                 // because it relies on us continuing to hash on the sink_id, with the same hash
                 // function, and for the Exchange pact to continue to distribute by modulo number
@@ -236,7 +222,6 @@ where
                     sink.key_desc.clone(),
                     sink.value_desc.clone(),
                     sink.as_of.clone(),
-                    source_ts_histories,
                     shared_frontier.clone(),
                 );
 

@@ -103,8 +103,6 @@ struct CommandsProcessedMetrics {
     insert: IntCounter,
     allow_compaction_int: i32,
     allow_compaction: IntCounter,
-    durability_frontier_updates_int: i32,
-    durability_frontier_updates: IntCounter,
     append_log_int: i32,
     append_log: IntCounter,
     add_source_timestamping_int: i32,
@@ -147,9 +145,6 @@ impl CommandsProcessedMetrics {
             allow_compaction_int: 0,
             allow_compaction: COMMANDS_PROCESSED_RAW
                 .with_label_values(&[worker, "allow_compaction"]),
-            durability_frontier_updates_int: 0,
-            durability_frontier_updates: COMMANDS_PROCESSED_RAW
-                .with_label_values(&[worker, "durability_frontier_updates"]),
             append_log_int: 0,
             append_log: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "append_log"]),
             add_source_timestamping_int: 0,
@@ -183,9 +178,6 @@ impl CommandsProcessedMetrics {
             SequencedCommand::CancelPeek { .. } => self.cancel_peek_int += 1,
             SequencedCommand::Insert { .. } => self.insert_int += 1,
             SequencedCommand::AllowCompaction(..) => self.allow_compaction_int += 1,
-            SequencedCommand::DurabilityFrontierUpdates(..) => {
-                self.durability_frontier_updates_int += 1
-            }
             SequencedCommand::AddSourceTimestamping { .. } => self.add_source_timestamping_int += 1,
             SequencedCommand::AdvanceSourceTimestamp { .. } => {
                 self.advance_source_timestamp_int += 1
@@ -236,11 +228,6 @@ impl CommandsProcessedMetrics {
             self.allow_compaction
                 .inc_by(self.allow_compaction_int as i64);
             self.allow_compaction_int = 0;
-        }
-        if self.durability_frontier_updates_int > 0 {
-            self.durability_frontier_updates
-                .inc_by(self.durability_frontier_updates_int as i64);
-            self.durability_frontier_updates_int = 0;
         }
         if self.add_source_timestamping_int > 0 {
             self.add_source_timestamping

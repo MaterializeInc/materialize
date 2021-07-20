@@ -7,16 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::ops::Deref;
 use std::panic;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::{bail, Context};
 use itertools::Itertools;
@@ -24,10 +25,12 @@ use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
 use mz_avro::schema::Schema;
 use mz_avro::types::Value;
+use ore::now::system_time;
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
+use repr::Timestamp;
 use tokio::sync::mpsc;
 
 use dataflow_types::{
@@ -38,6 +41,8 @@ use dataflow_types::{
 use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
 
+use crate::catalog::storage;
+use crate::catalog::Error;
 use crate::coord;
 
 const CONF_DENYLIST: &'static [&'static str] = &["statistics.interval.ms"];
@@ -253,6 +258,8 @@ pub struct Timestamper {
     /// (to add or remove the timestamping of a source)
     rx: std::sync::mpsc::Receiver<TimestampMessage>,
 
+    storage: Arc<Mutex<storage::Connection>>,
+
     /// Frequency at which thread should run
     timestamp_frequency: Duration,
 }
@@ -327,13 +334,13 @@ fn generate_ts_updates_from_debezium(
                     tx.send(coord::Message::AdvanceSourceTimestamp(
                         coord::AdvanceSourceTimestamp {
                             id: *id,
-                            update: TimestampSourceUpdate::BringYourOwn(
-                                match byo_consumer.connector {
+                            update: vec![TimestampSourceUpdate {
+                                pid: match byo_consumer.connector {
                                     ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
                                 },
-                                byo_consumer.last_ts,
-                                byo_consumer.last_offset,
-                            ),
+                                timestamp: byo_consumer.last_ts,
+                                offset: byo_consumer.last_offset,
+                            }],
                         },
                     ))
                     .expect("Failed to send update to coordinator");
@@ -463,6 +470,7 @@ fn identify_consistency_format(_enc: DataEncoding, env: SourceEnvelope) -> Consi
 
 impl Timestamper {
     pub fn new(
+        storage: Arc<Mutex<storage::Connection>>,
         frequency: Duration,
         tx: mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
@@ -477,6 +485,7 @@ impl Timestamper {
             byo_sources: HashMap::new(),
             tx,
             rx,
+            storage,
             timestamp_frequency: frequency,
         }
     }
@@ -706,7 +715,7 @@ impl Timestamper {
         // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
         let metadata_refresh_frequency = Duration::from_millis(
             kc.config_options
-                .get("topic_metadata_refresh_interval_ms")
+                .get("topic.metadata.refresh.interval.ms")
                 // Safe conversion: statement::extract_config enforces that option is a value
                 // between 0 and 3600000
                 .unwrap_or(&"30000".to_owned())
@@ -714,12 +723,19 @@ impl Timestamper {
                 .unwrap(),
         );
 
+        let storage = self.storage.clone();
+
         thread::Builder::new()
             .name("rt_kafka_meta".to_string())
             .spawn({
                 let connector = connector.clone();
                 move || {
-                    rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
+                    rt_kafka_metadata_fetch_loop(
+                        storage,
+                        connector,
+                        consumer,
+                        metadata_refresh_frequency,
+                    )
                 }
             })
             .unwrap();
@@ -861,51 +877,143 @@ impl Timestamper {
     }
 }
 
-fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wait: Duration) {
+fn rt_kafka_metadata_fetch_loop(
+    storage: Arc<Mutex<storage::Connection>>,
+    c: RtKafkaConnector,
+    consumer: BaseConsumer,
+    wait: Duration,
+) {
     debug!(
         "Starting realtime Kafka thread for {} (source {})",
         &c.topic, &c.id
     );
 
-    let mut current_partition_count = 0;
+    let mut announced_offsets = HashMap::new();
+
+    {
+        let storage = storage.lock().expect("lock poisoned");
+
+        let previous_bindings =
+            load_timestamp_bindings(storage, c.id).expect("could not load timestamp bindings");
+
+        announced_offsets.extend(
+            previous_bindings
+                .iter()
+                .map(|(pid, _ts, offset)| (pid.clone(), offset.offset)),
+        );
+
+        let coord_updates = previous_bindings
+            .into_iter()
+            .map(|(pid, timestamp, offset)| TimestampSourceUpdate {
+                pid,
+                timestamp,
+                offset,
+            })
+            .collect();
+
+        println!("Restored earlier ts bindings: {:?}", coord_updates);
+
+        c.coordination_state
+            .coordinator_channel
+            .send(coord::Message::AdvanceSourceTimestamp(
+                coord::AdvanceSourceTimestamp {
+                    id: c.id,
+                    update: coord_updates,
+                },
+            ))
+            .expect(
+                "Failed to send previous timestamp bindings to coordinator. This should not happen",
+            );
+    }
+
+    let update_interval = 1000;
+    let mut last_update_time = Instant::now();
+    let mut current_ts = system_time();
 
     while !c.coordination_state.stop.load(Ordering::SeqCst) {
+        let new_ts = maybe_update_timestamp(&mut last_update_time, update_interval, current_ts);
+
+        if new_ts == current_ts {
+            // Poll once to clear any extraneous messages on this queue.
+            consumer.poll(Duration::from_secs(0));
+
+            thread::sleep(wait);
+            continue;
+        }
+
+        current_ts = new_ts;
+
         match get_kafka_partitions(&consumer, &c.topic, Duration::from_secs(30)) {
             Ok(partitions) => {
-                // There cannot be more than i32 partitions
-                let new_partition_count: i32 = partitions.len().try_into().unwrap();
-                match new_partition_count.cmp(&current_partition_count) {
-                    cmp::Ordering::Greater => {
-                        let diff = new_partition_count - current_partition_count;
-                        info!(
-                            "Discovered {} new ({} total) kafka partitions for topic {} (source {})",
-                            diff, new_partition_count, c.topic, c.id,
-                        );
+                // Fetch the latest offset for each partition.
+                //
+                // TODO(benesch): Kafka supports fetching these in bulk, but
+                // rust-rdkafka does not. That would save us a lot of requests on
+                // large topics.
+                let updates: Result<Vec<_>, _> = partitions
+                    .into_iter()
+                    .map(|pid| {
+                        match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(30)) {
+                            Ok((_low, high)) => {
+                                let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
+                                    &c.topic,
+                                    &c.id.to_string(),
+                                    &pid.to_string(),
+                                ]);
+                                max_offset.set(high);
+                                debug!("High offset: {}: {}", pid, high);
+                                let pid = PartitionId::Kafka(pid);
 
-                        for partition in current_partition_count..new_partition_count {
-                            c.coordination_state
-                                .coordinator_channel
-                                .send(coord::Message::AdvanceSourceTimestamp(
-                                    coord::AdvanceSourceTimestamp {
-                                        id: c.id,
-                                        update: TimestampSourceUpdate::RealTime(
-                                            PartitionId::Kafka(partition),
-                                        ),
-                                    },
-                                ))
-                                .expect(
-                                    "Failed to send update to coordinator. This should not happen",
-                                );
+                                // high is one past the highest offset, MzOffset is 1-based, and
+                                // the MzOffset we send here should be one past the highest offset
+                                // for which the binding is covering.
+                                Ok((pid, current_ts, MzOffset { offset: high }))
+                            }
+                            Err(e) => Err(format!(
+                                "Unable to fetch Kafka watermarks for topic {} [{}] ({}): {}",
+                                c.topic, pid, c.id, e
+                            )),
                         }
-                        current_partition_count = new_partition_count;
+                    })
+                    .collect();
+
+                match updates {
+                    Ok(updates) => {
+                        let storage = storage.lock().expect("lock poisoned");
+
+                        insert_timestamp_bindings(storage, c.id, updates.clone())
+                            .expect("could not store timestamp bindings");
+
+                        let coord_updates = updates
+                            .into_iter()
+                            .map(|(pid, timestamp, offset)| TimestampSourceUpdate {
+                                pid,
+                                timestamp,
+                                offset,
+                            })
+                            .collect();
+
+                        c.coordination_state
+                            .coordinator_channel
+                            .send(coord::Message::AdvanceSourceTimestamp(
+                                coord::AdvanceSourceTimestamp {
+                                    id: c.id,
+                                    update: coord_updates,
+                                },
+                            ))
+                            .expect("Failed to send update to coordinator. This should not happen");
+
+                        c.coordination_state
+                            .coordinator_channel
+                            .send(coord::Message::CompactTimestampBindings(c.id))
+                            .expect("Failed to send compaction notice to coordinator. This should not happen");
                     }
-                    cmp::Ordering::Less => {
-                        info!(
-                            "Ignoring decrease in partitions (from {} to {}) for topic {} (source {})",
-                            current_partition_count, new_partition_count, c.topic, c.id,
+                    Err(e) => {
+                        error!(
+                            "Unable to fetch kafka metadata for topic {} (source {}): {}",
+                            c.topic, e, c.id
                         );
                     }
-                    cmp::Ordering::Equal => (),
                 }
             }
             Err(e) => {
@@ -916,42 +1024,59 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
             }
         }
 
-        // Fetch the latest offset for each partition.
-        //
-        // TODO(benesch): Kafka supports fetching these in bulk, but
-        // rust-rdkafka does not. That would save us a lot of requests on
-        // large topics.
-        for pid in 0..current_partition_count {
-            match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(30)) {
-                Ok((_low, high)) => {
-                    let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
-                        &c.topic,
-                        &c.id.to_string(),
-                        &pid.to_string(),
-                    ]);
-                    max_offset.set(high);
-                }
-                Err(e) => {
-                    error!(
-                        "Unable to fetch Kafka watermarks for topic {} [{}] ({}): {}",
-                        c.topic, pid, c.id, e
-                    );
-                }
-            }
-        }
-
         // Poll once to clear any extraneous messages on this queue.
         consumer.poll(Duration::from_secs(0));
 
-        if current_partition_count > 0 {
-            thread::sleep(wait);
-        } else {
-            // If no partitions have been detected yet, sleep for a second rather than
-            // the specified "wait" period of time, as we know that there should at least be one
-            // partition
-            thread::sleep(Duration::from_secs(1));
-        }
+        thread::sleep(wait);
     }
 
     debug!("Terminating realtime Kafka thread for {}", &c.topic);
+}
+
+fn maybe_update_timestamp(
+    last_update_time: &mut Instant,
+    update_interval: u64,
+    current_ts: Timestamp,
+) -> Timestamp {
+    if last_update_time.elapsed().as_millis() < update_interval.into() {
+        return current_ts;
+    }
+
+    *last_update_time = Instant::now();
+
+    let mut new_ts = system_time();
+    new_ts += update_interval - (new_ts % update_interval);
+
+    new_ts
+}
+
+// These shouldn't really be here. But it seems specific source types will
+// need to have their own data in persistent storage.
+
+fn insert_timestamp_bindings(
+    mut storage: MutexGuard<storage::Connection>,
+    source_id: GlobalId,
+    timestamps: impl IntoIterator<Item = (PartitionId, Timestamp, MzOffset)>,
+) -> Result<(), Error> {
+    let tx = storage.transaction()?;
+
+    for (pid, ts, offset) in timestamps.into_iter() {
+        tx.insert_timestamp_binding(&source_id, &pid.to_string(), ts, offset.offset)?;
+    }
+    tx.commit()?;
+
+    Ok(())
+}
+
+fn load_timestamp_bindings(
+    mut storage: MutexGuard<storage::Connection>,
+    source_id: GlobalId,
+) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
+    let tx = storage.transaction()?;
+
+    let result = tx.load_timestamp_bindings(source_id)?;
+
+    tx.commit()?;
+
+    Ok(result)
 }
