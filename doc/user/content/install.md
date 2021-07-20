@@ -128,7 +128,36 @@ Detail | Info
 **Database** | `materialize`
 **Port** | `6875`
 
-For more information, see [CLI Connections](/connect/cli/).
+### CLI Connections
+
+To connect to a running instance, you can use any [Materialize-compatible CLI](connect/cli/), like `psql` or `mzcli`. To install e.g. the `psql` client:
+
+{{< tabs >}}
+{{< tab "macOS">}}
+
+```shell
+brew install postgresql
+```
+
+{{< /tab >}}
+
+{{< tab "Linux">}}
+
+```shell
+apt install postgresql-client
+```
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+Once you have `psql` installed, connect using:
+
+```shell
+psql -U materialize -h localhost -p 6875 materialize
+```
+
+<p>
 
 {{< cta href="/get-started" >}}
 Next, let's get started with Materialize →

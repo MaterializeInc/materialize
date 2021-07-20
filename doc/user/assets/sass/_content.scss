@@ -300,3 +300,83 @@ a {
     display: none;
   }
 }
+
+// Navigation tabs (tab+tabs.html)
+
+.nav-tabs {
+  position: unset;
+  width: unset;
+}
+
+.tab-content > .tab-pane {
+  display: none;
+}
+
+.tab-pane {
+  padding: 3px 0px;
+  border-top: 1px solid $grey;
+}
+
+.tab-pane {
+  padding: 3px 0px;
+}
+
+.tab-content > .active {
+  display: block;
+  padding: 15px 0px 15px 0px
+}
+
+.nav-tabs {
+  color: $grey-light;
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.nav-tabs > li {
+  color: #0f0f0f;
+  float: left;
+}
+
+.nav-tabs > li > a {
+  display: block;
+  padding: 5px 10px;
+  font-size: 16px;
+}
+
+pre {
+  display: block;
+  padding: 9.5px;
+  margin: 10px 0px 10px;
+  line-height: 1;
+}
+
+.code-tabs {
+  margin: 10px 0px 0px 0px;
+}
+
+.nav-tabs > li.active > a, .nav-tabs > li > a:hover {
+  color: $purple !important;
+  background: $purple-1;
+}
+
+// Expandable sections (expand.html)
+
+.expand-label {
+  font-weight: bold;
+  padding: 10px 0px;
+  cursor: pointer;
+
+  i {
+      content: "";
+      border-left: 4px solid scale-color($purple, $lightness: 15%);
+      border-top: 4px solid transparent;
+      border-bottom: 4px solid transparent;
+      display: inline-block;
+      margin-left: 2px;
+      margin-right: 5px;
+      transition: transform 0.3s;
+    }
+
+}
