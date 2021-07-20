@@ -7,11 +7,11 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["network", "cli", "test", "chrono", "metrics"]
-network = ["tokio", "tokio-openssl", "async-trait", "futures", "smallvec", "bytes", "openssl"]
-metrics = ["prometheus"]
+default = ["network", "chrono", "cli", "metrics", "test"]
 cli = ["structopt"]
-test = ["tracing-subscriber"]
+metrics = ["prometheus"]
+network = ["async-trait", "bytes", "futures", "openssl", "smallvec", "tokio-openssl", "tokio"]
+test = ["ctor", "tracing-subscriber"]
 
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
@@ -23,6 +23,7 @@ test = ["tracing-subscriber"]
 async-trait = { version = "0.1.50", optional = true }
 bytes = { version = "1.0.1", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
+ctor = { version = "0.1.20", optional = true }
 either = "1.6.1"
 futures = { version = "0.3.16", optional = true }
 # This isn't directly imported by anything, but it's required at link time. The

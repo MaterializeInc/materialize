@@ -145,6 +145,7 @@ services:
     environment:
     - MZ_DEV=1
     - MZ_LOG_FILTER
+    - MZ_SOFT_ASSERTIONS=1
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN

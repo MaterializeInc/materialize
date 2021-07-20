@@ -731,6 +731,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctor"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e98e2ad1a782e33928b96fc3948e7c355e5af34ba4de7670fe8bac2a3b2006d"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "darling"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2539,6 +2549,7 @@ dependencies = [
  "bytes",
  "chrono",
  "crossbeam-utils",
+ "ctor",
  "either",
  "futures",
  "openssl",
