@@ -57,6 +57,13 @@ static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 #[derive(Clone, Debug)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.
+    ///
+    /// Each of the dataflows must contain `as_of` members that are valid
+    /// for each of the referenced arrangements, meaning `AllowCompaction`
+    /// should be held back to those values until the command.
+    /// Subsequent commands may arbitrarily compact the arrangements;
+    /// the dataflow runners are responsible for ensuring that they can
+    /// correctly maintain the dataflows.
     CreateDataflows(Vec<DataflowDescription<RenderPlan>>),
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
@@ -69,6 +76,13 @@ pub enum SequencedCommand {
     /// This request elicits data from the worker, by naming an
     /// arrangement and some actions to apply to the results before
     /// returning them.
+    ///
+    /// The `timestamp` member must be valid for the arrangement that
+    /// is referenced by `id`. This means that `AllowCompaction` for
+    /// this arrangement should not pass `timestamp` before this command.
+    /// Subsequent commands may arbitrarily compact the arrangements;
+    /// the dataflow runners are responsible for ensuring that they can
+    /// correctly answer the `Peek`.
     Peek {
         /// The identifier of the arrangement.
         id: GlobalId,
