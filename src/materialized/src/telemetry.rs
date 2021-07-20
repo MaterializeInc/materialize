@@ -110,7 +110,7 @@ async fn report_one(config: &Config) -> Result<semver::Version, anyhow::Error> {
                 .coord_client
                 .system_execute_one(&TELEMETRY_QUERY)
                 .await?;
-            let response = http_util::reqwest_client()?
+            let response = http_util::reqwest::client()
                 .post(format!(
                     "https://{}/api/telemetry/{}",
                     config.domain, config.cluster_id

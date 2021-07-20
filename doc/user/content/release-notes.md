@@ -48,6 +48,12 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.8.4 %}}
 
+- **Breaking change.** The `HTTP_PROXY` variable is no longer respected. Use
+  `http_proxy` instead.
+
+- Respect the [`no_proxy` environment variable](/cli/#http-proxies) to exclude
+  certain hosts from the configured HTTP/HTTPS proxy, if any.
+
 {{% version-header v0.8.3 %}}
 
 - The `MZ_LOG` environment variable is no longer recognized. Setting the log
