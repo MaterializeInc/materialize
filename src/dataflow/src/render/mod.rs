@@ -388,22 +388,24 @@ where
                 // Determine what this worker will contribute.
                 let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
-                let (rows, errs) = match locally {
+                let (mut rows, errs) = match locally {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
+
+                // We should advance times in constant collections to start from `as_of`.
+                use differential_dataflow::lattice::Lattice;
+                for (_, time, _) in rows.iter_mut() {
+                    time.advance_by(self.as_of_frontier.borrow());
+                }
+                let mut error_time: G::Timestamp = timely::progress::Timestamp::minimum();
+                error_time.advance_by(self.as_of_frontier.borrow());
 
                 let ok_collection = rows.into_iter().to_stream(scope).as_collection();
 
                 let err_collection = errs
                     .into_iter()
-                    .map(|e| {
-                        (
-                            DataflowError::from(e),
-                            timely::progress::Timestamp::minimum(),
-                            1,
-                        )
-                    })
+                    .map(move |e| (DataflowError::from(e), error_time, 1))
                     .to_stream(scope)
                     .as_collection();
 
