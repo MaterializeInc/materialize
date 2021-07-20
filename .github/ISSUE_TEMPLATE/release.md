@@ -13,7 +13,11 @@ about: >
 
 ## Announce the imminent release internally
 
-- [x] Create this release issue.
+- [x] Create this release issue. Determine whether this is a feature release or
+  a patch release by checking the [milestones
+  page](https://github.com/MaterializeInc/materialize/milestones) -- if the date
+  is correct for the next feature release double check with the PMs in the
+  #release slack channel and use that version, otherwise it's a patch release.
 - [ ] Check for open blocking issues:
   - [ ] For any release, check if there are any open [`M-release-blocker`][rel-blockers]
     issues or PRs
@@ -22,10 +26,6 @@ about: >
     a list here, or state that there are none:
 
   > unknown number of milestone blockers or release blockers
-- [ ] Link to this issue in the #release Slack channel and be sure to directly notify the @relnotes-team.
-
-  If there are open blockers, clarify if they should block this release until they're
-  merged when you link to this issue.
 
 [rel-blockers]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-release-blocker
 [blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-milestone-blocker
@@ -100,12 +100,12 @@ Release notes should be updated by engineers as they merge PRs. The release note
 team is responsible for reviewing release notes and the release announcement before
 a release is published.
 
-- [ ] Post the following message to the `#release` channel in slack:
+- [ ] Post the following message to the `#release` channel in slack, modifying the link to the issue to point to this one:
 
   > @relnotes-team the release is in progress, now's a great time to verify or
-  > prepare the release notes
-  > (https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md)
-  > and any announcement posts
+  > prepare the release notes and any announcement posts.
+  > * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
+  > * release issue: https://github.com/MaterializeInc/materialize/issues/
 
 ### Test the release candidate
 
@@ -130,16 +130,15 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   - [ ] "link to test run"
 
-- [ ] **cloud engineer** Start the load tests according to [the same instructions][load-instr],
-  using your release tag as the `git-ref` value for the release benchmarks. You can use [This
-  commit][] as an example to follow.
+- [ ] Wait for the docker build of the tag to complete and then start the load tests according to
+  [these instructions][load-instr], using your release tag as the `git-ref` value for the release
+  benchmarks. You can use [This commit][] as an example to follow.
 
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
-- [ ] **cloud engineer** Find the load tests in
-  https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them in #release, validating
-  that data is present. Note that the default view of that dashboard is of a full day, so it may
-  look like the test started and aborted suddenly:
+- [ ] Find the load tests in https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them
+  in #release, validating that data is present. Note that the default view of that dashboard is of
+  a full day, so it may look like the test started and aborted suddenly:
 
   - [ ] chbench
   - [ ] billing-demo
@@ -165,12 +164,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
 
-- [ ] **cloud engineer** Let the chaos test run for 24 hours. The test's `chaos_run` container
-  should complete with a `0` exit code. To check this, SSH into the EC2 instance running the chaos
-  test and run `docker ps -a`. You can ssh in using our [teleport cluster][], the chaos test has a
-  `purpose=chaos` label.
+- [ ] Let the chaos test run for 24 hours. The test's `chaos_run` container should complete with a
+  `0` exit code. To check this, SSH into the EC2 instance running the chaos test and run `docker ps
+  -a`. You can ssh in using our [teleport cluster][], the chaos test has a `purpose=chaos` label.
 
-- [ ] **cloud engineer** Remove all load test machines, documented on [the same page][load-instr].
+- [ ] Remove all load test machines, [documented here][load-instr].
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
 
@@ -233,7 +231,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
     materialized --version
     EOF
     ```
-  - [ ] `docker run --rm materialize/materialized:latest --version`
+  - [ ] `docker pull materialize/materialized:latest && docker run --rm materialize/materialized:latest --version`
   - [ ] substitute in the correct version in this one: `docker run --rm materialize/materialized:v0.X.Y --version`
 
 [bintray]: https://bintray.com/beta/#/materialize/apt/materialized
@@ -282,9 +280,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
     > channel and publish any appropriate blog posts
 
   - Post a link to the release tag in the `#general` channel, something like the
-    following, substituting in the correct version:
+    following, substituting in the correct version for the X and Y:
 
-    > 🎉🤘 Release v0.X.Y is complete! https://github.com/MaterializeInc/materialize/releases/tag/v0.X.Y 🤘🎉
+    > `🎉🤘 Release v0.X.Y is complete! https://github.com/MaterializeInc/materialize/releases/tag/v0.X.Y 🤘🎉`
 
 ## Finish
 
