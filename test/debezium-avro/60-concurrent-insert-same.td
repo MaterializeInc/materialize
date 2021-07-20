@@ -8,19 +8,18 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that moving a record from one PK to another works
+# Concurrent inserts into the same table
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE update_pk_values (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1));
-ALTER TABLE update_pk_values REPLICA IDENTITY FULL;
-INSERT INTO update_pk_values VALUES (1, 10);
-INSERT INTO update_pk_values VALUES (2, 20);
+CREATE TABLE insert_same_table (f1 INTEGER, PRIMARY KEY (f1));
+ALTER TABLE insert_same_table REPLICA IDENTITY FULL;
+INSERT INTO insert_same_table VALUES (0);
 
-$ schema-registry-wait-schema schema=postgres.public.update_pk_values-value
+$ schema-registry-wait-schema schema=postgres.public.insert_same_table-value
 
-> CREATE MATERIALIZED SOURCE update_pk_values
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.update_pk_values'
+> CREATE MATERIALIZED SOURCE insert_same_table
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_same_table'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 
@@ -30,22 +29,23 @@ $ postgres-connect name=conn2 url=postgres://postgres:postgres@postgres
 
 $ postgres-execute connection=conn1
 BEGIN;
-UPDATE update_pk_values SET f1 = f1 + 10 , f2 = f2 + 10 WHERE f1 = 1;
+INSERT INTO insert_same_table VALUES (1);
 
 $ postgres-execute connection=conn2
 BEGIN;
-UPDATE update_pk_values SET f1 = f1 + 10 , f2 = f2 + 10 WHERE f1 = 2;
+INSERT INTO insert_same_table VALUES (2);
 
 $ postgres-execute connection=conn1
-INSERT INTO update_pk_values VALUES (4, 40);
+INSERT INTO insert_same_table VALUES (3);
 COMMIT;
 
 $ postgres-execute connection=conn2
-INSERT INTO update_pk_values VALUES (5, 50);
+INSERT INTO insert_same_table VALUES (4);
 COMMIT;
 
-> SELECT * FROM update_pk_values;
-4  40
-5  50
-11 20
-12 30
+> SELECT * FROM insert_same_table;
+0
+1
+2
+3
+4
