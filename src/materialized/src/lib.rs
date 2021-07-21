@@ -13,16 +13,20 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::{convert::TryInto, sync::Arc};
 
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use ore::metrics::MetricsRegistry;
+use ore::{
+    metric,
+    metrics::{Gauge, MetricsRegistry, UIntGauge, UIntGaugeVec},
+};
+use sysinfo::{ProcessorExt, SystemExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -164,6 +168,69 @@ pub struct TelemetryConfig {
     pub interval: Duration,
 }
 
+/// Global metrics for the materialized server
+#[derive(Debug, Clone)]
+pub struct Metrics {
+    /// The number of workers active in the system.
+    worker_count: UIntGaugeVec,
+
+    /// The number of seconds that the system has been running.
+    uptime: Gauge,
+
+    /// The amount of time we spend gathering metrics in prometheus endpoints.
+    request_metrics_gather: UIntGauge,
+
+    /// The amount of time we spend encoding metrics in prometheus endpoints.
+    request_metrics_encode: UIntGauge,
+}
+
+impl Metrics {
+    fn register_with(registry: &MetricsRegistry) -> Self {
+        let mut system = sysinfo::System::new();
+        system.refresh_system();
+
+        let request_metrics: UIntGaugeVec = registry.register(metric!(
+            name: "mz_server_scrape_metrics_times",
+            help: "how long it took to gather metrics, used for very low frequency high accuracy measures",
+            var_labels: ["action"],
+        ));
+        Self {
+            worker_count: registry.register(metric!(
+                name: "mz_server_metadata_timely_worker_threads",
+                help: "number of timely worker threads",
+                var_labels: ["count"],
+            )),
+            uptime: registry.register(metric!(
+                name: "mz_server_metadata_seconds",
+                help: "server metadata, value is uptime",
+                const_labels: {
+                    "build_time" => BUILD_INFO.time,
+                    "version" => BUILD_INFO.version,
+                    "build_sha" => BUILD_INFO.sha,
+                    "os" => &os_info::get().to_string(),
+                    "ncpus_logical" => &num_cpus::get().to_string(),
+                    "ncpus_physical" => &num_cpus::get_physical().to_string(),
+                    "cpu0" => &{
+                        match &system.processors().get(0) {
+                            None => "<unknown>".to_string(),
+                            Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
+                        }
+                    },
+                    "memory_total" => &system.total_memory().to_string()
+                },
+            )),
+            request_metrics_gather: request_metrics.with_label_values(&["gather"]),
+            request_metrics_encode: request_metrics.with_label_values(&["encode"]),
+        }
+    }
+
+    fn update_uptime(&self, start_time: Instant) {
+        let uptime = start_time.elapsed();
+        let (secs, milli_part) = (uptime.as_secs() as f64, uptime.subsec_millis() as f64);
+        self.uptime.set(secs + milli_part / 1_000.0);
+    }
+}
+
 /// Start a `materialized` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let workers = config.workers;
@@ -205,10 +272,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             (Some(pgwire_tls), Some(http_tls))
         }
     };
-    let metrics_registry = MetricsRegistry::new();
+    let metrics_registry = Arc::new(MetricsRegistry::new());
+    let metrics = Metrics::register_with(&metrics_registry);
 
     // Set this metric once so that it shows up in the metric export.
-    crate::server_metrics::WORKER_COUNT
+    metrics
+        .worker_count
         .with_label_values(&[&workers.to_string()])
         .set(workers.try_into().unwrap());
 
@@ -228,6 +297,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
+        metrics_registry: Arc::clone(&metrics_registry),
     })
     .await?;
 
@@ -250,6 +320,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: http_tls,
             coord_client: coord_client.clone(),
             start_time: coord_handle.start_instant(),
+            metrics_registry: Arc::clone(&metrics_registry),
+            global_metrics: metrics.clone(),
         }));
         async move {
             // TODO(benesch): replace with `listener.incoming()` if that is
@@ -265,7 +337,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         let frequency = config.introspection_frequency;
         async move {
             loop {
-                server_metrics::update_uptime(start_time);
+                metrics.update_uptime(start_time);
                 tokio::time::sleep(frequency).await;
             }
         }
