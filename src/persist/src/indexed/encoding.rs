@@ -88,12 +88,23 @@ pub struct BlobFutureMeta {
     /// be present in the batches, but has been logically moved into the trace
     /// and should be ignored.
     pub ts_lower: Antichain<u64>,
-    /// The batches that make up the BlobFuture, represented by their
-    /// description and the key to retrieve the batch's data from the blob
-    /// store. Note that Descriptions are half-open intervals `[lower, upper)`.
-    pub batches: Vec<(Description<SeqNo>, String)>,
+    /// The batches that make up the BlobFuture.
+    pub batches: Vec<BlobFutureBatchMeta>,
     /// The next id used to assign a Blob key for this future.
     pub next_blob_id: u64,
+}
+
+/// The metadata necessary to reconstruct a BlobFutureBatch.
+///
+/// Invariants:
+/// - The [lower, upper) interval of sequence numbers in desc is non-empty.
+#[derive(Clone, Debug, Abomonation)]
+pub struct BlobFutureBatchMeta {
+    /// The key to retrieve the [BlobFutureBatch] from blob storage.
+    pub key: String,
+    /// Half-open interval [lower, upper) of sequence numbers that this batch
+    /// contains updates for.
+    pub desc: Description<SeqNo>,
 }
 
 /// The metadata necessary to reconstruct a BlobTrace.
@@ -116,6 +127,7 @@ pub struct BlobTraceMeta {
 /// storage for data keys corresponding to future data.
 ///
 /// Invariants:
+/// - The [lower, upper) interval of sequence numbers in desc is non-empty.
 /// - The values in updates are sorted by (time, key, value).
 /// - The values in updates are "consolidated", i.e. (time, key, value) is
 ///   unique.
@@ -142,6 +154,7 @@ pub struct BlobFutureBatch<K, V> {
 /// times >= since.
 ///
 /// Invariants:
+/// - The [lower, upper) interval of times in desc is non-empty.
 /// - The timestamp of each update is >= to desc.lower().
 /// - The timestamp of each update is < desc.upper() iff desc.upper() > desc.since().
 ///   Otherwise the timestamp of each update is <= desc.since().
@@ -280,22 +293,23 @@ impl BlobFutureMeta {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
-        let mut prev: Option<&Description<SeqNo>> = None;
-        for (desc, _) in self.batches.iter() {
+        let mut prev: Option<&BlobFutureBatchMeta> = None;
+        for meta in self.batches.iter() {
+            meta.validate()?;
             if let Some(prev) = prev {
                 // TODO: It's definitely useful in Trace for us to enforce that
                 // these line up, but is it useful in Future? Maybe not. It's
                 // also harder since SeqNos are multiplexed for all streams, but
                 // traces are sealed per-stream.
-                if prev.upper() != desc.lower() {
+                if prev.desc.upper() != meta.desc.lower() {
                     return Err(format!(
                         "invalid batch sequence: {:?} followed by {:?}",
-                        prev, desc
+                        prev.desc, meta.desc
                     )
                     .into());
                 }
             }
-            prev = Some(desc)
+            prev = Some(&meta)
         }
         Ok(())
     }
@@ -304,8 +318,23 @@ impl BlobFutureMeta {
     pub fn seqno_upper(&self) -> Antichain<SeqNo> {
         self.batches.last().map_or_else(
             || Antichain::from_elem(SeqNo(0)),
-            |(d, _)| d.upper().clone(),
+            |meta| meta.desc.upper().clone(),
         )
+    }
+}
+
+impl BlobFutureBatchMeta {
+    /// Asserts Self's documented invariants, returning an error if any are
+    /// violated.
+    pub fn validate(&self) -> Result<(), Error> {
+        // TODO: It's unclear if the equal case (an empty desc) is
+        // useful/harmful. Feel free to make this a less_than if empty descs end
+        // up making sense.
+        if PartialOrder::less_equal(self.desc.upper(), &self.desc.lower()) {
+            return Err(format!("invalid desc: {:?}", &self.desc).into());
+        }
+
+        Ok(())
     }
 }
 
@@ -494,6 +523,13 @@ mod tests {
             Antichain::from_elem(SeqNo(upper)),
             Antichain::from_elem(SeqNo(0)),
         )
+    }
+
+    fn future_batch_meta(lower: u64, upper: u64) -> BlobFutureBatchMeta {
+        BlobFutureBatchMeta {
+            key: "".to_string(),
+            desc: seqno_desc(lower, upper),
+        }
     }
 
     #[test]
@@ -730,6 +766,21 @@ mod tests {
     }
 
     #[test]
+    fn future_batch_meta_validate() {
+        // Normal case
+        let b = future_batch_meta(0, 1);
+        assert_eq!(b.validate(), Ok(()));
+
+        // Empty interval
+        let b = future_batch_meta(0, 0);
+        assert_eq!(b.validate(), Err(Error::from("invalid desc: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(0)] }, since: Antichain { elements: [SeqNo(0)] } }")));
+
+        // Invalid desc
+        let b = future_batch_meta(1, 0);
+        assert_eq!(b.validate(), Err(Error::from("invalid desc: Description { lower: Antichain { elements: [SeqNo(1)] }, upper: Antichain { elements: [SeqNo(0)] }, since: Antichain { elements: [SeqNo(0)] } }")));
+    }
+
+    #[test]
     fn future_meta_validate() {
         // Empty
         let b = BlobFutureMeta {
@@ -744,7 +795,7 @@ mod tests {
         let b = BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
-            batches: vec![(seqno_desc(0, 1), "".into()), (seqno_desc(1, 2), "".into())],
+            batches: vec![future_batch_meta(0, 1), future_batch_meta(1, 2)],
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
@@ -753,7 +804,7 @@ mod tests {
         let b = BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
-            batches: vec![(seqno_desc(0, 1), "".into()), (seqno_desc(2, 3), "".into())],
+            batches: vec![future_batch_meta(0, 1), future_batch_meta(2, 3)],
             next_blob_id: 0,
         };
         assert_eq!(
@@ -767,7 +818,7 @@ mod tests {
         let b = BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
-            batches: vec![(seqno_desc(0, 2), "".into()), (seqno_desc(1, 3), "".into())],
+            batches: vec![future_batch_meta(0, 2), future_batch_meta(1, 3)],
             next_blob_id: 0,
         };
         assert_eq!(
@@ -938,7 +989,7 @@ mod tests {
             futures_seqno_upper: SeqNo(2),
             futures: vec![BlobFutureMeta {
                 id: Id(0),
-                batches: vec![(seqno_desc(0, 3), "".into())],
+                batches: vec![future_batch_meta(0, 3)],
                 next_blob_id: 0,
                 ts_lower: vec![0].into(),
             }],
