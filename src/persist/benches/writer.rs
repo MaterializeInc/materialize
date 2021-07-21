@@ -35,7 +35,7 @@ pub fn bench_writes(c: &mut Criterion) {
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let file_buffer_dir = temp_dir.path().join("file_buffer_bench");
-    let mut file_buffer = FileBuffer::new(file_buffer_dir, b"file_buffer_bench")
+    let mut file_buffer = FileBuffer::new(file_buffer_dir, "file_buffer_bench")
         .expect("creating a FileBuffer cannot fail");
     c.bench_function("file_write_sync", |b| {
         bench_write_sync(&mut file_buffer, data.clone(), b)

@@ -14,14 +14,16 @@ use std::sync::mpsc;
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
 use crate::indexed::{IndexedSnapshot, Snapshot};
-use crate::mem::{MemBlob, MemBuffer};
 use crate::nemesis::{
     Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId, Step,
     TakeSnapshotReq, WriteReq, WriteRes,
 };
+use crate::unreliable::UnreliableHandle;
 
 pub struct Direct {
+    start_fn: Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient<String, ()>, Error>>,
     persister: RuntimeClient<String, ()>,
+    unreliable: UnreliableHandle,
     streams: HashMap<String, (StreamWriteHandle<String, ()>, StreamReadHandle<String, ()>)>,
     snapshots: HashMap<SnapshotId, IndexedSnapshot<String, ()>>,
 }
@@ -33,6 +35,15 @@ impl Runtime for Direct {
             Req::Seal(req) => Res::Seal(req.clone(), self.seal(req)),
             Req::TakeSnapshot(req) => Res::TakeSnapshot(req.clone(), self.take_snapshot(req)),
             Req::ReadSnapshot(req) => Res::ReadSnapshot(req.clone(), self.read_snapshot(req)),
+            Req::Restart => Res::Restart(self.restart()),
+            Req::StorageUnavailable => {
+                self.unreliable.make_unavailable();
+                Res::StorageUnavailable
+            }
+            Req::StorageAvailable => {
+                self.unreliable.make_available();
+                Res::StorageAvailable
+            }
         };
         Step {
             req_id: i.req_id,
@@ -44,12 +55,15 @@ impl Runtime for Direct {
 }
 
 impl Direct {
-    pub fn new(lock_info: &str) -> Result<Self, Error> {
-        let buffer = MemBuffer::new(lock_info)?;
-        let blob = MemBlob::new(lock_info)?;
-        let persister = runtime::start(buffer, blob)?;
+    pub fn new<F: FnMut(UnreliableHandle) -> Result<RuntimeClient<String, ()>, Error> + 'static>(
+        mut start_fn: F,
+    ) -> Result<Self, Error> {
+        let unreliable = UnreliableHandle::default();
+        let persister = start_fn(unreliable.clone())?;
         Ok(Direct {
+            start_fn: Box::new(start_fn),
             persister,
+            unreliable,
             streams: HashMap::new(),
             snapshots: HashMap::new(),
         })
@@ -113,18 +127,72 @@ impl Direct {
             contents,
         })
     }
+
+    fn restart(&mut self) -> Result<(), Error> {
+        let stop_res = self.persister.stop();
+        // The handles from the previous persister cannot be used after stop.
+        self.streams.clear();
+        let persister = (self.start_fn)(self.unreliable.clone())?;
+        self.persister = persister;
+        stop_res
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::file::{FileBlob, FileBuffer};
+    use crate::mem::MemRegistry;
     use crate::nemesis;
+    use crate::nemesis::generator::GeneratorConfig;
+    use crate::unreliable::{UnreliableBlob, UnreliableBuffer};
 
     use super::*;
 
     #[test]
     fn direct_mem() {
-        nemesis::run(100, || {
-            Direct::new("direct_mem").expect("new empty persist runtime is infallible")
+        let mut registry = MemRegistry::new();
+        let direct = Direct::new(move |unreliable| {
+            registry.open_unreliable("direct_mem", "direct_mem", unreliable)
         })
+        .expect("initial start failed");
+        nemesis::run(100, GeneratorConfig::default(), direct)
+    }
+
+    #[test]
+    fn direct_file() {
+        let temp_dir = tempfile::tempdir().expect("tempdir creation failed");
+        let direct = Direct::new(move |unreliable| {
+            let (buf_dir, blob_dir) = (temp_dir.path().join("buf"), temp_dir.path().join("blob"));
+            let buf = FileBuffer::new(buf_dir, "direct_file")?;
+            let buf = UnreliableBuffer::from_handle(buf, unreliable.clone());
+            let blob = FileBlob::new(blob_dir, "direct_file")?;
+            let blob = UnreliableBlob::from_handle(blob, unreliable);
+            runtime::start(buf, blob)
+        })
+        .expect("initial start failed");
+        // TODO: At the moment, running this for 100 steps takes a bit over a
+        // second, so run this one for fewer steps than the other tests. Revisit
+        // once we pipeline write calls in Buffer.
+        nemesis::run(10, GeneratorConfig::default(), direct);
+    }
+
+    // A variant with a traffic pattern vaguely like production usage of
+    // Materialize.
+    #[test]
+    fn direct_mzlike() {
+        let config = GeneratorConfig {
+            // Writes are likely to outnumber other operations.
+            write_unsealed_weight: 20,
+            // Writes to sealed timestamps are errors that we don't expect in
+            // production usage.
+            write_sealed_weight: 0,
+            ..Default::default()
+        };
+        let mut registry = MemRegistry::new();
+        let direct = Direct::new(move |unreliable| {
+            registry.open_unreliable("direct_mzlike", "direct_mzlike", unreliable)
+        })
+        .expect("initial start failed");
+        nemesis::run(100, config, direct)
     }
 }

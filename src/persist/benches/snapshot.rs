@@ -90,7 +90,7 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
         let blob_dir = temp_dir
             .path()
             .join(format!("snapshot_bench_blob_{}", path));
-        let lock_info = b"snapshot_bench";
+        let lock_info = "snapshot_bench";
         Indexed::new(
             FileBuffer::new(buffer_dir, lock_info)?,
             FileBlob::new(blob_dir, lock_info)?,

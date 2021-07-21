@@ -28,3 +28,4 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 criterion = "0.3.4"
 rand = { version = "0.8.4", features = [ "small_rng" ] }
 tempfile = "3.2.0"
+serde = { version = "1.0.126", features = ["derive"] }
