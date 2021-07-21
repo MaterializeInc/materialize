@@ -24,6 +24,7 @@
 
 mod codec;
 mod message;
+mod metrics;
 mod protocol;
 mod server;
 

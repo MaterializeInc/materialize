@@ -24,9 +24,7 @@ use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{sink, SinkExt, TryStreamExt};
-use lazy_static::lazy_static;
 use log::trace;
-use prometheus::{register_uint_counter, UIntCounter};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
@@ -39,14 +37,6 @@ use crate::message::{
     VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
 };
 use crate::server::Conn;
-
-lazy_static! {
-    static ref BYTES_SENT: UIntCounter = register_uint_counter!(
-        "mz_pg_sent_bytes",
-        "total number of bytes sent to clients from pgwire"
-    )
-    .unwrap();
-}
 
 pub const REJECT_ENCRYPTION: u8 = b'N';
 pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
@@ -358,8 +348,6 @@ impl Encoder<BackendMessage> for Codec {
         }
 
         let len = dst.len() - base;
-        // TODO: consider finding some way to not do this per-row
-        BYTES_SENT.inc_by(u64::cast_from(dst.len() - base));
 
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {

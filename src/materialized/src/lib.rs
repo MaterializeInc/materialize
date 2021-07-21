@@ -22,6 +22,7 @@ use std::time::Duration;
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use ore::metrics::MetricsRegistry;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -204,6 +205,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             (Some(pgwire_tls), Some(http_tls))
         }
     };
+    let metrics_registry = MetricsRegistry::new();
 
     // Set this metric once so that it shows up in the metric export.
     crate::server_metrics::WORKER_COUNT
@@ -242,6 +244,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         mux.add_handler(pgwire::Server::new(pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
+            metrics_registry: &metrics_registry,
         }));
         mux.add_handler(http::Server::new(http::Config {
             tls: http_tls,
