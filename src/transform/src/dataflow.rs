@@ -20,14 +20,18 @@ use std::collections::{HashMap, HashSet};
 
 /// Optimizes the implementation of each dataflow.
 ///
-/// This method is currently limited in scope to propagating filtering and
-/// projection information, though it could certainly generalize beyond.
+/// Inlines views, performs a full optimization pass including physical
+/// planning using the supplied indexes, propagates filtering and projection
+/// information to dataflow sources and lifts monotonicity information.
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
 ) {
     // Inline views that are used in only one other view.
-    inline_views(dataflow, indexes);
+    inline_views(dataflow);
+
+    // Full optimization pass after view inlining
+    optimize_dataflow_relations(dataflow, indexes);
 
     optimize_dataflow_filters(dataflow);
     // TODO: when the linear operator contract ensures that propagated
@@ -41,10 +45,7 @@ pub fn optimize_dataflow(
 }
 
 /// Inline views used in one other view, and in no exported objects.
-fn inline_views(
-    dataflow: &mut DataflowDesc,
-    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
-) {
+fn inline_views(dataflow: &mut DataflowDesc) {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
     // ability to name it.
@@ -139,7 +140,14 @@ fn inline_views(
             dataflow.objects_to_build.remove(index);
         }
     }
+}
 
+/// Performs a full optimization pass on the dataflow, including physcal planning
+/// using the supplied set of indexes.
+fn optimize_dataflow_relations(
+    dataflow: &mut DataflowDesc,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
     // Re-optimize each dataflow and perform physical optimizations.
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not

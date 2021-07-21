@@ -328,7 +328,7 @@ impl Optimizer {
         Self { transforms }
     }
 
-    /// Optimizes the supplied relation expression.
+    /// Optimizes the supplied relation expression returning an optimized relation.
     pub fn optimize(
         &mut self,
         mut relation: MirRelationExpr,
@@ -338,7 +338,7 @@ impl Optimizer {
         Ok(expr::OptimizedMirRelationExpr(relation))
     }
 
-    /// Optimizes the supplied relation expression.
+    /// Optimizes the supplied relation expression in place.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
