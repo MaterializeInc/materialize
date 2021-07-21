@@ -9,29 +9,21 @@
 
 //! Remove TopK operators with both an offset of zero and no limit.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::MirRelationExpr;
 
 /// Remove TopK operators with both an offset of zero and no limit.
 #[derive(Debug)]
 pub struct TopKElision;
 
-impl crate::Transform for TopKElision {
-    fn transform(
+impl LocalTransform for TopKElision {
+    /// Remove TopK operators with both an offset of zero and no limit.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl TopKElision {
-    /// Remove TopK operators with both an offset of zero and no limit.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::TopK {
             input,
             group_key: _,

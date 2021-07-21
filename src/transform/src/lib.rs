@@ -316,7 +316,10 @@ impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             // 1. Structure-agnostic cleanup
-            Box::new(crate::topk_elision::TopKElision),
+            Box::new(TraverseAndTransform {
+                traversal: Traversal::PostOrder,
+                transforms: vec![Box::new(crate::topk_elision::TopKElision)],
+            }),
             Box::new(crate::nonnull_requirements::NonNullRequirements),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
