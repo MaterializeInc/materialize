@@ -2542,6 +2542,7 @@ dependencies = [
  "either",
  "futures",
  "openssl",
+ "prometheus",
  "smallvec",
  "structopt",
  "tokio",

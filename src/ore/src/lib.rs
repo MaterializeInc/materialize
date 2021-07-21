@@ -39,6 +39,8 @@ pub mod hash;
 pub mod hint;
 pub mod iter;
 pub mod lex;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 #[cfg(feature = "network")]
 pub mod netio;
 pub mod now;
