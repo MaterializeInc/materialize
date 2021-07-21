@@ -19,29 +19,21 @@
 //! busywork and less efficiency, but the wins can be substantial when
 //! expressions re-use complex subexpressions.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Performs common sub-expression elimination.
 #[derive(Debug)]
 pub struct Map;
 
-impl crate::Transform for Map {
-    fn transform(
+impl LocalTransform for Map {
+    /// Performs common sub-expression elimination.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Map {
-    /// Performs common sub-expression elimination.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Map { input, scalars } = relation {
             let input_arity = input.arity();
             let scalars_len = scalars.len();

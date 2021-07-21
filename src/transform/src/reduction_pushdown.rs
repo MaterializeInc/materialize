@@ -11,29 +11,21 @@
 //!
 //! At the moment, this only absorbs Map operators into Reduce operators.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::MirRelationExpr;
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
 pub struct ReductionPushdown;
 
-impl crate::Transform for ReductionPushdown {
-    fn transform(
+impl LocalTransform for ReductionPushdown {
+    /// Pushes Reduce operators toward sources.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl ReductionPushdown {
-    /// Pushes Reduce operators toward sources.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Reduce {
             input,
             group_key,

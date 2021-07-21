@@ -21,7 +21,7 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::{MirRelationExpr, MirScalarExpr};
 use repr::RelationType;
 
@@ -32,22 +32,14 @@ use repr::RelationType;
 #[derive(Debug)]
 pub struct Join;
 
-impl crate::Transform for Join {
-    fn transform(
+impl LocalTransform for Join {
+    /// Fuses multiple `Join` operators into one `Join` operator.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Join {
-    /// Fuses multiple `Join` operators into one `Join` operator.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,

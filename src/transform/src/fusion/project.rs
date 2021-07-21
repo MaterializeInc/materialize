@@ -11,29 +11,21 @@
 
 // TODO(frank): evaluate for redundancy with projection hoisting.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::MirRelationExpr;
 
 /// Fuses Project operators with parent operators when possible.
 #[derive(Debug)]
 pub struct Project;
 
-impl crate::Transform for Project {
-    fn transform(
+impl LocalTransform for Project {
+    /// Fuses Project operators with parent operators when possible.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Project {
-    /// Fuses Project operators with parent operators when possible.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Project { input, outputs } = relation {
             while let MirRelationExpr::Project {
                 input: inner,

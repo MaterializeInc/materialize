@@ -9,26 +9,21 @@
 
 //! Detects an input being unioned with its negation and cancels them out
 
-use crate::{TransformArgs, TransformError};
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::MirRelationExpr;
 
 /// Detects an input being unioned with its negation and cancels them out
 #[derive(Debug)]
 pub struct UnionBranchCancellation;
 
-impl crate::Transform for UnionBranchCancellation {
-    fn transform(
+impl LocalTransform for UnionBranchCancellation {
+    /// Detects an input being unioned with its negation and cancels them out
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), TransformError> {
-        relation.try_visit_mut(&mut |e| self.action(e))
-    }
-}
-
-impl UnionBranchCancellation {
-    /// Detects an input being unioned with its negation and cancels them out
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Union { base, inputs } = relation {
             let matching_negation = |input: &MirRelationExpr,
                                      inputs: &[MirRelationExpr],
@@ -69,6 +64,5 @@ impl UnionBranchCancellation {
                 }
             }
         }
-        Ok(())
     }
 }

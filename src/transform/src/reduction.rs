@@ -15,25 +15,20 @@ use std::iter;
 use expr::{AggregateExpr, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
 use repr::{Datum, Diff, Row, RowArena};
 
-use crate::{TransformArgs, TransformError};
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 
 /// Replace operators on constants collections with constant collections.
 #[derive(Debug)]
 pub struct FoldConstants;
 
-impl crate::Transform for FoldConstants {
-    fn transform(
+impl LocalTransform for FoldConstants {
+    /// Replace operators on constants collections with constant collections.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), TransformError> {
-        relation.try_visit_mut(&mut |e| self.action(e))
-    }
-}
-
-impl FoldConstants {
-    /// Replace operators on constants collections with constant collections.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         let relation_type = relation.typ();
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
@@ -59,7 +54,7 @@ impl FoldConstants {
                 if group_key.iter().any(|e| e.contains_temporal())
                     || aggregates.iter().any(|a| a.expr.contains_temporal())
                 {
-                    return Ok(());
+                    return;
                 }
 
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
@@ -118,7 +113,7 @@ impl FoldConstants {
 
                 // Guard against evaluating expression that may contain temporal expressions.
                 if scalars.iter().any(|e| e.contains_temporal()) {
-                    return Ok(());
+                    return;
                 }
 
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
@@ -156,7 +151,7 @@ impl FoldConstants {
 
                 // Guard against evaluating expression that may contain temporal expressions.
                 if exprs.iter().any(|e| e.contains_temporal()) {
-                    return Ok(());
+                    return;
                 }
 
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
@@ -179,7 +174,7 @@ impl FoldConstants {
 
                 // Guard against evaluating expression that may contain temporal expressions.
                 if predicates.iter().any(|e| e.contains_temporal()) {
-                    return Ok(());
+                    return;
                 }
 
                 // If any predicate is false, reduce to the empty collection.
@@ -245,7 +240,7 @@ impl FoldConstants {
                         .iter()
                         .any(|equiv| equiv.iter().any(|e| e.contains_temporal()))
                     {
-                        return Ok(());
+                        return;
                     }
 
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
@@ -363,10 +358,10 @@ impl FoldConstants {
                 }
             }
         }
-
-        Ok(())
     }
+}
 
+impl FoldConstants {
     fn fold_reduce_constant(
         group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],

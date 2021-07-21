@@ -44,29 +44,21 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::MirRelationExpr;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
 pub struct Filter;
 
-impl crate::Transform for Filter {
-    fn transform(
+impl LocalTransform for Filter {
+    /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Filter {
-    /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Filter { input, predicates } = relation {
             // consolidate nested filters.
             while let MirRelationExpr::Filter {

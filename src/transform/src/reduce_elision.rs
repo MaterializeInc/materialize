@@ -13,29 +13,21 @@
 //! set of columns that form unique keys for the input, the reduce
 //! can be simplified to a map operation.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
 pub struct ReduceElision;
 
-impl crate::Transform for ReduceElision {
-    fn transform(
+impl LocalTransform for ReduceElision {
+    /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl ReduceElision {
-    /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Reduce {
             input,
             group_key,

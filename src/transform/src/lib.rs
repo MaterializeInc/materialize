@@ -78,6 +78,62 @@ pub trait Transform: std::fmt::Debug {
     }
 }
 
+/// doc me
+#[derive(Debug)]
+pub enum Traversal {
+    /// doc me
+    PostOrder,
+    /// doc me
+    PreOrder,
+}
+
+/// Transforms that can be applied locally to a single node.
+pub trait LocalTransform: std::fmt::Debug {
+    /// doc me
+    fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        args: &TransformArgs,
+        cache: &mut Option<Box<dyn LocalTransformCache>>,
+    );
+}
+
+/// doc me
+pub trait LocalTransformCache {}
+
+/// doc me
+#[derive(Debug)]
+pub struct TraverseAndTransform {
+    /// Note: the constructor validates that all transforms support
+    /// this traversal order
+    traversal: Traversal,
+    transforms: Vec<Box<dyn LocalTransform + Send>>,
+}
+
+impl Transform for TraverseAndTransform {
+    fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        args: TransformArgs,
+    ) -> Result<(), TransformError> {
+        let mut caches: Vec<Option<Box<dyn LocalTransformCache>>> =
+            (0..self.transforms.len()).map(|_| None).collect();
+        match &self.traversal {
+            Traversal::PreOrder => relation.visit_mut_pre(&mut |r| {
+                for (transform, cache) in self.transforms.iter().zip(caches.iter_mut()) {
+                    transform.action(r, &args, cache);
+                }
+            }),
+            Traversal::PostOrder => relation.visit_mut(&mut |r| {
+                for (transform, cache) in self.transforms.iter().zip(caches.iter_mut()) {
+                    transform.action(r, &args, cache);
+                }
+            }),
+        }
+        Ok(())
+    }
+}
+
 /// Errors that can occur during a transformation.
 #[derive(Debug, Clone)]
 pub enum TransformError {
@@ -159,18 +215,26 @@ impl Default for FuseAndCollapse {
             // (#716) proposes the removal of `InlineLet` and `UpdateLet` as a
             // transforms.
             transforms: vec![
-                Box::new(crate::projection_extraction::ProjectionExtraction),
-                Box::new(crate::projection_lifting::ProjectionLifting),
-                Box::new(crate::fusion::map::Map),
-                Box::new(crate::fusion::filter::Filter),
-                Box::new(crate::fusion::project::Project),
-                Box::new(crate::fusion::join::Join),
+                Box::new(TraverseAndTransform {
+                    traversal: Traversal::PostOrder,
+                    transforms: vec![Box::new(crate::projection_extraction::ProjectionExtraction)],
+                }),
                 Box::new(crate::inline_let::InlineLet),
-                Box::new(crate::fusion::reduce::Reduce),
-                Box::new(crate::fusion::union::Union),
-                // This goes after union fusion so we can cancel out
-                // more branches at a time.
-                Box::new(crate::union_cancel::UnionBranchCancellation),
+                Box::new(crate::projection_lifting::ProjectionLifting),
+                Box::new(TraverseAndTransform {
+                    traversal: Traversal::PostOrder,
+                    transforms: vec![
+                        Box::new(crate::fusion::map::Map),
+                        Box::new(crate::fusion::filter::Filter),
+                        Box::new(crate::fusion::project::Project),
+                        Box::new(crate::fusion::join::Join),
+                        Box::new(crate::fusion::reduce::Reduce),
+                        Box::new(crate::fusion::union::Union),
+                        // This goes after union fusion so we can cancel out
+                        // more branches at a time.
+                        Box::new(crate::union_cancel::UnionBranchCancellation),
+                    ],
+                }),
                 // This should run before redundant join to ensure that key info
                 // is correct.
                 Box::new(crate::update_let::UpdateLet),
@@ -187,7 +251,10 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(crate::reduction::FoldConstants),
+                Box::new(TraverseAndTransform {
+                    traversal: Traversal::PostOrder,
+                    transforms: vec![Box::new(crate::reduction::FoldConstants)],
+                }),
             ],
         }
     }
@@ -281,11 +348,16 @@ impl Default for Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    // Pushes aggregations down
-                    Box::new(crate::reduction_pushdown::ReductionPushdown),
-                    // Replaces reduces with maps when the group keys are
-                    // unique with maps
-                    Box::new(crate::reduce_elision::ReduceElision),
+                    Box::new(TraverseAndTransform {
+                        traversal: Traversal::PostOrder,
+                        transforms: vec![
+                            // Pushes aggregations down
+                            Box::new(crate::reduction_pushdown::ReductionPushdown),
+                            // Replaces reduces with maps when the group keys are
+                            // unique with maps
+                            Box::new(crate::reduce_elision::ReduceElision),
+                        ],
+                    }),
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
@@ -304,21 +376,39 @@ impl Default for Optimizer {
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
-                    Box::new(crate::reduction::FoldConstants),
-                    Box::new(crate::fusion::filter::Filter),
+                    Box::new(TraverseAndTransform {
+                        traversal: Traversal::PostOrder,
+                        transforms: vec![
+                            Box::new(crate::reduction::FoldConstants),
+                            Box::new(crate::fusion::filter::Filter),
+                        ],
+                    }),
                     // fill in the new demand after maps have been shifted
                     // around.
                     Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
-                    Box::new(crate::fusion::map::Map),
+                    Box::new(TraverseAndTransform {
+                        traversal: Traversal::PostOrder,
+                        transforms: vec![Box::new(crate::fusion::map::Map)],
+                    }),
                 ],
             }),
-            Box::new(crate::reduction_pushdown::ReductionPushdown),
-            Box::new(crate::cse::map::Map),
+            Box::new(TraverseAndTransform {
+                traversal: Traversal::PostOrder,
+                transforms: vec![
+                    Box::new(crate::reduction_pushdown::ReductionPushdown),
+                    Box::new(crate::cse::map::Map),
+                ],
+            }),
             Box::new(crate::projection_lifting::ProjectionLifting),
             Box::new(crate::join_implementation::JoinImplementation),
-            Box::new(crate::fusion::project::Project),
-            Box::new(crate::reduction::FoldConstants),
+            Box::new(TraverseAndTransform {
+                traversal: Traversal::PostOrder,
+                transforms: vec![
+                    Box::new(crate::fusion::project::Project),
+                    Box::new(crate::reduction::FoldConstants),
+                ],
+            }),
         ];
         Self { transforms }
     }
@@ -333,20 +423,5 @@ impl Optimizer {
     ) -> Result<expr::OptimizedMirRelationExpr, TransformError> {
         self.transform(&mut relation, indexes)?;
         Ok(expr::OptimizedMirRelationExpr(relation))
-    }
-
-    /// Simple fusion and elision transformations to render the query readable.
-    pub fn pre_optimization() -> Self {
-        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
-            Box::new(crate::fusion::join::Join),
-            Box::new(crate::inline_let::InlineLet),
-            Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::fusion::filter::Filter),
-            Box::new(crate::fusion::map::Map),
-            Box::new(crate::projection_extraction::ProjectionExtraction),
-            Box::new(crate::fusion::project::Project),
-            Box::new(crate::fusion::join::Join),
-        ];
-        Self { transforms }
     }
 }

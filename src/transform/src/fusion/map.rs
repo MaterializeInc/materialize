@@ -19,30 +19,22 @@
 
 use std::mem;
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::MirRelationExpr;
 
 /// Fuses a sequence of `Map` operators in to one `Map` operator.
 #[derive(Debug)]
 pub struct Map;
 
-impl crate::Transform for Map {
-    fn transform(
-        &self,
-        relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Map {
+impl LocalTransform for Map {
     /// Fuses a sequence of `Map` operators in to one `Map` operator.
     /// Remove the map operator if it is empty.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Map { input, scalars } = relation {
             while let MirRelationExpr::Map {
                 input: inner_input,

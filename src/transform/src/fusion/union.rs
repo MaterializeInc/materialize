@@ -14,31 +14,23 @@
 
 use std::iter;
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::MirRelationExpr;
 
 /// Fuses multiple `Union` operators into one.
 #[derive(Debug)]
 pub struct Union;
 
-impl crate::Transform for Union {
-    fn transform(
-        &self,
-        relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Union {
+impl LocalTransform for Union {
     /// Fuses multiple `Union` operators into one.
     /// Nested negated unions are merged into the parent one by pushing
     /// the Negate to all their branches.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         let relation_type = relation.typ();
         if let MirRelationExpr::Union { base, inputs } = relation {
             let can_fuse = iter::once(&**base).chain(&*inputs).any(|input| -> bool {

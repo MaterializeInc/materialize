@@ -8,29 +8,21 @@
 // by the Apache License, Version 2.0.
 
 //! Fuses reduce operators with parent operators if possible.
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Fuses reduce operators with parent operators if possible.
 #[derive(Debug)]
 pub struct Reduce;
 
-impl crate::Transform for Reduce {
-    fn transform(
+impl LocalTransform for Reduce {
+    /// Fuses reduce operators with parent operators if possible.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Reduce {
-    /// Fuses reduce operators with parent operators if possible.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Reduce {
             input,
             group_key,

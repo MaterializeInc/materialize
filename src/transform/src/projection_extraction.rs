@@ -9,7 +9,7 @@
 
 //! Transform column references in a `Map` into a `Project`.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Transform column references in a `Map` into a `Project`, or repeated
@@ -17,22 +17,14 @@ use expr::{MirRelationExpr, MirScalarExpr};
 #[derive(Debug)]
 pub struct ProjectionExtraction;
 
-impl crate::Transform for ProjectionExtraction {
-    fn transform(
+impl LocalTransform for ProjectionExtraction {
+    /// Transform column references in a `Map` into a `Project`.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl ProjectionExtraction {
-    /// Transform column references in a `Map` into a `Project`.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         if let MirRelationExpr::Map { input, scalars } = relation {
             if scalars
                 .iter()
