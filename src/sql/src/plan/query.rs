@@ -1217,7 +1217,7 @@ fn plan_view_select(
     let (mut relation_expr, from_scope) =
         from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
             let (left, left_scope) = l?;
-            plan_table_with_joins(qcx, left, left_scope, &JoinOperator::CrossJoin, twj)
+            plan_table_with_joins(qcx, left, left_scope, twj)
         })?;
 
     // Step 2. Handle WHERE clause.
@@ -1671,17 +1671,25 @@ fn plan_table_with_joins<'a>(
     qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
-    join_operator: &JoinOperator<Aug>,
     table_with_joins: &'a TableWithJoins<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
+    let pushed_left_was_join_identity = left.is_join_identity();
     let (mut left, mut left_scope) = plan_table_factor(
         qcx,
         left,
         left_scope,
-        join_operator,
+        &JoinOperator::CrossJoin,
         &table_with_joins.relation,
     )?;
     for join in &table_with_joins.joins {
+        if !pushed_left_was_join_identity
+            && matches!(
+                &join.join_operator,
+                JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
+            )
+        {
+            unsupported!(6875, "full/right outer joins in comma join");
+        }
         let (new_left, new_left_scope) =
             plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
         left = new_left;
@@ -1740,13 +1748,7 @@ fn plan_table_factor(
 
         TableFactor::NestedJoin { join, alias } => {
             let (identity, identity_scope) = plan_join_identity(&qcx);
-            let (expr, scope) = plan_table_with_joins(
-                &qcx,
-                identity,
-                identity_scope,
-                &JoinOperator::CrossJoin,
-                join,
-            )?;
+            let (expr, scope) = plan_table_with_joins(&qcx, identity, identity_scope, join)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }

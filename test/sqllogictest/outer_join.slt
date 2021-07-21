@@ -1,0 +1,39 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE a(a INTEGER);
+
+statement ok
+CREATE TABLE b(b INTEGER);
+
+statement ok
+CREATE TABLE c(c INTEGER);
+
+statement ok
+INSERT INTO a VALUES (1);
+
+statement ok
+INSERT INTO b VALUES (2);
+
+statement ok
+INSERT INTO c VALUES (3);
+
+query error full/right outer joins in comma join not yet supported, see https://github.com/MaterializeInc/materialize/issues/6875
+SELECT * FROM a, b full join c on b = c;
+
+query error full/right outer joins in comma join not yet supported, see https://github.com/MaterializeInc/materialize/issues/6875
+SELECT * FROM a, b right join c on b = c;
+
+query III
+SELECT * FROM a, b left join c on b = c;
+----
+1  2  NULL
