@@ -356,6 +356,7 @@ mzworkflows:
       services: [dashboard, metabase]
     - step: run
       service: peeker
+      force_service_name: true
       command: >-
         --only-initialize
         -q loadtest
@@ -480,6 +481,7 @@ mzworkflows:
       workflow: heavy-load-mysql
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -501,6 +503,7 @@ mzworkflows:
       workflow: heavy-load-postgres
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -565,6 +568,7 @@ mzworkflows:
       workflow: heavy-load-mysql
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -603,6 +607,7 @@ mzworkflows:
       workflow: heavy-load-mysql
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -674,6 +679,7 @@ mzworkflows:
         --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: >-
         --queries ${PEEKER_QUERIES:-benchmark}
