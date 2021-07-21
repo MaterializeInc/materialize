@@ -336,7 +336,10 @@ impl Default for Optimizer {
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(crate::predicate_pushdown::PredicatePushdown),
                     // Lifts the information `!isnull(col)`
-                    Box::new(crate::nonnullable::NonNullable),
+                    Box::new(TraverseAndTransform {
+                        traversal: Traversal::PostOrder,
+                        transforms: vec![Box::new(crate::nonnullable::NonNullable)],
+                    }),
                     // Lifts the information `col = literal`
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate

@@ -14,7 +14,7 @@
 
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
-use crate::TransformArgs;
+use crate::{LocalTransform, LocalTransformCache, TransformArgs};
 use expr::{AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::{Datum, RelationType, ScalarType};
 
@@ -22,22 +22,14 @@ use repr::{Datum, RelationType, ScalarType};
 #[derive(Debug)]
 pub struct NonNullable;
 
-impl crate::Transform for NonNullable {
-    fn transform(
+impl LocalTransform for NonNullable {
+    /// Harvests information about non-nullability of columns from sources.
+    fn action(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl NonNullable {
-    /// Harvests information about non-nullability of columns from sources.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+        _: &TransformArgs,
+        _: &mut Option<Box<dyn LocalTransformCache>>,
+    ) {
         match relation {
             MirRelationExpr::Map { input, scalars } => {
                 if scalars.iter().any(|s| scalar_contains_isnull(s)) {
