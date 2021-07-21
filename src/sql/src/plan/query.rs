@@ -2602,7 +2602,7 @@ fn plan_list(
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
         if let Some(ScalarType::List { element_type, .. }) = type_hint {
-            ((**element_type).clone(), vec![])
+            (element_type.default_embedded_value(), vec![])
         } else {
             bail!("cannot determine type of empty list");
         }
@@ -2621,7 +2621,7 @@ fn plan_list(
             });
         }
         let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
-        (ecx.scalar_type(&out[0]), out)
+        (ecx.scalar_type(&out[0]).default_embedded_value(), out)
     };
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },

@@ -328,18 +328,44 @@ fn get_cast(
 ) -> Option<Cast> {
     use CastContext::*;
 
-    if match (from, to) {
-        // Numeric values pass through and are only rescaled if:
-        // - CastContext is either Assignment or Explicit
-        // - `to` has a specified scale that differs from `from`'s
-        (
-            ScalarType::Numeric { scale: from_scale },
-            ScalarType::Numeric {
-                scale: to_scale @ Some(..),
-            },
-        ) if ccx != Implicit => from_scale == to_scale,
-        _ => from.base_eq(to),
-    } {
+    // Determines if types are equal in a way that does not require casting.
+    //
+    // Note that these checks are necessary to avoid unnecessary nop rescales of numeric types.
+    fn embedded_value_equality(ccx: &CastContext, l: &ScalarType, r: &ScalarType) -> bool {
+        use ScalarType::*;
+        match (l, r) {
+            (
+                ScalarType::Numeric { scale: from_scale },
+                ScalarType::Numeric {
+                    scale: to_scale @ Some(..),
+                },
+            ) if ccx != &Implicit => from_scale == to_scale,
+            (Array(l), Array(r))
+            | (
+                List {
+                    element_type: l,
+                    custom_oid: None,
+                },
+                List {
+                    element_type: r,
+                    custom_oid: None,
+                },
+            )
+            | (
+                Map {
+                    value_type: l,
+                    custom_oid: None,
+                },
+                Map {
+                    value_type: r,
+                    custom_oid: None,
+                },
+            ) => embedded_value_equality(&ccx, &l, &r),
+            (l, r) => l.base_eq(r),
+        }
+    }
+
+    if embedded_value_equality(&ccx, &from, &to) {
         return Some(Box::new(|expr| expr));
     }
 
@@ -445,8 +471,8 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 /// can be cast to. Returns `None` if a common type cannot be deduced.
 ///
 /// The returned type is not guaranteed to be accurate because we ignore type
-/// categories, e.g. on input `[ScalarType::Date, ScalarType::Int32]`, will guess
-/// that `Date` is the common type.
+/// categories, e.g. on input `[ScalarType::Date, ScalarType::Int32]`, will
+/// guess that `Date` is the common type.
 ///
 /// However, if there _is_ a common type among the input, it will correctly
 /// determine it, i.e. returns false positives but never false negatives.
@@ -458,6 +484,12 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 /// Note that this function implements the type-determination components of
 /// Postgres' ["`UNION`, `CASE`, and Related Constructs"][union-type-conv] type
 /// conversion.
+///
+/// ## Type hints
+/// Some types contain embedded values, e.g. [`ScalarType::Numeric`] contains
+/// the values' scales. When choosing a common type, and the `type_hint` is of
+/// the type chosen, you should guess _it_ because the given type hint can
+/// contain a distinct embedded value necessary to retain type invariants.
 ///
 /// [union-type-conv]:
 /// https://www.postgresql.org/docs/12/typeconv-union-case.html
@@ -478,17 +510,13 @@ pub fn guess_best_common_type(
         return Some(ScalarType::String);
     }
 
-    if known_types.iter().all(|t| t.base_eq(&known_types[0])) {
-        return Some(known_types[0].clone());
-    }
-
     // Tracks order of preferences for implicit casts for each [`TypeCategory`] that
     // contains multiple types, but does so irrespective of [`TypeCategory`].
     //
     // We could make this deterministic, but it offers no real benefit because the
     // information it provides is used in fallible functions anyway, so a bad guess
     // just gets caught elsewhere.
-    known_types
+    let r = known_types
         .iter()
         .max_by_key(|scalar_type| match scalar_type {
             // Strings can be cast to any type, so should be given lowest priority.
@@ -506,7 +534,12 @@ pub fn guess_best_common_type(
             ScalarType::TimestampTz => 9,
             _ => 10,
         })
-        .cloned()
+        .unwrap();
+
+    match type_hint {
+        Some(th) if r.base_eq(th) => type_hint.cloned(),
+        _ => Some(r.default_embedded_value()),
+    }
 }
 
 pub fn plan_coerce<'a>(

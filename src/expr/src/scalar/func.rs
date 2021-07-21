@@ -3099,11 +3099,15 @@ impl BinaryFunc {
                 ScalarType::Int64.nullable(true)
             }
 
-            ListListConcat | ListElementConcat => {
-                input1_type.scalar_type.unscale_any_numeric().nullable(true)
-            }
+            ListListConcat | ListElementConcat => input1_type
+                .scalar_type
+                .default_embedded_value()
+                .nullable(true),
 
-            ElementListConcat => input2_type.scalar_type.unscale_any_numeric().nullable(true),
+            ElementListConcat => input2_type
+                .scalar_type
+                .default_embedded_value()
+                .nullable(true),
 
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Position => ScalarType::Int32.nullable(in_nullable),
@@ -3983,7 +3987,7 @@ impl UnaryFunc {
             | CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
 
             CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
-                return_ty.unscale_any_numeric().nullable(false)
+                return_ty.default_embedded_value().nullable(false)
             }
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(nullable),

@@ -814,27 +814,29 @@ impl<'a> ScalarType {
         dims
     }
 
-    /// Returns `self` with any values equal to [`ScalarType::Numeric`] with their
-    /// `scale` set to `None`.
-    pub fn unscale_any_numeric(&self) -> ScalarType {
+    /// Returns `self` with any embedded values set to a value appropriate for a
+    /// collection of the type. Namely, this should set optional scales or
+    /// limits to `None`.
+    pub fn default_embedded_value(&self) -> ScalarType {
         use ScalarType::*;
         match self {
-            Numeric { scale: Some(..) } => Numeric { scale: None },
             List {
                 element_type,
                 custom_oid: None,
             } => List {
-                element_type: Box::new(element_type.unscale_any_numeric()),
+                element_type: Box::new(element_type.default_embedded_value()),
                 custom_oid: None,
             },
             Map {
                 value_type,
                 custom_oid: None,
             } => Map {
-                value_type: Box::new(value_type.unscale_any_numeric()),
+                value_type: Box::new(value_type.default_embedded_value()),
                 custom_oid: None,
             },
-            _ => self.clone(),
+            Array(a) => Array(Box::new(a.default_embedded_value())),
+            Numeric { .. } => Numeric { scale: None },
+            v => v.clone(),
         }
     }
 
