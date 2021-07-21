@@ -517,8 +517,7 @@ mod tests {
     use std::error::Error;
 
     use crate::error::Error as IndexedError;
-    use crate::mem::MemBlob;
-    use crate::mem::MemBuffer;
+    use crate::mem::{MemBlob, MemBuffer};
 
     use super::*;
 
@@ -716,6 +715,37 @@ mod tests {
                 "invalid sequence number in snapshot SeqNo(7), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
             ))
         );
+
+        Ok(())
+    }
+
+    // Regression test for two similar bugs causing future batches with
+    // non-adjacent seqno boundaries (which violates our invariants).
+    #[test]
+    fn regression_non_sequential_future_batches() -> Result<(), IndexedError> {
+        let mut i = Indexed::new(MemBuffer::new("lock"), MemBlob::new("lock"))?;
+
+        // First is some stream is registered, written to, and step'd, moving
+        // seqno 0..X into future. Then a second stream is registered, written
+        // to, and step'd. When it goes to move X..Y into the future, the second
+        // stream is missing a batch for 0..X. (Newly registered streams are
+        // missing 0 to the seqno that buffer was at when they are registered.)
+        //
+        // This caused a violation of our invariants (which are checked in tests
+        // and debug mode), so we just need the following to run without error
+        // to verify the fix.
+        let s1 = i.register("s1");
+        i.write_sync(s1, &[(((), ()), 0, 1)])?;
+        i.step()?;
+        let s2 = i.register("s2");
+        i.write_sync(s2, &[(((), ()), 1, 1)])?;
+        i.step()?;
+
+        // The second flavor is similar. If we then write to the first stream
+        // again and step, it is then missing X..Y. (A stream not written to
+        // between two step calls doesn't get a batch.)
+        i.write_sync(s1, &[(((), ()), 2, 1)])?;
+        i.step()?;
 
         Ok(())
     }
