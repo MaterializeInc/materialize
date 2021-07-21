@@ -223,7 +223,8 @@ impl ColumnKnowledge {
                     let knowledge = optimize(&mut aggregate.expr, &input_typ, &input_knowledge[..]);
                     // This could be improved.
                     let knowledge = match aggregate.func {
-                        AggregateFunc::MaxInt32
+                        AggregateFunc::MaxInt16
+                        | AggregateFunc::MaxInt32
                         | AggregateFunc::MaxInt64
                         | AggregateFunc::MaxFloat32
                         | AggregateFunc::MaxFloat64
@@ -232,6 +233,7 @@ impl ColumnKnowledge {
                         | AggregateFunc::MaxDate
                         | AggregateFunc::MaxTimestamp
                         | AggregateFunc::MaxTimestampTz
+                        | AggregateFunc::MinInt16
                         | AggregateFunc::MinInt32
                         | AggregateFunc::MinInt64
                         | AggregateFunc::MinFloat32

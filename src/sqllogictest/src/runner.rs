@@ -304,6 +304,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::FLOAT4 => Self(Value::Float4(types::float4_from_sql(raw)?)),
             PgType::FLOAT8 => Self(Value::Float8(types::float8_from_sql(raw)?)),
             PgType::DATE => Self(Value::Date(NaiveDate::from_sql(ty, raw)?)),
+            PgType::INT2 => Self(Value::Int2(types::int2_from_sql(raw)?)),
             PgType::INT4 => Self(Value::Int4(types::int4_from_sql(raw)?)),
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
@@ -424,6 +425,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
     match (typ, d.0) {
         (Type::Bool, Value::Bool(b)) => b.to_string(),
 
+        (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
@@ -439,6 +441,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             d.to_standard_notation_string()
         }
 
+        (Type::Real, Value::Int2(i)) => format!("{:.3}", i),
         (Type::Real, Value::Int4(i)) => format!("{:.3}", i),
         (Type::Real, Value::Int8(i)) => format!("{:.3}", i),
         (Type::Real, Value::Float4(f)) => match mode {

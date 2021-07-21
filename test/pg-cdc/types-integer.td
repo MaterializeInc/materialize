@@ -41,7 +41,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t1 LIMIT 1;
-integer integer bigint
+smallint integer bigint
 
 > SELECT * FROM t1;
 -32768 -2147483648 -9223372036854775808

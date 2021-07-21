@@ -7,9 +7,21 @@ menu:
 aliases:
   - /sql/types/bigint
   - /sql/types/int
+  - /sql/types/int2
   - /sql/types/int4
   - /sql/types/int8
+  - /sql/types/smallint
 ---
+
+## `smallint` info
+
+Detail | Info
+-------|------
+**Size** | 2 bytes
+**Aliases** | `int2`
+**Catalog name** | `pg_catalog.int2`
+**OID** | 23
+**Range** | [-32,768, 32,767]
 
 ## `integer` info
 
@@ -35,29 +47,43 @@ Detail | Info
 
 ### Valid casts
 
-In addition to the casts listed below, all integer types can be cast to and from
-all other integer types. `bigint`/`int8` to `int`/`int4` is a cast by assignment and
-`int`/`int4` to `bigint`/`int8` is an implicit cast.
+For details about casting, including contexts, see [Functions:
+Cast](../../functions/cast).
 
-#### From `integer` or `bigint`
+#### Between integer types
 
-You can [cast](../../functions/cast) `integer` or `bigint` to:
+From | To | Required context
+-----|----|--------
+`smallint` | `integer` | Implicit
+`smallint` | `bigint` | Implicit
+`integer` | `smallint` | Assignment
+`integer` | `bigint` | Implicit
+`bigint` | `smallint` | Assignment
+`bigint` | `integer` | Assignment
 
-- [`boolean`](../boolean) (explicitly)
-- [`numeric`](../numeric) (implicitly)
-- [`real`/`double precision`](../float) (implicitly)
-- [`text`](../text) (by assignment)
+#### From integer types
+
+You can cast integer types to:
+
+To | Required context
+---|--------
+[`boolean`](../boolean) (`integer` only) | Explicit
+[`numeric`](../numeric) | Implicit
+[`real`/`double precision`](../float) | Implicit
+[`text`](../text) | Assignment
 
 #### To `integer` or `bigint`
 
-You can [cast](../../functions/cast) the following types to `integer` or `bigint`:
+You can cast the following types to integer types:
 
-- [`bool`](../boolean) (implicitly)
-- [`jsonb`](../jsonb)(explicitly)
-- [`oid`](../oid) (by assignment)
-- [`numeric`](../numeric) (by assignment)
-- [`real`/`double precision`](../float) (by assignment)
-- [`text`](../text) (explicitly)
+From | Required context
+---|--------
+[`boolean`](../boolean) (`integer` only) | Explicit
+[`jsonb`](../jsonb) | Explicit
+[`oid`](../oid) (`integer` only) | Assignment
+[`numeric`](../numeric) | Assignment
+[`real`/`double precision`](../float) | Assignment
+[`text`](../text) | Explicit
 
 ## Examples
 

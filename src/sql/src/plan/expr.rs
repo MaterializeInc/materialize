@@ -360,6 +360,7 @@ pub struct AggregateExpr {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AggregateFunc {
     MaxNumeric,
+    MaxInt16,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
@@ -370,6 +371,7 @@ pub enum AggregateFunc {
     MaxTimestamp,
     MaxTimestampTz,
     MinNumeric,
+    MinInt16,
     MinInt32,
     MinInt64,
     MinFloat32,
@@ -379,6 +381,7 @@ pub enum AggregateFunc {
     MinDate,
     MinTimestamp,
     MinTimestampTz,
+    SumInt16,
     SumInt32,
     SumInt64,
     SumFloat32,
@@ -408,6 +411,7 @@ impl AggregateFunc {
         match self {
             AggregateFunc::MaxNumeric => expr::AggregateFunc::MaxNumeric,
             AggregateFunc::MaxInt64 => expr::AggregateFunc::MaxInt64,
+            AggregateFunc::MaxInt16 => expr::AggregateFunc::MaxInt16,
             AggregateFunc::MaxInt32 => expr::AggregateFunc::MaxInt32,
             AggregateFunc::MaxFloat32 => expr::AggregateFunc::MaxFloat32,
             AggregateFunc::MaxFloat64 => expr::AggregateFunc::MaxFloat64,
@@ -417,6 +421,7 @@ impl AggregateFunc {
             AggregateFunc::MaxTimestamp => expr::AggregateFunc::MaxTimestamp,
             AggregateFunc::MaxTimestampTz => expr::AggregateFunc::MaxTimestampTz,
             AggregateFunc::MinNumeric => expr::AggregateFunc::MinNumeric,
+            AggregateFunc::MinInt16 => expr::AggregateFunc::MinInt16,
             AggregateFunc::MinInt32 => expr::AggregateFunc::MinInt32,
             AggregateFunc::MinInt64 => expr::AggregateFunc::MinInt64,
             AggregateFunc::MinFloat32 => expr::AggregateFunc::MinFloat32,
@@ -426,6 +431,7 @@ impl AggregateFunc {
             AggregateFunc::MinDate => expr::AggregateFunc::MinDate,
             AggregateFunc::MinTimestamp => expr::AggregateFunc::MinTimestamp,
             AggregateFunc::MinTimestampTz => expr::AggregateFunc::MinTimestampTz,
+            AggregateFunc::SumInt16 => expr::AggregateFunc::SumInt16,
             AggregateFunc::SumInt32 => expr::AggregateFunc::SumInt32,
             AggregateFunc::SumInt64 => expr::AggregateFunc::SumInt64,
             AggregateFunc::SumFloat32 => expr::AggregateFunc::SumFloat32,
@@ -463,7 +469,7 @@ impl AggregateFunc {
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
-            AggregateFunc::SumInt32 => ScalarType::Int64,
+            AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
             _ => input_type.scalar_type,
         };
