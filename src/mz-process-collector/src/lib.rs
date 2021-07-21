@@ -21,9 +21,11 @@
 //! [following the prometheus instructions]:
 //!
 //! ```
+//! # use ore::metrics::MetricsRegistry;
 //! # fn handle_scrapes() {}
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     mz_process_collector::register_default_process_collector()?;
+//!     let registry = MetricsRegistry::new();
+//!     mz_process_collector::register_default_process_collector(&registry);
 //!
 //!     handle_scrapes();
 //!
@@ -45,6 +47,8 @@
 //! [prom-process]: https://prometheus.io/docs/instrumenting/writing_clientlibs/#process-metrics
 //! [following the prometheus instructions]: https://docs.rs/prometheus/0.10.0/prometheus/#basic-example
 
+use ore::metrics::MetricsRegistry;
+
 #[cfg(target_os = "linux")]
 mod process_collector;
 
@@ -55,13 +59,11 @@ pub use process_collector::ProcessCollector;
 ///
 /// [default registry]: https://docs.rs/prometheus/0.10.0/prometheus/fn.default_registry.html
 #[cfg(target_os = "linux")]
-pub fn register_default_process_collector() -> Result<(), prometheus::Error> {
+pub fn register_default_process_collector(registry: &MetricsRegistry) {
     let pc = ProcessCollector::for_self();
-    prometheus::default_registry().register(Box::new(pc))
+    registry.register_collector(pc);
 }
 
 /// Since the target os is not linux, this does nothing
 #[cfg(not(target_os = "linux"))]
-pub fn register_default_process_collector() -> Result<(), prometheus::Error> {
-    Ok(())
-}
+pub fn register_default_process_collector(_: &MetricsRegistry) {}

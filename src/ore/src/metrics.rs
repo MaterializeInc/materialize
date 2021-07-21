@@ -100,6 +100,13 @@ impl MetricsRegistry {
         collector
     }
 
+    /// Register a pre-defined prometheus collector.
+    pub fn register_collector<C: 'static + prometheus::core::Collector>(&self, collector: C) {
+        self.inner
+            .register(Box::new(collector))
+            .expect("registering pre-defined metrics collector");
+    }
+
     /// Gather all the metrics from the metrics registry for reporting.
     ///
     /// See also [`prometheus::Registry::gather`].

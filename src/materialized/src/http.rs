@@ -14,7 +14,6 @@
 //! profiles, and catalog dumps.
 
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Instant;
 
 use futures::future::TryFutureExt;
@@ -57,7 +56,7 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     pub coord_client: coord::Client,
     pub start_time: Instant,
-    pub metrics_registry: Arc<MetricsRegistry>,
+    pub metrics_registry: MetricsRegistry,
     pub global_metrics: Metrics,
 }
 
@@ -78,7 +77,7 @@ pub struct Server {
     tls: Option<TlsConfig>,
     coord_client: coord::Client,
     start_time: Instant,
-    metrics_registry: Arc<MetricsRegistry>,
+    metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
 }
 
@@ -153,7 +152,7 @@ impl Server {
             let user = user.clone();
             let coord_client = self.coord_client.clone();
             let start_time = self.start_time;
-            let metrics_registry = Arc::clone(&self.metrics_registry);
+            let metrics_registry = self.metrics_registry.clone();
             let global_metrics = self.global_metrics.clone();
             let future = async move {
                 let user = match user {

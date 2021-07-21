@@ -2332,6 +2332,7 @@ version = "0.0.0"
 dependencies = [
  "lazy_static",
  "libc",
+ "ore",
  "procfs",
  "prometheus",
 ]
@@ -4288,7 +4289,6 @@ dependencies = [
  "pgrepr",
  "postgres",
  "postgres-types",
- "prometheus",
  "regex",
  "repr",
  "serde",

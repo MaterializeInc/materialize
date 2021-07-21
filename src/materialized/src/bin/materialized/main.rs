@@ -40,6 +40,7 @@ use clap::AppSettings;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
+use ore::metrics::MetricsRegistry;
 use prometheus::{register_int_counter_vec, IntCounterVec};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
@@ -476,9 +477,10 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             }
         }
     }
+    let metrics_registry = MetricsRegistry::new();
 
     // Configure prometheus process metrics.
-    mz_process_collector::register_default_process_collector()?;
+    mz_process_collector::register_default_process_collector(&metrics_registry);
 
     // Print system information as the very first thing in the logs. The goal is
     // to increase the probability that we can reproduce a reported bug if all
@@ -568,6 +570,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
         introspection_frequency: args
             .introspection_frequency
             .unwrap_or_else(|| Duration::from_secs(1)),
+        metrics_registry,
     }))?;
 
     eprintln!(

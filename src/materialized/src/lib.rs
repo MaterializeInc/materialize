@@ -13,11 +13,11 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use std::{convert::TryInto, sync::Arc};
 
 use compile_time_run::run_command_str;
 use futures::StreamExt;
@@ -125,6 +125,8 @@ pub struct Config {
     pub safe_mode: bool,
     /// Telemetry configuration.
     pub telemetry: Option<TelemetryConfig>,
+    /// The place where the server's metrics will be reported from.
+    pub metrics_registry: MetricsRegistry,
 }
 
 /// Configures TLS encryption for connections.
@@ -272,7 +274,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             (Some(pgwire_tls), Some(http_tls))
         }
     };
-    let metrics_registry = Arc::new(MetricsRegistry::new());
+    let metrics_registry = config.metrics_registry;
     let metrics = Metrics::register_with(&metrics_registry);
 
     // Set this metric once so that it shows up in the metric export.
@@ -297,7 +299,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
-        metrics_registry: Arc::clone(&metrics_registry),
+        metrics_registry: metrics_registry.clone(),
     })
     .await?;
 
@@ -320,7 +322,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             tls: http_tls,
             coord_client: coord_client.clone(),
             start_time: coord_handle.start_instant(),
-            metrics_registry: Arc::clone(&metrics_registry),
+            metrics_registry: metrics_registry.clone(),
             global_metrics: metrics.clone(),
         }));
         async move {
