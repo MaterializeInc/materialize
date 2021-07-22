@@ -122,9 +122,12 @@ use ore::now::NowFn;
 use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::metrics::Metrics;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::LocalInput;
+use crate::sink::SinkBaseMetrics;
+use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
 
@@ -154,6 +157,8 @@ pub struct RenderState {
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Metrics reported by all dataflows.
+    pub metrics: Metrics,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.
@@ -177,6 +182,8 @@ pub fn build_dataflow<A: Allocate>(
     render_state: &mut RenderState,
     dataflow: DataflowDescription<plan::Plan>,
     now: NowFn,
+    source_metrics: &SourceBaseMetrics,
+    sink_metrics: &SinkBaseMetrics,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -213,6 +220,7 @@ pub fn build_dataflow<A: Allocate>(
                     src,
                     orig_id,
                     now,
+                    source_metrics,
                 );
             }
 
@@ -238,7 +246,14 @@ pub fn build_dataflow<A: Allocate>(
             // Export declared sinks.
             for (sink_id, sink) in &dataflow.sink_exports {
                 let imports = dataflow.get_imports(&sink.from);
-                context.export_sink(render_state, &mut tokens, imports, *sink_id, sink);
+                context.export_sink(
+                    render_state,
+                    &mut tokens,
+                    imports,
+                    *sink_id,
+                    sink,
+                    sink_metrics,
+                );
             }
         });
     })

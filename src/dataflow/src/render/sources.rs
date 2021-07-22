@@ -35,7 +35,6 @@ use crate::decode::render_decode;
 use crate::decode::render_decode_delimited;
 use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
-use crate::metrics;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
@@ -43,8 +42,8 @@ use crate::server::LocalInput;
 use crate::source::DecodeResult;
 use crate::source::SourceConfig;
 use crate::source::{
-    self, FileSourceReader, KafkaSourceReader, KinesisSourceReader, PostgresSourceReader,
-    PubNubSourceReader, S3SourceReader,
+    self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
+    PostgresSourceReader, PubNubSourceReader, S3SourceReader,
 };
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
@@ -65,6 +64,7 @@ where
         // ID).
         orig_id: GlobalId,
         now: NowFn,
+        base_metrics: &SourceBaseMetrics,
     ) {
         // Extract the linear operators, as we will need to manipulate them.
         // extracting them reduces the change we might accidentally communicate
@@ -167,6 +167,7 @@ where
                     logger: materialized_logging,
                     encoding: encoding.clone(),
                     now,
+                    base_metrics,
                 };
 
                 let (collection, capability) =
@@ -276,6 +277,7 @@ where
                                         &envelope,
                                         &mut linear_operators,
                                         fast_forwarded,
+                                        render_state.metrics.clone(),
                                     )
                                 } else {
                                     render_decode(
@@ -286,6 +288,7 @@ where
                                         &envelope,
                                         &mut linear_operators,
                                         fast_forwarded,
+                                        render_state.metrics.clone(),
                                     )
                                 };
                                 if let Some(tok) = extra_token {
@@ -301,10 +304,10 @@ where
                                     SourceEnvelope::Debezium(_, DebeziumMode::Upsert) => {
                                         let mut trackstate = (
                                             HashMap::new(),
-                                            metrics::DEBEZIUM_UPSERT_COUNT.with_label_values(&[
-                                                &src_id.to_string(),
-                                                &self.dataflow_id.to_string(),
-                                            ]),
+                                            render_state.metrics.debezium_upsert_count_for(
+                                                src_id,
+                                                self.dataflow_id,
+                                            ),
                                         );
                                         let results = results.flat_map(
                                             move |DecodeResult { key, value, .. }| {

@@ -35,7 +35,6 @@ pdqselect = "0.1.0"
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
 rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }

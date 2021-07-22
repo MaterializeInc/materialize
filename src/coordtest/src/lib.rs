@@ -53,6 +53,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::FutureExt;
+use ore::metrics::MetricsRegistry;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::mpsc;
 
@@ -86,13 +87,15 @@ pub struct CoordTest {
     uppers: HashMap<GlobalId, Timestamp>,
     timestamp: Arc<Mutex<u64>>,
     _verbose: bool,
+    _metrics_registry: MetricsRegistry,
 }
 
 impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
         let catalog_file = NamedTempFile::new()?;
+        let metrics_registry = MetricsRegistry::new();
         let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp) =
-            coord::serve_debug(catalog_file.path());
+            coord::serve_debug(catalog_file.path(), metrics_registry.clone());
         let coordtest = CoordTest {
             _handle: handle,
             client: Some(client),
@@ -103,6 +106,7 @@ impl CoordTest {
             uppers: HashMap::new(),
             _verbose: std::env::var_os("COORDTEST_VERBOSE").is_some(),
             timestamp,
+            _metrics_registry: metrics_registry,
         };
         Ok(coordtest)
     }

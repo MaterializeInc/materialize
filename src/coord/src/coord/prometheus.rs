@@ -12,7 +12,6 @@
 use std::{
     collections::HashMap,
     convert::TryInto,
-    sync::Arc,
     thread,
     time::{Duration, UNIX_EPOCH},
 };
@@ -36,7 +35,7 @@ use super::{
 pub struct Scraper {
     interval: Duration,
     retain_for: u64,
-    registry: Arc<MetricsRegistry>,
+    registry: MetricsRegistry,
     command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
     internal_tx: UnboundedSender<super::Message>,
 }
@@ -137,7 +136,7 @@ impl Scraper {
     pub fn new(
         interval: Duration,
         retain_for: Duration,
-        registry: Arc<MetricsRegistry>,
+        registry: MetricsRegistry,
         command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
         internal_tx: UnboundedSender<super::Message>,
     ) -> Self {

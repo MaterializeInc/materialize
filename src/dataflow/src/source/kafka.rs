@@ -33,6 +33,8 @@ use uuid::Uuid;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
+use super::metrics::SourceBaseMetrics;
+
 /// Values recorded from the last rdkafka statistics callback, used to generate a
 /// diff of values for logging
 #[derive(Default)]
@@ -242,6 +244,7 @@ impl SourceReader for KafkaSourceReader {
         connector: ExternalSourceConnector,
         _: SourceDataEncoding,
         logger: Option<Logger>,
+        _: SourceBaseMetrics,
     ) -> Result<(KafkaSourceReader, Option<PartitionId>), anyhow::Error> {
         match connector {
             ExternalSourceConnector::Kafka(kc) => Ok((

@@ -18,6 +18,7 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
+use ore::metrics::MetricsRegistry;
 use serde::{Deserialize, Serialize};
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -39,13 +40,17 @@ use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::{now::NowFn, result::ResultExt};
 use repr::{Diff, Row, RowArena, Timestamp};
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
+use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
 use crate::render::{self, plan::Plan as RenderPlan, RenderState};
-use crate::server::metrics::Metrics;
+use crate::sink::SinkBaseMetrics;
+use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
+
+use self::metrics::{ServerMetrics, WorkerMetrics};
 
 mod metrics;
 
@@ -201,10 +206,15 @@ pub struct Config {
     pub experimental_mode: bool,
     /// Function to get wall time now.
     pub now: NowFn,
+    /// Metrics registry through which dataflow metrics will be reported.
+    pub metrics_registry: MetricsRegistry,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
+    let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
+    let dataflow_source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
+    let dataflow_sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
     let workers = config.command_receivers.len();
     assert!(workers > 0);
 
@@ -219,6 +229,8 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
+    let metrics = Metrics::register_with(&config.metrics_registry);
+    let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     timely::execute::execute(
         timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -230,15 +242,20 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 .take()
                 .unwrap();
             let worker_idx = timely_worker.index();
+            let metrics = metrics.clone();
+            let trace_metrics = trace_metrics.clone();
+            let dataflow_source_metrics = dataflow_source_metrics.clone();
+            let dataflow_sink_metrics = dataflow_sink_metrics.clone();
             Worker {
                 timely_worker,
                 render_state: RenderState {
-                    traces: TraceManager::new(worker_idx),
+                    traces: TraceManager::new(trace_metrics, worker_idx),
                     local_inputs: HashMap::new(),
                     ts_source_mapping: HashMap::new(),
                     ts_histories: HashMap::default(),
                     dataflow_tokens: HashMap::new(),
                     sink_write_frontiers: HashMap::new(),
+                    metrics,
                 },
                 materialized_logger: None,
                 command_rx,
@@ -247,8 +264,10 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 reported_frontiers: HashMap::new(),
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
-                metrics: Metrics::for_worker_id(worker_idx),
+                metrics: server_metrics.for_worker_id(worker_idx),
                 now,
+                dataflow_source_metrics,
+                dataflow_sink_metrics,
             }
             .run()
         },
@@ -282,8 +301,11 @@ where
     /// Tracks the last time we sent binding durability info over `feedback_tx`.
     last_bindings_feedback: Instant,
     /// Metrics bundle.
-    metrics: Metrics,
+    metrics: WorkerMetrics,
     now: NowFn,
+    /// Metrics for the source-specific side of dataflows.
+    dataflow_source_metrics: SourceBaseMetrics,
+    dataflow_sink_metrics: SinkBaseMetrics,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -672,6 +694,8 @@ where
                         &mut self.render_state,
                         dataflow,
                         self.now,
+                        &self.dataflow_source_metrics,
+                        &self.dataflow_sink_metrics,
                     );
                 }
             }

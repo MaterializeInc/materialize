@@ -47,6 +47,8 @@ use self::metrics::ScanBucketMetrics;
 use self::notifications::{EventType, TestEvent};
 use ore::retry::Retry;
 
+use super::metrics::SourceBaseMetrics;
+
 mod metrics;
 mod notifications;
 
@@ -100,6 +102,7 @@ async fn download_objects_task(
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
     compression: Compression,
+    metrics: SourceBaseMetrics,
 ) {
     let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
@@ -134,7 +137,7 @@ async fn download_objects_task(
                 } else {
                     let bi = BucketInfo {
                         keys: HashSet::new(),
-                        metrics: BucketMetrics::new(&source_id, &msg.bucket),
+                        metrics: BucketMetrics::new(&metrics, &source_id, &msg.bucket),
                     };
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
@@ -219,6 +222,7 @@ async fn scan_bucket_task(
     glob: Option<GlobMatcher>,
     aws_info: aws::ConnectInfo,
     tx: tokio_mpsc::Sender<S3Result<KeyInfo>>,
+    base_metrics: SourceBaseMetrics,
 ) {
     let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
@@ -266,7 +270,7 @@ async fn scan_bucket_task(
         );
     }
 
-    let scan_metrics = ScanBucketMetrics::new(&source_id, &bucket);
+    let scan_metrics = ScanBucketMetrics::new(&base_metrics, &source_id, &bucket);
 
     let mut continuation_token = None;
     loop {
@@ -343,6 +347,7 @@ async fn read_sqs_task(
     queue: String,
     aws_info: aws::ConnectInfo,
     tx: tokio_mpsc::Sender<S3Result<KeyInfo>>,
+    base_metrics: SourceBaseMetrics,
 ) {
     log::debug!(
         "starting read sqs task queue={} source_id={}",
@@ -423,6 +428,7 @@ async fn read_sqs_task(
                     let cancelled_message = process_message(
                         message,
                         glob,
+                        base_metrics.clone(),
                         &mut metrics,
                         &source_id,
                         &tx,
@@ -466,6 +472,7 @@ async fn read_sqs_task(
 async fn process_message(
     message: rusoto_sqs::Message,
     glob: Option<&GlobMatcher>,
+    base_metrics: SourceBaseMetrics,
     metrics: &mut HashMap<String, ScanBucketMetrics>,
     source_id: &str,
     tx: &tokio_mpsc::Sender<S3Result<KeyInfo>>,
@@ -498,7 +505,11 @@ async fn process_message(
                             if let Some(m) = metrics.get(&record.s3.bucket.name) {
                                 m.objects_discovered.inc()
                             } else {
-                                let m = ScanBucketMetrics::new(&source_id, &record.s3.bucket.name);
+                                let m = ScanBucketMetrics::new(
+                                    &base_metrics,
+                                    &source_id,
+                                    &record.s3.bucket.name,
+                                );
                                 m.objects_discovered.inc();
                                 metrics.insert(record.s3.bucket.name.clone(), m);
                             }
@@ -730,6 +741,7 @@ impl SourceReader for S3SourceReader {
         connector: ExternalSourceConnector,
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
+        metrics: SourceBaseMetrics,
     ) -> Result<(S3SourceReader, Option<PartitionId>), anyhow::Error> {
         let s3_conn = match connector {
             ExternalSourceConnector::S3(s3_conn) => s3_conn,
@@ -751,6 +763,7 @@ impl SourceReader for S3SourceReader {
                 aws_info.clone(),
                 consumer_activator,
                 s3_conn.compression,
+                metrics.clone(),
             ));
             for key_source in s3_conn.key_sources {
                 match key_source {
@@ -762,6 +775,7 @@ impl SourceReader for S3SourceReader {
                             glob.clone(),
                             aws_info.clone(),
                             keys_tx.clone(),
+                            metrics.clone(),
                         ));
                     }
                     S3KeySource::SqsNotifications { queue } => {
@@ -772,6 +786,7 @@ impl SourceReader for S3SourceReader {
                             queue,
                             aws_info.clone(),
                             keys_tx.clone(),
+                            metrics.clone(),
                         ));
                     }
                 }

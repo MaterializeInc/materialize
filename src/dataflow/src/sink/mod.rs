@@ -9,4 +9,8 @@
 
 mod avro_ocf;
 mod kafka;
+mod metrics;
 mod tail;
+
+pub(crate) use metrics::KafkaBaseMetrics;
+pub use metrics::SinkBaseMetrics;

@@ -32,15 +32,13 @@ use dataflow_types::{
     Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
 };
 use expr::{PartitionId, SourceInstanceId};
-use lazy_static::lazy_static;
 use log::error;
+use ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, UIntGauge,
+};
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
-use prometheus::{
-    register_int_counter, register_int_counter_vec, register_int_gauge_vec,
-    register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
-    IntGaugeVec, UIntGauge, UIntGaugeVec,
-};
+
 use repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
@@ -50,6 +48,8 @@ use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 
+use self::metrics::SourceBaseMetrics;
+
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
@@ -58,6 +58,7 @@ use crate::source::timestamp::TimestampBindingRc;
 mod file;
 mod kafka;
 mod kinesis;
+pub(super) mod metrics;
 mod postgres;
 mod pubnub;
 mod s3;
@@ -112,6 +113,8 @@ pub struct SourceConfig<'a, G> {
     pub logger: Option<Logger>,
     /// The function to return a now time.
     pub now: NowFn,
+    /// The metrics & registry that each source instantiates.
+    pub base_metrics: &'a SourceBaseMetrics,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -248,12 +251,6 @@ pub enum SourceStatus {
     Done,
 }
 
-// Global Prometheus metrics
-lazy_static! {
-    static ref BYTES_READ_COUNTER: IntCounter =
-        register_int_counter!("mz_bytes_read_total", "Count of bytes read from sources").unwrap();
-}
-
 /// Types that implement this trait expose a length function
 pub trait MaybeLength {
     /// Returns the size of the object
@@ -303,6 +300,7 @@ pub(crate) trait SourceReader {
         connector: ExternalSourceConnector,
         encoding: SourceDataEncoding,
         logger: Option<Logger>,
+        metrics: crate::source::metrics::SourceBaseMetrics,
     ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
     where
         Self: Sized;
@@ -522,6 +520,7 @@ impl ConsistencyInfo {
         consistency: Consistency,
         timestamp_frequency: Duration,
         logger: Option<Logger>,
+        base_metrics: &SourceBaseMetrics,
     ) -> ConsistencyInfo {
         ConsistencyInfo {
             last_closed_ts: 0,
@@ -530,6 +529,7 @@ impl ConsistencyInfo {
             partition_metadata: HashMap::new(),
             source_type: consistency,
             source_metrics: SourceMetrics::new(
+                &base_metrics,
                 &metrics_name,
                 source_id,
                 &worker_id.to_string(),
@@ -746,39 +746,31 @@ pub struct SourceMetrics {
     logger: Option<Logger>,
     source_name: String,
     source_id: SourceInstanceId,
+    base_metrics: SourceBaseMetrics,
 }
 
 impl SourceMetrics {
     /// Initialises source metrics for a given (source_id, worker_id)
     pub fn new(
+        base: &SourceBaseMetrics,
         source_name: &str,
         source_id: SourceInstanceId,
         worker_id: &str,
         logger: Option<Logger>,
     ) -> SourceMetrics {
         let source_id_string = source_id.to_string();
-        lazy_static! {
-            static ref OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_operator_scheduled_total",
-                "The number of times the kafka client got invoked for this source",
-                &["topic", "source_id", "worker_id"]
-            )
-            .unwrap();
-            static ref CAPABILITY: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_capability",
-                "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",
-                &["topic", "source_id", "worker_id"]
-            )
-            .unwrap();
-        }
         let labels = &[source_name, &source_id_string, worker_id];
         SourceMetrics {
-            operator_scheduled_counter: OPERATOR_SCHEDULED_COUNTER.with_label_values(labels),
-            capability: CAPABILITY.with_label_values(labels),
+            operator_scheduled_counter: base
+                .source_specific
+                .operator_scheduled_counter
+                .with_label_values(labels),
+            capability: base.source_specific.capability.with_label_values(labels),
             partition_metrics: Default::default(),
             logger,
             source_name: source_name.to_string(),
             source_id,
+            base_metrics: base.clone(),
         }
     }
 
@@ -792,7 +784,12 @@ impl SourceMetrics {
             return;
         }
 
-        let metric = PartitionMetrics::new(&self.source_name, self.source_id, partition_id);
+        let metric = PartitionMetrics::new(
+            &self.base_metrics,
+            &self.source_name,
+            self.source_id,
+            partition_id,
+        );
         self.partition_metrics.insert(partition_id.clone(), metric);
     }
 
@@ -837,13 +834,13 @@ impl Drop for SourceMetrics {
 /// Partition-specific metrics, recorded to both Prometheus and a system table
 pub struct PartitionMetrics {
     /// Highest offset that has been received by the source and timestamped
-    offset_ingested: DeleteOnDropGauge<'static, AtomicI64>,
+    offset_ingested: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Highest offset that has been received by the source
-    offset_received: DeleteOnDropGauge<'static, AtomicI64>,
+    offset_received: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Value of the highest timestamp that is closed (for which all messages have been ingested)
-    closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
+    closed_ts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Total number of messages that have been received by the source and timestamped
-    messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
+    messages_ingested: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     last_offset: i64,
     last_timestamp: i64,
 }
@@ -872,65 +869,29 @@ impl PartitionMetrics {
 
     /// Initialises partition metrics for a given (source_id, partition_id)
     pub fn new(
+        base_metrics: &SourceBaseMetrics,
         source_name: &str,
         source_id: SourceInstanceId,
         partition_id: &PartitionId,
     ) -> PartitionMetrics {
-        const LABELS: &[&str] = &["topic", "source_id", "source_instance", "partition_id"];
-        lazy_static! {
-            static ref OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
-                "mz_partition_offset_ingested",
-                "The most recent offset that we have ingested into a dataflow. This correspond to \
-                data that we have 1)ingested 2) assigned a timestamp",
-                LABELS
-            )
-            .unwrap();
-            static ref OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
-                "mz_partition_offset_received",
-                "The most recent offset that we have been received by this source.",
-                LABELS
-            )
-            .unwrap();
-            static ref CLOSED_TS: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_partition_closed_ts",
-                "The highest closed timestamp for each partition in this dataflow",
-                LABELS
-            )
-            .unwrap();
-            static ref MESSAGES_INGESTED: IntCounterVec = register_int_counter_vec!(
-                "mz_messages_ingested",
-                "The number of messages ingested per partition.",
-                LABELS
-            )
-            .unwrap();
-        }
         let labels = &[
-            source_name,
-            &source_id.source_id.to_string(),
-            &source_id.dataflow_id.to_string(),
-            &partition_id.to_string(),
+            source_name.to_string(),
+            source_id.source_id.to_string(),
+            source_id.dataflow_id.to_string(),
+            partition_id.to_string(),
         ];
+        let base = &base_metrics.partition_specific;
         PartitionMetrics {
-            offset_ingested: DeleteOnDropGauge::new_with_error_handler(
-                OFFSET_INGESTED.with_label_values(labels),
-                &OFFSET_INGESTED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            offset_received: DeleteOnDropGauge::new_with_error_handler(
-                OFFSET_RECEIVED.with_label_values(labels),
-                &OFFSET_RECEIVED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            closed_ts: DeleteOnDropGauge::new_with_error_handler(
-                CLOSED_TS.with_label_values(labels),
-                &CLOSED_TS,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            messages_ingested: DeleteOnDropCounter::new_with_error_handler(
-                MESSAGES_INGESTED.with_label_values(labels),
-                &MESSAGES_INGESTED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
+            offset_ingested: base
+                .offset_ingested
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            offset_received: base
+                .offset_received
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            closed_ts: base.closed_ts.get_delete_on_drop_gauge(labels.to_vec()),
+            messages_ingested: base
+                .messages_ingested
+                .get_delete_on_drop_counter(labels.to_vec()),
             last_offset: 0,
             last_timestamp: 0,
         }
@@ -1104,6 +1065,7 @@ where
         timestamp_frequency,
         logger,
         now,
+        base_metrics,
         ..
     } = config;
 
@@ -1137,7 +1099,13 @@ where
         let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
 
         let metrics_name = upstream_name.unwrap_or(name);
-        let mut metrics = SourceMetrics::new(&metrics_name, id, &worker_id.to_string(), logger);
+        let mut metrics = SourceMetrics::new(
+            &base_metrics,
+            &metrics_name,
+            id,
+            &worker_id.to_string(),
+            logger,
+        );
 
         if active {
             metrics.add_partition(&PartitionId::None);
@@ -1217,8 +1185,10 @@ where
         active,
         encoding,
         logger,
+        base_metrics,
         ..
     } = config;
+    let bytes_read_counter = base_metrics.bytes_read.clone();
     let (stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
@@ -1233,6 +1203,7 @@ where
             consistency,
             timestamp_frequency,
             logger.clone(),
+            &base_metrics,
         );
 
         // Create source information (this function is specific to a specific
@@ -1249,6 +1220,7 @@ where
                 source_connector.clone(),
                 encoding,
                 logger,
+                base_metrics.clone(),
             ) {
                 Ok((source_reader, partition)) => {
                     if let Some(pid) = partition {
@@ -1293,7 +1265,7 @@ where
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
-            // Accumulate updates to BYTES_READ_COUNTER for Prometheus metrics collection
+            // Accumulate updates to bytes_read for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
             let mut metric_updates = HashMap::new();
@@ -1359,7 +1331,7 @@ where
                 }
             }
 
-            BYTES_READ_COUNTER.inc_by(bytes_read as i64);
+            bytes_read_counter.inc_by(bytes_read as u64);
             consistency_info
                 .source_metrics
                 .record_partition_offsets(metric_updates);

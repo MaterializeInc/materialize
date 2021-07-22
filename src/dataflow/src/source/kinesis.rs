@@ -14,9 +14,8 @@ use std::time::Instant;
 use anyhow::anyhow;
 use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
 use futures::executor::block_on;
-use lazy_static::lazy_static;
 use log::error;
-use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
+use ore::metrics::IntGauge;
 use repr::MessagePayload;
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
@@ -30,14 +29,7 @@ use expr::{PartitionId, SourceInstanceId};
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
-lazy_static! {
-    static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kinesis_shard_millis_behind_latest",
-        "How far the shard is behind the tip of the stream",
-        &["stream_name", "shard_id"]
-    )
-    .expect("Can construct an intgauge for millis_behind_latest");
-}
+use super::metrics::{KinesisMetrics, SourceBaseMetrics};
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -64,6 +56,8 @@ pub struct KinesisSourceReader {
     buffered_messages: VecDeque<SourceMessage>,
     /// Count of processed message
     processed_message_count: i64,
+    /// Metrics from which per-shard metrics get created.
+    base_metrics: KinesisMetrics,
 }
 
 impl KinesisSourceReader {
@@ -106,6 +100,7 @@ impl SourceReader for KinesisSourceReader {
         connector: ExternalSourceConnector,
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
+        base_metrics: SourceBaseMetrics,
     ) -> Result<(Self, Option<PartitionId>), anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kinesis(kc) => kc,
@@ -123,6 +118,7 @@ impl SourceReader for KinesisSourceReader {
                     shard_set,
                     stream_name,
                     processed_message_count: 0,
+                    base_metrics: base_metrics.kinesis,
                 },
                 Some(PartitionId::None),
             )),
@@ -151,7 +147,9 @@ impl SourceReader for KinesisSourceReader {
                         Ok(output) => {
                             shard_iterator = output.next_shard_iterator.clone();
                             if let Some(millis) = output.millis_behind_latest {
-                                let shard_metrics: IntGauge = MILLIS_BEHIND_LATEST
+                                let shard_metrics: IntGauge = self
+                                    .base_metrics
+                                    .millis_behind_latest
                                     .with_label_values(&[&self.stream_name, &shard_id]);
                                 shard_metrics.set(millis);
                             }
