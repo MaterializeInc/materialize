@@ -34,7 +34,7 @@
 <g id="node1" class="node">
 <title>boxhead3</title>
 <polygon fill="none" stroke="black" points="498.5,-486.84 498.5,-555.84 795.5,-555.84 795.5,-486.84 498.5,-486.84"/>
-<text text-anchor="middle" x="647" y="-540.64" font-family="Times,serif" font-size="14.00">Distinct: Preserve (DISTINCT TUPLES)</text>
+<text text-anchor="middle" x="647" y="-540.64" font-family="Times,serif" font-size="14.00">Distinct: Preserve</text>
 <polyline fill="none" stroke="black" points="498.5,-532.84 795.5,-532.84 "/>
 <text text-anchor="middle" x="647" y="-517.64" font-family="Times,serif" font-size="14.00">0: Q2.c0 as F1</text>
 <polyline fill="none" stroke="black" points="498.5,-509.84 795.5,-509.84 "/>
@@ -50,7 +50,7 @@
 <g id="node3" class="node">
 <title>boxhead2</title>
 <polygon fill="none" stroke="black" points="294.5,-344.79 294.5,-436.79 591.5,-436.79 591.5,-344.79 294.5,-344.79"/>
-<text text-anchor="middle" x="443" y="-421.59" font-family="Times,serif" font-size="14.00">Distinct: Preserve (DISTINCT TUPLES)</text>
+<text text-anchor="middle" x="443" y="-421.59" font-family="Times,serif" font-size="14.00">Distinct: Preserve</text>
 <polyline fill="none" stroke="black" points="294.5,-413.79 591.5,-413.79 "/>
 <text text-anchor="middle" x="443" y="-398.59" font-family="Times,serif" font-size="14.00">0: Q1.c0 as F1</text>
 <polyline fill="none" stroke="black" points="294.5,-390.79 591.5,-390.79 "/>

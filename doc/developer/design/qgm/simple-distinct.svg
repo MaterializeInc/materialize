@@ -24,7 +24,7 @@
 <g id="node1" class="node">
 <title>boxhead0</title>
 <polygon fill="none" stroke="black" points="166.5,-181.29 166.5,-250.29 455.5,-250.29 455.5,-181.29 166.5,-181.29"/>
-<text text-anchor="middle" x="311" y="-235.09" font-family="Times,serif" font-size="14.00">Distinct: Enforce (DISTINCT TUPLES)</text>
+<text text-anchor="middle" x="311" y="-235.09" font-family="Times,serif" font-size="14.00">Distinct: Enforce</text>
 <polyline fill="none" stroke="black" points="166.5,-227.29 455.5,-227.29 "/>
 <text text-anchor="middle" x="311" y="-212.09" font-family="Times,serif" font-size="14.00">0: Q0.c0 as A</text>
 <polyline fill="none" stroke="black" points="166.5,-204.29 455.5,-204.29 "/>
