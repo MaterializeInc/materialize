@@ -152,7 +152,11 @@ impl<K, V> RuntimeCore<K, V> {
         if let Some(handle) = self.handle.lock()?.take() {
             let (tx, rx) = mpsc::channel();
             self.send(Cmd::Stop(tx.into()));
-            rx.recv().map_err(|_| Error::RuntimeShutdown)??;
+            // NB: Make sure there are no early returns before this `join`,
+            // otherwise the runtime thread might still be cleaning up when this
+            // returns (flushing out final writes, cleaning up LOCK files, etc).
+            //
+            // TODO: Regression test for this.
             if let Err(_) = handle.join() {
                 // If the thread panic'd, then by definition it has been
                 // stopped, so we can return an Ok. This is surprising, though,
@@ -160,15 +164,17 @@ impl<K, V> RuntimeCore<K, V> {
                 // put the panic message in this log.
                 log::error!("persist runtime thread panic'd");
             }
+            rx.recv().map_err(|_| Error::RuntimeShutdown)?
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 }
 
 impl<K, V> Drop for RuntimeCore<K, V> {
     fn drop(&mut self) {
         if let Err(err) = self.stop() {
-            log::error!("dropping persist runtime: {}", err);
+            log::error!("error while stopping dropped persist runtime: {}", err);
         }
     }
 }
@@ -387,8 +393,8 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let buffer = MemBuffer::new("runtime")?;
-        let blob = MemBlob::new("runtime")?;
+        let buffer = MemBuffer::new("runtime");
+        let blob = MemBlob::new("runtime");
         let mut runtime = start(buffer, blob)?;
 
         let (mut write, meta) = runtime.create_or_load("0")?.into_inner();
@@ -412,8 +418,8 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let buffer = MemBuffer::new("concurrent")?;
-        let blob = MemBlob::new("concurrent")?;
+        let buffer = MemBuffer::new("concurrent");
+        let blob = MemBlob::new("concurrent");
         let client1 = start(buffer, blob)?;
         let _ = client1.create_or_load("0")?;
 

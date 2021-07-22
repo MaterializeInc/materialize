@@ -55,8 +55,9 @@ pub trait Buffer {
     /// Synchronously closes the buffer, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// Implementations must be idempotent.
-    fn close(&mut self) -> Result<(), Error>;
+    /// Implementations must be idempotent. Returns true if the buffer had not
+    /// previously been closed.
+    fn close(&mut self) -> Result<bool, Error>;
 }
 
 /// An abstraction over a `bytes key`->`bytes value` store.
@@ -73,8 +74,9 @@ pub trait Blob {
     /// Synchronously closes the buffer, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// Implementations must be idempotent.
-    fn close(&mut self) -> Result<(), Error>;
+    /// Implementations must be idempotent. Returns true if the buffer had not
+    /// previously been closed.
+    fn close(&mut self) -> Result<bool, Error>;
 }
 
 #[cfg(test)]
@@ -145,23 +147,23 @@ pub mod tests {
         assert!(slurp(&buf0)?.is_empty());
 
         // Cannot reuse a buffer once it is closed.
-        assert_eq!(buf0.close(), Ok(()));
+        assert_eq!(buf0.close(), Ok(true));
         assert!(buf0.write_sync(entries[1].clone()).is_err());
         assert!(slurp(&buf0).is_err());
         assert!(buf0.truncate(SeqNo(4)).is_err());
 
-        // Close must be idempotent.
-        assert_eq!(buf0.close(), Ok(()));
+        // Close must be idempotent and must return false if it did no work.
+        assert_eq!(buf0.close(), Ok(false));
 
         // But we can reopen it and use it.
         let mut buf0 = new_fn("0")?;
         assert_eq!(buf0.write_sync(entries[3].clone())?, SeqNo(3));
         assert_eq!(slurp(&buf0)?, sub_entries(3..=3));
-        assert_eq!(buf0.close(), Ok(()));
+        assert_eq!(buf0.close(), Ok(true));
         let mut buf0 = new_fn("0")?;
         assert_eq!(buf0.write_sync(entries[4].clone())?, SeqNo(4));
         assert_eq!(slurp(&buf0)?, sub_entries(3..=4));
-        assert_eq!(buf0.close(), Ok(()));
+        assert_eq!(buf0.close(), Ok(true));
 
         Ok(())
     }
@@ -196,12 +198,12 @@ pub mod tests {
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
 
         // Cannot reuse a blob once it is closed.
-        assert_eq!(blob0.close(), Ok(()));
+        assert_eq!(blob0.close(), Ok(true));
         assert!(blob0.get("k0").is_err());
         assert!(blob0.set("k1", values[0].clone(), true).is_err());
 
-        // Close must be idempotent.
-        assert_eq!(blob0.close(), Ok(()));
+        // Close must be idempotent and must return false if it did no work.
+        assert_eq!(blob0.close(), Ok(false));
 
         // But we can reopen it and use it.
         let blob0 = new_fn("0")?;

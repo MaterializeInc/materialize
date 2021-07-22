@@ -85,9 +85,26 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
 impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// Returns a new Indexed, initializing each Future and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(buf: U, blob: L) -> Result<Self, Error> {
-        let blob = BlobCache::new(blob);
-        let meta = blob.get_meta()?.unwrap_or_default();
+    pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
+        let mut blob = BlobCache::new(blob);
+        let meta = blob
+            .get_meta()
+            .map_err(|err| {
+                // Indexed is expected to close the buffer and blob it's handed.
+                // Usually that happens when close is called on Indexed itself,
+                // but if there's an error constructing it, we never get to that
+                // point and have to clean up ourselves.
+                //
+                // TODO: Regression test for this.
+                if let Err(err) = buf.close() {
+                    log::warn!("error closing buffer: {}", err);
+                }
+                if let Err(err) = blob.close() {
+                    log::warn!("error closing blob: {}", err);
+                }
+                err
+            })?
+            .unwrap_or_default();
         let futures = meta
             .futures
             .into_iter()
@@ -500,8 +517,7 @@ mod tests {
     use std::error::Error;
 
     use crate::error::Error as IndexedError;
-    use crate::mem::MemBlob;
-    use crate::mem::MemBuffer;
+    use crate::mem::{MemBlob, MemBuffer};
 
     use super::*;
 
@@ -517,8 +533,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("single_stream")?,
-            MemBlob::new("single_stream")?,
+            MemBuffer::new("single_stream"),
+            MemBlob::new("single_stream"),
         )?;
         let id = i.register("0");
 
@@ -573,8 +589,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("batch_sorting")?,
-            MemBlob::new("batch_sorting")?,
+            MemBuffer::new("batch_sorting"),
+            MemBlob::new("batch_sorting"),
         )?;
         let id = i.register("0");
 
@@ -600,8 +616,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("batch_consolidation")?,
-            MemBlob::new("batch_consolidation")?,
+            MemBuffer::new("batch_consolidation"),
+            MemBlob::new("batch_consolidation"),
         )?;
         let id = i.register("0");
 
@@ -629,8 +645,8 @@ mod tests {
     #[test]
     fn batch_future_empty() -> Result<(), Box<dyn Error>> {
         let mut i = Indexed::new(
-            MemBuffer::new("batch_future_empty")?,
-            MemBlob::new("batch_future_empty")?,
+            MemBuffer::new("batch_future_empty"),
+            MemBlob::new("batch_future_empty"),
         )?;
         let id = i.register("0");
 
@@ -659,8 +675,8 @@ mod tests {
     #[test]
     fn drain_buf_validate() -> Result<(), IndexedError> {
         let mut i = Indexed::new(
-            MemBuffer::new("drain_buf_validate")?,
-            MemBlob::new("drain_buf_validate")?,
+            MemBuffer::new("drain_buf_validate"),
+            MemBlob::new("drain_buf_validate"),
         )?;
         let id = i.register("0");
 
@@ -699,6 +715,37 @@ mod tests {
                 "invalid sequence number in snapshot SeqNo(7), expected value greater than or equal to SeqNo(4) and less than SeqNo(6)"
             ))
         );
+
+        Ok(())
+    }
+
+    // Regression test for two similar bugs causing future batches with
+    // non-adjacent seqno boundaries (which violates our invariants).
+    #[test]
+    fn regression_non_sequential_future_batches() -> Result<(), IndexedError> {
+        let mut i = Indexed::new(MemBuffer::new("lock"), MemBlob::new("lock"))?;
+
+        // First is some stream is registered, written to, and step'd, moving
+        // seqno 0..X into future. Then a second stream is registered, written
+        // to, and step'd. When it goes to move X..Y into the future, the second
+        // stream is missing a batch for 0..X. (Newly registered streams are
+        // missing 0 to the seqno that buffer was at when they are registered.)
+        //
+        // This caused a violation of our invariants (which are checked in tests
+        // and debug mode), so we just need the following to run without error
+        // to verify the fix.
+        let s1 = i.register("s1");
+        i.write_sync(s1, &[(((), ()), 0, 1)])?;
+        i.step()?;
+        let s2 = i.register("s2");
+        i.write_sync(s2, &[(((), ()), 1, 1)])?;
+        i.step()?;
+
+        // The second flavor is similar. If we then write to the first stream
+        // again and step, it is then missing X..Y. (A stream not written to
+        // between two step calls doesn't get a batch.)
+        i.write_sync(s1, &[(((), ()), 2, 1)])?;
+        i.step()?;
 
         Ok(())
     }

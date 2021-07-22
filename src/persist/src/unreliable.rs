@@ -106,9 +106,15 @@ impl<U: Buffer> Buffer for UnreliableBuffer<U> {
         self.buf.truncate(upper)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
+        // TODO: This check_unavailable is a different order from the others
+        // mostly for convenience in the nemesis tests. While we do want to
+        // prevent a normal read/write from going though when the storage is
+        // unavailable, it makes for a very uninteresting test if we can't clean
+        // up LOCK files. OTOH this feels like a smell, revisit.
+        let did_work = self.buf.close()?;
         self.handle.check_unavailable("buffer close")?;
-        self.buf.close()
+        Ok(did_work)
     }
 }
 
@@ -143,9 +149,15 @@ impl<L: Blob> Blob for UnreliableBlob<L> {
         self.blob.set(key, value, allow_overwrite)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
+        // TODO: This check_unavailable is a different order from the others
+        // mostly for convenience in the nemesis tests. While we do want to
+        // prevent a normal read/write from going though when the storage is
+        // unavailable, it makes for a very uninteresting test if we can't clean
+        // up LOCK files. OTOH this feels like a smell, revisit.
+        let did_work = self.blob.close()?;
         self.handle.check_unavailable("blob close")?;
-        self.blob.close()
+        Ok(did_work)
     }
 }
 
@@ -156,8 +168,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn buffer() -> Result<(), Error> {
-        let (mut buffer, mut handle) = UnreliableBuffer::new(MemBuffer::new("unreliable")?);
+    fn buffer() {
+        let (mut buffer, mut handle) = UnreliableBuffer::new(MemBuffer::new("unreliable"));
 
         // Initially starts reliable.
         assert!(buffer.write_sync(vec![]).is_ok());
@@ -175,13 +187,11 @@ mod tests {
         assert!(buffer.write_sync(vec![]).is_ok());
         assert!(buffer.snapshot(|_, _| { Ok(()) }).is_ok());
         assert!(buffer.truncate(SeqNo(2)).is_ok());
-
-        Ok(())
     }
 
     #[test]
-    fn blob() -> Result<(), Error> {
-        let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new("unreliable")?);
+    fn blob() {
+        let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new("unreliable"));
 
         // Initially starts reliable.
         assert!(blob.set("a", b"1".to_vec(), true).is_ok());
@@ -196,7 +206,5 @@ mod tests {
         handle.make_available();
         assert!(blob.set("a", b"3".to_vec(), true).is_ok());
         assert!(blob.get("a").is_ok());
-
-        Ok(())
     }
 }
