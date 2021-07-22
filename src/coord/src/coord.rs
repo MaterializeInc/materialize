@@ -250,6 +250,12 @@ pub struct Coordinator {
     ///
     /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
     pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
+
+    /// Tracks timestamps per timeline to provide linearizability
+    /// guarantees. SQL statements that determine timestamps should call
+    /// `advance_or_return_timestamp` to ensure timestamps never decrease across
+    /// transactions.
+    linestamps: HashMap<Timeline, Timestamp>,
 }
 
 /// Metadata about an active connection.
@@ -1380,8 +1386,10 @@ impl Coordinator {
             },
         ];
         self.catalog_transact(ops)?;
+        // TODO(mjibson): Should we pass the timeline to determine_frontier to have
+        // sinks start at the linearizability time?
         let as_of = SinkAsOf {
-            frontier: self.determine_frontier(sink.from),
+            frontier: self.determine_frontier(sink.from, None),
             strict: !sink.with_snapshot,
         };
         let df = self.dataflow_builder().build_sink_dataflow(
@@ -2259,6 +2267,8 @@ impl Coordinator {
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
                         let timestamp = self.get_write_ts();
+                        let timestamp = self
+                            .advance_or_return_timestamp(Timeline::EpochMilliseconds, timestamp);
 
                         // Separate out which updates were to tables we are
                         // persisting. In practice, we don't enable/disable this
@@ -2267,6 +2277,7 @@ impl Coordinator {
                         let mut persist_streams = Vec::new();
                         let mut persist_updates = Vec::new();
                         let mut volatile_updates = Vec::new();
+
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
                             let catalog_entry =
@@ -2397,64 +2408,74 @@ impl Coordinator {
             session.transaction(),
             &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
         );
-        // For explicit or implicit transactions that do not use AS OF, get the
-        // timestamp of the in-progress transaction or create one. If this is an AS OF
-        // query, we don't care about any possible transaction timestamp. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't need to
-        // worry about preventing compaction or choosing a valid timestamp for future
-        // queries.
-        let timestamp = if in_transaction && when == PeekWhen::Immediately {
-            let timestamp = session.get_transaction_timestamp(|| {
-                // Determine a timestamp that will be valid for anything in any schema
-                // referenced by the first query.
-                let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
-
-                // We want to prevent compaction of the indexes consulted by
-                // determine_timestamp, not the ones listed in the query.
-                let (timestamp, timestamp_ids) =
-                    self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
-                let mut handles = vec![];
-                for id in timestamp_ids {
-                    handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
-                }
-                let mut timedomain_set = HashSet::new();
-                for id in timedomain_ids {
-                    timedomain_set.insert(id);
-                }
-                self.txn_reads.insert(
-                    conn_id,
-                    TxnReads {
-                        timedomain_ids: timedomain_set,
-                        _handles: handles,
-                    },
-                );
-
-                Ok(timestamp)
-            })?;
-
-            // Verify that the indexes for this query are in the current read transaction.
-            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
-            for id in source_ids {
-                if !txn_reads.timedomain_ids.contains(&id) {
-                    let mut names: Vec<_> = txn_reads
-                        .timedomain_ids
-                        .iter()
-                        // This could filter out a view that has been replaced in another transaction.
-                        .filter_map(|id| self.catalog.try_get_by_id(*id))
-                        .map(|item| item.name().to_string())
-                        .collect();
-                    // Sort so error messages are deterministic.
-                    names.sort();
-                    return Err(CoordError::RelationOutsideTimeDomain {
-                        relation: self.catalog.get_by_id(&id).name().to_string(),
-                        names,
-                    });
-                }
+        let timestamp = match (in_transaction, when) {
+            // This is an AS OF query, we don't care about any possible transaction
+            // timestamp or linearizability.
+            (_, when @ PeekWhen::AtTimestamp(_)) => {
+                self.determine_timestamp(&source_ids, when, None)?.0
             }
+            // For explicit or implicit transactions that do not use AS OF, get the
+            // timestamp of the in-progress transaction or create one.
+            (true, PeekWhen::Immediately) => {
+                let timestamp = session.get_transaction_timestamp(|| {
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the first query.
+                    let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
-            timestamp
-        } else {
-            self.determine_timestamp(&source_ids, when)?.0
+                    // We want to prevent compaction of the indexes consulted by
+                    // determine_timestamp, not the ones listed in the query.
+                    let (timestamp, timestamp_ids) = self.determine_timestamp(
+                        &timedomain_ids,
+                        PeekWhen::Immediately,
+                        timeline.clone(),
+                    )?;
+                    let mut handles = vec![];
+                    for id in timestamp_ids {
+                        handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
+                    }
+                    let mut timedomain_set = HashSet::new();
+                    for id in timedomain_ids {
+                        timedomain_set.insert(id);
+                    }
+                    self.txn_reads.insert(
+                        conn_id,
+                        TxnReads {
+                            timedomain_ids: timedomain_set,
+                            _handles: handles,
+                        },
+                    );
+
+                    Ok(timestamp)
+                })?;
+
+                // Verify that the indexes for this query are in the current read transaction.
+                let txn_reads = self.txn_reads.get(&conn_id).unwrap();
+                for id in source_ids {
+                    if !txn_reads.timedomain_ids.contains(&id) {
+                        let mut names: Vec<_> = txn_reads
+                            .timedomain_ids
+                            .iter()
+                            // This could filter out a view that has been replaced in another transaction.
+                            .filter_map(|id| self.catalog.try_get_by_id(*id))
+                            .map(|item| item.name().to_string())
+                            .collect();
+                        // Sort so error messages are deterministic.
+                        names.sort();
+                        return Err(CoordError::RelationOutsideTimeDomain {
+                            relation: self.catalog.get_by_id(&id).name().to_string(),
+                            names,
+                        });
+                    }
+                }
+
+                timestamp
+            }
+            // This is a single-statement transaction (TransactionStatus::Started),
+            // we don't need to worry about preventing compaction or choosing a valid
+            // timestamp for future queries.
+            (false, when @ PeekWhen::Immediately) => {
+                self.determine_timestamp(&source_ids, when, timeline)?.0
+            }
         };
 
         let source = self.prep_relation_expr(
@@ -2646,11 +2667,12 @@ impl Coordinator {
         let frontier = if let Some(ts) = ts {
             // If a timestamp was explicitly requested, use that.
             Antichain::from_elem(
-                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?
+                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts), None)?
                     .0,
             )
         } else {
-            self.determine_frontier(source_id)
+            let timeline = self.validate_timeline(vec![source_id])?;
+            self.determine_frontier(source_id, timeline)
         };
         let sink_name = format!(
             "tail-source-{}",
@@ -2698,10 +2720,14 @@ impl Coordinator {
     /// traces (each has a `since` and `upper` frontier, and are only valid after
     /// `since` and sure to be available not after `upper`). The set of indexes
     /// used is also returned.
+    ///
+    /// If `timeline` is specified, the returned timestamp will advance or return
+    /// the `linestamps` linearizability timestamp.
     fn determine_timestamp(
         &mut self,
         uses_ids: &[GlobalId],
         when: PeekWhen,
+        timeline: Option<Timeline>,
     ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -2731,7 +2757,7 @@ impl Coordinator {
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
-        let timestamp = match when {
+        let mut timestamp = match when {
             // Explicitly requested timestamps should be respected.
             PeekWhen::AtTimestamp(timestamp) => timestamp,
 
@@ -2754,7 +2780,7 @@ impl Coordinator {
                     // has 0 or 1 elements in it. It happens to work because we use a timestamp
                     // type that meets that assumption, but would break if we used a more general
                     // timestamp.
-                    if let Some(candidate) = upper.elements().get(0) {
+                    let timestamp = if let Some(candidate) = upper.elements().get(0) {
                         if *candidate > 0 {
                             candidate.saturating_sub(1)
                         } else {
@@ -2775,8 +2801,20 @@ impl Coordinator {
                     } else {
                         // A complete trace can be read in its final form with this time.
                         //
-                        // This should only happen for literals that have no sources
+                        // This should only happen for literals that have no sources and non-tail file
+                        // sources.
                         Timestamp::max_value()
+                    };
+
+                    // Special case the EpochMilliseconds (Realtime) timeline, ensuring that it
+                    // can never progress beyond wall clock now. We do this here instead of in
+                    // advance_or_return_timestamp because we still want to respect the least valid
+                    // since.
+                    if let Some(Timeline::EpochMilliseconds) = timeline {
+                        let now = (self.now)();
+                        cmp::min(timestamp, now)
+                    } else {
+                        timestamp
                     }
                 };
                 // If the candidate is not beyond the valid `since` frontier,
@@ -2793,6 +2831,9 @@ impl Coordinator {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&timestamp) {
+            if let Some(timeline) = timeline {
+                timestamp = self.advance_or_return_timestamp(timeline, timestamp);
+            }
             Ok((timestamp, index_ids))
         } else {
             let invalid = index_ids
@@ -2818,7 +2859,14 @@ impl Coordinator {
     /// `source_id`.
     ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(&mut self, source_id: GlobalId) -> Antichain<Timestamp> {
+    ///
+    /// If `timeline` is specified, the returned timestamp will advance or return
+    /// the `linestamps` linearizability timestamp.
+    fn determine_frontier(
+        &mut self,
+        source_id: GlobalId,
+        timeline: Option<Timeline>,
+    ) -> Antichain<Timestamp> {
         // This function differs from determine_timestamp because sinks/tail don't care
         // about indexes existing or timestamps being complete. If data don't exist
         // yet (upper = 0), it is not a problem for the sink to wait for it. If the
@@ -2869,7 +2917,22 @@ impl Coordinator {
         if !since.less_equal(&candidate) {
             candidate.advance_by(since.borrow());
         }
+        if let Some(timeline) = timeline {
+            candidate = self.advance_or_return_timestamp(timeline, candidate);
+        }
         Antichain::from_elem(candidate)
+    }
+
+    fn advance_or_return_timestamp(
+        &mut self,
+        timeline: Timeline,
+        timestamp: Timestamp,
+    ) -> Timestamp {
+        let linestamp = self.linestamps.entry(timeline).or_insert(timestamp);
+        if timestamp > *linestamp {
+            *linestamp = timestamp;
+        }
+        *linestamp
     }
 
     fn sequence_explain(
@@ -3593,6 +3656,7 @@ pub async fn serve(
                 since_handles: HashMap::new(),
                 since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
+                linestamps: HashMap::new(),
                 now,
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
@@ -3755,6 +3819,7 @@ pub fn serve_debug(
             now: get_debug_timestamp,
             pending_peeks: HashMap::new(),
             pending_tails: HashMap::new(),
+            linestamps: HashMap::new(),
         };
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
