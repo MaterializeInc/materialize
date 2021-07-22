@@ -114,8 +114,20 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
 
         let desc = batch.desc.clone();
         let key = self.new_blob_key();
+        let ts_upper = match batch.updates.last() {
+            Some(upper) => upper.1,
+            None => {
+                return Err(Error::from(
+                    "invalid future batch: trying to append empty batch",
+                ))
+            }
+        };
         blob.set_future_batch(key.clone(), batch)?;
-        self.batches.push(BlobFutureBatchMeta { key, desc });
+        self.batches.push(BlobFutureBatchMeta {
+            key,
+            desc,
+            ts_upper,
+        });
         Ok(())
     }
 
@@ -149,8 +161,16 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
             .into());
         }
         self.ts_lower = new_ts_lower;
-        // TODO: Actually delete the data.
+        self.evict();
         Ok(())
+    }
+
+    /// Remove all batches containing only data strictly below the Future's time
+    /// lower bound.
+    fn evict(&mut self) {
+        // TODO: actually physically free the old batches.
+        let ts_lower = self.ts_lower.clone();
+        self.batches.retain(|b| ts_lower.less_equal(&b.ts_upper));
     }
 }
 
@@ -185,9 +205,71 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {
 mod tests {
     use differential_dataflow::trace::Description;
 
+    use crate::indexed::SnapshotExt;
     use crate::mem::MemBlob;
 
     use super::*;
+
+    // Generate a list of ((k, v), t, 1) updates at all of the specified times.
+    fn future_updates(update_times: Vec<u64>) -> Vec<((String, String), u64, isize)> {
+        update_times
+            .into_iter()
+            .map(|t| (("k".to_string(), "v".to_string()), t, 1))
+            .collect()
+    }
+
+    // Generate a future batch spanning the specified sequence numbers with
+    // updates at the specified times.
+    fn future_batch(
+        lower: u64,
+        upper: u64,
+        update_times: Vec<u64>,
+    ) -> BlobFutureBatch<String, String> {
+        BlobFutureBatch {
+            desc: Description::new(
+                Antichain::from_elem(SeqNo(lower)),
+                Antichain::from_elem(SeqNo(upper)),
+                Antichain::from_elem(SeqNo(0)),
+            ),
+            updates: future_updates(update_times),
+        }
+    }
+
+    // Read future batch metadata into a structure that can be asserted against.
+    //
+    // TODO: Revisit Antichain / Eq to see if we can do something better here.
+    fn future_batch_meta<K: Data, V: Data>(
+        future: &BlobFuture<K, V>,
+    ) -> Vec<(String, (SeqNo, SeqNo, SeqNo), u64)> {
+        future
+            .batches
+            .iter()
+            .map(|meta| {
+                (
+                    meta.key.clone(),
+                    (
+                        meta.desc.lower()[0],
+                        meta.desc.upper()[0],
+                        meta.desc.since()[0],
+                    ),
+                    meta.ts_upper,
+                )
+            })
+            .collect()
+    }
+
+    // Attempt to read every update in `future` at times in [lo, hi)
+    fn slurp_from<K: Data, V: Data, L: Blob>(
+        future: &BlobFuture<K, V>,
+        blob: &BlobCache<K, V, L>,
+        lo: u64,
+        hi: Option<u64>,
+    ) -> Result<Vec<((K, V), u64, isize)>, Error> {
+        let hi = hi.map_or_else(|| Antichain::new(), |e| Antichain::from_elem(e));
+        let snapshot = future.snapshot(Antichain::from_elem(lo), hi, &blob)?;
+        let updates = snapshot.read_to_end();
+        Ok(updates)
+    }
 
     #[test]
     fn append_ts_lower_invariant() {
@@ -242,5 +324,65 @@ mod tests {
                 "cannot regress ts_lower from Antichain { elements: [2] } to Antichain { elements: [1] }"
             ))
         );
+    }
+
+    #[test]
+    fn future_evict() -> Result<(), Error> {
+        let mut blob = BlobCache::new(MemBlob::new("future_evict"));
+        let mut f: BlobFuture<String, String> = BlobFuture::new(BlobFutureMeta {
+            id: Id(0),
+            ts_lower: Antichain::from_elem(0),
+            batches: vec![],
+            next_blob_id: 0,
+        });
+
+        f.append(future_batch(0, 1, vec![0]), &mut blob)?;
+        f.append(future_batch(1, 2, vec![1]), &mut blob)?;
+        f.append(future_batch(2, 3, vec![0, 1]), &mut blob)?;
+
+        let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
+        assert_eq!(snapshot_updates, future_updates(vec![0, 0, 1, 1]));
+        assert_eq!(
+            vec![
+                (
+                    "Id(0)-future-0".to_string(),
+                    (SeqNo(0), SeqNo(1), SeqNo(0)),
+                    0
+                ),
+                (
+                    "Id(0)-future-1".to_string(),
+                    (SeqNo(1), SeqNo(2), SeqNo(0)),
+                    1
+                ),
+                (
+                    "Id(0)-future-2".to_string(),
+                    (SeqNo(2), SeqNo(3), SeqNo(0)),
+                    1
+                ),
+            ],
+            future_batch_meta(&f)
+        );
+
+        f.truncate(Antichain::from_elem(1))?;
+
+        let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
+        assert_eq!(snapshot_updates, future_updates(vec![0, 1, 1]));
+        assert_eq!(
+            vec![
+                (
+                    "Id(0)-future-1".to_string(),
+                    (SeqNo(1), SeqNo(2), SeqNo(0)),
+                    1
+                ),
+                (
+                    "Id(0)-future-2".to_string(),
+                    (SeqNo(2), SeqNo(3), SeqNo(0)),
+                    1
+                ),
+            ],
+            future_batch_meta(&f)
+        );
+
+        Ok(())
     }
 }

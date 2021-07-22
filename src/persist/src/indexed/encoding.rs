@@ -80,7 +80,7 @@ pub struct BlobMeta {
 /// The metadata necessary to reconstruct a BlobFuture.
 ///
 /// Invariants:
-/// - The batch SeqNo ranges are sorted, non-overlapping, and contiguous.
+/// - The batch SeqNo ranges are sorted and non-overlapping.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobFutureMeta {
     /// The stream this future belongs to.
@@ -106,6 +106,8 @@ pub struct BlobFutureBatchMeta {
     /// Half-open interval [lower, upper) of sequence numbers that this batch
     /// contains updates for.
     pub desc: Description<SeqNo>,
+    /// The maximum timestamp of any update contained in this batch.
+    pub ts_upper: u64,
 }
 
 /// The metadata necessary to reconstruct a BlobTrace.
@@ -324,11 +326,7 @@ impl BlobFutureMeta {
         for meta in self.batches.iter() {
             meta.validate()?;
             if let Some(prev) = prev {
-                // TODO: It's definitely useful in Trace for us to enforce that
-                // these line up, but is it useful in Future? Maybe not. It's
-                // also harder since SeqNos are multiplexed for all streams, but
-                // traces are sealed per-stream.
-                if prev.desc.upper() != meta.desc.lower() {
+                if !PartialOrder::less_equal(prev.desc.upper(), meta.desc.lower()) {
                     return Err(format!(
                         "invalid batch sequence: {:?} followed by {:?}",
                         prev.desc, meta.desc
@@ -617,6 +615,7 @@ mod tests {
         BlobFutureBatchMeta {
             key: "".to_string(),
             desc: seqno_desc(lower, upper),
+            ts_upper: 0,
         }
     }
 
@@ -983,19 +982,14 @@ mod tests {
         };
         assert_eq!(b.validate(), Ok(()));
 
-        // Gap
+        // Normal case: gap between sequence number ranges.
         let b = BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![future_batch_meta(0, 1), future_batch_meta(2, 3)],
             next_blob_id: 0,
         };
-        assert_eq!(
-            b.validate(),
-            Err(Error::from(
-                "invalid batch sequence: Description { lower: Antichain { elements: [SeqNo(0)] }, upper: Antichain { elements: [SeqNo(1)] }, since: Antichain { elements: [SeqNo(0)] } } followed by Description { lower: Antichain { elements: [SeqNo(2)] }, upper: Antichain { elements: [SeqNo(3)] }, since: Antichain { elements: [SeqNo(0)] } }"
-            ))
-        );
+        assert_eq!(b.validate(), Ok(()),);
 
         // Overlapping
         let b = BlobFutureMeta {
