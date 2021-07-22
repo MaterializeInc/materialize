@@ -13,13 +13,12 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use differential_dataflow::trace::Description;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::encoding::BlobFutureMeta;
+use crate::indexed::encoding::{BlobFutureBatchMeta, BlobFutureMeta};
 use crate::indexed::{BlobFutureBatch, Id, Snapshot};
 use crate::storage::{Blob, SeqNo};
 use crate::Data;
@@ -40,9 +39,7 @@ pub struct BlobFuture<K, V> {
     // NB: This is a closed lower bound. When Indexed seals a time, only data
     // strictly before that time gets moved into the trace.
     ts_lower: Antichain<u64>,
-    // NB: The SeqNo ranges here are sorted and contiguous half-open intervals
-    // `[lower, upper)`.
-    batches: Vec<(Description<SeqNo>, String)>,
+    batches: Vec<BlobFutureBatchMeta>,
     _phantom: PhantomData<(K, V)>,
 }
 
@@ -81,7 +78,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
     pub fn seqno_upper(&self) -> Antichain<SeqNo> {
         self.batches.last().map_or_else(
             || Antichain::from_elem(SeqNo(0)),
-            |(desc, _)| desc.upper().clone(),
+            |meta| meta.desc.upper().clone(),
         )
     }
 
@@ -118,7 +115,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
         let desc = batch.desc.clone();
         let key = self.new_blob_key();
         blob.set_future_batch(key.clone(), batch)?;
-        self.batches.push((desc, key));
+        self.batches.push(BlobFutureBatchMeta { key, desc });
         Ok(())
     }
 
@@ -131,8 +128,8 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
         blob: &BlobCache<K, V, L>,
     ) -> Result<FutureSnapshot<K, V>, Error> {
         let mut updates = Vec::with_capacity(self.batches.len());
-        for (_, key) in self.batches.iter() {
-            updates.push(blob.get_future_batch(key)?);
+        for meta in self.batches.iter() {
+            updates.push(blob.get_future_batch(&meta.key)?);
         }
         Ok(FutureSnapshot {
             seqno_upper: self.seqno_upper(),
@@ -189,6 +186,8 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::trace::Description;
+
     use crate::mem::MemBlob;
 
     use super::*;
