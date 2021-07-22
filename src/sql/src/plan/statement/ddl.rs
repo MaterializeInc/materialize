@@ -29,10 +29,10 @@ use reqwest::Url;
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, Consistency,
     CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
-    KafkaSinkConnectorBuilder, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
-    PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector, RegexEncoding,
-    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding,
-    SourceEnvelope, Timeline,
+    KafkaSinkConnectorBuilder, KafkaSinkFormat, KafkaSourceConnector, KeyEnvelope,
+    KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector,
+    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
+    SourceDataEncoding, SourceEnvelope, Timeline,
 };
 use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
@@ -1256,7 +1256,15 @@ fn kafka_sink_builder(
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
-    let (schema_registry_url, ccsr_with_options) = match format {
+    let consistency_topic = match with_options.remove("consistency_topic") {
+        None => None,
+        Some(Value::String(topic)) => Some(topic),
+        Some(_) => bail!("consistency_topic must be a string"),
+    };
+
+    let config_options = kafka_util::extract_config(with_options)?;
+
+    let format = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
             url,
             seed,
@@ -1265,18 +1273,41 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            (url.parse::<Url>()?, normalize::options(&with_options))
+            let schema_registry_url = url.parse::<Url>()?;
+            let ccsr_with_options = normalize::options(&with_options);
+            let ccsr_config = kafka_util::generate_ccsr_client_config(
+                schema_registry_url.clone(),
+                &config_options,
+                ccsr_with_options,
+            )?;
+
+            let schema_generator = AvroSchemaGenerator::new(
+                key_desc_and_indices
+                    .as_ref()
+                    .map(|(desc, _indices)| desc.clone()),
+                value_desc.clone(),
+                consistency_topic.is_some(),
+            );
+            let value_schema = schema_generator.value_writer_schema().to_string();
+            let key_schema = schema_generator
+                .key_writer_schema()
+                .map(|key_schema| key_schema.to_string());
+
+            KafkaSinkFormat::Avro {
+                schema_registry_url,
+                key_schema,
+                value_schema,
+                ccsr_config,
+            }
         }
-        _ => unsupported!("non-confluent schema registry avro sinks"),
+        _ => {
+            // TODO@jldlaughlin: if format is not Avro with schema, fail if
+            // user has provided a consistency topic!
+            unsupported!("non-confluent schema registry avro sinks")
+        }
     };
 
     let broker_addrs = broker.parse()?;
-
-    let consistency_topic = match with_options.remove("consistency_topic") {
-        None => None,
-        Some(Value::String(topic)) => Some(topic),
-        Some(_) => bail!("consistency_topic must be a string"),
-    };
 
     let reuse_topic = match with_options.remove("reuse_topic") {
         Some(Value::Boolean(b)) => b,
@@ -1312,18 +1343,6 @@ fn kafka_sink_builder(
         Vec::new()
     };
 
-    let schema_generator = AvroSchemaGenerator::new(
-        key_desc_and_indices
-            .as_ref()
-            .map(|(desc, _indices)| desc.clone()),
-        value_desc.clone(),
-        consistency_topic.is_some(),
-    );
-    let value_schema = schema_generator.value_writer_schema().to_string();
-    let key_schema = schema_generator
-        .key_writer_schema()
-        .map(|key_schema| key_schema.to_string());
-
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
         None => -1,
@@ -1354,17 +1373,9 @@ fn kafka_sink_builder(
         .as_ref()
         .map(|_topic| avro::get_debezium_transaction_schema().canonical_form());
 
-    let config_options = kafka_util::extract_config(with_options)?;
-    let ccsr_config = kafka_util::generate_ccsr_client_config(
-        schema_registry_url.clone(),
-        &config_options,
-        ccsr_with_options,
-    )?;
-
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
-        schema_registry_url,
-        value_schema,
+        format,
         topic_prefix,
         consistency_topic_prefix: consistency_topic,
         topic_suffix_nonce,
@@ -1373,8 +1384,6 @@ fn kafka_sink_builder(
         fuel: 10000,
         consistency_value_schema,
         config_options,
-        ccsr_config,
-        key_schema,
         relation_key_indices,
         key_desc_and_indices,
         value_desc,

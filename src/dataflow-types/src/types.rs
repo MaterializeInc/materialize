@@ -1025,8 +1025,7 @@ pub struct KafkaSinkConnector {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,
-    pub key_schema_id: Option<i32>,
-    pub value_schema_id: i32,
+    pub published_schema_info: Option<PublishedSchemaInfo>,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
     pub exactly_once: bool,
     // Source dependencies for exactly-once sinks.
@@ -1111,9 +1110,7 @@ pub struct AvroOcfSinkConnectorBuilder {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectorBuilder {
     pub broker_addrs: KafkaAddrs,
-    pub schema_registry_url: Url,
-    pub key_schema: Option<String>,
-    pub value_schema: String,
+    pub format: KafkaSinkFormat,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
     /// The user-specified key for the sink.
@@ -1127,12 +1124,35 @@ pub struct KafkaSinkConnectorBuilder {
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
-    pub ccsr_config: ccsr::ClientConfig,
     // Forces the sink to always write to the same topic across restarts instead
     // of picking a new topic each time.
     pub reuse_topic: bool,
     // Source dependencies for exactly-once sinks.
     pub transitive_source_dependencies: Vec<GlobalId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaSinkFormat {
+    Avro {
+        schema_registry_url: Url,
+        key_schema: Option<String>,
+        value_schema: String,
+        ccsr_config: ccsr::ClientConfig,
+    },
+}
+
+impl KafkaSinkFormat {
+    pub fn ccsr_config(&self) -> &ccsr::ClientConfig {
+        match self {
+            KafkaSinkFormat::Avro { ccsr_config, .. } => &ccsr_config,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublishedSchemaInfo {
+    pub key_schema_id: Option<i32>,
+    pub value_schema_id: i32,
 }
 
 /// An index storing processed updates so they can be queried
