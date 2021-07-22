@@ -15,11 +15,13 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "iteration": 1575574512326,
+  "id": 1,
+  "iteration": 1626903509911,
   "links": [],
   "panels": [
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -45,6 +47,13 @@
         "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -58,12 +67,11 @@
       "legend": {
         "show": true
       },
-      "options": {},
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "sum(rate(mz_command_durations_hist{command=~\"$command\",status=\"success\"}[10s])) by (le)",
-          "format": "time_series",
+          "expr": "sum(increase(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[$__interval])) by (le)",
+          "format": "heatmap",
           "instant": false,
           "interval": "10s",
           "intervalFactor": 1,
@@ -110,7 +118,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "the view of how long things took, from inside pgwire",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -119,6 +134,7 @@
         "x": 12,
         "y": 1
       },
+      "hiddenSeries": false,
       "id": 25,
       "legend": {
         "avg": false,
@@ -237,7 +253,14 @@
         "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
+      "datasource": null,
       "description": "from mz_peek_durations",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -251,16 +274,14 @@
       "legend": {
         "show": true
       },
-      "options": {},
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "sum(rate(mz_perf_peek_durations[10s])) by (duration_ns)",
-          "format": "time_series",
-          "instant": false,
-          "interval": "10s",
-          "legendFormat": "{{duration_ns}}",
-          "refId": "A"
+          "expr": "sum(increase(mz_perf_peek_durations_bucket[$__interval])) by (le)",
+          "format": "heatmap",
+          "interval": "",
+          "legendFormat": "{{le}}",
+          "refId": "B"
         }
       ],
       "timeFrom": null,
@@ -300,7 +321,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "from mz_peek_durations",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -309,6 +337,7 @@
         "x": 12,
         "y": 9
       },
+      "hiddenSeries": false,
       "id": 14,
       "legend": {
         "avg": false,
@@ -413,6 +442,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "description": "Metrics for this panel are often disabled because they can dramatically impact materialized performance.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -421,6 +458,7 @@
         "x": 0,
         "y": 17
       },
+      "hiddenSeries": false,
       "id": 6,
       "legend": {
         "avg": false,
@@ -449,6 +487,7 @@
       "targets": [
         {
           "expr": "topk(10, mz_perf_dependency_frontiers)",
+          "interval": "",
           "legendFormat": "{{source}} -> {{dataflow}}",
           "refId": "A"
         }
@@ -499,6 +538,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -507,6 +553,7 @@
         "x": 12,
         "y": 17
       },
+      "hiddenSeries": false,
       "id": 37,
       "legend": {
         "avg": false,
@@ -586,6 +633,7 @@
     },
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -611,6 +659,13 @@
         "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -624,12 +679,11 @@
       "legend": {
         "show": true
       },
-      "options": {},
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "sum(rate(mz_client_peek_seconds_hist{query=~\"$client_query\"}[10s])) by (le)",
-          "format": "time_series",
+          "expr": "sum(increase(mz_client_peek_seconds_bucket{query=~\"$client_query\"}[$__interval])) by (le)",
+          "format": "heatmap",
           "instant": false,
           "interval": "10s",
           "intervalFactor": 1,
@@ -675,7 +729,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "generated by the src/peeker crate",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -684,6 +745,7 @@
         "x": 12,
         "y": 26
       },
+      "hiddenSeries": false,
       "id": 28,
       "legend": {
         "avg": false,
@@ -711,6 +773,7 @@
       "targets": [
         {
           "expr": "histogram_quantile(1, sum(rate(mz_client_peek_seconds_bucket{query=~\"$client_query\"}[30s])) by (le))",
+          "interval": "",
           "legendFormat": "max",
           "refId": "A"
         },
@@ -733,6 +796,12 @@
           "expr": "histogram_quantile(0.001, sum(rate(mz_client_peek_seconds_bucket{query=~\"$client_query\"}[30s])) by (le))",
           "legendFormat": "p001",
           "refId": "E"
+        },
+        {
+          "expr": "",
+          "interval": "",
+          "legendFormat": "",
+          "refId": "F"
         }
       ],
       "thresholds": [],
@@ -781,6 +850,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -789,6 +865,101 @@
         "x": 0,
         "y": 34
       },
+      "hiddenSeries": false,
+      "id": 43,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "rate(mz_client_peek_seconds_count{query=~\"$client_query\"}[$__interval])",
+          "interval": "",
+          "legendFormat": "{{query}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "per-query responses/sec (query=$client_query)",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "reqps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "hiddenSeries": false,
       "id": 43,
       "legend": {
         "avg": false,
@@ -866,6 +1037,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -874,6 +1052,7 @@
         "x": 12,
         "y": 34
       },
+      "hiddenSeries": false,
       "id": 45,
       "legend": {
         "avg": false,
@@ -900,7 +1079,8 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_client_pg_rows_total{query=~\"$client_query\"}[10s])",
+          "expr": "rate(mz_client_pg_rows_total{query=~\"$client_query\"}[$__interval])",
+          "interval": "",
           "legendFormat": "{{query}}",
           "refId": "A"
         }
@@ -947,97 +1127,13 @@
       }
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 42
-      },
-      "id": 43,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "rate(mz_client_peek_seconds_count{query=~\"$client_query\"}[10s])",
-          "legendFormat": "{{query}}",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "per-query responses/sec (query=$client_query)",
-      "tooltip": {
-        "shared": true,
-        "sort": 2,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "reqps",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 42
       },
       "id": 32,
       "panels": [],
@@ -1049,14 +1145,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 43
       },
+      "hiddenSeries": false,
       "id": 2,
       "legend": {
         "avg": false,
@@ -1137,14 +1241,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 51
+        "y": 43
       },
+      "hiddenSeries": false,
       "id": 41,
       "legend": {
         "avg": false,
@@ -1232,14 +1344,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 59
+        "y": 51
       },
+      "hiddenSeries": false,
       "id": 10,
       "legend": {
         "avg": false,
@@ -1350,14 +1470,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 59
+        "y": 51
       },
+      "hiddenSeries": false,
       "id": 12,
       "legend": {
         "avg": false,
@@ -1449,14 +1577,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 59
       },
+      "hiddenSeries": false,
       "id": 51,
       "legend": {
         "avg": false,
@@ -1534,14 +1670,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 59
       },
+      "hiddenSeries": false,
       "id": 47,
       "legend": {
         "avg": false,
@@ -1619,11 +1763,12 @@
     },
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 75
+        "y": 67
       },
       "id": 30,
       "panels": [],
@@ -1635,14 +1780,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 76
+        "y": 68
       },
+      "hiddenSeries": false,
       "id": 24,
       "legend": {
         "avg": false,
@@ -1720,14 +1873,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 76
+        "y": 68
       },
+      "hiddenSeries": false,
       "id": 20,
       "legend": {
         "avg": false,
@@ -1812,14 +1973,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 84
+        "y": 76
       },
+      "hiddenSeries": false,
       "id": 16,
       "legend": {
         "avg": false,
@@ -1897,15 +2066,23 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "Uncompacted records in each arrangement",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 84
+        "y": 76
       },
+      "hiddenSeries": false,
       "id": 35,
       "legend": {
         "avg": false,
@@ -1991,12 +2168,19 @@
         "mode": "opacity"
       },
       "dataFormat": "timeseries",
+      "datasource": null,
       "description": "Heatmap, each value is the sum over 10 seconds, which matches the grafana update interval, so should be the actual number of shared arangements in that bucket.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 92
+        "y": 84
       },
       "heatmap": {},
       "hideZeroBuckets": false,
@@ -2005,7 +2189,6 @@
       "legend": {
         "show": true
       },
-      "options": {},
       "reverseYBuckets": false,
       "targets": [
         {
@@ -2047,14 +2230,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 1,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 92
+        "y": 84
       },
+      "hiddenSeries": false,
       "id": 18,
       "legend": {
         "avg": false,
@@ -2132,14 +2323,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 100
+        "y": 92
       },
+      "hiddenSeries": false,
       "id": 22,
       "legend": {
         "avg": false,
@@ -2215,7 +2414,7 @@
     }
   ],
   "refresh": "30s",
-  "schemaVersion": 19,
+  "schemaVersion": 25,
   "style": "dark",
   "tags": [],
   "templating": {
@@ -2293,18 +2492,19 @@
       {
         "allValue": null,
         "current": {
+          "selected": false,
           "text": "All",
           "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(mz_client_peek_seconds_hist, query)",
+        "definition": "label_values(mz_client_peek_seconds_bucket, query)",
         "hide": 0,
         "includeAll": true,
         "label": "Client queries",
         "multi": false,
         "name": "client_query",
         "options": [],
-        "query": "label_values(mz_client_peek_seconds_hist, query)",
+        "query": "label_values(mz_client_peek_seconds_bucket, query)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -2338,8 +2538,9 @@
       {
         "allValue": null,
         "current": {
-          "text": "2020-04-22T21:12:29Z",
-          "value": "2020-04-22T21:12:29Z"
+          "selected": false,
+          "text": "2021-07-21T13:49:36Z",
+          "value": "2021-07-21T13:49:36Z"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, build_time)",
@@ -2363,8 +2564,9 @@
       {
         "allValue": null,
         "current": {
-          "text": "0.2.1-dev",
-          "value": "0.2.1-dev"
+          "selected": false,
+          "text": "0.8.4-dev",
+          "value": "0.8.4-dev"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, build_version)",
@@ -2388,8 +2590,9 @@
       {
         "allValue": null,
         "current": {
-          "text": "df6a7d5e975afa9779882c7a03bbaba421161194",
-          "value": "df6a7d5e975afa9779882c7a03bbaba421161194"
+          "selected": false,
+          "text": "ce2601a06a0a8ae71f1402aba18ce4cbcfbe2eaa",
+          "value": "ce2601a06a0a8ae71f1402aba18ce4cbcfbe2eaa"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, build_sha)",
@@ -2418,7 +2621,6 @@
   },
   "timepicker": {
     "refresh_intervals": [
-      "5s",
       "10s",
       "30s",
       "1m",

@@ -1254,6 +1254,11 @@ class RunStep(WorkflowStep):
       - command: the command to run. These are the arguments to the entrypoint
       - daemon: run as a daemon (default: False)
       - service_ports: expose and use service ports. (Default: True)
+      - force_service_name: ensure that this container has exactly the name of
+        its service. Only one container can exist with a given name at the same
+        time, so this should only be used when a start_services step cannot be used --e.g.
+        because it is not desired for it to be restarted on completion, or
+        because it needs to be passed command-line arguments.
     """
 
     def __init__(
@@ -1264,6 +1269,7 @@ class RunStep(WorkflowStep):
         daemon: bool = False,
         entrypoint: Optional[str] = None,
         service_ports: bool = True,
+        force_service_name: bool = False,
     ) -> None:
         cmd = []
         if daemon:
@@ -1275,6 +1281,8 @@ class RunStep(WorkflowStep):
             cmd.extend(shlex.split(command))
         elif isinstance(command, list):
             cmd.extend(command)
+        self._service = service
+        self._force_service_name = force_service_name
         self._service_ports = service_ports
         self._command = cmd
 
@@ -1284,6 +1292,7 @@ class RunStep(WorkflowStep):
                 [
                     "run",
                     *(["--service-ports"] if self._service_ports else []),
+                    *(["--name", self._service] if self._force_service_name else []),
                     *self._command,
                 ]
             )
@@ -1310,7 +1319,7 @@ class EnsureStaysUpStep(WorkflowStep):
                 raise errors.Failed(f"{e.stdout}")
             found = False
             for line in stdout.splitlines():
-                if line.startswith(pattern):
+                if line.startswith(pattern) or line.strip() == self._container:
                     found = True
                     break
             if not found:
