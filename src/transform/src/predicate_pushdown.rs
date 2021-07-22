@@ -45,7 +45,7 @@
 //!
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(1);
-//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::AddInt64);
+//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::Or);
 //! let predicate012 = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
 //!
 //! let mut expr = join.filter(
@@ -62,12 +62,11 @@
 //!   indexes: &std::collections::HashMap::new(),
 //! });
 //!
-//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
 //! let expected_expr = MirRelationExpr::join(
 //!     vec![
-//!         input1.clone().filter(vec![predicate0.clone(), predicate00.clone()]),
+//!         input1.clone().filter(vec![predicate0.clone()]),
 //!         input2.clone().filter(vec![predicate0.clone()]),
-//!         input3.clone().filter(vec![predicate0, predicate00])
+//!         input3.clone().filter(vec![predicate0])
 //!     ],
 //!     vec![vec![(0, 0), (2, 0)].into_iter().collect()],
 //! ).filter(vec![predicate012]);
@@ -168,9 +167,7 @@ impl PredicatePushdown {
                 // Reduce the predicates to determine as best as possible
                 // whether they are literal errors before working with them.
                 let input_type = input.typ();
-                for predicate in predicates.iter_mut() {
-                    predicate.reduce(&input_type);
-                }
+                expr::canonicalize::canonicalize_predicates(predicates, &input_type);
 
                 // It can be helpful to know if there are any non-literal errors,
                 // as this is justification for not pushing down literal errors.

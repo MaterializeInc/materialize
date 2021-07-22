@@ -38,6 +38,7 @@ EXPLAIN select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group b
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -123,6 +124,7 @@ EXPLAIN select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -180,6 +182,7 @@ EXPLAIN select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -238,6 +241,7 @@ EXPLAIN select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -367,6 +371,7 @@ EXPLAIN select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -468,6 +473,7 @@ EXPLAIN select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -521,6 +527,7 @@ EXPLAIN select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group b
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -568,6 +575,7 @@ EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t
 
 %3 =
 | Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -692,6 +700,7 @@ explain select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t
 
 %3 =
 | Get materialize.public.t1 (u5)
+| Filter !(isnull(#1))
 
 %4 =
 | Get %2 (l0)
@@ -739,6 +748,7 @@ explain select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t
 
 %3 =
 | Get materialize.public.t1 (u5)
+| Filter !(isnull(#1))
 
 %4 =
 | Get %2 (l0)

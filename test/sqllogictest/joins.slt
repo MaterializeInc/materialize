@@ -158,6 +158,7 @@ WHERE l1.la IN (
 
 %1 =
 | Get materialize.public.l (u1)
+| Filter !(isnull(#0))
 
 %2 = Let l0 =
 | Join %0 %1
@@ -166,6 +167,7 @@ WHERE l1.la IN (
 
 %3 =
 | Get materialize.public.l (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -173,7 +175,6 @@ WHERE l1.la IN (
 
 %5 =
 | Get %2 (l0)
-| Filter !(isnull(#1))
 | Distinct group=(#1)
 | ArrangeBy (#0)
 
@@ -329,6 +330,7 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 
 %3 =
 | Get materialize.public.l (u1)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -378,6 +380,7 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 
 %3 =
 | Get materialize.public.r (u3)
+| Filter !(isnull(#0))
 
 %4 =
 | Get %2 (l0)
@@ -432,6 +435,7 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 
 %4 =
 | Get materialize.public.r (u3)
+| Filter !(isnull(#0))
 
 %5 =
 | Get %3 (l1)
@@ -454,6 +458,7 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 
 %9 =
 | Get materialize.public.l (u1)
+| Filter !(isnull(#0))
 
 %10 =
 | Get %3 (l1)

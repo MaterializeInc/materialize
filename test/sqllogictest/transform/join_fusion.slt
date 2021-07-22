@@ -201,12 +201,12 @@ EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col
 ----
 %0 =
 | Get materialize.public.lineitem (u15)
-| Filter (#4 = (#4 % 5))
+| Filter (#4 = (#4 % 5)), ((#4 % 5) = (#4 % 5))
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.orders (u11)
-| Filter (#1 = 134), (#2 = (#2 % 5))
+| Filter (#1 = 134), (#2 = (#2 % 5)), ((#2 % 5) = (#2 % 5))
 | ArrangeBy (#2, #3)
 
 %2 =

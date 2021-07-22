@@ -145,6 +145,7 @@ mod tests {
             "NonNullRequirements" => Ok(Box::new(
                 transform::nonnull_requirements::NonNullRequirements,
             )),
+            "PredicatePullup" => Ok(Box::new(transform::predicate_pullup::PredicatePullup)),
             "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
             "ProjectionExtraction" => Ok(Box::new(
                 transform::projection_extraction::ProjectionExtraction,
