@@ -29,6 +29,8 @@ use crate::adt::numeric::Numeric;
 use crate::Datum;
 use fmt::Debug;
 
+mod encoding;
+
 /// A packed representation for `Datum`s.
 ///
 /// `Datum` is easy to work with but very space inefficent. A `Datum::Int32(42)`
