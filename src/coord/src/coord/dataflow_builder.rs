@@ -131,31 +131,21 @@ impl<'a> DataflowBuilder<'a> {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
         for get_id in view.global_uses() {
             self.import_into_dataflow(&get_id, dataflow);
-        }
-        // Collect sources, views, and indexes used.
-        view.visit(&mut |e| {
-            if let MirRelationExpr::ArrangeBy { input, keys } = e {
-                if let MirRelationExpr::Get {
-                    id: Id::Global(on_id),
-                    typ,
-                } = &**input
-                {
-                    for key_set in keys {
-                        let index_desc = IndexDesc {
-                            on_id: *on_id,
-                            keys: key_set.to_vec(),
-                        };
-                        // If the arrangement exists, import it. It may not exist, in which
-                        // case we should import the source to be sure that we have access
-                        // to the collection to arrange it ourselves.
-                        let indexes = &self.catalog.indexes()[on_id];
-                        if let Some((id, _)) = indexes.iter().find(|(_id, keys)| keys == key_set) {
-                            dataflow.import_index(*id, index_desc, typ.clone(), *view_id);
-                        }
-                    }
+
+            // TODO: indexes should be imported after the optimization process, and only those
+            // actually used by the optimized plan
+            if let Some(indexes) = self.catalog.indexes().get(&get_id) {
+                for (id, keys) in indexes.iter() {
+                    let on_entry = self.catalog.get_by_id(&get_id);
+                    let on_type = on_entry.desc().unwrap().typ().clone();
+                    let index_desc = IndexDesc {
+                        on_id: get_id,
+                        keys: keys.clone(),
+                    };
+                    dataflow.import_index(*id, index_desc, on_type, *view_id);
                 }
             }
-        });
+        }
         dataflow.insert_view(*view_id, view.clone());
     }
 

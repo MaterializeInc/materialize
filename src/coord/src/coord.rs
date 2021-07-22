@@ -192,7 +192,8 @@ pub struct Config<'a> {
 pub struct Coordinator {
     worker_guards: WorkerGuards<()>,
     worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
-    optimizer: Optimizer,
+    /// Optimizer instance for logical optimization of views.
+    view_optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of arrangement) -> (frontier information). This tracks the
@@ -1720,7 +1721,7 @@ impl Coordinator {
                 ..
             } = plan;
             let optimized_expr = self
-                .optimizer
+                .view_optimizer
                 .optimize(source.expr, self.catalog.indexes())?;
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
             let source = catalog::Source {
@@ -2772,7 +2773,7 @@ impl Coordinator {
                     &optimized_plan,
                     &mut dataflow,
                 );
-                transform::optimize_dataflow(&mut dataflow);
+                transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
                 let catalog = self.catalog.for_session(session);
                 let mut explanation =
                     dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
@@ -3035,7 +3036,7 @@ impl Coordinator {
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
         if let ExprPrepStyle::Static = style {
-            let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
+            let mut opt_expr = self.view_optimizer.optimize(expr, self.catalog.indexes())?;
             opt_expr.0.try_visit_mut(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
@@ -3056,7 +3057,7 @@ impl Coordinator {
             // constant expression that originally contains a global get? Is
             // there anything not containing a global get that cannot be
             // optimized to a constant expression?
-            Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+            Ok(self.view_optimizer.optimize(expr, self.catalog.indexes())?)
         }
     }
 
@@ -3171,7 +3172,7 @@ impl Coordinator {
             }
 
             // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(&mut dataflow);
+            transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
             let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
                 .expect("Dataflow planning failed; unrecoverable error");
             dataflow_plans.push(dataflow_plan);
@@ -3400,7 +3401,7 @@ pub async fn serve(
             let mut coord = Coordinator {
                 worker_guards,
                 worker_txs,
-                optimizer: Default::default(),
+                view_optimizer: Optimizer::for_view(),
                 catalog,
                 symbiosis,
                 indexes: ArrangementFrontiers::default(),
@@ -3550,7 +3551,7 @@ pub fn serve_debug(
         let mut coord = Coordinator {
             worker_guards,
             worker_txs: vec![worker_tx],
-            optimizer: Default::default(),
+            view_optimizer: Optimizer::for_view(),
             catalog,
             symbiosis: None,
             indexes: ArrangementFrontiers::default(),

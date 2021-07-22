@@ -52,7 +52,7 @@ mod tests {
 
         match test_type {
             TestType::Opt => {
-                let mut opt: Optimizer = Default::default();
+                let mut opt = Optimizer::for_dataflow();
                 rel = opt.optimize(rel, &HashMap::new()).unwrap().into_inner();
 
                 Ok(cat.generate_explanation(&rel, args.get("format")))
@@ -61,7 +61,7 @@ mod tests {
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
                 // that helpful for optimizations that involve those (which is most of them).
-                let opt: Optimizer = Default::default();
+                let opt = Optimizer::for_dataflow();
                 let mut out = String::new();
                 // Buffer of the names of the transformations that have been applied with no changes.
                 let mut no_change: Vec<String> = Vec::new();
