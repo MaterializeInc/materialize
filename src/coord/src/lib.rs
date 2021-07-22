@@ -23,6 +23,9 @@
 //! The main interface to the coordinator is [`Client`]. To start a coordinator,
 //! use the [`serve`] function.
 
+// WIP
+#![allow(unused_imports)]
+
 // TODO(benesch): delete this once we use structured errors everywhere.
 macro_rules! coord_bail {
     ($($e:expr),*) => {

@@ -10,6 +10,7 @@ anyhow = "1.0.42"
 coord = { path = "../coord" }
 datadriven = "0.6.0"
 dataflow = { path = "../dataflow" }
+dataflow-api = { path = "../dataflow-api" }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 futures = "0.3.14"

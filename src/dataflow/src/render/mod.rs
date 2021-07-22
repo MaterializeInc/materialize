@@ -115,7 +115,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id};
+use expr::{GlobalId, Id, OptimizedMirRelationExpr};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
@@ -127,6 +127,7 @@ use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::LocalInput;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
+use crate::Plan;
 
 mod context;
 mod flat_map;
@@ -175,9 +176,11 @@ pub struct RelevantTokens {
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     render_state: &mut RenderState,
-    dataflow: DataflowDescription<plan::Plan>,
+    dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     now: NowFn,
 ) {
+    let dataflow =
+        Plan::finalize_dataflow(dataflow).expect("Dataflow planning failed; unrecoverable error");
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let materialized_logging = timely_worker.log_register().get("materialized");
@@ -382,7 +385,6 @@ where
         scope: &mut G,
         worker_index: usize,
     ) -> CollectionBundle<G, Row, G::Timestamp> {
-        use plan::Plan;
         match plan {
             Plan::Constant { rows } => {
                 // Determine what this worker will contribute.

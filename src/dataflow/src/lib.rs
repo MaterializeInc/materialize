@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![forbid(missing_docs)]
+// WIP
+// #![forbid(missing_docs)]
+#![allow(unused_imports, missing_docs)]
 
 //! Driver for timely/differential dataflow.
 
@@ -23,7 +25,4 @@ pub mod logging;
 pub mod source;
 
 pub use render::plan::Plan;
-pub use server::{
-    serve, Config, SequencedCommand, TimestampBindingFeedback, WorkerFeedback,
-    WorkerFeedbackWithMeta,
-};
+pub use server::{Config, DataflowClientImpl};

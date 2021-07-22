@@ -513,7 +513,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "datadriven",
- "dataflow",
+ "dataflow-api",
  "dataflow-types",
  "dec",
  "derivative",
@@ -560,6 +560,7 @@ dependencies = [
  "coord",
  "datadriven",
  "dataflow",
+ "dataflow-api",
  "dataflow-types",
  "expr",
  "futures",
@@ -788,6 +789,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "csv-core",
+ "dataflow-api",
  "dataflow-types",
  "dec",
  "differential-dataflow",
@@ -828,6 +830,18 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "dataflow-api"
+version = "0.0.0"
+dependencies = [
+ "dataflow-types",
+ "expr",
+ "repr",
+ "serde",
+ "timely",
+ "tokio",
 ]
 
 [[package]]

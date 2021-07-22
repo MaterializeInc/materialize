@@ -53,6 +53,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::FutureExt;
+use ore::now::EpochMillis;
+use structopt::lazy_static::lazy_static;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::mpsc;
 
@@ -60,7 +62,7 @@ use coord::{
     session::{EndTransactionAction, Session},
     Client, ExecuteResponse, SessionClient,
 };
-use dataflow::{WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow_api::{WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
 use ore::thread::JoinOnDropHandle;
@@ -90,9 +92,17 @@ pub struct CoordTest {
 
 impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
+        lazy_static! {
+            static ref DEBUG_TIMESTAMP: Arc<Mutex<EpochMillis>> = Arc::new(Mutex::new(0));
+        }
+        fn get_debug_timestamp() -> EpochMillis {
+            *DEBUG_TIMESTAMP.lock().unwrap()
+        }
+
         let catalog_file = NamedTempFile::new()?;
+        let workers_debug = dataflow::DataflowClientImpl::start_debug(get_debug_timestamp);
         let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp) =
-            coord::serve_debug(catalog_file.path());
+            coord::serve_debug(catalog_file.path(), get_debug_timestamp, workers_debug);
         let coordtest = CoordTest {
             _handle: handle,
             client: Some(client),

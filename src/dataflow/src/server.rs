@@ -30,6 +30,10 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
+use dataflow_api::{
+    DataflowClient, SequencedCommand, TimestampBindingFeedback, WorkerFeedback,
+    WorkerFeedbackWithMeta,
+};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     Consistency, DataflowDescription, DataflowError, ExternalSourceConnector, MzOffset,
@@ -53,148 +57,10 @@ mod metrics;
 /// back to the coordinator.
 static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 
-/// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug)]
-pub enum SequencedCommand {
-    /// Create a sequence of dataflows.
-    ///
-    /// Each of the dataflows must contain `as_of` members that are valid
-    /// for each of the referenced arrangements, meaning `AllowCompaction`
-    /// should be held back to those values until the command.
-    /// Subsequent commands may arbitrarily compact the arrangements;
-    /// the dataflow runners are responsible for ensuring that they can
-    /// correctly maintain the dataflows.
-    CreateDataflows(Vec<DataflowDescription<RenderPlan>>),
-    /// Drop the sources bound to these names.
-    DropSources(Vec<GlobalId>),
-    /// Drop the sinks bound to these names.
-    DropSinks(Vec<GlobalId>),
-    /// Drop the indexes bound to these namees.
-    DropIndexes(Vec<GlobalId>),
-    /// Peek at an arrangement.
-    ///
-    /// This request elicits data from the worker, by naming an
-    /// arrangement and some actions to apply to the results before
-    /// returning them.
-    ///
-    /// The `timestamp` member must be valid for the arrangement that
-    /// is referenced by `id`. This means that `AllowCompaction` for
-    /// this arrangement should not pass `timestamp` before this command.
-    /// Subsequent commands may arbitrarily compact the arrangements;
-    /// the dataflow runners are responsible for ensuring that they can
-    /// correctly answer the `Peek`.
-    Peek {
-        /// The identifier of the arrangement.
-        id: GlobalId,
-        /// An optional key that should be used for the arrangement.
-        key: Option<Row>,
-        /// The identifier of this peek request.
-        ///
-        /// Used in responses and cancelation requests.
-        conn_id: u32,
-        /// A communication link for sending a response.
-        tx: mpsc::UnboundedSender<PeekResponse>,
-        /// The logical timestamp at which the arrangement is queried.
-        timestamp: Timestamp,
-        /// Actions to apply to the result set before returning them.
-        finishing: RowSetFinishing,
-        /// Linear operation to apply in-line on each result.
-        map_filter_project: expr::SafeMfpPlan,
-    },
-    /// Cancel the peek associated with the given `conn_id`.
-    CancelPeek {
-        /// The identifier of the peek request to cancel.
-        conn_id: u32,
-    },
-    /// Insert `updates` into the local input named `id`.
-    Insert {
-        /// Identifier of the local input.
-        id: GlobalId,
-        /// A list of updates to be introduced to the input.
-        updates: Vec<Update>,
-    },
-    /// Enable compaction in views.
-    ///
-    /// Each entry in the vector names a view and provides a frontier after which
-    /// accumulations must be correct. The workers gain the liberty of compacting
-    /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
-    /// Update durability information for sources.
-    ///
-    /// Each entry names a source and provides a frontier before which the source can
-    /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
-    /// all the same data)
-    DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<Timestamp>)>),
-    /// Add a new source to be aware of for timestamping.
-    AddSourceTimestamping {
-        /// The ID of the timestamped source
-        id: GlobalId,
-        /// The connector for the timestamped source.
-        connector: SourceConnector,
-        /// Previously stored timestamp bindings.
-        bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
-    },
-    /// Advance worker timestamp
-    AdvanceSourceTimestamp {
-        /// The ID of the timestamped source
-        id: GlobalId,
-        /// The associated update (RT or BYO)
-        update: TimestampSourceUpdate,
-    },
-    /// Drop all timestamping info for a source
-    DropSourceTimestamping {
-        /// The ID id of the formerly timestamped source.
-        id: GlobalId,
-    },
-    /// Advance all local inputs to the given timestamp.
-    AdvanceAllLocalInputs {
-        /// The timestamp to advance to.
-        advance_to: Timestamp,
-    },
-    /// Request that feedback is streamed to the provided channel.
-    EnableFeedback(mpsc::UnboundedSender<WorkerFeedbackWithMeta>),
-    /// Request that the logging sources in the contained configuration are
-    /// installed.
-    EnableLogging(LoggingConfig),
-    /// Disconnect inputs, drain dataflows, and shut down timely workers.
-    Shutdown,
-}
-
-/// Information from timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerFeedbackWithMeta {
-    /// Identifies the worker by its identifier.
-    pub worker_id: usize,
-    /// The feedback itself.
-    pub message: WorkerFeedback,
-}
-
-/// Data about timestamp bindings that dataflow workers send to the coordinator
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TimestampBindingFeedback {
-    /// Durability frontier changes
-    pub changes: Vec<(GlobalId, ChangeBatch<Timestamp>)>,
-    /// Timestamp bindings for all of those frontier changes
-    pub bindings: Vec<(GlobalId, PartitionId, Timestamp, MzOffset)>,
-}
-
-/// Responses the worker can provide back to the coordinator.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WorkerFeedback {
-    /// A list of identifiers of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
-    /// Timestamp bindings and prior and new frontiers for those bindings for all
-    /// sources
-    TimestampBindings(TimestampBindingFeedback),
-}
-
 /// Configures a dataflow server.
 pub struct Config {
-    /// Command stream receivers for each desired workers.
-    ///
-    /// The length of this vector determines the number of worker threads that
-    /// will be spawned.
-    pub command_receivers: Vec<crossbeam_channel::Receiver<SequencedCommand>>,
+    /// WIP
+    pub num_workers: usize,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
     /// Whether the server is running in experimental mode.
@@ -203,11 +69,78 @@ pub struct Config {
     pub now: NowFn,
 }
 
+pub struct DataflowClientImpl {
+    worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
+    worker_guards: WorkerGuards<()>,
+    feedback_rx: Option<mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>>,
+}
+
+impl DataflowClientImpl {
+    pub fn start(config: Config) -> Result<Box<dyn DataflowClient>, String> {
+        let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+        let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) = (0..config.num_workers)
+            .map(|_| crossbeam_channel::unbounded())
+            .unzip();
+        let worker_guards = serve(config, worker_rxs, feedback_tx)?;
+        let client = DataflowClientImpl {
+            worker_txs,
+            worker_guards,
+            feedback_rx: Some(feedback_rx),
+        };
+        Ok(Box::new(client))
+    }
+
+    pub fn start_debug(get_debug_timestamp: NowFn) -> Box<dyn DataflowClient> {
+        let config = Config {
+            num_workers: 1,
+            timely_worker: timely::WorkerConfig::default(),
+            experimental_mode: true,
+            now: get_debug_timestamp,
+        };
+
+        let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+        let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
+        let worker_guards = serve(config, vec![worker_rx], feedback_tx).unwrap();
+        let client = DataflowClientImpl {
+            worker_txs: vec![worker_tx],
+            worker_guards,
+            feedback_rx: Some(feedback_rx),
+        };
+        Box::new(client)
+    }
+}
+
+impl DataflowClient for DataflowClientImpl {
+    fn num_workers(&self) -> usize {
+        self.worker_txs.len()
+    }
+
+    fn broadcast(&self, cmd: SequencedCommand) {
+        for tx in &self.worker_txs {
+            tx.send(cmd.clone())
+                .expect("worker command receiver should not drop first")
+        }
+        for handle in self.worker_guards.guards() {
+            handle.thread().unpark()
+        }
+        todo!()
+    }
+
+    fn take_feedback_rx(&mut self) -> mpsc::UnboundedReceiver<WorkerFeedbackWithMeta> {
+        self.feedback_rx.take().expect("only called once")
+    }
+}
+
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
+fn serve(
+    config: Config,
+    command_receivers: Vec<crossbeam_channel::Receiver<SequencedCommand>>,
+    feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
+) -> Result<WorkerGuards<()>, String> {
     let experimental_mode = config.experimental_mode;
-    let workers = config.command_receivers.len();
+    let workers = config.num_workers;
     assert!(workers > 0);
+    assert_eq!(command_receivers.len(), config.num_workers);
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
@@ -215,8 +148,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
     // TODO(benesch): package up this idiom of handing out ownership of N items
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
-    let command_rxs: Mutex<Vec<_>> =
-        Mutex::new(config.command_receivers.into_iter().map(Some).collect());
+    let command_rxs: Mutex<Vec<_>> = Mutex::new(command_receivers.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
@@ -244,7 +176,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 materialized_logger: None,
                 command_rx,
                 pending_peeks: Vec::new(),
-                feedback_tx: None,
+                feedback_tx: feedback_tx.clone(),
                 reported_frontiers: HashMap::new(),
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
@@ -276,7 +208,7 @@ where
     /// Peek commands that are awaiting fulfillment.
     pending_peeks: Vec<PendingPeek>,
     /// The channel over which frontier information is reported.
-    feedback_tx: Option<mpsc::UnboundedSender<WorkerFeedbackWithMeta>>,
+    feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Tracks the timestamp binding durability information that has been sent over `feedback_tx`.
@@ -495,7 +427,8 @@ where
             }
         }
 
-        if let Some(feedback_tx) = &mut self.feedback_tx {
+        // WIP no Some just to unpack it
+        if let Some(feedback_tx) = Some(&mut self.feedback_tx) {
             let mut new_frontier = Antichain::new();
             let mut progress = Vec::new();
             for (id, traces) in self.render_state.traces.traces.iter_mut() {
@@ -573,7 +506,6 @@ where
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
         if !self.experimental_mode
-            || self.feedback_tx.is_none()
             || self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS
         {
             return;
@@ -622,8 +554,6 @@ where
 
         if !changes.is_empty() || !bindings.is_empty() {
             self.feedback_tx
-                .as_mut()
-                .expect("known to exist")
                 .send(WorkerFeedbackWithMeta {
                     worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
@@ -814,10 +744,6 @@ where
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
-            }
-
-            SequencedCommand::EnableFeedback(tx) => {
-                self.feedback_tx = Some(tx);
             }
             SequencedCommand::EnableLogging(config) => {
                 self.initialize_logging(&config);

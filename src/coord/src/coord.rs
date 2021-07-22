@@ -65,8 +65,9 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
-use dataflow::{
-    SequencedCommand, TimestampBindingFeedback, WorkerFeedback, WorkerFeedbackWithMeta,
+use dataflow_api::{
+    DataflowClient, SequencedCommand, TimestampBindingFeedback, WorkerFeedback,
+    WorkerFeedbackWithMeta,
 };
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
@@ -176,8 +177,6 @@ pub struct LoggingConfig {
 
 /// Configures a coordinator.
 pub struct Config<'a> {
-    pub workers: usize,
-    pub timely_worker: timely::WorkerConfig,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
@@ -190,8 +189,8 @@ pub struct Config<'a> {
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
-    worker_guards: WorkerGuards<()>,
-    worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
+    // WIP probably not a Box
+    workers: Box<dyn DataflowClient>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -263,7 +262,7 @@ struct TxnReads {
 
 impl Coordinator {
     fn num_workers(&self) -> usize {
-        self.worker_txs.len()
+        self.workers.num_workers()
     }
 
     /// Assign a timestamp for a read.
@@ -478,7 +477,6 @@ impl Coordinator {
         mut self,
         internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         cmd_rx: mpsc::UnboundedReceiver<Command>,
-        feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
         _timestamper_thread_handle: JoinOnDropHandle<()>,
         _metric_thread_handle: Option<JoinOnDropHandle<()>>,
     ) {
@@ -486,6 +484,7 @@ impl Coordinator {
             .map(Message::Command)
             .chain(stream::once(future::ready(Message::Shutdown)));
 
+        let feedback_rx = self.workers.take_feedback_rx();
         let feedback_stream = UnboundedReceiverStream::new(feedback_rx).map(Message::Worker);
 
         let mut messages = ore::future::select_all_biased(vec![
@@ -3173,9 +3172,7 @@ impl Coordinator {
 
             // Optimize the dataflow across views, and any other ways that appeal.
             transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
-            let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
-                .expect("Dataflow planning failed; unrecoverable error");
-            dataflow_plans.push(dataflow_plan);
+            dataflow_plans.push(dataflow);
         }
 
         // Finalize the dataflow by broadcasting its construction to all workers.
@@ -3183,13 +3180,7 @@ impl Coordinator {
     }
 
     fn broadcast(&self, cmd: SequencedCommand) {
-        for tx in &self.worker_txs {
-            tx.send(cmd.clone())
-                .expect("worker command receiver should not drop first")
-        }
-        for handle in self.worker_guards.guards() {
-            handle.thread().unpark()
-        }
+        self.workers.broadcast(cmd);
     }
 
     // Notify the timestamper thread that a source has been created or dropped.
@@ -3299,8 +3290,6 @@ impl Coordinator {
 /// coordinator.
 pub async fn serve(
     Config {
-        workers,
-        timely_worker,
         symbiosis_url,
         logging,
         data_directory,
@@ -3310,9 +3299,9 @@ pub async fn serve(
         safe_mode,
         build_info,
     }: Config<'_>,
+    workers: Box<dyn DataflowClient>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
     let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
@@ -3328,23 +3317,13 @@ pub async fn serve(
         safe_mode,
         enable_logging: logging.is_some(),
         build_info,
-        num_workers: workers,
+        num_workers: workers.num_workers(),
         timestamp_frequency,
         now: system_time,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
-
-    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) =
-        (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
-    let worker_guards = dataflow::serve(dataflow::Config {
-        command_receivers: worker_rxs,
-        timely_worker,
-        experimental_mode,
-        now: system_time,
-    })
-    .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
     let (metric_scraper_handle, metric_scraper_tx) = if let Some(LoggingConfig {
         granularity,
@@ -3399,8 +3378,7 @@ pub async fn serve(
         .spawn(move || {
             let now = catalog.config().now;
             let mut coord = Coordinator {
-                worker_guards,
-                worker_txs,
+                workers,
                 view_optimizer: Optimizer::for_view(),
                 catalog,
                 symbiosis,
@@ -3424,7 +3402,6 @@ pub async fn serve(
                 sink_writes: HashMap::new(),
                 now,
             };
-            coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
             if let Some(config) = &logging {
                 coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
                     granularity_ns: config.granularity.as_nanos(),
@@ -3451,7 +3428,6 @@ pub async fn serve(
             handle.block_on(coord.serve(
                 internal_cmd_rx,
                 cmd_rx,
-                feedback_rx,
                 timestamper_thread_handle,
                 metric_scraper_handle,
             ))
@@ -3474,6 +3450,8 @@ pub async fn serve(
 
 pub fn serve_debug(
     catalog_path: &Path,
+    get_debug_timestamp: NowFn,
+    workers: Box<dyn DataflowClient>,
 ) -> (
     JoinOnDropHandle<()>,
     Client,
@@ -3481,13 +3459,6 @@ pub fn serve_debug(
     tokio::sync::mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
     Arc<Mutex<u64>>,
 ) {
-    lazy_static! {
-        static ref DEBUG_TIMESTAMP: Arc<Mutex<EpochMillis>> = Arc::new(Mutex::new(0));
-    }
-    pub fn get_debug_timestamp() -> EpochMillis {
-        *DEBUG_TIMESTAMP.lock().unwrap()
-    }
-
     let (catalog, builtin_table_updates) = catalog::Catalog::open(&catalog::Config {
         path: catalog_path,
         enable_logging: true,
@@ -3501,19 +3472,13 @@ pub fn serve_debug(
     .unwrap();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
-    let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
-    let worker_guards = dataflow::serve(dataflow::Config {
-        command_receivers: vec![worker_rx],
-        timely_worker: timely::WorkerConfig::default(),
-        experimental_mode: true,
-        now: get_debug_timestamp,
-    })
-    .unwrap();
 
     // We want to be able to control communication from dataflow to the
     // coordinator, so setup an additional channel pair.
-    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
-    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+    // WIP I've definitely broken this
+    let (inner_feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
+    // let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
+    // let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
 
     let executor = TokioHandle::current();
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
@@ -3549,8 +3514,7 @@ pub fn serve_debug(
     let handle = TokioHandle::current();
     let thread = thread::spawn(move || {
         let mut coord = Coordinator {
-            worker_guards,
-            worker_txs: vec![worker_tx],
+            workers,
             view_optimizer: Optimizer::for_view(),
             catalog,
             symbiosis: None,
@@ -3573,26 +3537,21 @@ pub fn serve_debug(
             sink_writes: HashMap::new(),
             now: get_debug_timestamp,
         };
-        coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
-        handle.block_on(coord.serve(
-            internal_cmd_rx,
-            cmd_rx,
-            feedback_rx,
-            timestamper_thread_handle,
-            None,
-        ))
+        handle.block_on(coord.serve(internal_cmd_rx, cmd_rx, timestamper_thread_handle, None))
     })
     .join_on_drop();
     bootstrap_rx.recv().unwrap().unwrap();
     let client = Client::new(cmd_tx);
+    // WIP this is certainly broken, gotta share this with get_debug_timestamp.
+    let debug_timestamp = Arc::new(Mutex::new(0));
     (
         thread,
         client,
         inner_feedback_tx,
         inner_feedback_rx,
-        DEBUG_TIMESTAMP.clone(),
+        debug_timestamp,
     )
 }
 

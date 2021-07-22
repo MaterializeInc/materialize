@@ -1,0 +1,14 @@
+[package]
+name = "dataflow-api"
+description = "Service API for the dataflow crate."
+version = "0.0.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+dataflow-types = { path = "../dataflow-types" }
+expr = { path = "../expr" }
+repr = { path = "../repr" }
+serde = { version = "1.0.126", features = ["derive"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = { version = "1.8.1", features = ["fs", "rt", "sync"] }

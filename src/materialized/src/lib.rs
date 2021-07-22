@@ -19,9 +19,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use ore::now::system_time;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -214,19 +216,29 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
-    // Initialize coordinator.
-    let (coord_handle, coord_client) = coord::serve(coord::Config {
-        workers,
+    // Initialize dataflow workers.
+    let dataflow_client = dataflow::DataflowClientImpl::start(dataflow::Config {
         timely_worker: config.timely_worker,
-        symbiosis_url: config.symbiosis_url.as_deref(),
-        logging: config.logging,
-        data_directory: &config.data_directory,
-        timestamp_frequency: config.timestamp_frequency,
-        logical_compaction_window: config.logical_compaction_window,
+        num_workers: workers,
         experimental_mode: config.experimental_mode,
-        safe_mode: config.safe_mode,
-        build_info: &BUILD_INFO,
+        now: system_time,
     })
+    .map_err(|s| anyhow!("{}", s))?;
+
+    // Initialize coordinator.
+    let (coord_handle, coord_client) = coord::serve(
+        coord::Config {
+            symbiosis_url: config.symbiosis_url.as_deref(),
+            logging: config.logging,
+            data_directory: &config.data_directory,
+            timestamp_frequency: config.timestamp_frequency,
+            logical_compaction_window: config.logical_compaction_window,
+            experimental_mode: config.experimental_mode,
+            safe_mode: config.safe_mode,
+            build_info: &BUILD_INFO,
+        },
+        dataflow_client,
+    )
     .await?;
 
     // Launch task to serve connections.
