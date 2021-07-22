@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use ore::collections::CollectionExt;
+use repr::adt::char;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
@@ -157,7 +158,10 @@ impl<'a> ToJson for TypedDatum<'_> {
                     serde_json::value::Value::String(format!("{}", datum.unwrap_interval()))
                 }
                 ScalarType::Bytes => json!(datum.unwrap_bytes()),
-                ScalarType::String => json!(datum.unwrap_str()),
+                ScalarType::String | ScalarType::VarChar { .. } => json!(datum.unwrap_str()),
+                ScalarType::Char { length } => {
+                    json!(&char::format_str(&datum.unwrap_str(), *length, false).unwrap())
+                }
                 ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
                 ScalarType::Uuid => json!(datum.unwrap_uuid()),
                 ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
@@ -256,7 +260,9 @@ fn build_row_schema_field<F: FnMut() -> String>(
             "logicalType": "duration"
         }),
         ScalarType::Bytes => json!("bytes"),
-        ScalarType::String => json!("string"),
+        ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
+            json!("string")
+        }
         ScalarType::Jsonb => json!({
             "type": "string",
             "connect.name": "io.debezium.data.Json",

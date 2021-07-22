@@ -40,7 +40,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t1 LIMIT 1;
-text text text
+"character varying" "character" "text"
 
 > SELECT * FROM t1;
 "abc" "abc       " "abc"

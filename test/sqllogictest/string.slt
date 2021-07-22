@@ -390,15 +390,15 @@ SELECT length('str', 99)
 
 # standard tests
 query I rowsort
-SELECT length(strcol) FROM lengthtest
+SELECT octet_length(strcol) FROM lengthtest
 ----
 15
 15
 15
 15
-15
-15
-15
+19
+21
+23
 NULL
 
 query I rowsort
@@ -851,28 +851,28 @@ true
 
 # Invalid type mods
 
-query error length for type varchar must be within \[1-10485760\], have 0
+query error length for type character varying must be within \[1-10485760\], have 0
 SELECT ''::VARCHAR(0)
 
-query error length for type varchar must be within \[1-10485760\], have 10485761
+query error length for type character varying must be within \[1-10485760\], have 10485761
 SELECT ''::VARCHAR(10485761)
 
-query error length for type char must be within \[1-10485760\], have 0
+query error length for type character must be within \[1-10485760\], have 0
 SELECT ''::CHAR(0)
 
-query error length for type char must be within \[1-10485760\], have 10485761
+query error length for type character must be within \[1-10485760\], have 10485761
 SELECT ''::CHAR(10485761)
 
-query error length for type varchar must be within \[1-10485760\], have 0
+query error length for type character varying must be within \[1-10485760\], have 0
 SELECT ''::pg_catalog.VARCHAR(0)
 
-query error length for type varchar must be within \[1-10485760\], have 10485761
+query error length for type character varying must be within \[1-10485760\], have 10485761
 SELECT ''::pg_catalog.VARCHAR(10485761)
 
-query error length for type char must be within \[1-10485760\], have 0
+query error length for type character must be within \[1-10485760\], have 0
 SELECT ''::pg_catalog.CHAR(0)
 
-query error length for type char must be within \[1-10485760\], have 10485761
+query error length for type character must be within \[1-10485760\], have 10485761
 SELECT ''::pg_catalog.CHAR(10485761)
 
 ### position ###

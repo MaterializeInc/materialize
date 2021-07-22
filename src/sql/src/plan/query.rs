@@ -2344,7 +2344,17 @@ pub fn plan_expr<'a>(
                 Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
                 _ => plan_expr(ecx, expr)?,
             };
-            let expr = typeconv::plan_coerce(ecx, expr, &to_scalar_type)?;
+
+            let expr = match expr {
+                // Maintain the stringness of literals strings to preserve any
+                // side effects of Explicit casts (going through plan_coerce
+                // uses Assignment casts).
+                CoercibleScalarExpr::LiteralString(..) => {
+                    expr.type_as(&ecx, &ScalarType::String)?
+                }
+                expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
+            };
+
             typeconv::plan_cast("CAST", ecx, CastContext::Explicit, expr, &to_scalar_type)?.into()
         }
         Expr::Function(func) => plan_function(ecx, func)?.into(),
@@ -2612,6 +2622,7 @@ fn plan_list(
             Some(ScalarType::List { element_type, .. }) => Some(&**element_type),
             _ => None,
         };
+
         let mut out = vec![];
         for expr in exprs {
             out.push(match expr {
@@ -3100,12 +3111,26 @@ pub fn scalar_type_from_sql(
                         // if this type is actually a length-parameterized
                         // string.
                         match name.raw_name().item.as_str() {
-                            n @ "bpchar" | n @ "char" | n @ "varchar" => {
+                            n @ "bpchar" => {
                                 validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
                             }
                             _ => {}
                         }
                         ScalarType::String
+                    }
+                    ScalarType::Char { .. } => {
+                        validate_typ_mod("character", &typ_mod, &[("length", 1, 10_485_760)])?;
+                        let length = Some(usize::try_from(*typ_mod.get(0).unwrap_or(&1)).unwrap());
+                        ScalarType::Char { length }
+                    }
+                    ScalarType::VarChar { .. } => {
+                        validate_typ_mod(
+                            "character varying",
+                            &typ_mod,
+                            &[("length", 1, 10_485_760)],
+                        )?;
+                        let length = typ_mod.get(0).map(|v| usize::try_from(*v).unwrap());
+                        ScalarType::VarChar { length }
                     }
                     t => {
                         validate_typ_mod(&name.to_string(), &typ_mod, &[])?;
@@ -3162,7 +3187,7 @@ pub fn unwrap_numeric_typ_mod(
     Ok((precision, scale))
 }
 
-fn validate_typ_mod(
+pub fn validate_typ_mod(
     name: &str,
     typ_mod: &[u64],
     val_ranges: &[(&str, u64, u64)],
@@ -3202,6 +3227,8 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         pgrepr::Type::Interval => Ok(ScalarType::Interval),
         pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
         pgrepr::Type::Text => Ok(ScalarType::String),
+        pgrepr::Type::Char => Ok(ScalarType::Char { length: None }),
+        pgrepr::Type::VarChar => Ok(ScalarType::VarChar { length: None }),
         pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
         pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
         pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),

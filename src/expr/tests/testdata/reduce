@@ -202,11 +202,8 @@ canonicalize
 )]
 [(int32 false) (int32 false)]
 ----
-----
 !(isnull(#0))
 !(isnull(#1))
-----
-----
 
 reduce
 (

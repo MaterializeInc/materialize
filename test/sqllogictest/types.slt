@@ -367,17 +367,19 @@ SELECT 'dog'::pg_catalog.text
 ----
 dog
 
-# 🔬🔬🔬 text aliases
+# 🔬🔬🔬 char
 
 query T
-SELECT 'dog'::char(10)
+SELECT 'dog'::char(3)
 ----
 dog
 
 query T
-SELECT '1'::pg_catalog.char(10)
+SELECT 'dog'::pg_catalog.char(3)
 ----
-1
+dog
+
+# 🔬🔬🔬 varchar
 
 query T
 SELECT 'dog'::varchar(10)

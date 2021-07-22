@@ -202,10 +202,6 @@ EOF
 query error Cannot call function char_length\(integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT char_length(321);
 
-# Cannot implicitly cast string to any numeric category
-query error no overload for text \+ text
-SELECT 'dog'::text + 'cat'::text;
-
 # Cannot implicitly cast double precision to numeric
 query error Cannot call function round\(double precision, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(1.23::float, 1);
@@ -277,6 +273,50 @@ EXPLAIN RAW PLAN FOR
 
 EOF
 
+# Check that char casts to text for string functions
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT lower('a'::char);
+----
+%0 =
+| Constant ()
+| Map lower(chartostr(strtochar("a")))
+
+EOF
+
+# Check that char promotes to text
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT 'a'::char < 'a'::text;
+----
+%0 =
+| Constant ()
+| Map (chartostr(strtochar("a")) < "a")
+
+EOF
+
+# Check that cast from varchar to str unnecessary
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT 'a'::varchar < 'a'::text;
+----
+%0 =
+| Constant ()
+| Map (strtovarchar("a") < "a")
+
+EOF
+
+# Check that text is most-common type
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT coalesce('a'::char, 'a'::varchar, 'a'::text);
+----
+%0 =
+| Constant ()
+| Map coalesce(chartostr(strtochar("a")), strtovarchar("a"), "a")
+
+EOF
+
 query T
 SELECT 1::smallint::smallint;
 ----
@@ -324,8 +364,20 @@ SELECT '1'::jsonb::smallint;
 ----
 1
 
-query error invalid input syntax for type smallint: invalid digit found in string: "dog"
-SELECT 'dog'::text::smallint
+query R
+SELECT '1'::text::smallint
+----
+1
+
+query R
+SELECT '1'::char::smallint
+----
+1
+
+query R
+SELECT '1'::varchar::smallint
+----
+1
 
 query error CAST does not support casting from time to smallint
 SELECT '01:02:03'::time::smallint
@@ -386,8 +438,20 @@ SELECT '1'::jsonb::bigint;
 ----
 1
 
-query error invalid input syntax for type bigint: invalid digit found in string: "dog"
-SELECT 'dog'::text::bigint
+query R
+SELECT '1'::text::bigint
+----
+1
+
+query R
+SELECT '1'::char::bigint
+----
+1
+
+query R
+SELECT '1'::varchar::bigint
+----
+1
 
 query error CAST does not support casting from time to bigint
 SELECT '01:02:03'::time::bigint
@@ -434,8 +498,20 @@ SELECT '{}'::jsonb::boolean;
 query error cannot cast jsonb numeric to type boolean
 SELECT '1'::jsonb::boolean;
 
-query error invalid input syntax for type boolean: "dog"
-SELECT 'dog'::text::boolean
+query T
+SELECT 'true'::text::boolean
+----
+true
+
+query T
+SELECT 'true'::char(4)::boolean
+----
+true
+
+query T
+SELECT 'true'::varchar::boolean
+----
+true
 
 query error CAST does not support casting from time to boolean
 SELECT '01:02:03'::time::boolean
@@ -478,8 +554,20 @@ SELECT '1'::interval::date
 query error CAST does not support casting from jsonb to date
 SELECT '{}'::jsonb::date
 
-query error invalid input syntax for type date: YEAR, MONTH, DAY are all required: "dog"
-SELECT 'dog'::text::date
+query T
+SELECT '2001 02-03'::text::date
+----
+2001-02-03
+
+query T
+SELECT '2001 02-03'::char(11)::date
+----
+2001-02-03
+
+query T
+SELECT '2001 02-03'::varchar::date
+----
+2001-02-03
 
 query error CAST does not support casting from time to date
 SELECT '01:02:03'::time::date
@@ -541,8 +629,20 @@ SELECT '1'::jsonb::numeric;
 ----
 1
 
-query error invalid input syntax for type numeric: "dog"
-SELECT 'dog'::text::numeric
+query R
+SELECT '1'::text::numeric
+----
+1
+
+query R
+SELECT '1'::char::numeric
+----
+1
+
+query R
+SELECT '1'::varchar::numeric
+----
+1
 
 query error CAST does not support casting from time to numeric
 SELECT '01:02:03'::time::numeric
@@ -600,8 +700,20 @@ SELECT '1'::jsonb::double;
 ----
 1.000
 
-query error invalid input syntax for type double precision: "dog"
-SELECT 'dog'::text::double
+query R
+SELECT '1'::text::double
+----
+1
+
+query R
+SELECT '1'::char::double
+----
+1
+
+query R
+SELECT '1'::varchar::double
+----
+1
 
 query error CAST does not support casting from time to double precision
 SELECT '01:02:03'::time::double
@@ -659,8 +771,20 @@ SELECT '2'::jsonb::real;
 ----
 2
 
-query error invalid input syntax for type real: "dog"
-SELECT 'dog'::text::real
+query R
+SELECT '1'::text::real
+----
+1
+
+query R
+SELECT '1'::char::real
+----
+1
+
+query R
+SELECT '1'::varchar::real
+----
+1
 
 query error CAST does not support casting from time to real
 SELECT '01:02:03'::time::real
@@ -715,8 +839,20 @@ SELECT '1'::jsonb::integer;
 ----
 1
 
-query error invalid input syntax for type integer: invalid digit found in string: "dog"
-SELECT 'dog'::text::integer
+query R
+SELECT '1'::text::integer
+----
+1
+
+query R
+SELECT '1'::char::integer
+----
+1
+
+query R
+SELECT '1'::varchar::integer
+----
+1
 
 query error CAST does not support casting from time to integer
 SELECT '01:02:03'::time::integer
@@ -759,8 +895,20 @@ SELECT '1'::interval::interval;
 query error CAST does not support casting from jsonb to interval
 SELECT '{}'::jsonb::interval
 
-query error invalid input syntax for type interval: unknown units dog: "dog"
-SELECT 'dog'::text::interval
+query T
+SELECT '1'::text::interval
+----
+00:00:01
+
+query T
+SELECT '1'::char::interval
+----
+00:00:01
+
+query T
+SELECT '1'::varchar::interval
+----
+00:00:01
 
 query T
 SELECT '01:02:03'::time::interval;
@@ -878,6 +1026,16 @@ SELECT 'dog'::text::text;
 dog
 
 query T
+SELECT 'dog'::char(3)::text;
+----
+dog
+
+query T
+SELECT 'dog'::varchar::text;
+----
+dog
+
+query T
 SELECT '01:02:03'::time::text;
 ----
 01:02:03
@@ -889,6 +1047,171 @@ SELECT '2002 03-04'::timestamp::text;
 
 query T
 SELECT '2003 04-05'::timestamptz::text;
+----
+2003-04-05 00:00:00+00
+
+query T
+SELECT trim(trailing from 1::bigint::char(20));
+----
+1
+
+query T
+SELECT trim(trailing from TRUE::boolean::char(20));
+----
+true
+
+query T
+SELECT trim(trailing from '2001 02-03'::date::char(20));
+----
+2001-02-03
+
+query T
+SELECT trim(trailing from 1.1::numeric::char(20));
+----
+1.1
+
+query T
+SELECT trim(trailing from 1.2::double::char(20));
+----
+1.2
+
+query T
+SELECT trim(trailing from 1.3::real::char(20));
+----
+1.3
+
+query T
+SELECT trim(trailing from 2::int::char(20));
+----
+2
+
+query T
+SELECT trim(trailing from '1'::interval::char(20));
+----
+00:00:01
+
+query T
+SELECT trim(trailing from '{}'::jsonb::char(20));
+----
+{}
+
+query T
+SELECT trim(trailing from '1'::jsonb::char(20));
+----
+1
+
+query T
+SELECT trim(trailing from 'dog'::text::char(20));
+----
+dog
+
+query T
+SELECT trim(trailing from 'dog'::char(3)::char(20));
+----
+dog
+
+query T
+SELECT trim(trailing from 'dog'::varchar::char(20));
+----
+dog
+
+query T
+SELECT trim(trailing from '01:02:03'::time::char(20));
+----
+01:02:03
+
+query T
+SELECT trim(trailing from '2002 03-04'::timestamp::char(20));
+----
+2002-03-04 00:00:00
+
+query T
+SELECT trim(trailing from '2003 04-05'::timestamptz::char(20));
+----
+2003-04-05 00:00:00+
+
+query T
+SELECT 1::smallint::varchar;
+----
+1
+
+query T
+SELECT 1::bigint::varchar;
+----
+1
+
+query T
+SELECT TRUE::boolean::varchar;
+----
+true
+
+query T
+SELECT '2001 02-03'::date::varchar;
+----
+2001-02-03
+
+query T
+SELECT 1.1::numeric::varchar;
+----
+1.1
+
+query T
+SELECT 1.2::double::varchar;
+----
+1.2
+
+query T
+SELECT 1.3::real::varchar;
+----
+1.3
+
+query T
+SELECT 2::int::varchar;
+----
+2
+
+query T
+SELECT '1'::interval::varchar;
+----
+00:00:01
+
+query T
+SELECT '{}'::jsonb::varchar;
+----
+{}
+
+query T
+SELECT '1'::jsonb::varchar;
+----
+1
+
+query T
+SELECT 'dog'::text::varchar;
+----
+dog
+
+query T
+SELECT 'dog'::char(3)::varchar;
+----
+dog
+
+query T
+SELECT 'dog'::varchar::varchar;
+----
+dog
+
+query T
+SELECT '01:02:03'::time::varchar;
+----
+01:02:03
+
+query T
+SELECT '2002 03-04'::timestamp::varchar;
+----
+2002-03-04 00:00:00
+
+query T
+SELECT '2003 04-05'::timestamptz::varchar;
 ----
 2003-04-05 00:00:00+00
 
@@ -924,8 +1247,20 @@ SELECT '1'::interval::time;
 query error CAST does not support casting from jsonb to time
 SELECT '{}'::jsonb::time
 
-query error invalid input syntax for type time: unknown units dog: "dog"
-SELECT 'dog'::text::time
+query T
+SELECT '01:02:03'::text::time
+----
+01:02:03
+
+query T
+SELECT '01:02:03'::char(9)::time
+----
+01:02:03
+
+query T
+SELECT '01:02:03'::varchar::time
+----
+01:02:03
 
 query T
 SELECT '01:02:03'::time::time;
@@ -970,8 +1305,20 @@ SELECT '1'::interval::timestamp
 query error CAST does not support casting from jsonb to timestamp
 SELECT '{}'::jsonb::timestamp
 
-query error invalid input syntax for type timestamp: YEAR, MONTH, DAY are all required: "dog"
-SELECT 'dog'::text::timestamp
+query T
+SELECT '2001 02-03'::text::timestamp
+----
+2001-02-03 00:00:00
+
+query T
+SELECT '2001 02-03'::char(10)::timestamp
+----
+2001-02-03 00:00:00
+
+query T
+SELECT '2001 02-03'::varchar::timestamp
+----
+2001-02-03 00:00:00
 
 query error CAST does not support casting from time to timestamp
 SELECT '01:02:03'::time::timestamp
@@ -1018,8 +1365,20 @@ SELECT '1'::interval::timestamptz
 query error CAST does not support casting from jsonb to timestamp with time zone
 SELECT '{}'::jsonb::timestamptz
 
-query error invalid input syntax for type timestamp with time zone: YEAR, MONTH, DAY are all required: "dog"
-SELECT 'dog'::text::timestamptz
+query T
+SELECT '2001 02-03'::text::timestamptz
+----
+2001-02-03 00:00:00+00
+
+query T
+SELECT '2001 02-03'::char(10)::timestamptz
+----
+2001-02-03 00:00:00+00
+
+query T
+SELECT '2001 02-03'::varchar::timestamptz
+----
+2001-02-03 00:00:00+00
 
 query error CAST does not support casting from time to timestamp with time zone
 SELECT '01:02:03'::time::timestamptz

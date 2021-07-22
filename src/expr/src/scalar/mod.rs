@@ -1036,6 +1036,10 @@ pub enum EvalError {
     MultipleRowsFromSubquery,
     Undefined(String),
     LikePatternTooLong,
+    StringValueTooLong {
+        target_type: String,
+        length: usize,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -1119,6 +1123,12 @@ impl fmt::Display for EvalError {
             }
             EvalError::LikePatternTooLong => {
                 write!(f, "LIKE pattern exceeds maximum length")
+            }
+            EvalError::StringValueTooLong {
+                target_type,
+                length,
+            } => {
+                write!(f, "value too long for type {}({})", target_type, length)
             }
         }
     }

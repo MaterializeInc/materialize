@@ -57,6 +57,8 @@ pub enum Datum<'a> {
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(&'a str),
+    /// Like [`String`] but imposes a limit on the length of string supported.
+    Char(&'a str),
     /// A variable-length multidimensional array of datums.
     ///
     /// Unlike [`Datum::List`], arrays are like tensors and are not permitted to
@@ -280,6 +282,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the string value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Char`].
+    #[track_caller]
+    pub fn unwrap_char(&self) -> &'a str {
+        match self {
+            Datum::Char(s) => s,
+            _ => panic!("Datum::unwrap_char called on {:?}", self),
+        }
+    }
+
     /// Unwraps the bytes value within this datum.
     ///
     /// # Panics
@@ -410,8 +425,11 @@ impl<'a> Datum<'a> {
                     (Datum::Interval(_), _) => false,
                     (Datum::Bytes(_), ScalarType::Bytes) => true,
                     (Datum::Bytes(_), _) => false,
-                    (Datum::String(_), ScalarType::String) => true,
+                    (Datum::String(_), ScalarType::String)
+                    | (Datum::String(_), ScalarType::VarChar { .. }) => true,
                     (Datum::String(_), _) => false,
+                    (Datum::Char(_), ScalarType::Char { .. }) => true,
+                    (Datum::Char(_), _) => false,
                     (Datum::Uuid(_), ScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
                     (Datum::Array(array), ScalarType::Array(t)) => {
@@ -631,7 +649,7 @@ impl fmt::Display for Datum<'_> {
                 }
                 Ok(())
             }
-            Datum::String(s) => {
+            Datum::String(s) | Datum::Char(s) => {
                 f.write_str("\"")?;
                 for c in s.chars() {
                     if c == '"' {
@@ -722,6 +740,13 @@ pub enum ScalarType {
     Bytes,
     /// The type of [`Datum::String`].
     String,
+    /// The type of [`Datum::Char`].
+    ///
+    /// Note that `length` is an option to allow expressions of varying width
+    /// `Char` values in e.g. lists.
+    Char { length: Option<usize> },
+    /// Stored as [`Datum::String`], but can optionally express a limit on the string's length.
+    VarChar { length: Option<usize> },
     /// The type of a datum that may represent any valid JSON value.
     ///
     /// Valid datum variants for this type are:
@@ -836,6 +861,10 @@ impl<'a> ScalarType {
             },
             Array(a) => Array(Box::new(a.default_embedded_value())),
             Numeric { .. } => Numeric { scale: None },
+            // Char's default length should not be `Some(1)`, but instead `None`
+            // to support Char values of different lengths in e.g. lists.
+            Char { .. } => Char { length: None },
+            VarChar { .. } => VarChar { length: None },
             v => v.clone(),
         }
     }
@@ -861,6 +890,21 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Map { value_type, .. } => &**value_type,
             _ => panic!("ScalarType::unwrap_map_value_type called on {:?}", self),
+        }
+    }
+
+    /// Returns the length of a [`ScalarType::Char`] or [`ScalarType::VarChar`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Char`] or [`ScalarType::VarChar`].
+    pub fn unwrap_char_varchar_length(&self) -> Option<usize> {
+        match self {
+            ScalarType::Char { length, .. } | ScalarType::VarChar { length } => *length,
+            _ => panic!(
+                "ScalarType::unwrap_char_varchar_length called on {:?}",
+                self
+            ),
         }
     }
 
@@ -944,6 +988,7 @@ impl<'a> ScalarType {
                     custom_name: name_b,
                 },
             ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
+            (String, VarChar { .. }) | (VarChar { .. }, String) => true,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }

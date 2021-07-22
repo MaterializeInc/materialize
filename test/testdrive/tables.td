@@ -161,7 +161,7 @@ invalid input syntax for type integer: invalid digit found in string: "d"
 > INSERT INTO t VALUES ('4', 'e')
 
 # ...but not in complicated VALUES clauses, per PostgreSQL.
-! INSERT INTO t VALUES ('4', 'e') LIMIT 0
+! INSERT INTO t VALUES ('5', 'f') LIMIT 0
 column "a" is of type integer but expression is of type text
 
 # Test that assignment casts occur when possible...

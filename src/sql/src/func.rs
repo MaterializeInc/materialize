@@ -104,7 +104,9 @@ impl TypeCategory {
             | ScalarType::Numeric { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
-            ScalarType::String => Self::String,
+            ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
+                Self::String
+            }
             ScalarType::Record { .. } => Self::Pseudo,
             ScalarType::Map { .. } => Self::Pseudo,
         }
@@ -679,7 +681,7 @@ impl ParamType {
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
-            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
+            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t.clone(), to.clone()),
         }
     }
 
@@ -773,6 +775,8 @@ impl From<ScalarBaseType> for ParamType {
             Interval => ScalarType::Interval,
             Bytes => ScalarType::Bytes,
             String => ScalarType::String,
+            Char => ScalarType::Char { length: None },
+            VarChar => ScalarType::VarChar { length: None },
             Jsonb => ScalarType::Jsonb,
             Uuid => ScalarType::Uuid,
             Oid => ScalarType::Oid,
@@ -1431,6 +1435,7 @@ lazy_static! {
             "octet_length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 720;
                 params!(String) => UnaryFunc::ByteLengthString, 1374;
+                params!(Char) => UnaryFunc::ByteLengthChar, 1375;
             },
             "obj_description" => Scalar {
                 params!(Oid, String) => Operation::binary(|_ecx, _oid, _catalog| {

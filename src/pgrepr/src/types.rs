@@ -51,6 +51,10 @@ pub enum Type {
     Record(Vec<Type>),
     /// A variable-length string.
     Text,
+    /// A fixed-length string.
+    Char,
+    /// A variable-length string with an optional limit.
+    VarChar,
     /// A time of day without a day.
     Time,
     /// A date and time, without a timezone.
@@ -101,11 +105,9 @@ impl Type {
             postgres_types::Type::JSONB => Some(Type::Jsonb),
             postgres_types::Type::NUMERIC => Some(Type::Numeric),
             postgres_types::Type::OID => Some(Type::Oid),
-            // TODO(petrosagg): char and bpchar values should not be stored as Text. see #6757
-            postgres_types::Type::TEXT
-            | postgres_types::Type::BPCHAR
-            | postgres_types::Type::CHAR
-            | postgres_types::Type::VARCHAR => Some(Type::Text),
+            postgres_types::Type::TEXT => Some(Type::Text),
+            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => Some(Type::Char),
+            postgres_types::Type::VARCHAR => Some(Type::VarChar),
             postgres_types::Type::TIME => Some(Type::Time),
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
             postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
@@ -134,6 +136,8 @@ impl Type {
                 Type::Oid => &postgres_types::Type::OID_ARRAY,
                 Type::Record(_) => &postgres_types::Type::RECORD_ARRAY,
                 Type::Text => &postgres_types::Type::TEXT_ARRAY,
+                Type::Char => &postgres_types::Type::BPCHAR_ARRAY,
+                Type::VarChar => &postgres_types::Type::VARCHAR_ARRAY,
                 Type::Time => &postgres_types::Type::TIME_ARRAY,
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
@@ -155,6 +159,8 @@ impl Type {
             Type::Oid => &postgres_types::Type::OID,
             Type::Record(_) => &postgres_types::Type::RECORD,
             Type::Text => &postgres_types::Type::TEXT,
+            Type::Char => &postgres_types::Type::BPCHAR,
+            Type::VarChar => &postgres_types::Type::VARCHAR,
             Type::Time => &postgres_types::Type::TIME,
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
@@ -169,6 +175,7 @@ impl Type {
         match self.inner() {
             &postgres_types::Type::BOOL_ARRAY => "boolean[]",
             &postgres_types::Type::BYTEA_ARRAY => "bytea[]",
+            &postgres_types::Type::BPCHAR_ARRAY => "character[]",
             &postgres_types::Type::DATE_ARRAY => "date[]",
             &postgres_types::Type::FLOAT4_ARRAY => "real[]",
             &postgres_types::Type::FLOAT8_ARRAY => "double precision[]",
@@ -184,13 +191,16 @@ impl Type {
             &postgres_types::Type::TIMESTAMP_ARRAY => "timestamp[]",
             &postgres_types::Type::TIMESTAMPTZ_ARRAY => "timestamp with time zone[]",
             &postgres_types::Type::UUID_ARRAY => "uuid[]",
+            &postgres_types::Type::VARCHAR_ARRAY => "character varying[]",
             &postgres_types::Type::BOOL => "boolean",
+            &postgres_types::Type::BPCHAR => "character",
             &postgres_types::Type::FLOAT4 => "real",
             &postgres_types::Type::FLOAT8 => "double precision",
             &postgres_types::Type::INT2 => "smallint",
             &postgres_types::Type::INT4 => "integer",
             &postgres_types::Type::INT8 => "bigint",
             &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
+            &postgres_types::Type::VARCHAR => "character varying",
             other => other.name(),
         }
     }
@@ -223,6 +233,8 @@ impl Type {
             Type::Oid => 4,
             Type::Record(_) => -1,
             Type::Text => -1,
+            Type::Char => -1,
+            Type::VarChar => -1,
             Type::Time => 4,
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
@@ -265,6 +277,8 @@ impl Type {
             },
             Type::Text => ScalarType::String,
             Type::Time => ScalarType::Time,
+            Type::Char => ScalarType::Char { length: None },
+            Type::VarChar => ScalarType::VarChar { length: None },
             Type::Timestamp => ScalarType::Timestamp,
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
@@ -300,6 +314,8 @@ impl From<&ScalarType> for Type {
                     .collect(),
             ),
             ScalarType::String => Type::Text,
+            ScalarType::Char { .. } => Type::Char,
+            ScalarType::VarChar { .. } => Type::VarChar,
             ScalarType::Time => Type::Time,
             ScalarType::Timestamp => Type::Timestamp,
             ScalarType::TimestampTz => Type::TimestampTz,

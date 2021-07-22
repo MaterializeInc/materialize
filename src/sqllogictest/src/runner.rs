@@ -313,7 +313,9 @@ impl<'a> FromSql<'a> for Slt {
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
-            PgType::TEXT => Self(Value::Text(types::text_from_sql(raw)?.to_string())),
+            PgType::TEXT | PgType::BPCHAR | PgType::VARCHAR => {
+                Self(Value::Text(types::text_from_sql(raw)?.to_string()))
+            }
             PgType::TIME => Self(Value::Time(NaiveTime::from_sql(ty, raw)?)),
             PgType::TIMESTAMP => Self(Value::Timestamp(NaiveDateTime::from_sql(ty, raw)?)),
             PgType::TIMESTAMPTZ => Self(Value::TimestampTz(DateTime::<Utc>::from_sql(ty, raw)?)),
@@ -385,6 +387,8 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::OID
                 | PgType::RECORD
                 | PgType::TEXT
+                | PgType::BPCHAR
+                | PgType::VARCHAR
                 | PgType::TIME
                 | PgType::TIMESTAMP
                 | PgType::TIMESTAMPTZ

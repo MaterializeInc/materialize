@@ -138,7 +138,7 @@ fn decode(row: &Row) -> Result<HashMap<String, String>, String> {
         let ty = col.type_();
         let conversion = match *ty {
             Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
-            Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+            Type::BPCHAR | Type::TEXT => row.get::<_, Option<String>>(i),
             Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
                 let s = x.into_iter().map(ascii::escape_default).flatten().collect();
                 String::from_utf8(s).unwrap()

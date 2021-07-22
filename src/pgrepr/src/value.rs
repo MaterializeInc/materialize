@@ -79,6 +79,10 @@ pub enum Value {
     TimestampTz(DateTime<Utc>),
     /// A variable-length string.
     Text(String),
+    /// A fixed-length string.
+    Char(String),
+    /// A variable-length string with an optional limit.
+    VarChar(String),
     /// A universally unique identifier.
     Uuid(Uuid),
 }
@@ -112,6 +116,8 @@ impl Value {
             (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
+            (Datum::String(s), ScalarType::VarChar { .. }) => Some(Value::VarChar(s.to_owned())),
+            (Datum::Char(s), ScalarType::Char { .. }) => Some(Value::Char(s.to_owned())),
             (_, ScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
@@ -228,6 +234,14 @@ impl Value {
             Value::TimestampTz(ts) => (Datum::TimestampTz(ts), ScalarType::TimestampTz),
             Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
+            Value::Char(s) => (
+                Datum::Char(buf.push_string(s)),
+                ScalarType::Char { length: None },
+            ),
+            Value::VarChar(s) => (
+                Datum::String(buf.push_string(s)),
+                ScalarType::VarChar { length: None },
+            ),
             Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
             Value::Numeric(n) => (
                 Datum::Numeric(n.0),
@@ -284,7 +298,7 @@ impl Value {
                 None => buf.write_null(),
                 Some(elem) => elem.encode_text(buf.nonnull_buffer()),
             }),
-            Value::Text(s) => strconv::format_string(buf, s),
+            Value::Text(s) | Value::Char(s) | Value::VarChar(s) => strconv::format_string(buf, s),
             Value::Time(t) => strconv::format_time(buf, *t),
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
@@ -350,6 +364,8 @@ impl Value {
                 Ok(postgres_types::IsNull::No)
             }
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
+            Value::Char(s) => s.to_sql(&PgType::BPCHAR, buf),
+            Value::VarChar(s) => s.to_sql(&PgType::VARCHAR, buf),
             Value::Time(t) => t.to_sql(&PgType::TIME, buf),
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
@@ -408,6 +424,8 @@ impl Value {
                 return Err("input of anonymous composite types is not implemented".into())
             }
             Type::Text => Value::Text(raw.to_owned()),
+            Type::Char => Value::Char(raw.to_owned()),
+            Type::VarChar => Value::VarChar(raw.to_owned()),
             Type::Time => Value::Time(strconv::parse_time(raw)?),
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
@@ -435,6 +453,8 @@ impl Value {
             Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
+            Type::Char => String::from_sql(ty.inner(), raw).map(Value::Char),
+            Type::VarChar => String::from_sql(ty.inner(), raw).map(Value::VarChar),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
@@ -493,6 +513,8 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         Type::Numeric => ScalarType::Numeric { scale: None },
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
+        Type::Char => ScalarType::Char { length: None },
+        Type::VarChar => ScalarType::VarChar { length: None },
         Type::Time => ScalarType::Time,
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
