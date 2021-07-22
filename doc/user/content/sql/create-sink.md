@@ -161,6 +161,8 @@ When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new 
 ```nofmt
 {topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
 ```
+**Note:** With `reuse_topic` enabled, this schema for topic naming is ignored. Instead, the topic name specified in the sink definition is used as is.
+
 You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
 {{% kafka-sink-drop  %}}
