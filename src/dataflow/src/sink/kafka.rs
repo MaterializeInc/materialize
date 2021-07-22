@@ -27,7 +27,7 @@ use prometheus::{
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
-use rdkafka::message::Message;
+use rdkafka::message::{Message, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
@@ -402,7 +402,11 @@ impl KafkaSinkState {
         }
     }
 
-    fn send(&self, record: BaseRecord<Vec<u8>, Vec<u8>>) -> Result<(), bool> {
+    fn send<K, P>(&self, record: BaseRecord<K, P>) -> Result<(), bool>
+    where
+        K: ToBytes + ?Sized,
+        P: ToBytes + ?Sized,
+    {
         if let Err((e, _)) = self.producer.send(record) {
             error!("unable to produce message in {}: {}", self.name, e);
             self.metrics.message_send_errors_counter.inc();
@@ -419,6 +423,32 @@ impl KafkaSinkState {
             self.metrics.messages_sent_counter.inc();
             Ok(())
         }
+    }
+
+    fn send_consistency_record<'a>(
+        &self,
+        transaction_id: &str,
+        status: &str,
+        message_count: Option<i64>,
+    ) -> Result<(), bool> {
+        let consistency = self
+            .consistency
+            .as_ref()
+            .expect("no consistency information");
+
+        let encoded = avro::encode_debezium_transaction_unchecked(
+            consistency.schema_id,
+            &self.topic_prefix,
+            transaction_id,
+            status,
+            message_count,
+        );
+
+        let record = BaseRecord::to(&consistency.topic)
+            .payload(&encoded)
+            .key(&self.topic_prefix);
+
+        self.send(record)
     }
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
@@ -476,22 +506,12 @@ impl KafkaSinkState {
 
             if min_frontier > self.latest_progress_ts {
                 // record the write frontier in the consistency topic.
-                if let Some(consistency) = &self.consistency {
-                    let encoded = avro::encode_debezium_transaction_unchecked(
-                        consistency.schema_id,
-                        &self.topic_prefix,
-                        &min_frontier.to_string(),
-                        "END",
-                        None,
-                    );
-
-                    let record = BaseRecord::to(&consistency.topic).payload(&encoded);
-
+                if self.consistency.is_some() {
                     if self.transactional {
                         self.producer.begin_transaction()?
                     }
 
-                    self.send(record)
+                    self.send_consistency_record(&min_frontier.to_string(), "END", None)
                         .map_err(|_e| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
@@ -763,17 +783,10 @@ where
                         }
                     }
                     SendState::Begin => {
-                        if let Some(consistency) = &s.consistency {
-                            let encoded = avro::encode_debezium_transaction_unchecked(
-                                consistency.schema_id,
-                                &s.topic_prefix,
-                                &ts.to_string(),
-                                "BEGIN",
-                                None,
-                            );
+                        if s.consistency.is_some() {
+                            let result = s.send_consistency_record(&ts.to_string(), "BEGIN", None);
 
-                            let record = BaseRecord::to(&consistency.topic).payload(&encoded);
-                            if let Err(retry) = s.send(record) {
+                            if let Err(retry) = result {
                                 return retry;
                             }
                         }
@@ -826,17 +839,14 @@ where
                         }
                     }
                     SendState::End(total_count) => {
-                        if let Some(consistency) = &s.consistency {
-                            let encoded = avro::encode_debezium_transaction_unchecked(
-                                consistency.schema_id,
-                                &s.topic_prefix,
+                        if s.consistency.is_some() {
+                            let result = s.send_consistency_record(
                                 &ts.to_string(),
                                 "END",
                                 Some(total_count),
                             );
 
-                            let record = BaseRecord::to(&consistency.topic).payload(&encoded);
-                            if let Err(retry) = s.send(record) {
+                            if let Err(retry) = result {
                                 return retry;
                             }
                         }
