@@ -45,7 +45,6 @@ use crate::source::SourceOutput;
 
 mod avro;
 mod csv;
-mod metrics;
 mod protobuf;
 
 /// Update row to blank out retractions of rows that we have never seen
