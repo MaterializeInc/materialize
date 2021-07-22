@@ -108,6 +108,8 @@ pub struct BlobFutureBatchMeta {
     pub desc: Description<SeqNo>,
     /// The maximum timestamp of any update contained in this batch.
     pub ts_upper: u64,
+    /// The minimum timestamp from any update contained in this batch.
+    pub ts_lower: u64,
 }
 
 /// The metadata necessary to reconstruct a BlobTrace.
@@ -616,6 +618,7 @@ mod tests {
             key: "".to_string(),
             desc: seqno_desc(lower, upper),
             ts_upper: 0,
+            ts_lower: 0,
         }
     }
 
