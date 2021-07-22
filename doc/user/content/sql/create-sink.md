@@ -54,7 +54,7 @@ Field                | Value type | Description
 ---------------------|------------|------------
 `partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
-`exactly_once`  | `bool`   |  Use the existing Kafka topic after Materialize restarts, instead of creating a new one. `consistency_topic` is required if true. The default is false.
+`reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. `consistency_topic` is required if true. The default is false.
 `consistency_topic`  | `text`     | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks.
 `security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
@@ -175,7 +175,7 @@ This is currently available only for Kafka sources and the views based on them.
 
 When you create a sink, you must:
 
-* Enable the `exactly_once` switch.
+* Enable the `reuse_topic` switch.
 * Specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system.
 
 The sink consistency topic cannot be written to by any other process, and both the sink topic and the sink consistency topic need to be set to infinite data retention.
@@ -310,7 +310,7 @@ FORMAT AVRO USING
 #### With topic reuse enabled after restart
 
 ```sql
-CREATE SINK my_sink FROM data_schema_inline INTO KAFKA BROKER 'localhost:9092' TOPIC 'my_one_and_only_sink_topic' WITH (exactly_once=true, consistency_topic='my_consistency_topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+CREATE SINK my_sink FROM data_schema_inline INTO KAFKA BROKER 'localhost:9092' TOPIC 'my_one_and_only_sink_topic' WITH (reuse_topic=true, consistency_topic='my_consistency_topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
 #### From materialized views

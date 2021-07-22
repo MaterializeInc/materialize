@@ -1138,7 +1138,9 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
-    pub exactly_once: bool,
+    // Forces the sink to always write to the same topic across restarts instead
+    // of picking a new topic each time.
+    pub reuse_topic: bool,
     // Source dependencies for exactly-once sinks.
     pub transitive_source_dependencies: Vec<GlobalId>,
 }

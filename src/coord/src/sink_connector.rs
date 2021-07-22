@@ -329,10 +329,10 @@ async fn build_kafka(
     id: GlobalId,
 ) -> Result<SinkConnector, CoordError> {
     let maybe_append_nonce = {
-        let exactly_once = builder.exactly_once;
+        let reuse_topic = builder.reuse_topic;
         let topic_suffix_nonce = builder.topic_suffix_nonce;
         move |topic: &str| {
-            if exactly_once {
+            if reuse_topic {
                 topic.to_string()
             } else {
                 format!("{}-{}-{}", topic, id, topic_suffix_nonce)
@@ -365,7 +365,7 @@ async fn build_kafka(
         &ccsr,
         &builder.value_schema,
         builder.key_schema.as_deref(),
-        builder.exactly_once,
+        builder.reuse_topic,
     )
     .await
     .context("error registering kafka topic for sink")?;
@@ -387,13 +387,13 @@ async fn build_kafka(
             &ccsr,
             &consistency_value_schema,
             None,
-            builder.exactly_once,
+            builder.reuse_topic,
         )
         .await
         .context("error registering kafka consistency topic for sink")?;
 
         // get latest committed timestamp from consistencty topic
-        let gate_ts = if builder.exactly_once {
+        let gate_ts = if builder.reuse_topic {
             let mut consumer_config = config.clone();
             consumer_config
                 .set("group.id", format!("materialize-bootstrap-{}", topic))
@@ -431,7 +431,7 @@ async fn build_kafka(
         key_desc_and_indices: builder.key_desc_and_indices,
         value_desc: builder.value_desc,
         consistency,
-        exactly_once: builder.exactly_once,
+        exactly_once: builder.reuse_topic,
         transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
         config_options: builder.config_options,

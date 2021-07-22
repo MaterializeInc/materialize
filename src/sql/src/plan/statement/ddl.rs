@@ -1278,22 +1278,22 @@ fn kafka_sink_builder(
         Some(_) => bail!("consistency_topic must be a string"),
     };
 
-    let exactly_once = match with_options.remove("exactly_once") {
+    let reuse_topic = match with_options.remove("reuse_topic") {
         Some(Value::Boolean(b)) => b,
         None => false,
-        Some(_) => bail!("exactly-once must be a boolean"),
+        Some(_) => bail!("reuse_topic must be a boolean"),
     };
 
-    if exactly_once && consistency_topic.is_none() {
-        bail!("exactly-once requires a consistency topic");
+    if reuse_topic && consistency_topic.is_none() {
+        bail!("reuse_topic requires a consistency topic");
     }
 
-    let transitive_source_dependencies: Vec<_> = if exactly_once {
+    let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source {
                 if !item.source_connector()?.yields_stable_input() {
                     bail!(
-                    "all input sources of an exactly-once Kafka sink must be replayable, {} is not",
+                    "reuse_topic requires that sink input dependencies are replayable, {} is not",
                     item.name()
                 );
                 } else if !item.source_connector()?.is_byo() {
@@ -1301,7 +1301,7 @@ fn kafka_sink_builder(
                 }
             } else if item.item_type() != CatalogItemType::Source {
                 bail!(
-                    "all inputs of an exactly-once Kafka sink must be sources, {} is not",
+                    "reuse_topic requires that sink input dependencies are sources, {} is not",
                     item.name()
                 );
             };
@@ -1378,7 +1378,7 @@ fn kafka_sink_builder(
         relation_key_indices,
         key_desc_and_indices,
         value_desc,
-        exactly_once,
+        reuse_topic,
         transitive_source_dependencies,
     }))
 }
