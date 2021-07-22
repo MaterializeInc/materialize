@@ -139,13 +139,14 @@ struct Quantifier {
     alias: Option<Ident>,
 }
 
+/// Type of quantifiers (with their abbreviations)
 enum QuantifierType {
-    All,
-    Any,
-    Existential,
-    Foreach,
-    PreservedForeach,
-    Scalar,
+    All,               // 'All'
+    Any,               // 'Any'
+    Existential,       // 'E'
+    Foreach,           // 'F'
+    PreservedForeach,  // 'P'
+    Scalar,            // 'S'
 }
 ```
 
@@ -598,6 +599,20 @@ connecting the quantifiers involved in the predicate.
 
 Note that the having filter is just a regular predicate on the `Select` box ranging over the `Grouping` box.
 
+#### `GROUP BY` vs. `DISTINCT`
+
+As mentioned above, `GROUP BY` and `DISTINCT` use different representation in QGM. The following diagram
+shows a simple `DISTINCT` query.
+
+![DISTINCT](qgm/simple-distinct.svg)
+
+As shown below, the equivalent `GROUP BY` query is automatically converted into the query graph above
+during the normalization process.
+
+![GROUP BY DISTINCT before normalization](qgm/group-by-distinct-before.svg)
+
+![GROUP BY DISTINCT after normalization](qgm/group-by-distinct-after.svg)
+
 #### Comma join
 
 ![Simple comma join](qgm/simple-comma-join.svg)
@@ -670,7 +685,9 @@ We will see later how we could decorrelate a query like that via transformations
 `NATURAL` joins don't have an explicit representation in QGM since, like `LATERAL`, it is a name resolution concept
 that doesn't make sense anymore after it.
 
-#### `EXISTS` and `IN SELECT`
+#### Subqueries
+
+##### `EXISTS` and `IN SELECT`
 
 `EXISTS` and `IN SELECT` subqueries are represented via `Existential` quantifiers. In fact, `EXISTS` subqueries
 are represented as `1 IN (SELECT 1 FROM (<exists subquery>))` as shown in the second example below.
@@ -682,7 +699,7 @@ are represented as `1 IN (SELECT 1 FROM (<exists subquery>))` as shown in the se
 Given that the two queries above are equivalent, the normalization process should normalize both to the same
 representation.
 
-#### Scalar subqueries
+##### Scalar subqueries
 
 ![VALUES](qgm/simple-scalar-subquery.svg)
 
@@ -690,6 +707,13 @@ Scalar subqueries are represented via `Scalar` quantifiers as shown above. These
 regular `Foreach` quantifiers iff the inner subquery is guaranteed to always return one row at most and the NULL
 value returned when the subquery is empty is ignored. Otherwise, no predicate can cross the boundary of a `Scalar`
 quantifier.
+
+##### `ANY`/`ALL` subqueries
+
+`ANY`/`ALL` subqueries are represented via `Any` and `All` quantifier types respectively.
+
+![ALL](qgm/subquery-all.svg)
+![ANY](qgm/subquery-any.svg)
 
 #### `VALUES`
 
