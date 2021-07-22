@@ -47,12 +47,15 @@ should be extendable with the current work, but will be prioritized separately.
 -->
 
 User-facing changes are limited to an expansion of the ability to combine
-existing formats with S3 sources, for example e.g. `FORMAT CSV WITH HEADER`.
+existing formats with S3 sources, for example `FORMAT CSV WITH HEADER` or Avro
+Object Container Files.
 
 When a user specifies a source format that has a header, we will obtain an
 arbitrary file from the source declaration and inspect its header, making it the
-cannonical schema. All files must have exactly the same schema -- if any are
-encountered that do not match, the dataflow will be put into an error state.
+canonical schema. All files must have exactly the same schema -- if any are
+encountered that do not match, the dataflow will be put into an error state. If
+it is not immediately possible to determine the header, the `CREATE SOURCE`
+invocation will fail.
 
 Internally, there are only a few changes that need to be made.
 
@@ -65,11 +68,16 @@ Internally, there are only a few changes that need to be made.
 ### Purification strategy
 
 We will extend the [purification strategy from existing formats][csv-purify]
-into their combination with S3, including using existing syntax.
+into their combination with S3, introducing new syntax for the CSV format that
+explicitly lists all column names, which will be the purification target for all
+CSV format clauses.
+
+The new syntax is `WITH (HEADER AND)? NAMED COLUMNS (colname (, colname)*)`. See
+examples below.
 
 [csv-purify]: https://github.com/MaterializeInc/materialize/blob/88cf93c3309ca62/src/sql/src/pure.rs#L480-L501
 
-#### Examples
+#### CSV format examples
 
 A CSV source containing files with header lines like `id,value` as:
 
@@ -82,13 +90,14 @@ FORMAT CSV WITH HEADER;
 will be rewritten via purify to:
 
 ```sql
-CREATE SOURCE example (id, value)
+CREATE SOURCE example
 FROM S3 DISCOVER OBJECTS USING USING BUCKET SCAN 'bucket'
-FORMAT CSV WITH HEADER;
+FORMAT CSV WITH HEADER AND NAMED COLUMNS (id, value);
 ```
 
 Conversely, the following create source statement (and the equivalent without
-headers) will be rejected:
+headers) will be rejected if it is not immediately possible to determine the
+headers because there is no object in the queue:
 
 ```sql
 CREATE SOURCE example
@@ -96,15 +105,42 @@ FROM S3 DISCOVER OBJECTS USING SQS NOTIFICATIONS 'queuename'
 FORMAT CSV WITH HEADER;
 ```
 
-it will instead require that users specify the column names:
+it will instead require that users specify the column names using one of the
+following syntaxes:
+
+*
+  ```sql
+  CREATE SOURCE example (id, value)
+  FROM S3 DISCOVER OBJECTS USING SQS NOTIFICATIONS 'queuename'
+  FORMAT CSV WITH HEADER;
+  ```
+*
+  ```sql
+  CREATE SOURCE example
+  FROM S3 DISCOVER OBJECTS USING SQS NOTIFICATIONS 'queuename'
+  FORMAT CSV WITH NAMED COLUMNS (id, value);
+  ```
+
+All syntaxes for CSV-formatted sources (`WITH n COLUMNS` without an alias, `WITH
+n COLUMNS` with aliases, `WITH HEADER`) will always be rewritten to the named
+columns syntax inside the catalog. Column aliases and the named columns syntax
+will not be allowed to be used at the same time.
+
+This means that the following create source statement:
 
 ```sql
-CREATE SOURCE example (id, value)
-FROM S3 DISCOVER OBJECTS USING SQS NOTIFICATIONS 'queuename'
-FORMAT CSV WITH HEADER;
+CREATE SOURCE example
+FROM ...
+FORMAT CSV WITH 2 COLUMNS;
 ```
 
-Similar rules will apply to Avro OCF objects, when implemented.
+will be rewritten to:
+
+```sql
+CREATE SOURCE example
+FROM ...
+FORMAT CSV WITH NAMED COLUMNS (column1, column2);
+```
 
 ## Alternatives and future work
 
