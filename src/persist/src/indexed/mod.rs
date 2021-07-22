@@ -351,7 +351,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let mut updates = Vec::new();
         {
             let mut snap =
-                future.snapshot(desc.lower().clone(), Some(desc.upper().clone()), &self.blob)?;
+                future.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
             while snap.read(&mut updates) {}
         }
 
@@ -427,7 +427,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let trace = trace.snapshot(&self.blob)?;
-        let future = future.snapshot(trace.ts_upper.clone(), None, &self.blob)?;
+        let future = future.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
         // A closed lower bound on the updates we should include in `buffer` (i.e.
         // the ones not included in `future`).
