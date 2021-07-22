@@ -178,7 +178,7 @@ When you create a sink, you must:
 * Enable the `reuse_topic` switch.
 * Specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system.
 
-The sink consistency topic cannot be written to by any other process, and both the sink topic and the sink consistency topic need to be set to infinite data retention.
+The sink consistency topic cannot be written to by any other process, including another Materialize instance or another sink.
 
 Because this feature is still experimental, we strongly suggest that you start with test data, rather than with production. Please [escalate](https://github.com/MaterializeInc/materialize/issues/new/choose) any issues to us.
 
