@@ -123,6 +123,11 @@ fn tail<G>(
                             if should_emit {
                                 packer.push(Datum::from(numeric::Numeric::from(*time)));
                                 if connector.emit_progress {
+                                    // When sinking with PROGRESS, the output
+                                    // includes an additional column that
+                                    // indicates whether a timestamp is
+                                    // complete. For regular "data" upates this
+                                    // is always `false`.
                                     packer.push(Datum::False);
                                 }
 
