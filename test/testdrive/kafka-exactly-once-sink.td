@@ -96,67 +96,73 @@ New York,NY,10004
 
 > CREATE SINK output1 FROM input_kafka_byo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output1-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output1-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK output2 FROM input_kafka_no_byo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output2-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output2-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 ! CREATE SINK output3 FROM input_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output3-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output3-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
 
 > CREATE SINK output4 FROM input_kafka_byo_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output4-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output4-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK output4_view FROM input_kafka_byo_mview_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output4b-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output4b-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK output5 FROM input_kafka_no_byo_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output5-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK output5_view FROM input_kafka_no_byo_mview_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output5b-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output5b-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 ! CREATE SINK output6 FROM input_table_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output6-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output6-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 reuse_topic requires that sink input dependencies are sources, materialize.public.input_table is not
 
 ! CREATE SINK output7 FROM input_values_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output7-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output7-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_view is not
 
 ! CREATE SINK output8 FROM input_values_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output8-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output8-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 reuse_topic requires that sink input dependencies are sources, materialize.public.input_values_mview is not
 
 > CREATE SINK output12 FROM input_kafka_no_byo_derived_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output12-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output12-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK output13 FROM input_csv
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output13-view-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output13-view-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> CREATE SINK output14_custom_consistency_topic FROM input_kafka_byo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output1-view-${testdrive.seed}'
+  WITH (reuse_topic=true, consistency_topic='output14-custom-consistency-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
 
 # ensure that the sink works with log compaction enabled on the consistency topic
 
@@ -174,7 +180,7 @@ $ kafka-create-topic topic=compaction-test-output-consistency compaction=true
 
 > CREATE SINK compaction_test_sink FROM compaction_test_input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic = 'testdrive-compaction-test-output-consistency-${testdrive.seed}') FORMAT AVRO
+  WITH (reuse_topic=true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=compaction-test-input schema=${schema} timestamp=1
