@@ -740,7 +740,7 @@ representation.
 
 ##### Scalar subqueries
 
-![VALUES](qgm/simple-scalar-subquery.svg)
+![Scalar subquery](qgm/simple-scalar-subquery.svg)
 
 Scalar subqueries are represented via `Scalar` quantifiers as shown above. These quantifiers can be converted into
 regular `Foreach` quantifiers iff the inner subquery is guaranteed to always return one row at most and the NULL
@@ -759,6 +759,9 @@ quantifier.
 ![VALUES](qgm/simple-values.svg)
 
 ![VALUES with alias](qgm/simple-values-with-alias.svg)
+
+In the example above, an extra box is added for the simple purpose of storing the column aliases. This extra box
+is merged into the top-level one during the normalization process by the `SelMerge` rule described in the paper.
 
 #### `UNION`
 
