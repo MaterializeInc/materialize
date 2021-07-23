@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
+use serde_json::Value;
 
 use expr::explain::ViewExplanation;
 use expr::*;
@@ -45,7 +46,7 @@ lazy_static! {
 /// See [lowertest::to_json] for the syntax.
 pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
     deserialize(
-        &mut parse_str(s)?.into_iter(),
+        &mut tokenize(s)?.into_iter(),
         "MirScalarExpr",
         &RTI,
         &mut MirScalarExprDeserializeContext::default(),
@@ -57,7 +58,7 @@ pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
 /// See [lowertest::to_json] for the syntax.
 pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, String> {
     deserialize(
-        &mut parse_str(s)?.into_iter(),
+        &mut tokenize(s)?.into_iter(),
         "MirRelationExpr",
         &RTI,
         &mut MirRelationExprDeserializeContext::new(catalog),
@@ -110,7 +111,7 @@ impl<'a> TestCatalog {
     /// * `(defsource [types_of_cols] [[optional_sets_of_key_cols]])`
     ///   insert a source into the catalog.
     pub fn handle_test_command(&mut self, spec: &str) -> Result<(), String> {
-        let mut stream_iter = parse_str(spec)?.into_iter();
+        let mut stream_iter = tokenize(spec)?.into_iter();
         match stream_iter.next() {
             Some(TokenTree::Group(group)) => {
                 let mut inner_iter = group.stream().into_iter().peekable();
@@ -218,6 +219,15 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
             Some(result) => Ok(Some(serde_json::to_string(&result).map_err_to_string()?)),
             None => Ok(None),
         }
+    }
+
+    fn reverse_syntax_override(
+        &mut self,
+        json: &Value,
+        type_name: &str,
+        rti: &ReflectedTypeInfo,
+    ) -> Option<String> {
+        None
     }
 }
 
@@ -442,6 +452,15 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                 Ok(None)
             }
         }
+    }
+
+    fn reverse_syntax_override(
+        &mut self,
+        json: &Value,
+        type_name: &str,
+        rti: &ReflectedTypeInfo,
+    ) -> Option<String> {
+        self.inner_ctx.reverse_syntax_override(json, type_name, rti)
     }
 }
 

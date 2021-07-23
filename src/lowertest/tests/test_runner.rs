@@ -15,33 +15,34 @@ mod tests {
 
     use lazy_static::lazy_static;
     use ore::result::ResultExt;
-    use proc_macro2::{TokenStream, TokenTree};
+    use proc_macro2::TokenTree;
     use serde::{Deserialize, Serialize};
+    use serde_json::Value;
 
-    #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
     struct SingleUnnamedArg(Box<f64>);
 
-    #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
-    struct OptionalArg(bool, #[serde(default)] (f64, usize));
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    struct OptionalArg(bool, #[serde(default)] (f64, u32));
 
-    #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
     struct MultiUnnamedArg(Vec<(usize, Vec<(String, usize)>, usize)>, String);
 
-    #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
     struct MultiNamedArg {
         fizz: Vec<Option<bool>>,
         #[serde(default)]
         bizz: Vec<Vec<(SingleUnnamedArg, bool)>>,
     }
 
-    #[derive(Debug, Deserialize, Serialize, MzStructReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
     struct FirstArgEnum {
         test_enum: Box<TestEnum>,
         #[serde(default)]
         second_arg: String,
     }
 
-    #[derive(Debug, Deserialize, Serialize, MzEnumReflect)]
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzEnumReflect)]
     enum TestEnum {
         SingleNamedField {
             foo: Vec<usize>,
@@ -53,6 +54,8 @@ mod tests {
             baz: bool,
         },
         SingleUnnamedField(SingleUnnamedArg),
+        SingleUnnamedField2(Vec<i64>),
+        SingleUnnamedField3(MultiNamedArg),
         MultiUnnamedFields(MultiUnnamedArg, MultiNamedArg, Box<TestEnum>),
         MultiUnnamedFields2(OptionalArg, FirstArgEnum, #[serde(default)] String),
         Unit,
@@ -143,11 +146,32 @@ mod tests {
             }
             Ok(None)
         }
+
+        /// This decrements all numbers of type "usize" by one.
+        fn reverse_syntax_override(
+            &mut self,
+            json: &Value,
+            type_name: &str,
+            _rti: &ReflectedTypeInfo,
+        ) -> Option<String> {
+            if type_name == "usize" {
+                let result: usize = json.as_u64().unwrap() as usize;
+                if result == 0 {
+                    return Some(0.to_string());
+                } else {
+                    return Some((result - 1).to_string());
+                }
+            }
+            None
+        }
     }
 
-    fn build(s: &str, args: &HashMap<String, Vec<String>>) -> Result<String, String> {
-        let stream = s.to_string().parse::<TokenStream>().map_err_to_string()?;
-        let result: Option<TestEnum> = if args.get("override").is_some() {
+    fn create_test_enum(
+        s: &str,
+        args: &HashMap<String, Vec<String>>,
+    ) -> Result<Option<TestEnum>, String> {
+        let stream = tokenize(s)?;
+        if args.get("override").is_some() {
             deserialize_optional(
                 &mut stream.into_iter(),
                 "TestEnum",
@@ -161,7 +185,48 @@ mod tests {
                 &RTI,
                 &mut GenericTestDeserializeContext::default(),
             )
-        }?;
+        }
+    }
+
+    fn build(s: &str, args: &HashMap<String, Vec<String>>) -> Result<String, String> {
+        // 1) Go from original spec to TestEnum.
+        let result: Option<TestEnum> = create_test_enum(s, args)?;
+        // 2) Go from TestEnum back to a new spec.
+        let (json, new_s) = if let Some(result) = &result {
+            let json = serde_json::to_value(result).map_err_to_string()?;
+            let new_s = if args.get("override").is_some() {
+                from_json(
+                    &json,
+                    "TestEnum",
+                    &RTI,
+                    &mut TestOverrideDeserializeContext::default(),
+                )
+            } else {
+                from_json(
+                    &json,
+                    "TestEnum",
+                    &RTI,
+                    &mut GenericTestDeserializeContext::default(),
+                )
+            };
+            (json, new_s)
+        } else {
+            (serde_json::json!(null), "".to_string())
+        };
+        // 3) The two specs cannot be directly compared to see if the roundtrip
+        //    is successful because of the syntax supports multiple ways of
+        //    specifying the same thing. So convert the new spec back into a
+        //    TestEnum and compare the TestEnums.
+        let new_result = create_test_enum(&new_s, &args)?;
+        if !new_result.eq(&result) {
+            return Err(format!(
+                "Round trip failed. New spec:\n{}
+                Original TestEnum\n{:?}
+                New TestEnum:\n{:?}
+                JSON for original TestEnum:\n{}",
+                new_s, result, new_result, json
+            ));
+        }
         Ok(format!("{:?}", result))
     }
 

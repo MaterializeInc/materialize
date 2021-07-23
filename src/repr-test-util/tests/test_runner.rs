@@ -9,7 +9,7 @@
 
 #[cfg(test)]
 mod tests {
-    use lowertest::parse_str;
+    use lowertest::tokenize;
     use repr::{Datum, ScalarType};
     use repr_test_util::{get_datum_from_str, get_scalar_type_or_default};
 
@@ -27,7 +27,7 @@ mod tests {
     }
 
     fn build_scalar_type_inner(litval: &str, s: &str) -> Result<ScalarType, String> {
-        get_scalar_type_or_default(litval, &mut parse_str(s)?.into_iter())
+        get_scalar_type_or_default(litval, &mut tokenize(s)?.into_iter())
     }
 
     #[test]
