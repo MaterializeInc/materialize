@@ -40,7 +40,7 @@ First, create a source from the kafka topic.
 ```
 CREATE SOURCE x
   FROM KAFKA BROKER 'kafka:9092' TOPIC 't'
-  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT;
+  FORMAT TEXT ENVELOPE UPSERT;
 ```
 
 For some of the streams, such as predictions or trips, MBTA requires that
