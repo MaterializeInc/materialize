@@ -20,7 +20,6 @@ use crate::indexed::encoding::Id;
 use crate::indexed::{Indexed, IndexedSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
-use crate::Token;
 
 enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
@@ -206,21 +205,21 @@ impl<K, V> Clone for RuntimeClient<K, V> {
 impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// Synchronously registers a new stream for writes and reads.
     ///
-    /// This method is idempotent.
-    /// Returns a token used to construct a persisted stream operator.
+    /// This method is idempotent. Returns read and write handles used to
+    /// construct a persisted stream operator.
     ///
-    /// If data was written by a previous [RuntimeClient] for this id, it's loaded and
-    /// replayed into the stream once constructed.
+    /// If data was written by a previous [RuntimeClient] for this id, it's
+    /// loaded and replayed into the stream once constructed.
     pub fn create_or_load(
         &self,
         id: &str,
-    ) -> Result<Token<StreamWriteHandle<K, V>, StreamReadHandle<K, V>>, Error> {
+    ) -> Result<(StreamWriteHandle<K, V>, StreamReadHandle<K, V>), Error> {
         let (tx, rx) = mpsc::channel();
         self.core.send(Cmd::Register(id.to_owned(), tx.into()));
         let id = rx.recv().map_err(|_| Error::RuntimeShutdown)??;
         let write = StreamWriteHandle::new(id, self.clone());
         let meta = StreamReadHandle::new(id, self.clone());
-        Ok(Token { write, meta })
+        Ok((write, meta))
     }
 
     /// Asynchronously persists `(Key, Value, Time, Diff)` updates for the
@@ -282,6 +281,15 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
 pub struct StreamWriteHandle<K, V> {
     id: Id,
     runtime: RuntimeClient<K, V>,
+}
+
+impl<K, V> Clone for StreamWriteHandle<K, V> {
+    fn clone(&self) -> Self {
+        StreamWriteHandle {
+            id: self.id,
+            runtime: self.runtime.clone(),
+        }
+    }
 }
 
 impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
@@ -414,7 +422,7 @@ mod tests {
         let blob = MemBlob::new("runtime");
         let mut runtime = start(buffer, blob)?;
 
-        let (mut write, meta) = runtime.create_or_load("0")?.into_inner();
+        let (mut write, meta) = runtime.create_or_load("0")?;
         block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
@@ -443,7 +451,7 @@ mod tests {
         // Everything is still running after client1 is dropped.
         let mut client2 = client1.clone();
         drop(client1);
-        let (mut write, meta) = client2.create_or_load("0")?.into_inner();
+        let (mut write, meta) = client2.create_or_load("0")?;
         block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
@@ -464,14 +472,14 @@ mod tests {
         // Shutdown happens if we explicitly call stop, unlocking the buffer and
         // blob and allowing them to be reused in the next Indexed.
         let mut persister = registry.open("path", "restart-1")?;
-        let (mut write, _) = persister.create_or_load("0")?.into_inner();
+        let (mut write, _) = persister.create_or_load("0")?;
         block_on(|res| write.write(&data[0..1], res))?;
         assert_eq!(persister.stop(), Ok(()));
 
         // Shutdown happens if all handles are dropped, even if we don't call
         // stop.
         let persister = registry.open("path", "restart-2")?;
-        let (mut write, _) = persister.create_or_load("0")?.into_inner();
+        let (mut write, _) = persister.create_or_load("0")?;
         block_on(|res| write.write(&data[1..2], res))?;
         drop(write);
         drop(persister);
@@ -479,7 +487,7 @@ mod tests {
         // We can read back what we previously wrote.
         {
             let persister = registry.open("path", "restart-1")?;
-            let (_, meta) = persister.create_or_load("0")?.into_inner();
+            let (_, meta) = persister.create_or_load("0")?;
             let snap = meta.snapshot()?;
             assert_eq!(snap.read_to_end(), data);
         }

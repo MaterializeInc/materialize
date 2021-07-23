@@ -20,7 +20,6 @@ use timely::Data;
 use crate::error::Error;
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators;
-use crate::Token;
 
 /// A Timely Dataflow operator that passes through its input after persisting
 /// it.
@@ -29,7 +28,7 @@ pub trait Persist<G: Scope<Timestamp = u64>, K: Data, V: Data> {
     /// recorded.
     fn persist(
         &self,
-        token: Token<StreamWriteHandle<K, V>, StreamReadHandle<K, V>>,
+        token: (StreamWriteHandle<K, V>, StreamReadHandle<K, V>),
     ) -> (
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
@@ -44,12 +43,12 @@ where
 {
     fn persist(
         &self,
-        token: Token<StreamWriteHandle<K, V>, StreamReadHandle<K, V>>,
+        token: (StreamWriteHandle<K, V>, StreamReadHandle<K, V>),
     ) -> (
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
     ) {
-        let (mut write, read) = token.into_inner();
+        let (mut write, read) = token;
 
         let (ok_new, err_new) = self.ok_err(
             move |((k, v), ts, diff)| -> Result<((K, V), u64, isize), (String, u64, isize)> {

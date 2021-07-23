@@ -62,17 +62,3 @@ pub mod unreliable;
 /// TODO: Replace Abomonation with something like an Encode+Decode trait.
 pub trait Data: Clone + Abomonation + fmt::Debug + Ord {}
 impl<T: Clone + Abomonation + fmt::Debug + Ord> Data for T {}
-
-/// An exclusivity token needed to construct persistence [operators].
-///
-/// Intentionally not Clone since it's an exclusivity token.
-pub struct Token<W, M> {
-    write: W,
-    meta: M,
-}
-
-impl<W, M> Token<W, M> {
-    fn into_inner(self) -> (W, M) {
-        (self.write, self.meta)
-    }
-}
