@@ -80,6 +80,7 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
     blob: BlobCache<K, V, L>,
     futures: HashMap<Id, BlobFuture<K, V>>,
     traces: HashMap<Id, BlobTrace<K, V>>,
+    listeners: HashMap<Id, Vec<ListenFn<K, V>>>,
 }
 
 impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
@@ -123,6 +124,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             blob,
             futures,
             traces,
+            listeners: HashMap::new(),
         };
         Ok(indexed)
     }
@@ -131,6 +133,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     ///
     /// This method is idempotent.
     pub fn close(&mut self) -> Result<(), Error> {
+        // Make sure all the listener closures are dropped.
+        self.listeners.clear();
         // Be careful to attempt to close both buf and blob even if one of the
         // closes fails.
         let buf_res = self.buf.close();
@@ -198,7 +202,15 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let mut entry_bytes = Vec::new();
         unsafe { abomonation::encode(&entry, &mut entry_bytes) }
             .expect("write to Vec is infallible");
-        self.buf.write_sync(entry_bytes)
+        let seqno = self.buf.write_sync(entry_bytes)?;
+        for (id, updates) in entry.updates.iter() {
+            if let Some(listen_fns) = self.listeners.get(id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Records(updates.clone()));
+                }
+            }
+        }
+        Ok(seqno)
     }
 
     /// Atomically moves all writes currently in the buffer into the future.
@@ -363,11 +375,18 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
         // ...and atomically swapping that snapshot's data into trace.
         let batch = BlobTraceBatch { desc, updates };
-        self.append_trace(id, batch)
+        self.append_trace(id, batch)?;
+
+        if let Some(listen_fns) = self.listeners.get(&id) {
+            for listen_fn in listen_fns.iter() {
+                listen_fn(ListenEvent::Sealed(ts_upper));
+            }
+        }
 
         // TODO: This is a good point to compact future. The data that's been
         // moved is still there but now irrelevant. It may also be a good time
         // to compact trace.
+        Ok(())
     }
 
     /// Permit compaction of updates at times < since to since.
@@ -482,7 +501,32 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
         Ok(IndexedSnapshot(buffer, future, trace))
     }
+
+    /// Registers a callback to be invoked on successful writes and seals.
+    //
+    // TODO: Finish the naming bikeshed for this. Other options so far include
+    // tail, subscribe, tee, inspect, and capture.
+    pub fn listen(&mut self, id: Id, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
+        // Verify that id has been registered.
+        let _ = self.sealed_frontier(id)?;
+        self.listeners.entry(id).or_default().push(listen_fn);
+        Ok(())
+    }
 }
+
+/// An event in a persisted stream.
+//
+// TODO: This is similar to timely's capture Event but just different enough
+// that I couldn't see how to use it directly. Revisit.
+pub enum ListenEvent<K, V> {
+    /// Records in the data stream.
+    Records(Vec<((K, V), u64, isize)>),
+    /// Progress of the data stream.
+    Sealed(u64),
+}
+
+/// The callback used by [Indexed::listen].
+pub type ListenFn<K, V> = Box<dyn Fn(ListenEvent<K, V>) + Send>;
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)
 /// updates.
@@ -545,6 +589,7 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::mpsc;
 
     use crate::error::Error as IndexedError;
     use crate::mem::{MemBlob, MemBuffer};
@@ -574,6 +619,20 @@ mod tests {
         assert_eq!(future.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![]);
 
+        // Register a listener for writes.
+        let (listen_tx, listen_rx) = mpsc::channel();
+        let listen_fn: ListenFn<String, String> = Box::new(move |e| match e {
+            ListenEvent::Records(records) => {
+                for ((k, v), ts, diff) in records.iter() {
+                    listen_tx
+                        .send(((k.clone(), v.clone()), *ts, *diff))
+                        .expect("rx hasn't been dropped");
+                }
+            }
+            ListenEvent::Sealed(_) => {}
+        });
+        i.listen(id, listen_fn)?;
+
         // After a write, all data is in the buffer.
         i.write_sync(vec![(id, updates.clone())])?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
@@ -581,6 +640,16 @@ mod tests {
         assert_eq!(buf.read_to_end(), updates);
         assert_eq!(future.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![]);
+
+        // Verify that the listener got a copy of the writes.
+        let listen_received = {
+            let mut buf = Vec::new();
+            while let Ok(x) = listen_rx.try_recv() {
+                buf.push(x);
+            }
+            buf
+        };
+        assert_eq!(listen_received, updates);
 
         // After a step, it's all moved into the future part of the index.
         i.step()?;
