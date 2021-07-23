@@ -58,7 +58,7 @@ create_source_avro_kafka ::=
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT') (avro_format_spec | format_spec)
   ('INCLUDE KEY' ('AS' key_name)?)?
-  ('ENVELOPE' ('NONE'|'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
+  ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
 create_source ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -82,9 +82,9 @@ create_source_csv_kafka ::=
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
-  ('CSV WITH' ( 'HEADER' | n 'COLUMNS') | format_spec)
+  ('CSV WITH' ( 'HEADER' | n 'COLUMNS') ('DELIMITED BY' char)? | format_spec)
   ('INCLUDE KEY' ('AS' key_name)?)?
-  ('DELIMITED BY' char)?
+  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_csv_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -103,6 +103,7 @@ create_source_json_kafka ::=
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' ) ( 'TEXT' | 'BYTES' | format_spec)
   ('INCLUDE KEY' ('AS' key_name )?)?
+  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_postgres ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES'
@@ -118,6 +119,7 @@ create_source_protobuf_kafka ::=
     'USING SCHEMA' ('FILE' schema_file_path | inline_schema) |
     format_spec )
   ('INCLUDE KEY' ('AS' key_name)?)?
+  ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_protobuf_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
