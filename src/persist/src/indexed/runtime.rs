@@ -299,13 +299,13 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
     }
 
     /// Synchronously writes (Key, Value, Time, Diff) updates.
-    pub fn write(&mut self, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
+    pub fn write(&self, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
         self.runtime.write(self.id, updates, res);
     }
 
     /// Closes the stream at the given timestamp, migrating data strictly less
     /// than it into the trace.
-    pub fn seal(&mut self, upper: u64, res: CmdResponse<()>) {
+    pub fn seal(&self, upper: u64, res: CmdResponse<()>) {
         self.runtime.seal(self.id, upper, res);
     }
 }
@@ -422,7 +422,7 @@ mod tests {
         let blob = MemBlob::new("runtime");
         let mut runtime = start(buffer, blob)?;
 
-        let (mut write, meta) = runtime.create_or_load("0")?;
+        let (write, meta) = runtime.create_or_load("0")?;
         block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
@@ -451,7 +451,7 @@ mod tests {
         // Everything is still running after client1 is dropped.
         let mut client2 = client1.clone();
         drop(client1);
-        let (mut write, meta) = client2.create_or_load("0")?;
+        let (write, meta) = client2.create_or_load("0")?;
         block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
@@ -472,14 +472,14 @@ mod tests {
         // Shutdown happens if we explicitly call stop, unlocking the buffer and
         // blob and allowing them to be reused in the next Indexed.
         let mut persister = registry.open("path", "restart-1")?;
-        let (mut write, _) = persister.create_or_load("0")?;
+        let (write, _) = persister.create_or_load("0")?;
         block_on(|res| write.write(&data[0..1], res))?;
         assert_eq!(persister.stop(), Ok(()));
 
         // Shutdown happens if all handles are dropped, even if we don't call
         // stop.
         let persister = registry.open("path", "restart-2")?;
-        let (mut write, _) = persister.create_or_load("0")?;
+        let (write, _) = persister.create_or_load("0")?;
         block_on(|res| write.write(&data[1..2], res))?;
         drop(write);
         drop(persister);

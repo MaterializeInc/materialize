@@ -48,7 +48,7 @@ where
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
     ) {
-        let (mut write, read) = token;
+        let (write, read) = token;
 
         let (ok_new, err_new) = self.ok_err(
             move |((k, v), ts, diff)| -> Result<((K, V), u64, isize), (String, u64, isize)> {
