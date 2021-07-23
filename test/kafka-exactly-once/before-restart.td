@@ -76,7 +76,7 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK output_rt FROM input_rt
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-rt-sink-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output-rt-sink-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE MATERIALIZED SOURCE input_byo
@@ -86,7 +86,7 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK output_byo FROM input_byo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-byo-sink-${testdrive.seed}'
-  WITH (reuse_topic=true, consistency_topic='output-byo-sink-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschemakey}

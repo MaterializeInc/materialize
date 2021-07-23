@@ -22,7 +22,7 @@ use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use log::error;
+use log::{debug, error};
 use regex::Regex;
 use reqwest::Url;
 
@@ -1284,9 +1284,16 @@ fn kafka_sink_builder(
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
 
-    if reuse_topic && consistency_topic.is_none() {
-        bail!("reuse_topic requires a consistency topic");
-    }
+    let consistency_topic = if reuse_topic && consistency_topic.is_none() {
+        let default_consistency_topic = format!("{}-consistency", topic_prefix);
+        debug!(
+            "Using default consistency topic '{}' for topic '{}'",
+            default_consistency_topic, topic_prefix
+        );
+        Some(default_consistency_topic)
+    } else {
+        consistency_topic
+    };
 
     let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {

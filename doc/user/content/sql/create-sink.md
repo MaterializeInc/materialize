@@ -54,8 +54,8 @@ Field                | Value type | Description
 ---------------------|------------|------------
 `partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
-`reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. `consistency_topic` is required if true. The default is false.
-`consistency_topic`  | `text`     | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks.
+`reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. The default is false.
+`consistency_topic`  | `text`     | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. If `reuse_topic` is `true`, a default `consistency_topic` will be used when not explicitly set.
 `security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 
@@ -178,7 +178,7 @@ This is currently available only for Kafka sources and the views based on them.
 When you create a sink, you must:
 
 * Enable the `reuse_topic` switch.
-* Specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system.
+* Optionally specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system. If not specified, a default consistency topic name will be used.
 
 The sink consistency topic cannot be written to by any other process, including another Materialize instance or another sink.
 
