@@ -50,30 +50,54 @@ function useSQL(sql) {
 }
 
 function Views() {
-  const queryMaterializedViews = `
-    SELECT
-      id, name, records
-    FROM
-      mz_catalog.mz_records_per_dataflow_global
-    WHERE
-      name NOT LIKE 'Dataflow: mz_catalog.%'
-    ORDER BY
-      records DESC
-  `;
-
   useEffect(() => {
     const search = new URLSearchParams(location.search);
     const dataflow = search.get('dataflow');
     if (dataflow) {
       setCurrent([dataflow, dataflow]);
     }
+    const includeSystemCatalog = search.get('system_catalog');
+    if (includeSystemCatalog) {
+      setIncludeSystemCatalog([includeSystemCatalog, includeSystemCatalog]);
+    }
   }, []);
 
   const [current, setCurrent] = useState(null);
+  const [includeSystemCatalog, setIncludeSystemCatalog] = useState(false);
+
+  const where_fragment = includeSystemCatalog ? ``: `WHERE name NOT LIKE 'Dataflow: mz_catalog.%'`;
+
+  const queryMaterializedViews = `
+    SELECT
+      id, name, records
+    FROM
+      mz_catalog.mz_records_per_dataflow_global
+    ${where_fragment}
+    ORDER BY
+      records DESC
+  `;
+
   const [data, loading, error] = useSQL(queryMaterializedViews);
 
   return (
     <div>
+      <div>
+        <input type="checkbox" id="include_system_catalog" name="include_system_catalog"
+          onChange={(event) => {
+            const params = new URLSearchParams(location.search);
+            params.set('system_catalog', event.target.checked);
+            window.history.replaceState(
+              {},
+              '',
+              `${location.pathname}?${params}`
+            );
+
+            setIncludeSystemCatalog(event.target.checked);
+          }}
+          checked={includeSystemCatalog}
+        />
+        <label for="include_system_catalog">Include system catalog</label>
+      </div>
       {loading ? (
         <div>Loading...</div>
       ) : error ? (
