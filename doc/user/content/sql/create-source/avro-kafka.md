@@ -19,9 +19,13 @@ topic.
 
 {{< diagram "create-source-avro-kafka.svg" >}}
 
-### format_spec
+### avro_format_spec
 
 {{< diagram "format-spec-avro-kafka.svg" >}}
+
+### format_spec
+
+{{< diagram "format-spec.svg" >}}
 
 ### key_constraint
 
