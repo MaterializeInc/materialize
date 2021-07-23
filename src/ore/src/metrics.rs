@@ -48,6 +48,9 @@ pub use prometheus::{
     IntGaugeVec, UIntCounter, UIntCounterVec, UIntGauge, UIntGaugeVec,
 };
 
+mod delete_on_drop;
+pub use delete_on_drop::*;
+
 /// Define a metric for use in materialize.
 #[macro_export]
 macro_rules! metric {
