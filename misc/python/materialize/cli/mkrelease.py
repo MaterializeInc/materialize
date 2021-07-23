@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 import click
 import requests
-import semver
+from semver.version import Version
 
 from materialize import errors
 from materialize import git
@@ -28,30 +28,152 @@ BIN_CARGO_TOML = "src/materialized/Cargo.toml"
 LICENSE = "LICENSE"
 USER_DOC_CONFIG = "doc/user/config.toml"
 
+OPT_CREATE_BRANCH = click.option(
+    "-b", "--create-branch", default=None, help="Create a branch and check it out"
+)
+OPT_CHECKOUT = click.option(
+    "-c",
+    "--checkout",
+    default=None,
+    help="Commit or branch to check out (before creating a new branch)",
+)
+OPT_AFFECT_REMOTE = click.option(
+    "--affect-remote/--no-affect-remote",
+    default=True,
+    help="Whether or not to interact with origin at all",
+)
+
+
 say = ui.speaker("")
 
 
 @click.group()
 def cli() -> None:
-    pass
+    """
+    Manage the release process
+
+    You should be interacting with this because you opened a github "release"
+    issue, which has all the steps that you should take in order.
+
+    See the <repo_root>/.github/ISSUE_TEMPLATE/release.md file for full instructions.
+    """
 
 
 @cli.command()
-@click.argument("version")
-@click.option(
-    "-b", "--create-branch", default=None, help="Create a branch and check it out"
+@OPT_CREATE_BRANCH
+@OPT_CHECKOUT
+@OPT_AFFECT_REMOTE
+@click.argument(
+    "level",
+    type=click.Choice(["major", "feature", "biweekly", "rc"]),
 )
-@click.option("-c", "--checkout", default=None, help="Commit or branch to check out")
-@click.option("--tag/--no-tag", default=True, help="")
-@click.option(
-    "--affect-remote/--no-affect-remote",
-    default=True,
-    help="Whether or not to interact with origin at all",
-)
-def release(
-    version: str,
+def new_rc(
+    create_branch: Optional[str],
     checkout: Optional[str],
-    create_branch: str,
+    affect_remote: bool,
+    level: str,
+) -> None:
+    """Start a brand new release
+
+    \b
+    Arguments:
+        level    Which part of the version to change:
+                 * biweekly - The Z in X.Y.Z
+                 * feature  - The Y in X.Y.Z
+                 * major    - The X in X.Y.Z
+                 * rc       - increases the N in -rcN, should only be used if
+                              you need to create a second or greater release candidate
+    """
+    tag = get_latest_tag(fetch=True)
+    new_version = None
+    if level == "rc":
+        if tag.prerelease is None or not tag.prerelease.startswith("-rc"):
+            raise errors.MzConfigurationError(
+                "Attempted to bump an rc version without starting an RC"
+            )
+        next_rc = int(tag.prerelease[3:]) + 1
+        new_version = tag.replace(prerelease=f"rc{next_rc}")
+    elif level == "biweekly":
+        new_version = tag.bump_patch().replace(prerelease="rc1")
+    elif level == "feature":
+        new_version = tag.bump_minor().replace(prerelease="rc1")
+    elif level == "major":
+        new_version = tag.bump_major().replace(prerelease="rc1")
+    assert new_version is not None
+
+    release(new_version, checkout, create_branch, True, affect_remote)
+
+
+@cli.command()
+@OPT_CREATE_BRANCH
+@OPT_CHECKOUT
+@OPT_AFFECT_REMOTE
+def incorporate(
+    create_branch: Optional[str], checkout: Optional[str], affect_remote: bool
+) -> None:
+    """Update to the next patch version  with a -dev suffix"""
+    incorporate_inner(
+        create_branch, checkout, affect_remote, fetch=True, is_finish=False
+    )
+
+
+def incorporate_inner(
+    create_branch: Optional[str],
+    checkout: Optional[str],
+    affect_remote: bool,
+    fetch: bool,
+    is_finish: bool,
+) -> None:
+
+    tag = get_latest_tag(fetch=fetch)
+    new_version = tag.bump_patch().replace(prerelease="dev")
+    if not create_branch and not checkout:
+        if is_finish:
+            create = f"continue-{new_version}"
+        else:
+            create = f"prepare-{new_version}"
+
+    release(
+        new_version,
+        checkout=checkout,
+        create_branch=create,
+        tag=False,
+        affect_remote=affect_remote,
+    )
+
+
+@cli.command()
+@OPT_CREATE_BRANCH
+@OPT_AFFECT_REMOTE
+def finish(create_branch: Optional[str], affect_remote: bool) -> None:
+    """Create the final non-rc tag and a branch to incorporate into the repo"""
+    tag = get_latest_tag(fetch=True)
+    if not tag.prerelease or "-rc" not in tag.prerelease:
+        click.confirm(
+            "This version: {tag} doesn't look like a prerelease, "
+            "are you sure you want to continue?",
+            abort=True,
+        )
+    new_version = tag.replace(prerelease=None)
+    checkout = f"v{tag}"
+    release(
+        new_version,
+        checkout=checkout,
+        create_branch=None,
+        tag=True,
+        affect_remote=affect_remote,
+    )
+
+    checkout = None
+    incorporate_inner(
+        create_branch, checkout, affect_remote, fetch=False, is_finish=True
+    )
+
+
+def release(
+    version: Version,
+    checkout: Optional[str],
+    create_branch: Optional[str],
     tag: bool,
     affect_remote: bool,
 ) -> None:
@@ -78,7 +200,6 @@ def release(
         )
         sys.exit(1)
 
-    version = version.lstrip("v")
     the_tag = f"v{version}"
     confirm_version_is_next(version, affect_remote)
 
@@ -96,7 +217,7 @@ def release(
         f"Licensed Work:             Materialize Version {version}",
     )
     # Don't update the change date unless some code has changed
-    if "-rc" in version or "-dev" in version:
+    if version.prerelease:
         future = four_years_hence()
         change_line(LICENSE, "Change Date", f"Change Date:               {future}")
 
@@ -120,8 +241,9 @@ def release(
     matching = git.first_remote_matching("MaterializeInc/materialize")
     if tag:
         if matching is not None:
+            spawn.runv(["git", "show", "HEAD"])
             if affect_remote and ui.confirm(
-                f"\nWould you like me to run: git push {matching} {the_tag}"
+                f"\nWould you like to push the above changes as: git push {matching} {the_tag}"
             ):
                 spawn.runv(["git", "push", matching, the_tag])
         else:
@@ -135,7 +257,7 @@ def release(
         say(f"Create a PR with your branch: '{branch}'")
 
 
-def update_versions_list(released_version: semver.VersionInfo) -> None:
+def update_versions_list(released_version: Version) -> None:
     """Update the doc config with the passed-in version"""
     today = date.today().strftime("%d %B %Y")
     toml_line = f'  {{ name = "v{released_version}", date = "{today}" }},\n'
@@ -179,10 +301,9 @@ def four_years_hence() -> str:
     return future.strftime("%B %d, %Y")
 
 
-def confirm_version_is_next(version: str, affect_remote: bool) -> None:
+def confirm_version_is_next(this_tag: Version, affect_remote: bool) -> None:
     """Check if the passed-in tag is the logical next tag"""
     latest_tag = get_latest_tag(affect_remote)
-    this_tag = semver.VersionInfo.parse(version)
     if this_tag.minor == latest_tag.minor:
         if (
             this_tag.patch == latest_tag.patch
@@ -224,6 +345,7 @@ def confirm_version_is_next(version: str, affect_remote: bool) -> None:
 
 
 def confirm_on_latest_rc(affect_remote: bool) -> None:
+    """Confirm before making a release on e.g. -rc1 when -rc2 exists"""
     latest_tag = get_latest_tag(affect_remote)
     if not git.is_ancestor(f"v{latest_tag}", "HEAD"):
         ancestor_tag = git.describe()
@@ -235,7 +357,7 @@ def confirm_on_latest_rc(affect_remote: bool) -> None:
         )
 
 
-def get_latest_tag(fetch: bool) -> semver.VersionInfo:
+def get_latest_tag(fetch: bool) -> Version:
     """Get the most recent tag in this repo"""
     tags = git.get_version_tags(fetch=fetch)
     return tags[0]
@@ -258,7 +380,7 @@ def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
             recent = tags[0]
             recent_ref = str(tags[0])
         else:
-            recent = semver.VersionInfo.parse(recent_ref)
+            recent = Version.parse(recent_ref)
         if ancestor_ref is None:
             for ref in tags[1:]:
                 ancestor = ref

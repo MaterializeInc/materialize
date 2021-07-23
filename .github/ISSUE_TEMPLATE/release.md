@@ -40,14 +40,11 @@ production readiness.
 - [ ] Choose the commit for the release. Unless there are open release blockers above,
   this should just be the head commit of the main branch. Checkout that commit.
 
-- [ ] Choose the name for the release candidate following the format
-  `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
-  v0.2.3 would be called v0.2.3-rc1. Use that to run the `bin/mkrelease`
-  script:
+- [ ] Create a new release candidate, specifying what kind of release this
+  should be (see `--help` for all the release types):
 
   ```shell
-  tag=v<VERSION>-rc<N>
-  bin/mkrelease release -b rel-$tag $tag
+  bin/mkrelease new-rc biweekly
   ```
 
 - [ ] Update the [release notes][] to include a new "unreleased" version so that new
@@ -73,11 +70,10 @@ production readiness.
 
 - [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
 
-  Without checking out main to `main`, perform:
+  Without checking out `main`, perform:
 
   ```shell
-  next=v<NEXT_VERSION>-dev
-  bin/mkrelease release --no-tag -b prepare-$next $next
+  bin/mkrelease incorporate
   ```
 
   Open a PR with this change, and land it.
@@ -187,21 +183,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   was only one RC, then the final RC tag would be `-rc1`.
 
   ```shell
-  $ tag=v<VERSION>
-  $ bin/mkrelease release --checkout ${tag}-rcN $tag
-  git push origin $tag
+  $ bin/mkrelease finish
   ```
-- [ ] Incorporate this tag into `main`'s history, and update the user doc config to mark this as
-  released:
 
-  ```console
-  $ next=v<NEXT_VERSION>-dev
-  $ bin/mkrelease release --no-tag -b continue-$next $next
-  ... snip ...
-  Update doc/user/config.toml with 0.6.1 [y/N]: y
-  ...
-  Create a PR with your branch: 'continue-$next'
-  ```
+  That will create a new branch named `continue-<version>`, the exact name will
+  be output as the last line of the script.
 
   Open a PR with that branch, and land it. This is possible using [gh] from the
   terminal: `gh pr create --web`

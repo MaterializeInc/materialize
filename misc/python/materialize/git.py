@@ -15,7 +15,7 @@ from functools import lru_cache, total_ordering
 from pathlib import Path
 from typing import List, Optional, Set, Union, NamedTuple
 
-import semver
+import semver.version
 
 from materialize import spawn
 from materialize import errors
@@ -89,7 +89,7 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
+def get_version_tags(*, fetch: bool = True) -> List[semver.version.Version]:
     """List all the version-like tags in the repo
 
     Args:
@@ -100,7 +100,7 @@ def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
     tags = []
     for t in spawn.capture(["git", "tag"], unicode=True).splitlines():
         try:
-            tags.append(semver.VersionInfo.parse(t.lstrip("v")))
+            tags.append(semver.version.Version.parse(t.lstrip("v")))
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 
