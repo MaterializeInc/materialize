@@ -9,7 +9,7 @@
 
 use std::convert::TryFrom;
 use std::fmt::{self, Write};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
@@ -669,7 +669,19 @@ impl fmt::Display for Datum<'_> {
 ///
 /// There is a direct correspondence between `Datum` variants and `ScalarType`
 /// variants.
-#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd, EnumKind, MzEnumReflect)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Hash,
+    EnumKind,
+    MzEnumReflect,
+)]
 #[enum_kind(ScalarBaseType, derive(Hash))]
 pub enum ScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
@@ -802,27 +814,29 @@ impl<'a> ScalarType {
         dims
     }
 
-    /// Returns `self` with any values equal to [`ScalarType::Numeric`] with their
-    /// `scale` set to `None`.
-    pub fn unscale_any_numeric(&self) -> ScalarType {
+    /// Returns `self` with any embedded values set to a value appropriate for a
+    /// collection of the type. Namely, this should set optional scales or
+    /// limits to `None`.
+    pub fn default_embedded_value(&self) -> ScalarType {
         use ScalarType::*;
         match self {
-            Numeric { scale: Some(..) } => Numeric { scale: None },
             List {
                 element_type,
                 custom_oid: None,
             } => List {
-                element_type: Box::new(element_type.unscale_any_numeric()),
+                element_type: Box::new(element_type.default_embedded_value()),
                 custom_oid: None,
             },
             Map {
                 value_type,
                 custom_oid: None,
             } => Map {
-                value_type: Box::new(value_type.unscale_any_numeric()),
+                value_type: Box::new(value_type.default_embedded_value()),
                 custom_oid: None,
             },
-            _ => self.clone(),
+            Array(a) => Array(Box::new(a.default_embedded_value())),
+            Numeric { .. } => Numeric { scale: None },
+            v => v.clone(),
         }
     }
 
@@ -880,48 +894,44 @@ impl<'a> ScalarType {
             _ => false,
         }
     }
-}
 
-/// NOTE: `ScalarType` equality is complicated by variants that store values.
-/// While we might want to handle stored values in one manner most of the time,
-/// that same approach might be insufficient in some cases.
-///
-/// When assessing unexpected behavior with type planning, it's worthwhile to
-/// see if the default equality is overridden in some other part of the code,
-/// e.g. when deciding how to handle potential casts between types.
-impl PartialEq for ScalarType {
-    fn eq(&self, other: &Self) -> bool {
+    /// Determines equality among scalar types that acknowledges custom OIDs,
+    /// but ignores other embedded values.
+    ///
+    /// In most situations, you want to use `base_eq` rather than `ScalarType`'s
+    /// implementation of `Eq`. `base_eq` expresses the semantics of direct type
+    /// interoperability whereas `Eq` expresses an exact comparison between the
+    /// values.
+    ///
+    /// For instance, `base_eq` signals that e.g. two [`ScalarType::Numeric`]
+    /// values can be added together, irrespective of their embedded scale. In
+    /// contrast, two `Numeric` values with different scales are never `Eq` to
+    /// one another.
+    pub fn base_eq(&self, other: &ScalarType) -> bool {
         use ScalarType::*;
         match (self, other) {
-            (Bool, Bool)
-            | (Int16, Int16)
-            | (Int32, Int32)
-            | (Int64, Int64)
-            | (Float32, Float32)
-            | (Float64, Float64)
-            | (Date, Date)
-            | (Time, Time)
-            | (Timestamp, Timestamp)
-            | (TimestampTz, TimestampTz)
-            | (Interval, Interval)
-            | (Bytes, Bytes)
-            | (String, String)
-            | (Uuid, Uuid)
-            | (Jsonb, Jsonb)
-            | (Oid, Oid)
-            | (Numeric { .. }, Numeric { .. }) => true,
             (
                 List {
-                    element_type: element_l,
+                    element_type: l,
                     custom_oid: oid_l,
                 },
                 List {
-                    element_type: element_r,
+                    element_type: r,
                     custom_oid: oid_r,
                 },
-            ) => element_l.eq(element_r) && oid_l == oid_r,
+            )
+            | (
+                Map {
+                    value_type: l,
+                    custom_oid: oid_l,
+                },
+                Map {
+                    value_type: r,
+                    custom_oid: oid_r,
+                },
+            ) => l.base_eq(r) && oid_l == oid_r,
 
-            (Array(a), Array(b)) => a.eq(b),
+            (Array(a), Array(b)) => a.base_eq(b),
             (
                 Record {
                     fields: fields_a,
@@ -934,93 +944,7 @@ impl PartialEq for ScalarType {
                     custom_name: name_b,
                 },
             ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
-            (
-                Map {
-                    value_type: value_l,
-                    custom_oid: oid_l,
-                },
-                Map {
-                    value_type: value_r,
-                    custom_oid: oid_r,
-                },
-            ) => value_l.eq(value_r) && oid_l == oid_r,
-
-            (Bool, _)
-            | (Int16, _)
-            | (Int32, _)
-            | (Int64, _)
-            | (Float32, _)
-            | (Float64, _)
-            | (Date, _)
-            | (Time, _)
-            | (Timestamp, _)
-            | (TimestampTz, _)
-            | (Interval, _)
-            | (Bytes, _)
-            | (String, _)
-            | (Jsonb, _)
-            | (Uuid, _)
-            | (Array(_), _)
-            | (List { .. }, _)
-            | (Record { .. }, _)
-            | (Oid, _)
-            | (Map { .. }, _)
-            | (Numeric { .. }, _) => false,
-        }
-    }
-}
-
-impl Hash for ScalarType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        use ScalarType::*;
-        match self {
-            Bool => state.write_u8(0),
-            Int16 => state.write_u8(1),
-            Int32 => state.write_u8(2),
-            Int64 => state.write_u8(3),
-            Float32 => state.write_u8(4),
-            Float64 => state.write_u8(5),
-            Numeric { .. } => state.write_u8(6),
-            Date => state.write_u8(7),
-            Time => state.write_u8(8),
-            Timestamp => state.write_u8(9),
-            TimestampTz => state.write_u8(10),
-            Interval => state.write_u8(11),
-            Bytes => state.write_u8(12),
-            String => state.write_u8(13),
-            Jsonb => state.write_u8(14),
-            Array(t) => {
-                state.write_u8(15);
-                t.hash(state);
-            }
-            List {
-                element_type,
-                custom_oid,
-            } => {
-                state.write_u8(16);
-                element_type.hash(state);
-                custom_oid.hash(state);
-            }
-            Record {
-                fields,
-                custom_oid,
-                custom_name,
-            } => {
-                state.write_u8(17);
-                fields.hash(state);
-                custom_oid.hash(state);
-                custom_name.hash(state);
-            }
-            Uuid => state.write_u8(18),
-            Oid => state.write_u8(19),
-            Map {
-                value_type,
-                custom_oid,
-            } => {
-                state.write_u8(20);
-                value_type.hash(state);
-                custom_oid.hash(state);
-            }
+            (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }
 }

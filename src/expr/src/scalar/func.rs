@@ -3099,11 +3099,15 @@ impl BinaryFunc {
                 ScalarType::Int64.nullable(true)
             }
 
-            ListListConcat | ListElementConcat => {
-                input1_type.scalar_type.unscale_any_numeric().nullable(true)
-            }
+            ListListConcat | ListElementConcat => input1_type
+                .scalar_type
+                .default_embedded_value()
+                .nullable(true),
 
-            ElementListConcat => input2_type.scalar_type.unscale_any_numeric().nullable(true),
+            ElementListConcat => input2_type
+                .scalar_type
+                .default_embedded_value()
+                .nullable(true),
 
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Position => ScalarType::Int32.nullable(in_nullable),
@@ -3983,7 +3987,7 @@ impl UnaryFunc {
             | CastInPlace { return_ty } => (return_ty.clone()).nullable(nullable),
 
             CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
-                return_ty.unscale_any_numeric().nullable(false)
+                return_ty.default_embedded_value().nullable(false)
             }
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(nullable),
@@ -5404,7 +5408,7 @@ impl VariadicFunc {
                 debug_assert!(
                     input_types
                         .windows(2)
-                        .all(|w| w[0].scalar_type == w[1].scalar_type),
+                        .all(|w| w[0].scalar_type.base_eq(&w[1].scalar_type)),
                     "coalesce inputs did not have uniform type: {:?}",
                     input_types
                 );
@@ -5418,7 +5422,7 @@ impl VariadicFunc {
             JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
             ArrayCreate { elem_type } => {
                 debug_assert!(
-                    input_types.iter().all(|t| t.scalar_type == *elem_type),
+                    input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
                     "Args to ArrayCreate should have types that are compatible with the elem_type"
                 );
                 match elem_type {
@@ -5429,7 +5433,7 @@ impl VariadicFunc {
             ArrayToString { .. } => ScalarType::String.nullable(true),
             ListCreate { elem_type } => {
                 debug_assert!(
-                    input_types.iter().all(|t| t.scalar_type == *elem_type),
+                    input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
                     "Args to ListCreate should have types that are compatible with the elem_type"
                 );
                 ScalarType::List {

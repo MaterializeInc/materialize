@@ -999,7 +999,9 @@ fn plan_set_expr(
             let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
             let (right_expr, _right_scope) = plan_set_expr(qcx, right)?;
 
-            // TODO(jamii) this type-checking is redundant with HirRelationExpr::typ, but currently it seems that we need both because HirRelationExpr::typ is not allowed to return errors
+            // TODO(jamii) this type-checking is redundant with
+            // HirRelationExpr::typ, but currently it seems that we need both
+            // because HirRelationExpr::typ is not allowed to return errors
             let left_types = qcx.relation_type(&left_expr).column_types;
             let right_types = qcx.relation_type(&right_expr).column_types;
             if left_types.len() != right_types.len() {
@@ -2600,7 +2602,7 @@ fn plan_list(
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
         if let Some(ScalarType::List { element_type, .. }) = type_hint {
-            ((**element_type).clone(), vec![])
+            (element_type.default_embedded_value(), vec![])
         } else {
             bail!("cannot determine type of empty list");
         }
@@ -2619,7 +2621,7 @@ fn plan_list(
             });
         }
         let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
-        (ecx.scalar_type(&out[0]), out)
+        (ecx.scalar_type(&out[0]).default_embedded_value(), out)
     };
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },

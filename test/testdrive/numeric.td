@@ -23,3 +23,12 @@ a    eq_zero
 ------------
 0    true
 0.01 false
+
+# Ensure values are rescaled on insert
+> INSERT INTO numeric_insertions VALUES (1.2345);
+> SELECT a FROM numeric_values ORDER BY a
+a
+----
+0
+0.01
+1.23
