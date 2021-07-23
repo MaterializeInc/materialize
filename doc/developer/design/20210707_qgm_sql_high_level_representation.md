@@ -121,8 +121,12 @@ enum BoxType {
 }
 
 enum DistinctOperation {
-    Enforced,
+    /// DISTINCTness is required but guaranteed by the internal structure
+    /// of the box.
     Guaranteed,
+    /// The box must enforce DISTINCT
+    Enforce,
+    /// DISTINCTness is not required
     Preserve,
 }
 
@@ -183,6 +187,7 @@ There a few subtle constraints that are not explicit in the representation above
   subqueries in the `ON`-clause of the outer join, but should push down the subquery to the non-preserving side.
   Note 2: In QGM there is no distinction between a `LEFT JOIN` and a `RIGHT JOIN`, since that's a concept that belongs
   only in the AST.
+* `PreservedForeach` quantifiers can only exist in `OuterJoin` boxes.
 
 Some of the constraints above are just conventions for making query transformation easier due to having to cover
 fewer cases. The rest are just constructions that don't make sense semantically speaking.
@@ -380,6 +385,40 @@ This information must be re-computed every time the underlying structure of the 
 `GROUP BY` and `DISTINCT` have a different representation in QGM, where the latter is always preferred since
 it makes query flattening easier. Because of that, a normalization rule will convert any `Grouping` box without
 aggregate functions into a `Select` box with `DistinctOperation::Enforce`.
+
+#### `DistinctOperation::Enforce` vs. `DistinctOperation::Guaranteed`
+
+The following example illustrates the difference between `DistinctOperation::Enforce` and
+`DistinctOperation::Guaranteed`. Consider the following scenario:
+
+```sql
+create table a(a ... primary key, ...);
+create table b(b ... primary key, ...);
+select * from a, b from (select distinct a from a) x, b where a = b;
+```
+
+After parsing this query we end up with a `Select` box ranging over `BaseTable` `A` with `DistinctOperation::Enforce`
+projecting only column `A`, and then another `Select` box (the top-level one) ranging over that one and `BaseTable` `B`,
+containing the join predicate.
+
+One of the main goals of the normalization process is to reduce the number of boxes and flatten the query as much as possible.
+Given two nested `Select` boxes, it will always try to merge them. However, in general `DistinctOperation::Enforce`
+prevents a child `Select` box into a parent one, unless certain conditions that ensure the semantic correctness of the
+transformation are met. One of these sufficient conditions is when the internal structure of the nested `Select` box
+already guarantees the uniqueness of its output, which is indicated by `DistinctOperation::Guaranteed` flag. A
+semantic transformation will analyze the internal structure of any `Select` box with `DistinctOperation::Enforce`
+and will determine whether it already guarantees the uniqueness of its output.
+
+Going back to the example above, the semantic transformation mentioned will kick in for the nested `Select` box, allowing
+its merge into the top-level one. The result is a single `Select` box ranging over both base tables, which is the
+representation for the following equivalent but simpler version of the query above:
+
+```sql
+select * from a, b where a = b;
+```
+
+However, following with the same example, column `A` wasn't a primary/unique key of table `A`, the distinctness of
+the nested `Select` box would not be guaranteed and hence, it could not be merged into the top-level one.
 
 ### Query model transformations: query normalization stage
 
