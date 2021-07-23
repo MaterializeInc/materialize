@@ -96,7 +96,7 @@ def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
         fetch: If false, don't automatically run `git fetch --tags`.
     """
     if fetch:
-        spawn.runv(["git", "fetch", "--tags"])
+        _fetch()
     tags = []
     for t in spawn.capture(["git", "tag"], unicode=True).splitlines():
         try:
@@ -137,6 +137,13 @@ def describe() -> str:
     """Describe the relationship between the current commit and the most recent tag"""
     return spawn.capture(["git", "describe"], unicode=True).strip()
 
+
+def fetch() -> str:
+    """Fetch from all configured default fetch remotes"""
+    return spawn.capture(["git", "fetch", "--tags"], unicode=True).strip()
+
+
+_fetch = fetch  # renamed because an argument shadows the fetch name in get_tags
 
 # Work tree mutation
 

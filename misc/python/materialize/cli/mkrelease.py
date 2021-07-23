@@ -7,11 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import base64
+import concurrent.futures
+import os
+import re
 import sys
 from datetime import date, timedelta
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import click
+import requests
 import semver
 
 from materialize import errors
@@ -26,7 +31,12 @@ USER_DOC_CONFIG = "doc/user/config.toml"
 say = ui.speaker("")
 
 
-@click.command()
+@click.group()
+def cli() -> None:
+    pass
+
+
+@cli.command()
 @click.argument("version")
 @click.option(
     "-b", "--create-branch", default=None, help="Create a branch and check it out"
@@ -38,7 +48,7 @@ say = ui.speaker("")
     default=True,
     help="Whether or not to interact with origin at all",
 )
-def main(
+def release(
     version: str,
     checkout: Optional[str],
     create_branch: str,
@@ -231,6 +241,114 @@ def get_latest_tag(fetch: bool) -> semver.VersionInfo:
     return tags[0]
 
 
+@cli.command()
+@click.argument("recent-ref", required=False)
+@click.argument("ancestor-ref", required=False)
+def list_prs(recent_ref: Optional[str], ancestor_ref: Optional[str]) -> None:
+    """
+    List PRs between a range of refs
+
+    If no refs are specified, then this will find the refs between the most
+    recent tag and the previous semver tag (i.e. excluding RCs)
+    """
+    git.fetch()
+    if recent_ref is None or ancestor_ref is None:
+        tags = git.get_version_tags(fetch=False)
+        if recent_ref is None:
+            recent = tags[0]
+            recent_ref = str(tags[0])
+        else:
+            recent = semver.VersionInfo.parse(recent_ref)
+        if ancestor_ref is None:
+            for ref in tags[1:]:
+                ancestor = ref
+                if (
+                    ancestor.major < recent.major
+                    or ancestor.minor < recent.minor
+                    or ancestor.patch < recent.patch
+                ):
+                    ancestor_ref = str(ref)
+                    break
+
+            say(
+                f"Using recent_ref={recent_ref}  ancestor_ref={ancestor_ref}",
+            )
+
+    commit_range = f"v{ancestor_ref}..v{recent_ref}"
+    commits = spawn.capture(
+        [
+            "git",
+            "log",
+            "--pretty=format:%d %s",
+            "--abbrev-commit",
+            "--date=iso",
+            commit_range,
+            "--",
+        ],
+        unicode=True,
+    )
+
+    pattern = re.compile(r"^\s*\(refs/pullreqs/(\d+)|\(#(\d+)")
+    prs = []
+    found_ref = False
+    for commit in commits.splitlines():
+        if "build(deps)" in commit:
+            continue
+
+        match = pattern.search(commit)
+        if match is not None:
+            pr = match.group(1)
+            if pr:
+                found_ref = True
+            else:
+                pr = match.group(2)
+            prs.append(pr)
+
+    if not found_ref:
+        say(
+            "WARNING: you probably don't have pullreqs configured for your repo",
+        )
+        say(
+            "Add the following line to the MaterializeInc/materialize remote section in your .git/config",
+        )
+        say("  fetch = +refs/pull/*/head:refs/pullreqs/*")
+
+    username = input("Enter your github username: ")
+    creds_path = os.path.expanduser("~/.config/materialize/dev-tools-access-token")
+
+    try:
+        with open(creds_path) as fh:
+            token = fh.read().strip()
+    except FileNotFoundError:
+        raise errors.MzConfigurationError(
+            f"""No developer tool api token at {creds_path!r}
+    please create an access token at https://github.com/settings/tokens"""
+        )
+
+    def get(pr: str) -> Any:
+        return requests.get(
+            f"https://{username}:{token}@api.github.com/repos/MaterializeInc/materialize/pulls/{pr}",
+            headers={
+                "Accept": "application/vnd.github.v3+json",
+            },
+        ).json()
+
+    collected = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(get, pr): pr for pr in prs}
+        for future in concurrent.futures.as_completed(futures):
+            pr = futures[future]
+            contents = future.result()
+            try:
+                url = contents["html_url"]
+                title = contents["title"]
+                collected.append((url, title))
+            except KeyError:
+                raise errors.MzRuntimeError(contents)
+    for url, title in sorted(collected):
+        print(url, title)
+
+
 if __name__ == "__main__":
     with errors.error_handler(say):
-        main()
+        cli()

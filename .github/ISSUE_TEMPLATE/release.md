@@ -40,9 +40,6 @@ production readiness.
 - [ ] Choose the commit for the release. Unless there are open release blockers above,
   this should just be the head commit of the main branch. Checkout that commit.
 
-- [ ] Review all PRs in the release that were not reviewed by another engineer
-  prior to being merged into main.
-
 - [ ] Choose the name for the release candidate following the format
   `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
   v0.2.3 would be called v0.2.3-rc1. Use that to run the `bin/mkrelease`
@@ -50,7 +47,7 @@ production readiness.
 
   ```shell
   tag=v<VERSION>-rc<N>
-  bin/mkrelease -b rel-$tag $tag
+  bin/mkrelease release -b rel-$tag $tag
   ```
 
 - [ ] Update the [release notes][] to include a new "unreleased" version so that new
@@ -80,7 +77,7 @@ production readiness.
 
   ```shell
   next=v<NEXT_VERSION>-dev
-  bin/mkrelease --no-tag -b prepare-$next $next
+  bin/mkrelease release --no-tag -b prepare-$next $next
   ```
 
   Open a PR with this change, and land it.
@@ -91,6 +88,16 @@ production readiness.
   ```console
   $ gh pr create --web
   ```
+
+- [ ] Collect all PRs in this release using the list-prs command and create a slack post in
+  `#release` with the output:
+
+  ```shell
+  bin/mkrelease list-prs
+  ```
+
+- [ ] Review all PRs in the release that were not reviewed by another engineer
+  prior to being merged into main.
 
 [gh]: https://cli.github.com/
 
@@ -181,7 +188,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   ```shell
   $ tag=v<VERSION>
-  $ bin/mkrelease --checkout ${tag}-rcN $tag
+  $ bin/mkrelease release --checkout ${tag}-rcN $tag
   git push origin $tag
   ```
 - [ ] Incorporate this tag into `main`'s history, and update the user doc config to mark this as
@@ -189,7 +196,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   ```console
   $ next=v<NEXT_VERSION>-dev
-  $ bin/mkrelease --no-tag -b continue-$next $next
+  $ bin/mkrelease release --no-tag -b continue-$next $next
   ... snip ...
   Update doc/user/config.toml with 0.6.1 [y/N]: y
   ...
