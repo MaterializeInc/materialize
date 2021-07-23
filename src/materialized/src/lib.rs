@@ -46,7 +46,7 @@ mod telemetry;
 // [2]: https://github.com/jemalloc/jemalloc/issues/1467
 #[cfg(not(target_os = "macos"))]
 #[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const BUILD_INFO: BuildInfo = BuildInfo {
     version: env!("CARGO_PKG_VERSION"),
