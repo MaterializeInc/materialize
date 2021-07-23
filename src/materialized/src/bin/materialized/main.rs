@@ -40,8 +40,8 @@ use clap::AppSettings;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
-use ore::metrics::MetricsRegistry;
-use prometheus::{register_int_counter_vec, IntCounterVec};
+use ore::metric;
+use ore::metrics::{IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 
@@ -400,6 +400,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         })
     };
 
+    let metrics_registry = MetricsRegistry::new();
     // Configure tracing.
     {
         use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -415,21 +416,18 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             // otherwise.
             .add_directive("panic=error".parse().unwrap());
 
-        lazy_static! {
-            static ref LOG_MESSAGE_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_log_message_total",
-                "The number of log messages produced by this materialized instance",
-                &["severity"]
-            )
-            .unwrap();
-        }
+        let log_message_counter: IntCounterVec = metrics_registry.register(metric!(
+            name: "mz_log_message_total",
+            help: "The number of log messages produced by this materialized instance",
+            var_labels: ["severity"],
+        ));
 
         match args.log_file.as_deref() {
             Some("stderr") => {
                 // The user explicitly directed logs to stderr. Log only to stderr
                 // with the user-specified `env_filter`.
                 tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(LOG_MESSAGE_COUNTER.clone()))
+                    .with(MetricsRecorderLayer::new(log_message_counter))
                     .with(env_filter)
                     .with(
                         fmt::layer()
@@ -446,7 +444,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     None => LevelFilter::WARN,
                 };
                 tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(LOG_MESSAGE_COUNTER.clone()))
+                    .with(MetricsRecorderLayer::new(log_message_counter))
                     .with(env_filter)
                     .with({
                         let path = match log_file {
@@ -477,7 +475,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             }
         }
     }
-    let metrics_registry = MetricsRegistry::new();
 
     // Configure prometheus process metrics.
     mz_process_collector::register_default_process_collector(&metrics_registry);
