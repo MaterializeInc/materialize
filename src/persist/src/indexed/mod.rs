@@ -367,6 +367,31 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         // to compact trace.
     }
 
+    /// Permit compaction of updates at times < since to since.
+    ///
+    /// The compaction frontier can only monotonically increase and it is an error
+    /// to call this function with a since argument that is less than or equal to
+    /// the current compaction frontier. It is also an error to advance the
+    /// compaction frontier beyond the current sealed frontier.
+    ///
+    /// TODO: it's unclear whether this function needs to be so restrictive about
+    /// calls with a frontier <= current_compaction_frontier. We chose to mirror
+    /// the `seal` API here but if that doesn't make sense, remove the restrictions.
+    pub fn allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
+        let trace = self
+            .traces
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let since = Antichain::from_elem(since);
+
+        trace.allow_compaction(since)?;
+        // Atomically update the meta with both the trace and future changes.
+        //
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())
+    }
+
     /// Appends the given `batch` to the future for `id`, writing the data into
     /// blob storage.
     ///
@@ -577,6 +602,9 @@ mod tests {
         assert_eq!(buf.read_to_end(), vec![]);
         assert_eq!(future.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
+
+        // Can advance compaction frontier to a time that has already been sealed
+        i.allow_compaction(id, 2)?;
 
         Ok(())
     }
