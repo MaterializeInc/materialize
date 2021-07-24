@@ -124,7 +124,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
     pub fn snapshot<L: Blob>(
         &self,
         ts_lower: Antichain<u64>,
-        ts_upper: Option<Antichain<u64>>,
+        ts_upper: Antichain<u64>,
         blob: &BlobCache<K, V, L>,
     ) -> Result<FutureSnapshot<K, V>, Error> {
         let mut updates = Vec::with_capacity(self.batches.len());
@@ -161,8 +161,8 @@ pub struct FutureSnapshot<K, V> {
     pub seqno_upper: Antichain<SeqNo>,
     /// A closed lower bound on the times of contained updates.
     pub ts_lower: Antichain<u64>,
-    /// An optional open upper bound on the times of the contained updates.
-    pub ts_upper: Option<Antichain<u64>>,
+    /// An open upper bound on the times of the contained updates.
+    pub ts_upper: Antichain<u64>,
     updates: Vec<Arc<BlobFutureBatch<K, V>>>,
 }
 
@@ -172,10 +172,7 @@ impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {
             let updates = batch
                 .updates
                 .iter()
-                .filter(|(_, ts, _)| {
-                    self.ts_lower.less_equal(ts)
-                        && self.ts_upper.as_ref().map_or(true, |u| !u.less_equal(ts))
-                })
+                .filter(|(_, ts, _)| self.ts_lower.less_equal(ts) && !self.ts_upper.less_equal(ts))
                 .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
             buf.extend(updates);
             return true;
