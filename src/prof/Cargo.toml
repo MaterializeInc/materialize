@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.42"
 backtrace = "0.3.60"
-tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
+tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true, git = "https://github.com/MaterializeInc/jemallocator" }
 lazy_static = "1.4.0"
 pprof = "0.4.4"
 serde = { version = "1.0.126", features = ["derive"] }
