@@ -15,6 +15,7 @@ use std::fmt;
 
 use abomonation_derive::Abomonation;
 use differential_dataflow::trace::Description;
+use ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
@@ -46,9 +47,16 @@ pub struct BufferEntry<K, V> {
 /// Invariants:
 /// - All strings in id_mapping are unique.
 /// - All ids in id_mapping are unique.
+/// - All strings in graveyard are unique.
+/// - All ids in graveyard are unique.
+/// - None of the strings in graveyard are present in any of the (string, id)
+///   tuples in id_mapping.
+/// - None of the ids in graveyard are present in any of the (string, id) tuples
+///   in id_mapping.
 /// - The same set of ids are present in id_mapping, futures, and traces.
 /// - For each id, the ts_lower in the future is == the ts_upper in the
 ///   corresponding trace.
+/// - id_mapping.len() + graveyard.len() is == next_stream_id.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobMeta {
     /// The next internal stream id to assign.
@@ -63,6 +71,8 @@ pub struct BlobMeta {
     ///
     /// Invariant: Each stream name and stream id are in here at most once.
     pub id_mapping: Vec<(String, Id)>,
+    /// Set of deleted streams, indexed by external stream name.
+    pub graveyard: Vec<(String, Id)>,
     /// BlobFutures indexed by stream id.
     ///
     /// Invariant: Each stream id is in here at most once. This would be more
@@ -223,6 +233,7 @@ impl Default for BlobMeta {
             next_stream_id: Id(0),
             futures_seqno_upper: SeqNo(0),
             id_mapping: Vec::new(),
+            graveyard: Vec::new(),
             futures: Vec::new(),
             traces: Vec::new(),
         }
@@ -251,6 +262,55 @@ impl BlobMeta {
                 return Err(format!("duplicate internal stream id: {:?}", id).into());
             }
             ids.insert(*id);
+        }
+
+        let mut deleted_ids = HashSet::new();
+        let mut deleted_names = HashSet::new();
+
+        for (name, id) in self.graveyard.iter() {
+            if id >= &self.next_stream_id {
+                return Err(format!(
+                    "graveyard contained stream id {:?} >= next_stream_id: {:?}",
+                    id, self.next_stream_id
+                )
+                .into());
+            }
+
+            if names.contains(name) {
+                return Err(format!(
+                    "duplicate external stream name {} across deleted and registered streams",
+                    name
+                )
+                .into());
+            }
+
+            if ids.contains(id) {
+                return Err(format!(
+                    "duplicate internal stream id {:?} across deleted and registered streams",
+                    id
+                )
+                .into());
+            }
+
+            if deleted_names.contains(name) {
+                return Err(format!("duplicate deleted external stream name: {}", name).into());
+            }
+            deleted_names.insert(name.clone());
+
+            if deleted_ids.contains(id) {
+                return Err(format!("duplicate deleted internal stream id: {:?}", id).into());
+            }
+            deleted_ids.insert(*id);
+        }
+
+        if u64::cast_from(deleted_ids.len() + ids.len()) != self.next_stream_id.0 {
+            return Err(format!(
+                "next stream {:?}, but only registered {} ids and deleted {} ids",
+                self.next_stream_id,
+                ids.len(),
+                deleted_ids.len()
+            )
+            .into());
         }
 
         let mut futures = HashMap::new();
@@ -1097,7 +1157,7 @@ mod tests {
 
         // Extra future
         let b = BlobMeta {
-            next_stream_id: Id(1),
+            next_stream_id: Id(0),
             id_mapping: vec![],
             futures: vec![BlobFutureMeta::new(Id(0))],
             traces: vec![],
@@ -1110,7 +1170,7 @@ mod tests {
 
         // Extra trace
         let b = BlobMeta {
-            next_stream_id: Id(1),
+            next_stream_id: Id(0),
             id_mapping: vec![],
             futures: vec![],
             traces: vec![BlobTraceMeta::new(Id(0))],
@@ -1184,6 +1244,76 @@ mod tests {
             b.validate(),
             Err(Error::from(
                 "id Id(0) future seqno_upper Antichain { elements: [SeqNo(3)] } is not less than the blob's future_seqno_upper SeqNo(2)"
+            ))
+        );
+
+        // Duplicate id in graveyard.
+        let b = BlobMeta {
+            next_stream_id: Id(1),
+            graveyard: vec![("deleted".into(), Id(0)), ("1".into(), Id(0))],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from("duplicate deleted internal stream id: Id(0)"))
+        );
+
+        // Duplicate stream name in graveyard.
+        let b = BlobMeta {
+            next_stream_id: Id(2),
+            graveyard: vec![("deleted".into(), Id(0)), ("deleted".into(), Id(1))],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "duplicate deleted external stream name: deleted"
+            ))
+        );
+
+        // Duplicate id across graveyard and id_mapping.
+        let b = BlobMeta {
+            next_stream_id: Id(2),
+            id_mapping: vec![("deleted".into(), Id(0))],
+            graveyard: vec![("1".into(), Id(0))],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "duplicate internal stream id Id(0) across deleted and registered streams"
+            ))
+        );
+
+        // Duplicate stream name across graveyard and id_mapping.
+        let b = BlobMeta {
+            next_stream_id: Id(2),
+            id_mapping: vec![("name".into(), Id(1))],
+            graveyard: vec![("name".into(), Id(0))],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "duplicate external stream name name across deleted and registered streams"
+            ))
+        );
+
+        // Next stream id != id_mapping + deleted
+        let b = BlobMeta {
+            next_stream_id: Id(2),
+            id_mapping: vec![("name".into(), Id(0))],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            b.validate(),
+            Err(Error::from(
+                "next stream Id(2), but only registered 1 ids and deleted 0 ids"
             ))
         );
     }

@@ -53,7 +53,7 @@ where
         .collect();
 
     let mut i = new_fn(1).expect("creating index cannot fail");
-    let id = i.register("0");
+    let id = i.register("0").expect("registration succeeds");
 
     // Write the data out to the index's buffer.
     i.write_sync(vec![(id, data)])

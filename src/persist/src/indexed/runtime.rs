@@ -27,6 +27,7 @@ use crate::Data;
 
 enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
+    Destroy(String, CmdResponse<bool>),
     Write(Vec<(Id, Vec<((K, V), u64, isize)>)>, CmdResponse<SeqNo>),
     Seal(Id, u64, CmdResponse<()>),
     AllowCompaction(Id, u64, CmdResponse<()>),
@@ -155,6 +156,9 @@ impl<K, V> RuntimeCore<K, V> {
                 }
                 Cmd::Register(_, res) => {
                     res.send(Err(Error::from("register cmd sent to stopped runtime")))
+                }
+                Cmd::Destroy(_, res) => {
+                    res.send(Err(Error::from("destroy cmd sent to stopped runtime")))
                 }
                 Cmd::Write(_, res) => {
                     res.send(Err(Error::from("write cmd sent to stopped runtime")))
@@ -291,12 +295,14 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
         self.core.stop()
     }
 
-    /// Remove the persisted stream.
-    pub fn destroy(&mut self, _id: &str) -> Result<(), Error> {
-        // TODO: When we implement this, we'll almost certainly want to put both
-        // the external string stream name and internal u64 stream id into a
-        // graveyard, so they're not accidentally reused.
-        unimplemented!()
+    /// Synchronously remove the persisted stream.
+    ///
+    /// This method is idempotent and returns true if the stream was actually
+    /// destroyed, false if the stream had already been destroyed previously.
+    pub fn destroy(&mut self, id: &str) -> Result<bool, Error> {
+        let (tx, rx) = mpsc::channel();
+        self.core.send(Cmd::Destroy(id.to_owned(), tx.into()));
+        rx.recv().map_err(|_| Error::RuntimeShutdown)?
     }
 }
 
@@ -465,7 +471,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
             }
             Cmd::Register(id, res) => {
                 let r = self.indexed.register(&id);
-                res.send(Ok(r));
+                res.send(r);
+            }
+            Cmd::Destroy(id, res) => {
+                let r = self.indexed.destroy(&id);
+                res.send(r);
             }
             Cmd::Write(updates, res) => {
                 let write_res = self.indexed.write_sync(updates);
