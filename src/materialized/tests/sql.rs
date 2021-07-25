@@ -150,6 +150,82 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_reads.batch_execute(
+        "BEGIN;
+         DECLARE c CURSOR FOR TAIL t;",
+    )?;
+
+    let data = format!("line {}", 42);
+    client_writes.execute(
+        "INSERT INTO t VALUES ($1), ($2), ($3)",
+        &[&data, &data, &data],
+    )?;
+    let row = client_reads.query_one("FETCH ALL c", &[])?;
+
+    assert_eq!(row.get::<_, i64>("mz_diff"), 3);
+    assert_eq!(row.get::<_, String>("data"), data);
+
+    Ok(())
+}
+
+#[test]
+fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_writes.batch_execute(
+        "CREATE MATERIALIZED VIEW counts AS SELECT data AS key, COUNT(data) AS count FROM t GROUP BY data",
+    )?;
+    client_reads.batch_execute(
+        "BEGIN;
+         DECLARE c CURSOR FOR TAIL counts;",
+    )?;
+
+    let data = format!("line {}", 42);
+    client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+    let row = client_reads.query_one("FETCH ALL c", &[])?;
+
+    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
+    assert_eq!(row.get::<_, String>("key"), data);
+    assert_eq!(row.get::<_, i64>("count"), 1);
+
+    // send another row with the same key, this will retract the previous
+    // count and emit an updated count
+
+    let data = format!("line {}", 42);
+    client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+
+    let rows = client_reads.query("FETCH ALL c", &[])?;
+    let mut rows = rows.iter();
+
+    let row = rows.next().expect("missing result");
+    assert_eq!(row.get::<_, i64>("mz_diff"), -1);
+    assert_eq!(row.get::<_, String>("key"), data);
+    assert_eq!(row.get::<_, i64>("count"), 1);
+
+    let row = rows.next().expect("missing result");
+    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
+    assert_eq!(row.get::<_, String>("key"), data);
+    assert_eq!(row.get::<_, i64>("count"), 2);
+
+    Ok(())
+}
+
+#[test]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 

@@ -1304,29 +1304,27 @@ impl Coordinator {
             id,
             sink.from,
             connector.clone(),
-            sink.envelope,
+            Some(sink.envelope),
             as_of,
         );
 
-        if let SinkConnector::Kafka(kafka_sink) = connector {
-            // For exactly-once Kafka sinks, we need to block compaction of each timestamp binding
-            // until all sinks that depend on a given source have finished writing out that timestamp.
-            // To achieve that, each sink will hold a AntichainToken for all of the sources it depends
-            // on, and will advance all of its source dependencies' compaction frontiers as it completes
-            // writes.
-            if kafka_sink.exactly_once {
-                let mut tokens = Vec::new();
+        // For some sinks, we need to block compaction of each timestamp binding
+        // until all sinks that depend on a given source have finished writing out that timestamp.
+        // To achieve that, each sink will hold a AntichainToken for all of the sources it depends
+        // on, and will advance all of its source dependencies' compaction frontiers as it completes
+        // writes.
+        if connector.requires_source_compaction_holdback() {
+            let mut tokens = Vec::new();
 
-                // Collect AntichainTokens from all of the sources that have them.
-                for id in &kafka_sink.transitive_source_dependencies {
-                    if let Some(token) = self.since_handles.get(&id) {
-                        tokens.push(token.clone());
-                    }
+            // Collect AntichainTokens from all of the sources that have them.
+            for id in connector.transitive_source_dependencies() {
+                if let Some(token) = self.since_handles.get(&id) {
+                    tokens.push(token.clone());
                 }
-
-                let sink_writes = SinkWrites::new(tokens);
-                self.sink_writes.insert(id, sink_writes);
             }
+
+            let sink_writes = SinkWrites::new(tokens);
+            self.sink_writes.insert(id, sink_writes);
         }
         Ok(self.ship_dataflow(df).await)
     }
@@ -2526,7 +2524,7 @@ impl Coordinator {
                 object_columns,
                 value_desc: desc,
             }),
-            SinkEnvelope::Tail { emit_progress },
+            None,
             SinkAsOf {
                 frontier,
                 strict: !with_snapshot,

@@ -184,18 +184,14 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
         from_id: GlobalId,
         from_desc: RelationDesc,
         connector: SinkConnector,
-        envelope: SinkEnvelope,
+        envelope: Option<SinkEnvelope>,
         as_of: SinkAsOf,
     ) {
-        let key_desc = connector.get_key_desc().cloned();
-        let value_desc = connector.get_value_desc().clone();
         self.sink_exports.push((
             id,
             SinkDesc {
                 from: from_id,
                 from_desc,
-                key_desc,
-                value_desc,
                 connector,
                 envelope,
                 as_of,
@@ -626,10 +622,8 @@ pub struct SourceDesc {
 pub struct SinkDesc {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
-    pub value_desc: RelationDesc,
-    pub key_desc: Option<RelationDesc>,
     pub connector: SinkConnector,
-    pub envelope: SinkEnvelope,
+    pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf,
 }
 
@@ -637,7 +631,6 @@ pub struct SinkDesc {
 pub enum SinkEnvelope {
     Debezium,
     Upsert,
-    Tail { emit_progress: bool },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1060,38 +1053,35 @@ impl SinkConnector {
         }
     }
 
-    pub fn get_key_desc(&self) -> Option<&RelationDesc> {
+    /// Returns `true` if this sink requires sources to block timestamp binding
+    /// compaction until all sinks that depend on a given source have finished
+    /// writing out that timestamp.
+    ///
+    /// To achieve that, each sink will hold a `AntichainToken` for all of
+    /// the sources it depends on, and will advance all of its source
+    /// dependencies' compaction frontiers as it completes writes.
+    ///
+    /// Sinks that do need to hold back compaction need to insert an
+    /// [`Antichain`] into `RenderState.sink_write_frontiers` that they update
+    /// in order to advance the frontier that holds back upstream compaction
+    /// of timestamp bindings.
+    ///
+    /// See also [`transitive_source_dependencies`](SinkConnector::transitive_source_dependencies).
+    pub fn requires_source_compaction_holdback(&self) -> bool {
         match self {
-            SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
+            SinkConnector::Kafka(k) => k.exactly_once,
+            SinkConnector::AvroOcf(_) => false,
+            SinkConnector::Tail(_) => false,
         }
     }
 
-    pub fn get_key_indices(&self) -> Option<&[usize]> {
+    /// Returns the [`GlobalIds`](GlobalId) of the transitive sources of this
+    /// sink.
+    pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
         match self {
-            SinkConnector::Kafka(k) => k
-                .key_desc_and_indices
-                .as_ref()
-                .map(|(_desc, indices)| indices.as_slice()),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
-        }
-    }
-
-    pub fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        match self {
-            SinkConnector::Kafka(k) => k.relation_key_indices.as_deref(),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
-        }
-    }
-
-    pub fn get_value_desc(&self) -> &RelationDesc {
-        match self {
-            SinkConnector::Kafka(k) => &k.value_desc,
-            SinkConnector::Tail(t) => &t.value_desc,
-            SinkConnector::AvroOcf(a) => &a.value_desc,
+            SinkConnector::Kafka(k) => &k.transitive_source_dependencies,
+            SinkConnector::AvroOcf(_) => &[],
+            SinkConnector::Tail(_) => &[],
         }
     }
 }

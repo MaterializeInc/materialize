@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info};
@@ -34,19 +34,126 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{FrontieredInputHandle, InputHandle, OutputHandle};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, Map};
+use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
 
-use dataflow_types::{KafkaSinkConnector, KafkaSinkConsistencyConnector, SinkAsOf};
+use dataflow_types::{KafkaSinkConnector, KafkaSinkConsistencyConnector, SinkAsOf, SinkDesc};
 use expr::GlobalId;
 use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
 use interchange::encode::Encode;
-use repr::{Diff, RelationDesc, Row, Timestamp};
-use timely::progress::frontier::AntichainRef;
+use ore::cast::CastFrom;
+use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
+use crate::render::sinks::SinkRender;
+use crate::render::RenderState;
 use crate::source::timestamp::TimestampBindingRc;
+
+impl<G> SinkRender<G> for KafkaSinkConnector
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn uses_keys(&self) -> bool {
+        true
+    }
+
+    fn get_key_desc(&self) -> Option<&RelationDesc> {
+        self.key_desc_and_indices
+            .as_ref()
+            .map(|(desc, _indices)| desc)
+    }
+
+    fn get_key_indices(&self) -> Option<&[usize]> {
+        self.key_desc_and_indices
+            .as_ref()
+            .map(|(_desc, indices)| indices.as_slice())
+    }
+
+    fn get_relation_key_indices(&self) -> Option<&[usize]> {
+        self.relation_key_indices.as_deref()
+    }
+
+    fn get_value_desc(&self) -> &RelationDesc {
+        &self.value_desc
+    }
+
+    fn render_continuous_sink(
+        &self,
+        render_state: &mut RenderState,
+        sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        // consistent/exactly-once Kafka sinks need the timestamp in the row
+        let sinked_collection = if self.consistency.is_some() {
+            sinked_collection
+                .inner
+                .map(|((k, v), t, diff)| {
+                    let v = v.map(|mut v| {
+                        let t = t.to_string();
+                        v.push_list_with(|rp| {
+                            rp.push(Datum::String(&t));
+                        });
+                        v
+                    });
+                    ((k, v), t, diff)
+                })
+                .as_collection()
+        } else {
+            sinked_collection
+        };
+
+        // Extract handles to the relevant source timestamp histories the sink
+        // needs to hear from before it can write data out to Kafka.
+        let mut source_ts_histories = Vec::new();
+
+        for id in &self.transitive_source_dependencies {
+            if let Some(history) = render_state.ts_histories.get(id) {
+                let mut history_bindings = history.clone();
+                // We don't want these to block compaction
+                // ever.
+                history_bindings.set_compaction_frontier(Antichain::new().borrow());
+                source_ts_histories.push(history_bindings);
+            }
+        }
+
+        // TODO: this is a brittle way to indicate the worker that will write to the sink
+        // because it relies on us continuing to hash on the sink_id, with the same hash
+        // function, and for the Exchange pact to continue to distribute by modulo number
+        // of workers.
+        let peers = sinked_collection.inner.scope().peers();
+        let worker_index = sinked_collection.inner.scope().index();
+        let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
+        let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(0)));
+
+        let token = kafka(
+            sinked_collection,
+            sink_id,
+            self.clone(),
+            self.key_desc_and_indices
+                .clone()
+                .map(|(desc, _indices)| desc),
+            self.value_desc.clone(),
+            sink.as_of.clone(),
+            source_ts_histories,
+            shared_frontier.clone(),
+        );
+
+        if active_write_worker {
+            render_state
+                .sink_write_frontiers
+                .insert(sink_id, shared_frontier);
+        }
+
+        Some(token)
+    }
+}
 
 /// Per-Kafka sink metrics.
 #[derive(Clone)]
@@ -444,7 +551,7 @@ struct EncodedRow {
 }
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
-pub fn kafka<G>(
+fn kafka<G>(
     collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
     connector: KafkaSinkConnector,

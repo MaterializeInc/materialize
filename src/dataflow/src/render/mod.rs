@@ -132,7 +132,7 @@ mod context;
 mod flat_map;
 mod join;
 mod reduce;
-mod sinks;
+pub mod sinks;
 mod sources;
 mod threshold;
 mod top_k;
@@ -238,15 +238,7 @@ pub fn build_dataflow<A: Allocate>(
             // Export declared sinks.
             for (sink_id, sink) in &dataflow.sink_exports {
                 let imports = dataflow.get_imports(&sink.from);
-                context.export_sink(
-                    render_state,
-                    &mut tokens,
-                    imports,
-                    *sink_id,
-                    sink,
-                    region.index(),
-                    region.peers(),
-                );
+                context.export_sink(render_state, &mut tokens, imports, *sink_id, sink);
             }
         });
     })
