@@ -264,7 +264,10 @@ lazy_static! {
             (Char, String) => Implicit: CastCharToString,
             (Char, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastCharToChar { length, fail_on_len: ccx == CastContext::Assignment}))
+                Some(move |e: HirScalarExpr| match length {
+                    None => e,
+                    Some(length) => e.call_unary(CastCharToChar {length, fail_on_len: ccx == CastContext::Assignment}),
+                })
             }),
 
             // VARCHAR
@@ -321,10 +324,12 @@ lazy_static! {
             (Uuid, String) => Assignment: CastUuidToString,
 
             // Numeric
-            // Numeric to Numeric casts are not necessary in implicit contexts
             (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let scale = to_type.unwrap_numeric_scale().unwrap();
-                Some(move |e: HirScalarExpr| e.call_unary(UnaryFunc::RescaleNumeric(scale)))
+                let scale = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| match scale {
+                    None => e,
+                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
+                })
             }),
             (Numeric, Float32) => Implicit: CastNumericToFloat32,
             (Numeric, Float64) => Implicit: CastNumericToFloat64,
@@ -350,39 +355,29 @@ fn get_cast(
     fn embedded_value_equality(ccx: &CastContext, l: &ScalarType, r: &ScalarType) -> bool {
         use ScalarType::*;
         match (l, r) {
-            // This check is necessary to avoid unnecessary nop rescales of numeric types.
+            (Array(l), Array(r)) => embedded_value_equality(&ccx, &l, &r),
             (
-                ScalarType::Numeric { scale: from_scale },
-                ScalarType::Numeric {
-                    scale: to_scale @ Some(..),
-                },
-            ) if ccx != &Implicit => from_scale == to_scale,
-            // Only pass through values where casts are in non-implicit contexts
-            (ScalarType::String, ScalarType::VarChar { .. })
-            | (ScalarType::VarChar { .. }, ScalarType::String)
-            | (ScalarType::Char { .. }, ScalarType::Char { .. }) => ccx == &Implicit,
-            (Array(l), Array(r))
-            | (
                 List {
                     element_type: l,
-                    custom_oid: None,
+                    custom_oid: oid_l,
                 },
                 List {
                     element_type: r,
-                    custom_oid: None,
+                    custom_oid: oid_r,
                 },
             )
             | (
                 Map {
                     value_type: l,
-                    custom_oid: None,
+                    custom_oid: oid_l,
                 },
                 Map {
                     value_type: r,
-                    custom_oid: None,
+                    custom_oid: oid_r,
                 },
-            ) => embedded_value_equality(&ccx, &l, &r),
-            (l, r) => l.base_eq(r),
+            ) => oid_l == oid_r && embedded_value_equality(&ccx, &l, &r),
+            (l, r) if ccx == &Implicit => l.base_eq(r),
+            (l, r) => l == r,
         }
     }
 
@@ -720,15 +715,14 @@ where
     // we refactor this function to approximately use the function selection
     // infrastructure, this is probably the fewest LOC change.
     match (&cast_from, cast_to) {
-        // Rewrite all varchar `from`s to string
-        (VarChar { .. }, dest) if dest != &ScalarType::String => cast_inner(&String, dest, expr),
-        // Pass through char "rescale"
+        // Pass through char to char
         (s @ Char { .. }, d @ Char { .. }) => cast_inner(s, d, expr),
-        // If `from` is char, or `to` is char or varchar, use intermediate string
-        // expression.
-        (source @ Char { .. }, dest)
-        | (source, dest @ Char { .. })
-        | (source, dest @ VarChar { .. }) => {
+        // Rewrite all varchar `from`s to string
+        (Char { .. }, dest) | (VarChar { .. }, dest) if dest != &ScalarType::String => {
+            cast_inner(&String, dest, expr)
+        }
+        // If `to` is char or varchar, use intermediate string expression.
+        (source, dest @ Char { .. }) | (source, dest @ VarChar { .. }) => {
             let source_to_str_expr = cast_inner(source, &String, expr)?;
             cast_inner(&String, dest, source_to_str_expr)
         }

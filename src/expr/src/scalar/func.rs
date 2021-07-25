@@ -3624,7 +3624,7 @@ pub enum UnaryFunc {
         fail_on_len: bool,
     },
     CastCharToChar {
-        length: Option<usize>,
+        length: usize,
         fail_on_len: bool,
     },
     CastCharToString,
@@ -3832,7 +3832,7 @@ impl UnaryFunc {
             UnaryFunc::CastCharToChar {
                 length,
                 fail_on_len,
-            } => cast_str_to_char(a.unwrap_char(), *length, *fail_on_len, temp_storage),
+            } => cast_str_to_char(a.unwrap_char(), Some(*length), *fail_on_len, temp_storage),
             UnaryFunc::CastStringToVarChar {
                 length,
                 fail_on_len,
@@ -4072,9 +4072,14 @@ impl UnaryFunc {
                 return_ty.default_embedded_value().nullable(false)
             }
 
-            CastStringToChar { length, .. } | CastCharToChar { length, .. } => {
+            CastStringToChar { length, .. } => {
                 ScalarType::Char { length: *length }.nullable(nullable)
             }
+
+            CastCharToChar { length, .. } => ScalarType::Char {
+                length: Some(*length),
+            }
+            .nullable(nullable),
 
             CastStringToVarChar { length, .. } => {
                 ScalarType::VarChar { length: *length }.nullable(nullable)
