@@ -42,7 +42,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use repr::adt::numeric;
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
     Timestamp,
@@ -3109,41 +3109,21 @@ pub fn scalar_type_from_sql(
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
                     ScalarType::Numeric { .. } => {
-                        let (_, scale) = unwrap_numeric_typ_mod(
-                            typ_mod,
-                            NUMERIC_DATUM_MAX_PRECISION as u8,
-                            "numeric",
-                        )?;
+                        let scale = numeric::extract_typ_mod(typ_mod)?;
                         ScalarType::Numeric { scale }
                     }
-                    ScalarType::String => {
-                        // TODO(justin): we should look up in the catalog to see
-                        // if this type is actually a length-parameterized
-                        // string.
-                        match name.raw_name().item.as_str() {
-                            n @ "bpchar" => {
-                                validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
-                            }
-                            _ => {}
-                        }
-                        ScalarType::String
-                    }
                     ScalarType::Char { .. } => {
-                        validate_typ_mod("character", &typ_mod, &[("length", 1, 10_485_760)])?;
-                        let length = Some(usize::try_from(*typ_mod.get(0).unwrap_or(&1)).unwrap());
+                        let length = repr::adt::char::extract_typ_mod(&typ_mod)?;
                         ScalarType::Char { length }
                     }
                     ScalarType::VarChar { .. } => {
-                        validate_typ_mod(
-                            "character varying",
-                            &typ_mod,
-                            &[("length", 1, 10_485_760)],
-                        )?;
-                        let length = typ_mod.get(0).map(|v| usize::try_from(*v).unwrap());
+                        let length = repr::adt::varchar::extract_typ_mod(&typ_mod)?;
                         ScalarType::VarChar { length }
                     }
                     t => {
-                        validate_typ_mod(&name.to_string(), &typ_mod, &[])?;
+                        if !typ_mod.is_empty() {
+                            bail!("{} does not support type modifiers", &name.to_string());
+                        }
                         t
                     }
                 },
@@ -3154,71 +3134,6 @@ pub fn scalar_type_from_sql(
             }
         }
     })
-}
-
-/// Returns the first two values provided as typ_mods as `u8`, which are
-/// appropriate values to associate with `ScalarType::Numeric`'s values,
-/// precision and scale.
-///
-/// Note that this function assumes you have already determined that
-/// `data_type.name` should resolve to `ScalarType::Numeric`.
-pub fn unwrap_numeric_typ_mod(
-    typ_mod: &[u64],
-    max: u8,
-    name: &str,
-) -> Result<(Option<u8>, Option<u8>), anyhow::Error> {
-    let max_precision = u64::from(max);
-    validate_typ_mod(
-        name,
-        &typ_mod,
-        &[("precision", 1, max_precision), ("scale", 0, max_precision)],
-    )?;
-
-    // Poor man's VecDeque
-    let (precision, scale) = match typ_mod.len() {
-        0 => (None, None),
-        1 => (Some(typ_mod[0] as u8), None),
-        2 => {
-            let precision = typ_mod[0] as u8;
-            let scale = typ_mod[1] as u8;
-            if scale > precision {
-                bail!(
-                    "{} scale {} must be between 0 and precision {}",
-                    name,
-                    scale,
-                    precision
-                );
-            }
-            (Some(precision), Some(scale))
-        }
-        _ => unreachable!(),
-    };
-
-    Ok((precision, scale))
-}
-
-pub fn validate_typ_mod(
-    name: &str,
-    typ_mod: &[u64],
-    val_ranges: &[(&str, u64, u64)],
-) -> Result<(), anyhow::Error> {
-    if typ_mod.len() > val_ranges.len() {
-        bail!("invalid {} type modifier", name)
-    }
-
-    for (v, range) in typ_mod.iter().zip(val_ranges.iter()) {
-        if v < &range.1 || v > &range.2 {
-            bail!(
-                "{} for type {} must be within [{}-{}], have {}",
-                range.0,
-                name,
-                range.1,
-                range.2,
-                v,
-            )
-        }
-    }
-    Ok(())
 }
 
 pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Error> {

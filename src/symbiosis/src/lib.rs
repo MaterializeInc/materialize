@@ -26,7 +26,6 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::TryFrom;
 use std::env;
 use std::rc::Rc;
 
@@ -36,7 +35,7 @@ use tokio_postgres::types::FromSql;
 use uuid::Uuid;
 
 use pgrepr::Jsonb;
-use repr::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION};
+use repr::adt::numeric;
 use repr::{Datum, RelationDesc, RelationType, Row};
 use sql::ast::{
     ColumnOption, CreateSchemaStatement, CreateTableStatement, DataType, DeleteStatement,
@@ -412,25 +411,17 @@ fn push_column(
                 row.push(Datum::from(string.as_deref()));
             }
             "pg_catalog.bpchar" | "pg_catalog.char" => {
-                sql::plan::validate_typ_mod("character", &typ_mod, &[("length", 1, 10_485_760)])?;
-                let length = usize::try_from(*typ_mod.get(0).unwrap_or(&1)).unwrap();
-
+                let length = repr::adt::char::extract_typ_mod(&typ_mod)?;
                 match get_column_inner::<String>(postgres_row, i, nullable)? {
                     None => row.push(Datum::Null),
                     Some(s) => {
-                        let s = repr::adt::char::format_str(&s, Some(length), true)?;
+                        let s = repr::adt::char::format_str(&s, length, true)?;
                         row.push(Datum::Char(&s));
                     }
                 }
             }
             "pg_catalog.varchar" => {
-                sql::plan::validate_typ_mod(
-                    "character varying",
-                    &typ_mod,
-                    &[("length", 1, 10_485_760)],
-                )?;
-                let length = typ_mod.get(0).map(|v| usize::try_from(*v).unwrap());
-
+                let length = repr::adt::varchar::extract_typ_mod(&typ_mod)?;
                 match get_column_inner::<String>(postgres_row, i, nullable)? {
                     None => row.push(Datum::Null),
                     Some(s) => {
@@ -477,11 +468,7 @@ fn push_column(
                 }
             }
             "pg_catalog.numeric" => {
-                let (_, desired_scale) = sql::plan::unwrap_numeric_typ_mod(
-                    typ_mod,
-                    NUMERIC_DATUM_MAX_PRECISION as u8,
-                    "numeric",
-                )?;
+                let desired_scale = repr::adt::numeric::extract_typ_mod(typ_mod)?;
                 match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
                     None => row.push(Datum::Null),
                     Some(mut d) => {
