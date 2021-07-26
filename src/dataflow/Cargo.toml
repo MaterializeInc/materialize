@@ -21,7 +21,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 flate2 = "1.0.20"
-futures = "0.3.15"
+futures = "0.3.16"
 globset = "0.4.8"
 inotify = "0.9.3"
 interchange = { path = "../interchange" }

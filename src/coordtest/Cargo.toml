@@ -12,7 +12,7 @@ datadriven = "0.6.0"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-futures = "0.3.14"
+futures = "0.3.16"
 ore = { path = "../ore" }
 repr = { path = "../repr" }
 serde_json = "1.0.64"
