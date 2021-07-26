@@ -76,9 +76,7 @@ impl Direct {
         let (streams, persister) = (&mut self.streams, &mut self.persister);
         match streams.entry(name.to_string()) {
             Entry::Occupied(x) => Ok(x.into_mut()),
-            Entry::Vacant(x) => persister
-                .create_or_load(name)
-                .map(|token| x.insert(token.into_inner())),
+            Entry::Vacant(x) => persister.create_or_load(name).map(|token| x.insert(token)),
         }
     }
 

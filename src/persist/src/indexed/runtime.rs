@@ -10,8 +10,12 @@
 //! Runtime for concurrent, asynchronous use of [Indexed], and the public API
 //! used by the rest of the crate to connect to it.
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use log;
 
@@ -20,11 +24,10 @@ use crate::indexed::encoding::Id;
 use crate::indexed::{Indexed, IndexedSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
-use crate::Token;
 
 enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
-    Write(Id, Vec<((K, V), u64, isize)>, CmdResponse<SeqNo>),
+    Write(Vec<(Id, Vec<((K, V), u64, isize)>)>, CmdResponse<SeqNo>),
     Seal(Id, u64, CmdResponse<()>),
     AllowCompaction(Id, u64, CmdResponse<()>),
     Snapshot(Id, CmdResponse<IndexedSnapshot<K, V>>),
@@ -49,14 +52,19 @@ where
     let indexed = Indexed::new(buf, blob)?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
-    let handle = thread::spawn(move || {
+    let runtime_f = move || {
         // TODO: Set up the tokio or other async runtime context here.
         let mut l = RuntimeImpl { indexed, rx };
         while l.work() {}
-    });
+    };
+    let id = RuntimeId::new();
+    let handle = thread::Builder::new()
+        .name(format!("persist-runtime-{}", id.0))
+        .spawn(runtime_f)?;
     let handle = Mutex::new(Some(handle));
     let core = RuntimeCore { handle, tx };
     Ok(RuntimeClient {
+        id,
         core: Arc::new(core),
     })
 }
@@ -116,6 +124,18 @@ impl<T> CmdResponse<T> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct RuntimeId(u64);
+
+impl RuntimeId {
+    pub fn new() -> Self {
+        let mut h = DefaultHasher::new();
+        Instant::now().hash(&mut h);
+        RuntimeId(h.finish())
+    }
+}
+
+#[derive(Debug)]
 struct RuntimeCore<K, V> {
     handle: Mutex<Option<JoinHandle<()>>>,
     tx: crossbeam_channel::Sender<Cmd<K, V>>,
@@ -136,7 +156,7 @@ impl<K, V> RuntimeCore<K, V> {
                 Cmd::Register(_, res) => {
                     res.send(Err(Error::from("register cmd sent to stopped runtime")))
                 }
-                Cmd::Write(_, _, res) => {
+                Cmd::Write(_, res) => {
                     res.send(Err(Error::from("write cmd sent to stopped runtime")))
                 }
                 Cmd::Seal(_, _, res) => {
@@ -191,13 +211,16 @@ impl<K, V> Drop for RuntimeCore<K, V> {
 /// NB: The methods below are executed concurrently. For a some call X to be
 /// guaranteed as "previous" to another call Y, X's response must have been
 /// received before Y's call started.
+#[derive(Debug)]
 pub struct RuntimeClient<K, V> {
+    id: RuntimeId,
     core: Arc<RuntimeCore<K, V>>,
 }
 
 impl<K, V> Clone for RuntimeClient<K, V> {
     fn clone(&self) -> Self {
         RuntimeClient {
+            id: self.id.clone(),
             core: self.core.clone(),
         }
     }
@@ -206,29 +229,29 @@ impl<K, V> Clone for RuntimeClient<K, V> {
 impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// Synchronously registers a new stream for writes and reads.
     ///
-    /// This method is idempotent.
-    /// Returns a token used to construct a persisted stream operator.
+    /// This method is idempotent. Returns read and write handles used to
+    /// construct a persisted stream operator.
     ///
-    /// If data was written by a previous [RuntimeClient] for this id, it's loaded and
-    /// replayed into the stream once constructed.
+    /// If data was written by a previous [RuntimeClient] for this id, it's
+    /// loaded and replayed into the stream once constructed.
     pub fn create_or_load(
         &self,
         id: &str,
-    ) -> Result<Token<StreamWriteHandle<K, V>, StreamReadHandle<K, V>>, Error> {
+    ) -> Result<(StreamWriteHandle<K, V>, StreamReadHandle<K, V>), Error> {
         let (tx, rx) = mpsc::channel();
         self.core.send(Cmd::Register(id.to_owned(), tx.into()));
         let id = rx.recv().map_err(|_| Error::RuntimeShutdown)??;
         let write = StreamWriteHandle::new(id, self.clone());
         let meta = StreamReadHandle::new(id, self.clone());
-        Ok(Token { write, meta })
+        Ok((write, meta))
     }
 
     /// Asynchronously persists `(Key, Value, Time, Diff)` updates for the
-    /// stream with the given id.
+    /// streams with the given ids.
     ///
-    /// The id must have previously been registered.
-    fn write(&self, id: Id, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
-        self.core.send(Cmd::Write(id, updates.to_vec(), res))
+    /// The ids must have previously been registered.
+    fn write(&self, updates: Vec<(Id, Vec<((K, V), u64, isize)>)>, res: CmdResponse<SeqNo>) {
+        self.core.send(Cmd::Write(updates, res))
     }
 
     /// Asynchronously advances the "sealed" frontier for the stream with the
@@ -279,9 +302,19 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
 
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
+#[derive(Debug)]
 pub struct StreamWriteHandle<K, V> {
     id: Id,
     runtime: RuntimeClient<K, V>,
+}
+
+impl<K, V> Clone for StreamWriteHandle<K, V> {
+    fn clone(&self) -> Self {
+        StreamWriteHandle {
+            id: self.id,
+            runtime: self.runtime.clone(),
+        }
+    }
 }
 
 impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
@@ -290,20 +323,87 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
         StreamWriteHandle { id, runtime }
     }
 
+    /// Returns the stream [Id] for this handle.
+    pub fn stream_id(&self) -> Id {
+        self.id
+    }
+
     /// Synchronously writes (Key, Value, Time, Diff) updates.
-    pub fn write(&mut self, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
-        self.runtime.write(self.id, updates, res);
+    pub fn write(&self, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
+        self.runtime.write(vec![(self.id, updates.to_vec())], res);
     }
 
     /// Closes the stream at the given timestamp, migrating data strictly less
     /// than it into the trace.
-    pub fn seal(&mut self, upper: u64, res: CmdResponse<()>) {
+    pub fn seal(&self, upper: u64, res: CmdResponse<()>) {
         self.runtime.seal(self.id, upper, res);
+    }
+}
+
+/// A handle for atomically writing to multiple streams.
+pub struct AtomicWriteHandle<K, V> {
+    ids: HashSet<Id>,
+    runtime: RuntimeClient<K, V>,
+}
+
+impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
+    /// Returns a new [AtomicWriteHandle] for the given streams.
+    pub fn new(handles: &[&StreamWriteHandle<K, V>]) -> Result<Self, Error> {
+        let mut stream_ids = HashSet::new();
+        let runtime = if let Some(handle) = handles.first() {
+            handle.runtime.clone()
+        } else {
+            return Err(Error::from("AtomicWriteHandle received no streams"));
+        };
+        for handle in handles.iter() {
+            if handle.runtime.id != runtime.id {
+                return Err(Error::from(format!(
+                    "AtomicWriteHandle got handles from two runtimes: {:?} and {:?}",
+                    runtime.id, handle.runtime.id
+                )));
+            }
+            // It's odd if there are duplicates but the semantics of what that
+            // means are straightforward, so for now we support it.
+            stream_ids.insert(handle.id);
+        }
+        Ok(AtomicWriteHandle {
+            ids: stream_ids,
+            runtime,
+        })
+    }
+
+    /// Atomically writes the given updates to the paired streams.
+    ///
+    /// Either all of the writes will be made durable for replay or none of them
+    /// will.
+    ///
+    /// Ids may be duplicated. However, the updates are passed down to storage
+    /// unchanged, so users should coalesce them when that's not otherwise
+    /// slower.
+    //
+    // TODO: This could take &StreamWriteHandle instead of Id to avoid surfacing
+    // Id to users, but that would require an extra Vec. Revisit.
+    pub fn write_atomic(
+        &self,
+        updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+        res: CmdResponse<SeqNo>,
+    ) {
+        for (id, _) in updates.iter() {
+            if !self.ids.contains(id) {
+                res.send(Err(Error::from(format!(
+                    "AtomicWriteHandle cannot write to stream: {:?}",
+                    id
+                ))));
+                return;
+            }
+        }
+        self.runtime.write(updates, res)
     }
 }
 
 /// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
+#[derive(Debug)]
 pub struct StreamReadHandle<K, V> {
     id: Id,
     runtime: RuntimeClient<K, V>,
@@ -367,8 +467,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
                 let r = self.indexed.register(&id);
                 res.send(Ok(r));
             }
-            Cmd::Write(id, updates, res) => {
-                let write_res = self.indexed.write_sync(id, &updates);
+            Cmd::Write(updates, res) => {
+                let write_res = self.indexed.write_sync(updates);
                 // TODO: Move this to a Cmd::Tick or something.
                 let step_res = self.indexed.step();
                 res.send(step_res.and_then(|_| write_res));
@@ -414,7 +514,7 @@ mod tests {
         let blob = MemBlob::new("runtime");
         let mut runtime = start(buffer, blob)?;
 
-        let (mut write, meta) = runtime.create_or_load("0")?.into_inner();
+        let (write, meta) = runtime.create_or_load("0")?;
         block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
@@ -443,7 +543,7 @@ mod tests {
         // Everything is still running after client1 is dropped.
         let mut client2 = client1.clone();
         drop(client1);
-        let (mut write, meta) = client2.create_or_load("0")?.into_inner();
+        let (write, meta) = client2.create_or_load("0")?;
         block_on(|res| write.write(&data, res))?;
         let snap = meta.snapshot()?;
         assert_eq!(snap.read_to_end(), data);
@@ -464,14 +564,14 @@ mod tests {
         // Shutdown happens if we explicitly call stop, unlocking the buffer and
         // blob and allowing them to be reused in the next Indexed.
         let mut persister = registry.open("path", "restart-1")?;
-        let (mut write, _) = persister.create_or_load("0")?.into_inner();
+        let (write, _) = persister.create_or_load("0")?;
         block_on(|res| write.write(&data[0..1], res))?;
         assert_eq!(persister.stop(), Ok(()));
 
         // Shutdown happens if all handles are dropped, even if we don't call
         // stop.
         let persister = registry.open("path", "restart-2")?;
-        let (mut write, _) = persister.create_or_load("0")?.into_inner();
+        let (write, _) = persister.create_or_load("0")?;
         block_on(|res| write.write(&data[1..2], res))?;
         drop(write);
         drop(persister);
@@ -479,10 +579,51 @@ mod tests {
         // We can read back what we previously wrote.
         {
             let persister = registry.open("path", "restart-1")?;
-            let (_, meta) = persister.create_or_load("0")?.into_inner();
+            let (_, meta) = persister.create_or_load("0")?;
             let snap = meta.snapshot()?;
             assert_eq!(snap.read_to_end(), data);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn atomic() -> Result<(), Error> {
+        let data = vec![
+            (("key1".to_string(), ()), 1, 1),
+            (("key2".to_string(), ()), 1, 1),
+        ];
+
+        let mut registry = MemRegistry::new();
+        let client1 = registry.open::<String, ()>("1", "atomic")?;
+        let client2 = registry.open::<String, ()>("2", "atomic")?;
+
+        let (c1s1, c1s1_read) = client1.create_or_load("1")?;
+        let (c1s2, c1s2_read) = client1.create_or_load("2")?;
+        let (c2s1, _) = client2.create_or_load("1")?;
+
+        // Cannot construct with no streams.
+        assert!(AtomicWriteHandle::<(), ()>::new(&[]).is_err());
+
+        // Cannot construct with streams from different runtimes.
+        assert!(AtomicWriteHandle::new(&[&c1s2, &c2s1]).is_err());
+
+        // Normal case
+        let atomic = AtomicWriteHandle::new(&[&c1s1, &c1s2])?;
+        let updates = vec![
+            (c1s1.stream_id(), data[..1].to_vec()),
+            (c1s2.stream_id(), data[1..].to_vec()),
+        ];
+        block_on(|res| atomic.write_atomic(updates, res))?;
+        assert_eq!(c1s1_read.snapshot()?.read_to_end(), data[..1].to_vec());
+        assert_eq!(c1s2_read.snapshot()?.read_to_end(), data[1..].to_vec());
+
+        // Cannot write to streams not specified during construction.
+        let (c1s3, _) = client1.create_or_load("3")?;
+        assert!(
+            block_on(|res| atomic.write_atomic(vec![(c1s3.stream_id(), data.clone())], res))
+                .is_err()
+        );
 
         Ok(())
     }

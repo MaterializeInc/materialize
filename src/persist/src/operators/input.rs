@@ -24,14 +24,13 @@ use crate::error::Error;
 use crate::indexed::runtime::{CmdResponse, StreamReadHandle, StreamWriteHandle};
 use crate::operators;
 use crate::storage::SeqNo;
-use crate::Token;
 
 /// A persistent equivalent of [UnorderedInput].
 pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
     /// A persistent equivalent of [UnorderedInput::new_unordered_input].
     fn new_persistent_unordered_input(
         &mut self,
-        token: Token<StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>>,
+        token: (StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>),
     ) -> (
         (
             PersistentUnorderedHandle<K>,
@@ -49,7 +48,7 @@ where
 {
     fn new_persistent_unordered_input(
         &mut self,
-        token: Token<StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>>,
+        token: (StreamWriteHandle<K, ()>, StreamReadHandle<K, ()>),
     ) -> (
         (
             PersistentUnorderedHandle<K>,
@@ -59,7 +58,7 @@ where
         Stream<G, (String, u64, isize)>,
     ) {
         let ((handle, cap), ok_new) = self.new_unordered_input();
-        let (write, read) = token.into_inner();
+        let (write, read) = token;
 
         // Replay the previously persisted data, if any.
         let (ok_previous, err_previous) = operators::replay(self, &read);
