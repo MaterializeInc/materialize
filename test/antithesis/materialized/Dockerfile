@@ -11,7 +11,7 @@ FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get -qy install ca-certificates
 
-COPY libvoidstar.so /usr/local/lib
+COPY libvoidstar.so /usr/lib
 RUN ldconfig
 
 COPY materialized /usr/local/bin/
