@@ -117,6 +117,10 @@ where
 
         for id in &self.transitive_source_dependencies {
             if let Some(history) = render_state.ts_histories.get(id) {
+                // As soon as we have one sink that depends on a given source,
+                // that source needs to persist timestamp bindings.
+                history.enable_persistence();
+
                 let mut history_bindings = history.clone();
                 // We don't want these to block compaction
                 // ever.

@@ -271,6 +271,8 @@ pub struct TimestampBindingBox {
     /// Never persist these bindings. This is used for BYO, where the bindings
     /// are stored externally already.
     never_requires_persistence: bool,
+    /// Whether or not these timestamp bindings need to be persisted.
+    requires_persistence: bool,
 }
 
 impl TimestampBindingBox {
@@ -285,6 +287,7 @@ impl TimestampBindingBox {
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i, now)),
             never_requires_persistence,
+            requires_persistence: false,
         }
     }
 
@@ -560,7 +563,17 @@ impl TimestampBindingRc {
 
     /// Whether or not these timestamp bindings must be persisted.
     pub fn requires_persistence(&self) -> bool {
-        !self.wrapper.borrow().never_requires_persistence
+        let inner = self.wrapper.borrow();
+        if inner.never_requires_persistence {
+            false
+        } else {
+            inner.requires_persistence
+        }
+    }
+
+    /// Enables persistence for these bindings.
+    pub fn enable_persistence(&self) {
+        self.wrapper.borrow_mut().requires_persistence = true;
     }
 }
 
