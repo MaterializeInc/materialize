@@ -1,13 +1,13 @@
 ---
-title: "Node.JS and Materialize"
-description: "This guide explains how to use a Node.JS application to connect, insert data, manage, and read data from Materialize."
+title: "Node.js and Materialize"
+description: "This guide explains how to use a Node.js application to connect, insert data, manage, and read data from Materialize."
 weight: 10
 menu:
   main:
     parent: guides
 ---
 
-This guide explains all you need to know to start working with Materialize from a Node.JS Application.
+This guide explains all you need to know to start working with Materialize from a Node.js Application.
 
 Materialize is **PostgreSQL-compatible**, this means that a Node.js application can use any existing PostgreSQL client like `pg` ([node-postgres](https://node-postgres.com/)) to connect, manage, and read from Materialize as if it were a PostgreSQL database.
 
@@ -49,9 +49,9 @@ Replace `MY_INSTANCE_ID`) in the code above with your Materialize Cloud instance
 
 ## Stream
 
-To take advantage of incrementally updated materialized views from a Node.JS application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
 
-Read a stream of updates from a materialized view named `my_view` into Node.JS:
+Read a stream of updates from a materialized view named `my_view` into Node.js:
 
 ```js
 const { Client } = require('pg');
@@ -118,7 +118,7 @@ client.connect((err, client) => {
 
 ## Query
 
-Querying Materialize is identical to querying a traditional PostgreSQL database: Node.JS executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+Querying Materialize is identical to querying a traditional PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
 Query a view `my_view` with a select statement:
 
@@ -141,20 +141,20 @@ Polling _(repeatedly querying)_ of a view is fine, and response times are much f
 
 ## Push data to a source
 
-Data produced in a node.js app **cannot be sent directly to a [`SOURCE` in Materialize](/sql/create-source/)** for a couple of reasons:
+Data produced in a Node.js app **cannot be sent directly to a [`SOURCE` in Materialize](/sql/create-source/)** for a couple of reasons:
 
 -  Materialize relies on another system (a traditional database, S3 or Kafka) to serve as the "system of record" for data. Materialize processes a live stream of data and maintains views in memory.
 -  Sending data to an intermediary system helps decouple the operation of the Node.js app from the operation of Materialize.
 
-The table below lists the options for **intermediary systems** that a Node.JS Application can send data through to reach Materialize.
+The table below lists the options for **intermediary systems** that a Node.js Application can send data through to reach Materialize.
 
 Intermediary System | Notes and Resources
 -------------|-------------
-**Kafka** | Produce messages from [Node.JS to Kafka](https://kafka.js.org/docs/getting-started), and create a [Materialize Kafka Source](/sql/create-source/json-kafka/) to consume them. Kafka is recommended for scenarios where low-latency and high-throughput are important.
-**Kinesis** | Send data from [Node.JS to a Kinesis stream](https://docs.aws.amazon.com/streams/latest/dev/kinesis-record-processor-implementation-app-nodejs.html) and consume them with a [Materialize Kinesis source](/sql/create-source/json-kinesis/). Kinesis is easier to configure and maintain than Kafka but less fully-featured and configurable. For example, Kinesis is a [volatile source](/overview/volatility/) because it cannot do infinite retention.
-**PostgreSQL** | Node.JS sends data to PostgreSQL, and the [Materialize PostgreSQL source]() receives events from the change feed (the write-ahead log) of the database. Ideal for Node.JS apps that already use PostgreSQL and fast-changing relational data.
-**PubNub** | Streams as a service provider PubNub provides a [Node.JS SDK](https://www.pubnub.com/docs/sdks/javascript/nodejs) to send data into a stream, [Materialize PubNub source](/sql/create-source/json-pubnub/) subscribes to the stream and consumes data.
-**S3** | [Write data from Node.JS to S3](https://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/getting-started-nodejs.html) in an append-only fashion, use the Materialize [S3 Source](/sql/create-source/json-s3), to scan the S3 bucket for data and [listen for new data via SQS notifications](/sql/create-source/json-s3/#listening-to-sqs-notifications). If data is already sent to S3 and minute latency is not an issue, this is an economical and low-maintenance option.
+**Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Materialize Kafka Source](/sql/create-source/json-kafka/) to consume them. Kafka is recommended for scenarios where low-latency and high-throughput are important.
+**Kinesis** | Send data from [Node.js to a Kinesis stream](https://docs.aws.amazon.com/streams/latest/dev/kinesis-record-processor-implementation-app-nodejs.html) and consume them with a [Materialize Kinesis source](/sql/create-source/json-kinesis/). Kinesis is easier to configure and maintain than Kafka but less fully-featured and configurable. For example, Kinesis is a [volatile source](/overview/volatility/) because it cannot do infinite retention.
+**PostgreSQL** | Node.js sends data to PostgreSQL, and the [Materialize PostgreSQL source]() receives events from the change feed (the write-ahead log) of the database. Ideal for Node.js apps that already use PostgreSQL and fast-changing relational data.
+**PubNub** | Streams as a service provider PubNub provides a [Node.js SDK](https://www.pubnub.com/docs/sdks/javascript/nodejs) to send data into a stream, [Materialize PubNub source](/sql/create-source/json-pubnub/) subscribes to the stream and consumes data.
+**S3** | [Write data from Node.js to S3](https://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/getting-started-nodejs.html) in an append-only fashion, use the Materialize [S3 Source](/sql/create-source/json-s3), to scan the S3 bucket for data and [listen for new data via SQS notifications](/sql/create-source/json-s3/#listening-to-sqs-notifications). If data is already sent to S3 and minute latency is not an issue, this is an economical and low-maintenance option.
 
 ## Insert data into tables
 
@@ -182,9 +182,9 @@ Multiple rows can be
 
 ## Manage sources, views, indexes
 
-Creation of sources, views and indexes in Materialize should be treated with the same care as schema creation and updates in a traditional database. These are typically done during Materialize deployment. However, a Node.JS app is perfectly capable of executing these DDL statements 
+Creation of sources, views and indexes in Materialize should be treated with the same care as schema creation and updates in a traditional database. These are typically done during Materialize deployment. However, a Node.js app is perfectly capable of executing these DDL statements 
 
-**Create a source from Node.JS:**
+**Create a source from Node.js:**
 
 ```js
 const { Client } = require('pg');
@@ -205,7 +205,7 @@ main();
 
 See [`CREATE SOURCE`](/sql/create-source/) reference for more information.
 
-**Create a view from Node.JS:**
+**Create a view from Node.js:**
 
 ```js
 const { Client } = require('pg');
@@ -228,7 +228,7 @@ main();
 
 See [`CREATE VIEW`](/sql/create-view/) reference for more information.
 
-## Node.JS ORMs
+## Node.js ORMs
 
 While it communicates over the same wire protocol as PostgreSQL, Materialize doesn't currently respond to the entire catalog of PostgreSQL system metadata API endpoints. Object-relational-mapping (ORM) systems like **Prisma**, **Sequelize** or **TypeORM** use these PostgreSQL system calls (often within the `pg_catalog` namespace) to introspect the database and do extra work behind the scenes.
 
