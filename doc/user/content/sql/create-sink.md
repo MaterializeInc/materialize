@@ -98,7 +98,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 
 - Materialize currently only supports Avro-formatted sinks that write to either a topic or an Avro object container file.
 - For most sinks, Materialize creates new, distinct topics and files for each sink on restart.
-- For Avro-formatted Kafka sinks, an experimental feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#enabling-topic-reuse-after-restart).
+- For Avro-formatted Kafka sinks, a beta feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#enabling-topic-reuse-after-restart).
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
 - Materialize generates Avro schemas for views and sources that are stored in sinks.
 - Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction id information inline with the data, and adds a separate transaction metadata topic.
@@ -169,7 +169,7 @@ You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
 #### Enabling topic reuse after restart
 
-{{< experimental v0.8.2 />}}
+{{< beta v0.8.4 />}}
 
 By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead, Materialize must be able to reconstruct the prior history of the sinked object and all objects on which it is dependent--that is, events must have replayable timestamps--and must ensure that no other processes write to the output topic.
 
@@ -182,7 +182,7 @@ When you create a sink, you must:
 
 The sink consistency topic cannot be written to by any other process, including another Materialize instance or another sink.
 
-Because this feature is still experimental, we strongly suggest that you start with test data, rather than with production. Please [escalate](https://github.com/MaterializeInc/materialize/issues/new/choose) any issues to us.
+Because this feature is still in beta, we strongly suggest that you start with test data, rather than with production. Please [escalate](https://github.com/MaterializeInc/materialize/issues/new/choose) any issues to us.
 
 #### Consistency metadata
 

@@ -1244,7 +1244,6 @@ pub fn plan_create_views(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
-    scx: &StatementContext,
     format: Option<Format<Raw>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
@@ -1333,8 +1332,6 @@ fn kafka_sink_builder(
                     "reuse_topic requires that sink input dependencies are replayable, {} is not",
                     item.name()
                 );
-                } else if !item.source_connector()?.is_byo() {
-                    scx.require_experimental_mode("Exactly-once sinks")?;
                 }
             } else if item.item_type() != CatalogItemType::Source {
                 bail!(
@@ -1543,7 +1540,6 @@ pub fn plan_create_sink(
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
-            scx,
             format,
             &mut with_options,
             broker,
