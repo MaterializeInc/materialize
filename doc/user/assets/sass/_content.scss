@@ -360,23 +360,3 @@ pre {
   color: $purple !important;
   background: $purple-1;
 }
-
-// Expandable sections (expand.html)
-
-.expand-label {
-  font-weight: bold;
-  padding: 10px 0px;
-  cursor: pointer;
-
-  i {
-      content: "";
-      border-left: 4px solid scale-color($purple, $lightness: 15%);
-      border-top: 4px solid transparent;
-      border-bottom: 4px solid transparent;
-      display: inline-block;
-      margin-left: 2px;
-      margin-right: 5px;
-      transition: transform 0.3s;
-    }
-
-}

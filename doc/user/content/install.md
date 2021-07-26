@@ -130,7 +130,7 @@ Detail | Info
 
 ### CLI Connections
 
-To connect to a running instance, you can use any [Materialize-compatible CLI](connect/cli/), like `psql` or `mzcli`. To install e.g. the `psql` client:
+To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. To install the `psql` client:
 
 {{< tabs >}}
 {{< tab "macOS">}}
@@ -160,7 +160,7 @@ psql -U materialize -h localhost -p 6875 materialize
 <p>
 
 {{< cta href="/get-started" >}}
-Next, let's get started with Materialize →
+Next, let's get started with Materialize! →
 {{</ cta >}}
 
 [Rustup]: https://rustup.rs

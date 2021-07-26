@@ -7,19 +7,13 @@ weight: 3
 
 This guide walks you through getting started with Materialize, from installing it to creating your first materialized view on top of streaming data. We'll cover:
 
-* Installing, running and connecting to Materialize
+* Installing, running, and connecting to Materialize
 
 * Connecting to a streaming data source
 
 * Creating a materialized view
 
 * Exploring common patterns like joins and time-windowing
-
-<p>
-
-{{< cta href="/katacoda/?intro-wikipedia" target="_blank" >}}
-Try the demo in your browser →
-{{</ cta >}}
 
 ## Install, run, connect
 
@@ -34,9 +28,9 @@ Select an environment and follow the instructions to get the latest stable relea
     docker run -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
     ```
 
-    This starts a process using one [worker thread](/connect/cli//#worker-threads) and listening on port 6875 by default.
+    This starts a process using one [worker thread](/connect/cli/#worker-threads) and listening on port 6875 by default.
 
-1. You can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -47,13 +41,13 @@ Select an environment and follow the instructions to get the latest stable relea
 {{< /tab >}}
 {{< tab "macOS">}}
 
-1. Assuming you're using [Homebrew](https://brew.sh/), open a terminal and run:
+1. If you're using [Homebrew](https://brew.sh/), open a terminal and run:
     
     ```shell
     brew install MaterializeInc/materialize/materialized
     ```
     
-    **Note:** For a _curl_-based alternative, see [Install](/install/#curl).
+    **Note:** For a `curl`-based alternative, see [Install](/install/#curl).
 
 1. Once the installation is complete, you can start the `materialized` process:
 
@@ -61,9 +55,9 @@ Select an environment and follow the instructions to get the latest stable relea
     materialized -w 1
     ```
 
-    This starts a process using one [worker thread](/connect/cli//#worker-threads) and listening on port 6875 by default.
+    This starts a process using one [worker thread](/connect/cli/#worker-threads) and listening on port 6875 by default.
 
-1. You can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -75,7 +69,7 @@ Select an environment and follow the instructions to get the latest stable relea
 
 {{< tab "Linux">}}
 
-1. Assuming you're using [apt](https://linuxize.com/post/how-to-use-apt-command/), open a terminal and run (as _root_):
+1. If you're using [apt](https://linuxize.com/post/how-to-use-apt-command/), open a terminal and run (as _root_):
 
     ```shell
     # Add the signing key for the Materialize apt repository
@@ -87,7 +81,7 @@ Select an environment and follow the instructions to get the latest stable relea
     apt install materialized
     ```
 
-    **Note:** For a _curl_-based alternative, see [Install](/install/#curl-1).
+    **Note:** For a `curl`-based alternative, see [Install](/install/#curl-1).
 
 1. Once the installation is complete, you can start the `materialized` process:
 
@@ -95,9 +89,9 @@ Select an environment and follow the instructions to get the latest stable relea
     materialized -w 1
     ```
 
-    This starts a process using one [worker thread](/connect/cli//#worker-threads) and listening on port 6875 by default.
+    This starts a process using one [worker thread](/connect/cli/#worker-threads) and listening on port 6875 by default.
 
-1. You can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -111,14 +105,14 @@ Select an environment and follow the instructions to get the latest stable relea
 
 ## Explore a streaming source
 
-Materialize allows you to work with streaming data from multiple external sources using nothing but standard SQL. You write arbitrarily complex queries, Materialize takes care of maintaining the results automatically up to date with very low latency.
+Materialize allows you to work with streaming data from multiple external sources using nothing but standard SQL. You write arbitrarily complex queries; Materialize takes care of maintaining the results automatically up to date with very low latency.
 
 We'll start with some sample real-time data from a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) receiving the latest market orders for a given marketplace.
 
 1. Let's create a [PubNub source](/sql/create-source/json-pubnub/#pubnub-source-details) that connects to the market orders channel with a subscribe key:
 
     ```sql
-    CREATE SOURCE market_orders_raw 
+    CREATE SOURCE market_orders_raw
     FROM PUBNUB
     SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
     CHANNEL 'pubnub-market-orders';
@@ -152,7 +146,7 @@ We'll start with some sample real-time data from a [PubNub stream](https://www.p
 
     ```sql
     CREATE MATERIALIZED VIEW avg_bid AS
-    SELECT symbol, 
+    SELECT symbol,
            AVG(bid_price) AS avg
     FROM market_orders
     GROUP BY symbol;
@@ -160,7 +154,7 @@ We'll start with some sample real-time data from a [PubNub stream](https://www.p
 
     The `avg_bid` view is incrementally updated as new data streams in, so you get fresh and correct results with millisecond latency. Behind the scenes, Materialize is indexing the results of the embedded query in memory (i.e. _materializing_ the view).
 
-    To see the results:
+1. Let's check the results:
 
     ```sql
     SELECT * FROM avg_bid;
@@ -186,15 +180,11 @@ We'll start with some sample real-time data from a [PubNub stream](https://www.p
 
     To cancel out of the stream, press **CTRL+C**.
 
-## What's next?
+### Joins
 
-That's it! You just created your first materialized view on top of streaming data. We encourage you to continue exploring the PubNub source using the supported [SQL commands](/sql/). Here are a few examples of other interesting patterns to try:
+Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) under all the conditions you would expect from a traditional relational database. Let's enrich the PubNub stream with some reference data as an example!
 
-{{< expand Joins >}}
-
-Joins are one of the most powerful features in SQL, but something quite hard to get right in the streaming world. Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) under all the conditions you would expect from a traditional relational database.
-
-1. Create and populate a table with static, reference data:
+1. Create and populate a table with static reference data:
 
     ```sql
     CREATE TABLE symbols (
@@ -203,30 +193,30 @@ Joins are one of the most powerful features in SQL, but something quite hard to 
     );
 
     INSERT INTO symbols
-    SELECT * 
-    FROM (VALUES ('Apple','AAPL'), 
-                 ('Google','GOOG'), 
-                 ('Elerium','ELER'), 
+    SELECT *
+    FROM (VALUES ('Apple','AAPL'),
+                 ('Google','GOOG'),
+                 ('Elerium','ELER'),
                  ('Bespin Gas','BGAS'),
                  ('Linen Cloth','LCLO')
     );
 
     ```
 
-    **Note:** We are using a table for convenience, to avoid adding complexity to the guide. It's [unlikely](/sql/create-table/#when-to-use-a-table) that you'll need to use tables in real-world scenarios.
+    **Note:** We are using a table for convenience to avoid adding complexity to the guide. It's [unlikely](/sql/create-table/#when-to-use-a-table) that you'll need to use tables in real-world scenarios.
 
 1. Now, we can enrich our aggregated data with the ticker for each stock using a regular `JOIN`:
 
     ```sql
     CREATE MATERIALIZED VIEW cnt_ticker AS
-    SELECT s.ticker AS ticker, 
+    SELECT s.ticker AS ticker,
            COUNT(*) AS cnt
     FROM market_orders m
     JOIN symbols s ON m.symbol = s.symbol
     GROUP BY s.ticker;
     ```
 
-    To see the results:
+1. To see the results:
 
     ```sql
     SELECT * FROM cnt_ticker;
@@ -238,22 +228,25 @@ Joins are one of the most powerful features in SQL, but something quite hard to 
      GOOG   |  51
      LCLO   |  70
     ```
-{{< /expand >}}
 
-{{< expand "Temporal Filters" >}}
+    If you re-run the `SELECT` statement at different points in time, you can see the updated results based on the latest data.
 
-A common requirement in streaming use cases is time-windowing, for example to model business processes or simply to bound resource usage. In Materialize, you can express this pattern using [temporal filters](/guides/temporal-filters/).
+### Temporal Filters
 
-1. If instead of computing and maintaining the _overall_ count we want to get the _moving_ count over the past minute:
+In Materialize, [temporal filters](/guides/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
+
+1. If, instead of computing and maintaining the _overall_ count, we want to get the _moving_ count over the past minute:
 
     ```sql
     CREATE MATERIALIZED VIEW cnt_sliding AS
-    SELECT symbol, 
+    SELECT symbol,
            COUNT(*) AS cnt
     FROM market_orders m
     WHERE EXTRACT(EPOCH FROM (ts + INTERVAL '1 minute'))::bigint * 1000 > mz_logical_timestamp()
     GROUP BY symbol;
     ```
+
+    The `mz_logical_timestamp()` function is used to keep track of the logical time for your query (similar to `now()` in other systems, as explained more in-depth in ["now and mz_logical_timestamp functions"](/sql/functions/now_and_mz_logical_timestamp/)).
 
 1. To see the results:
 
@@ -269,8 +262,12 @@ A common requirement in streaming use cases is time-windowing, for example to mo
      Linen Cloth |  45
     ```
 
-{{< /expand >}}
+    As it advances, only the records that satisfy the time constraint are used in the materialized view and contribute to the in-memory footprint.
 
-{{< cta href="/demos/microservice" >}}
-Next, see how Materialize can work as an entire microservices →
-{{</ cta >}}
+## Learn more
+
+That's it! You just created your first materialized view and tried out some common patterns enabled by SQL on streams. We encourage you to continue exploring the PubNub source using the supported [SQL commands](/sql/), and read through ["What is Materialize?"](/overview/what-is-materialize) for a more comprehensive overview.
+
+**Next steps**
+
+When you're done with this guide, you can move on to the [end-to-end demos](/demos/) to learn how to use Materialize with other external systems for different use cases.
