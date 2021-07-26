@@ -10,7 +10,7 @@ use ore::metrics::{
     IntCounterVec, IntGaugeVec, MetricsRegistry, UIntCounter, UIntCounterVec, UIntGaugeVec,
 };
 
-/// The base metrics set for the [`crate::source::s3`] module.
+/// The base metrics set for the s3 module.
 #[derive(Clone, Debug)]
 pub(crate) struct S3Metrics {
     pub(crate) objects_downloaded: UIntCounterVec,
@@ -54,7 +54,7 @@ impl S3Metrics {
     }
 }
 
-/// The base metrics set for the [`crate::source::kinesis`] module.
+/// The base metrics set for the kinesis module.
 #[derive(Clone, Debug)]
 pub(crate) struct KinesisMetrics {
     pub(crate) millis_behind_latest: IntGaugeVec,
