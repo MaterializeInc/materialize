@@ -4409,7 +4409,7 @@ dependencies = [
 [[package]]
 name = "tikv-jemalloc-ctl"
 version = "0.4.1"
-source = "git+https://github.com/MaterializeInc/jemallocator#21b277d1bce952bbfc4e9679dcb1d31c874ccf09"
+source = "git+https://github.com/MaterializeInc/jemallocator#f10172b8b6785e11d0e368f85434feda9dadde7d"
 dependencies = [
  "libc",
  "paste",
@@ -4419,7 +4419,7 @@ dependencies = [
 [[package]]
 name = "tikv-jemalloc-sys"
 version = "0.4.1+5.2.1-patched"
-source = "git+https://github.com/MaterializeInc/jemallocator#21b277d1bce952bbfc4e9679dcb1d31c874ccf09"
+source = "git+https://github.com/MaterializeInc/jemallocator#f10172b8b6785e11d0e368f85434feda9dadde7d"
 dependencies = [
  "cc",
  "fs_extra",
@@ -4429,7 +4429,7 @@ dependencies = [
 [[package]]
 name = "tikv-jemallocator"
 version = "0.4.1"
-source = "git+https://github.com/MaterializeInc/jemallocator#21b277d1bce952bbfc4e9679dcb1d31c874ccf09"
+source = "git+https://github.com/MaterializeInc/jemallocator#f10172b8b6785e11d0e368f85434feda9dadde7d"
 dependencies = [
  "libc",
  "tikv-jemalloc-sys",
