@@ -41,7 +41,9 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
 
-use dataflow_types::{KafkaSinkConnector, KafkaSinkConsistencyConnector, SinkAsOf, SinkDesc};
+use dataflow_types::{
+    KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
+};
 use expr::GlobalId;
 use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
 use interchange::encode::Encode;
@@ -588,25 +590,31 @@ where
 
     let stream = &collection.inner;
 
-    let schema_generator =
-        AvroSchemaGenerator::new(key_desc, value_desc, connector.consistency.is_some());
-    let encoder = AvroEncoder::new(
-        schema_generator,
-        connector.key_schema_id,
-        connector.value_schema_id,
-    );
-
-    let encoded_stream = avro_encode_stream(
-        stream,
-        as_of.clone(),
-        connector
-            .consistency
-            .clone()
-            .and_then(|consistency| consistency.gate_ts),
-        encoder,
-        connector.fuel,
-        name.clone(),
-    );
+    let encoded_stream = match connector.published_schema_info {
+        Some(PublishedSchemaInfo {
+            key_schema_id,
+            value_schema_id,
+        }) => {
+            let schema_generator =
+                AvroSchemaGenerator::new(key_desc, value_desc, connector.consistency.is_some());
+            let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
+            avro_encode_stream(
+                stream,
+                as_of.clone(),
+                connector
+                    .consistency
+                    .clone()
+                    .and_then(|consistency| consistency.gate_ts),
+                encoder,
+                connector.fuel,
+                name.clone(),
+            )
+        }
+        _ => {
+            // this will not be true once we add new kafka sink formats!
+            unreachable!("kafka sink without schemas")
+        }
+    };
 
     produce_to_kafka(
         encoded_stream,
