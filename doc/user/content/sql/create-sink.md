@@ -161,6 +161,8 @@ When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new 
 ```nofmt
 {topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
 ```
+**Note:** With `reuse_topic` enabled, this schema for topic naming is ignored. Instead, the topic name specified in the sink definition is used as is.
+
 You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
 {{% kafka-sink-drop  %}}
@@ -178,7 +180,7 @@ When you create a sink, you must:
 * Enable the `reuse_topic` switch.
 * Specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system.
 
-The sink consistency topic cannot be written to by any other process, and both the sink topic and the sink consistency topic need to be set to infinite data retention.
+The sink consistency topic cannot be written to by any other process, including another Materialize instance or another sink.
 
 Because this feature is still experimental, we strongly suggest that you start with test data, rather than with production. Please [escalate](https://github.com/MaterializeInc/materialize/issues/new/choose) any issues to us.
 

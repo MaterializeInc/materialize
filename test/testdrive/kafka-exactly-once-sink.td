@@ -30,6 +30,30 @@ $ set schema={
     ]
   }
 
+$ set trxschema={
+    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
+    "fields":[
+    {"name":"status","type":"string"},
+    {"name":"id","type": "string"},
+    {"name": "event_count",
+    "type": ["null", "long"],
+    "default": null
+    },
+    {"name":"data_collections","type":["null",{"type":"array",
+    "items": {"type":"record",
+    "name":"ConnectDefault",
+    "namespace":"io.confluent.connect.Avro",
+    "fields": [ {
+    "name": "data_collection",
+    "type": "string"
+    },
+    {
+    "name": "event_count",
+    "type": "long" }]}}],
+    "default": null}],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+    }
+
 $ kafka-create-topic topic=input-consistency
 $ kafka-create-topic topic=input
 
@@ -133,3 +157,39 @@ reuse_topic requires that sink input dependencies are sources, materialize.publi
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output13-view-${testdrive.seed}'
   WITH (reuse_topic=true, consistency_topic='output13-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# ensure that the sink works with log compaction enabled on the consistency topic
+
+$ kafka-create-topic topic=compaction-test-input-consistency
+$ kafka-create-topic topic=compaction-test-input
+
+# create topic with known compaction settings, instead of letting
+# Materialize create it when creating the sink
+$ kafka-create-topic topic=compaction-test-output-consistency compaction=true
+
+> CREATE MATERIALIZED SOURCE compaction_test_input
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-compaction-test-input-${testdrive.seed}'
+    WITH (consistency_topic = 'testdrive-compaction-test-input-consistency-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+
+> CREATE SINK compaction_test_sink FROM compaction_test_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
+  WITH (reuse_topic=true, consistency_topic = 'testdrive-compaction-test-output-consistency-${testdrive.seed}') FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+
+$ kafka-ingest format=avro topic=compaction-test-input schema=${schema} timestamp=1
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}}
+
+$ kafka-ingest format=avro topic=compaction-test-input-consistency timestamp=1 schema=${trxschema}
+{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
+{"status":"END","id":"1","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-compaction-test-input-${testdrive.seed}"}]}}
+
+# We cannot observe the consistency topic, because compaction is not deterministic.
+# We indirectly test this by verifying that the data output is correct. If this
+# output were not here, something must have gone wrong with comitting to the
+# consistency topic.
+
+$ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
