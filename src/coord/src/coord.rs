@@ -54,6 +54,7 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use ore::metrics::MetricsRegistry;
 use rand::Rng;
 use repr::adt::numeric;
 use timely::communication::WorkerGuards;
@@ -186,6 +187,7 @@ pub struct Config<'a> {
     pub experimental_mode: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
+    pub metrics_registry: Arc<MetricsRegistry>,
 }
 
 /// Glues the external world to the Timely workers.
@@ -3307,6 +3309,7 @@ pub async fn serve(
         experimental_mode,
         safe_mode,
         build_info,
+        metrics_registry,
     }: Config<'_>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -3354,7 +3357,7 @@ pub async fn serve(
         let mut scraper = Scraper::new(
             granularity,
             retain_readings_for,
-            ::prometheus::default_registry(),
+            Arc::clone(&metrics_registry),
             rx,
             internal_cmd_tx.clone(),
         );
@@ -3375,8 +3378,12 @@ pub async fn serve(
     // Spawn timestamper after any fallible operations so that if bootstrap fails we still
     // tell it to shut down.
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let mut timestamper =
-        Timestamper::new(Duration::from_millis(10), internal_cmd_tx.clone(), ts_rx);
+    let mut timestamper = Timestamper::new(
+        Duration::from_millis(10),
+        internal_cmd_tx.clone(),
+        ts_rx,
+        &*metrics_registry,
+    );
     let executor = TokioHandle::current();
     let timestamper_thread_handle = thread::Builder::new()
         .name("timestamper".to_string())
