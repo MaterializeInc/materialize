@@ -415,8 +415,8 @@ fn push_column(
                 match get_column_inner::<String>(postgres_row, i, nullable)? {
                     None => row.push(Datum::Null),
                     Some(s) => {
-                        let s = repr::adt::char::format_str(&s, length, true)?;
-                        row.push(Datum::Char(&s));
+                        let s = repr::adt::char::format_str_trim(&s, length, true)?;
+                        row.push(Datum::String(&s));
                     }
                 }
             }

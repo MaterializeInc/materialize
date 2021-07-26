@@ -1435,7 +1435,12 @@ lazy_static! {
             "octet_length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 720;
                 params!(String) => UnaryFunc::ByteLengthString, 1374;
-                params!(Char) => UnaryFunc::ByteLengthChar, 1375;
+                params!(Char) => Operation::unary(|ecx, e| {
+                    let length = ecx.scalar_type(&e).unwrap_char_varchar_length();
+                    Ok(e.call_unary(UnaryFunc::PadChar { length })
+                        .call_unary(UnaryFunc::ByteLengthString)
+                    )
+                }), 1375;
             },
             "obj_description" => Scalar {
                 params!(Oid, String) => Operation::binary(|_ecx, _oid, _catalog| {
@@ -2194,6 +2199,12 @@ lazy_static! {
             // LIKE
             "~~" => Scalar {
                 params!(String, String) => IsLikePatternMatch { case_insensitive: false }, 1209;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                    )
+                }), 1211;
             },
             "!~~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
@@ -2201,16 +2212,35 @@ lazy_static! {
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
                 }), 1210;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                        .call_unary(UnaryFunc::Not)
+                    )
+                }), 1212;
             },
 
             // REGEX
             "~" => Scalar {
                 params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
+                    )
+                }), 1055;
             },
             "~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(rhs, IsRegexpMatch { case_insensitive: true }))
                 }), 1228;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                    )
+                }), 1234;
             },
             "!~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
@@ -2218,6 +2248,13 @@ lazy_static! {
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
                 }), 642;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                        .call_unary(UnaryFunc::Not)
+                    )
+                }), 1056;
             },
             "!~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
@@ -2225,6 +2262,13 @@ lazy_static! {
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not))
                 }), 1229;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                        .call_unary(UnaryFunc::Not)
+                    )
+                }), 1235;
             },
 
             // CONCAT
@@ -2336,6 +2380,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Lt, 1332;
                 params!(Bytes, Bytes) => BinaryFunc::Lt, 1957;
                 params!(String, String) => BinaryFunc::Lt, 664;
+                params!(Char, Char) => BinaryFunc::Lt, 1058;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lt, 1072;
             },
@@ -2356,6 +2401,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Lte, 1333;
                 params!(Bytes, Bytes) => BinaryFunc::Lte, 1958;
                 params!(String, String) => BinaryFunc::Lte, 665;
+                params!(Char, Char) => BinaryFunc::Lte, 1059;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lte, 1074;
             },
@@ -2376,6 +2422,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Gt, 1334;
                 params!(Bytes, Bytes) => BinaryFunc::Gt, 1959;
                 params!(String, String) => BinaryFunc::Gt, 666;
+                params!(Char, Char) => BinaryFunc::Gt, 1060;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gt, 1073;
             },
@@ -2396,9 +2443,13 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Gte, 1335;
                 params!(Bytes, Bytes) => BinaryFunc::Gte, 1960;
                 params!(String, String) => BinaryFunc::Gte, 667;
+                params!(Char, Char) => BinaryFunc::Gte, 1061;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte, 1075;
             },
+            // Warning! If you are writing functions here that do not simply use
+            // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
+            // operations).
             "=" => Scalar {
                 params!(Numeric, Numeric) => BinaryFunc::Eq, 1752;
                 params!(Bool, Bool) => BinaryFunc::Eq, 91;
@@ -2416,6 +2467,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Eq, 1330;
                 params!(Bytes, Bytes) => BinaryFunc::Eq, 1955;
                 params!(String, String) => BinaryFunc::Eq, 98;
+                params!(Char, Char) => BinaryFunc::Eq, 1054;
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
                 params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
@@ -2437,6 +2489,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::NotEq, 1331;
                 params!(Bytes, Bytes) => BinaryFunc::NotEq, 1956;
                 params!(String, String) => BinaryFunc::NotEq, 531;
+                params!(Char, Char) => BinaryFunc::NotEq, 1057;
                 params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq, 1071;
             }

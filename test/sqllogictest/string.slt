@@ -1197,3 +1197,69 @@ query T
 SELECT repeat('a', -1)
 ----
 (empty)
+
+# Check for char cmp validity, which ignores white space
+# ...at datum level
+
+statement ok
+CREATE TABLE bpchar_t (a char(5));
+
+statement ok
+INSERT INTO bpchar_t VALUES ('a');
+
+query TTTTTT
+SELECT a = 'a ', a != 'a ', 'a ' < a, 'a ' <= a, a > 'a ', a >= 'a ' FROM bpchar_t;
+----
+true false false true false true
+
+# ...at row level
+statement ok
+INSERT INTO bpchar_t VALUES ('a  ');
+
+query T
+SELECT DISTINCT octet_length(a) FROM bpchar_t;
+----
+5
+
+# LIKE comparisons using char retains lhs padding, but rhs is cast to string, so
+# trimmed.
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc';
+----
+true
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc ';
+----
+false
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc'::char(4);
+----
+true
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc';
+----
+false
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc ';
+----
+true
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc'::char(3);
+----
+false
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc'::char(4);
+----
+false
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc'::char(4);
+----
+true

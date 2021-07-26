@@ -27,6 +27,9 @@ use crate::adt::numeric::Numeric;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 
 /// A single value.
+///
+/// Note that `Datum` must always derive [`Eq`] to enforce equality with
+/// `repr::Row`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Datum<'a> {
     /// The `false` boolean value.
@@ -57,10 +60,6 @@ pub enum Datum<'a> {
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(&'a str),
-    /// Like [`String`] but imposes a limit on the length of string supported.
-    Char(&'a str),
-    /// A variable-length multidimensional array of datums.
-    ///
     /// Unlike [`Datum::List`], arrays are like tensors and are not permitted to
     /// be ragged.
     Array(Array<'a>),
@@ -282,19 +281,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the string value within this datum.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the datum is not [`Datum::Char`].
-    #[track_caller]
-    pub fn unwrap_char(&self) -> &'a str {
-        match self {
-            Datum::Char(s) => s,
-            _ => panic!("Datum::unwrap_char called on {:?}", self),
-        }
-    }
-
     /// Unwraps the bytes value within this datum.
     ///
     /// # Panics
@@ -426,10 +412,9 @@ impl<'a> Datum<'a> {
                     (Datum::Bytes(_), ScalarType::Bytes) => true,
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String)
-                    | (Datum::String(_), ScalarType::VarChar { .. }) => true,
+                    | (Datum::String(_), ScalarType::VarChar { .. })
+                    | (Datum::String(_), ScalarType::Char { .. }) => true,
                     (Datum::String(_), _) => false,
-                    (Datum::Char(_), ScalarType::Char { .. }) => true,
-                    (Datum::Char(_), _) => false,
                     (Datum::Uuid(_), ScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
                     (Datum::Array(array), ScalarType::Array(t)) => {
@@ -649,7 +634,7 @@ impl fmt::Display for Datum<'_> {
                 }
                 Ok(())
             }
-            Datum::String(s) | Datum::Char(s) => {
+            Datum::String(s) => {
                 f.write_str("\"")?;
                 for c in s.chars() {
                     if c == '"' {
@@ -740,10 +725,11 @@ pub enum ScalarType {
     Bytes,
     /// The type of [`Datum::String`].
     String,
-    /// The type of [`Datum::Char`].
+    /// Stored as [`Datum::String`], but expresses a fixed-width, blank-padded
+    /// string.
     ///
-    /// Note that `length` is an option to allow expressions of varying width
-    /// `Char` values in e.g. lists.
+    /// Note that a `length` of `None` is used in special cases, such as
+    /// creating lists.
     Char { length: Option<usize> },
     /// Stored as [`Datum::String`], but can optionally express a limit on the string's length.
     VarChar { length: Option<usize> },

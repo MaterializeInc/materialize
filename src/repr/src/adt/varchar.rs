@@ -25,13 +25,13 @@ pub fn format_str(
         // Note that length is 1-indexed, so finding `None` means the string's
         // characters don't exceed the length, while finding `Some` means it
         // does.
-        Some(length) => match s.char_indices().nth(length) {
+        Some(l) => match s.char_indices().nth(l) {
             None => s.to_string(),
             Some((idx, _)) => {
                 if !fail_on_len || s[idx..].chars().all(|c| c.is_ascii_whitespace()) {
-                    s[..idx].into()
+                    s[..idx].to_string()
                 } else {
-                    bail!("{} exceeds maximum length of {}", s, length)
+                    bail!("{} exceeds maximum length of {}", s, l)
                 }
             }
         },

@@ -211,10 +211,6 @@ enum Tag {
     StringShort,
     StringLong,
     StringHuge,
-    CharTiny,
-    CharShort,
-    CharLong,
-    CharHuge,
     Uuid,
     Array,
     List,
@@ -271,12 +267,10 @@ unsafe fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8
 /// and it was only written with a `String` tag if it was indeed UTF-8.
 unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
     let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny | Tag::CharTiny => read_copy::<u8>(data, offset) as usize,
-        Tag::BytesShort | Tag::StringShort | Tag::CharShort => {
-            read_copy::<u16>(data, offset) as usize
-        }
-        Tag::BytesLong | Tag::StringLong | Tag::CharLong => read_copy::<u32>(data, offset) as usize,
-        Tag::BytesHuge | Tag::StringHuge | Tag::CharHuge => read_copy::<usize>(data, offset),
+        Tag::BytesTiny | Tag::StringTiny => read_copy::<u8>(data, offset) as usize,
+        Tag::BytesShort | Tag::StringShort => read_copy::<u16>(data, offset) as usize,
+        Tag::BytesLong | Tag::StringLong => read_copy::<u32>(data, offset) as usize,
+        Tag::BytesHuge | Tag::StringHuge => read_copy::<usize>(data, offset),
         _ => unreachable!(),
     };
     let bytes = &data[*offset..(*offset + len)];
@@ -285,9 +279,6 @@ unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) 
         Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
             Datum::String(std::str::from_utf8_unchecked(bytes))
-        }
-        Tag::CharTiny | Tag::CharShort | Tag::CharLong | Tag::CharHuge => {
-            Datum::Char(std::str::from_utf8_unchecked(bytes))
         }
         _ => unreachable!(),
     }
@@ -355,11 +346,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::StringTiny
         | Tag::StringShort
         | Tag::StringLong
-        | Tag::StringHuge
-        | Tag::CharTiny
-        | Tag::CharShort
-        | Tag::CharLong
-        | Tag::CharHuge => {
+        | Tag::StringHuge => {
             let datum = read_lengthed_datum(data, offset, tag);
             datum
         }
@@ -451,16 +438,16 @@ fn push_untagged_bytes<T: Bytes>(data: &mut T, bytes: &[u8]) {
 
 fn push_lengthed_bytes<T: Bytes>(data: &mut T, bytes: &[u8], tag: Tag) {
     match tag {
-        Tag::BytesTiny | Tag::StringTiny | Tag::CharTiny => {
+        Tag::BytesTiny | Tag::StringTiny => {
             push_copy!(data, bytes.len() as u8, u8);
         }
-        Tag::BytesShort | Tag::StringShort | Tag::CharShort => {
+        Tag::BytesShort | Tag::StringShort => {
             push_copy!(data, bytes.len() as u16, u16);
         }
-        Tag::BytesLong | Tag::StringLong | Tag::CharLong => {
+        Tag::BytesLong | Tag::StringLong => {
             push_copy!(data, bytes.len() as u32, u32);
         }
-        Tag::BytesHuge | Tag::StringHuge | Tag::CharHuge => {
+        Tag::BytesHuge | Tag::StringHuge => {
             push_copy!(data, bytes.len() as usize, usize);
         }
         _ => unreachable!(),
@@ -530,16 +517,6 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
                 256..=65535 => Tag::StringShort,
                 65536..=4294967295 => Tag::StringLong,
                 _ => Tag::StringHuge,
-            };
-            data.push(tag as u8);
-            push_lengthed_bytes(data, string.as_bytes(), tag);
-        }
-        Datum::Char(string) => {
-            let tag = match string.len() {
-                0..=255 => Tag::CharTiny,
-                256..=65535 => Tag::CharShort,
-                65536..=4294967295 => Tag::CharLong,
-                _ => Tag::CharHuge,
             };
             data.push(tag as u8);
             push_lengthed_bytes(data, string.as_bytes(), tag);
@@ -640,7 +617,7 @@ pub fn datum_size(datum: &Datum) -> usize {
             };
             1 + bytes_for_length + bytes.len()
         }
-        Datum::String(string) | Datum::Char(string) => {
+        Datum::String(string) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match string.len() {
                 0..=255 => 1,
@@ -1619,7 +1596,6 @@ mod tests {
             Datum::Interval(Interval::default()),
             Datum::Bytes(&[]),
             Datum::String(""),
-            Datum::Char(""),
             Datum::JsonNull,
         ];
         for value in values_of_interest {

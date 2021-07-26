@@ -262,12 +262,9 @@ lazy_static! {
 
             // CHAR
             (Char, String) => Implicit: CastCharToString,
-            (Char, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_varchar_length();
-                Some(move |e: HirScalarExpr| match length {
-                    None => e,
-                    Some(length) => e.call_unary(CastCharToChar {length, fail_on_len: ccx == CastContext::Assignment}),
-                })
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
             }),
 
             // VARCHAR
@@ -717,11 +714,11 @@ where
     match (&cast_from, cast_to) {
         // Pass through char to char
         (s @ Char { .. }, d @ Char { .. }) => cast_inner(s, d, expr),
-        // Rewrite all varchar `from`s to string
+        // Rewrite from char, varchar as from string
         (Char { .. }, dest) | (VarChar { .. }, dest) if dest != &ScalarType::String => {
             cast_inner(&String, dest, expr)
         }
-        // If `to` is char or varchar, use intermediate string expression.
+        // If to is char or varchar, use intermediate string expression.
         (source, dest @ Char { .. }) | (source, dest @ VarChar { .. }) => {
             let source_to_str_expr = cast_inner(source, &String, expr)?;
             cast_inner(&String, dest, source_to_str_expr)
