@@ -177,22 +177,24 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
     /// with the given id.
-    pub fn write_sync(&mut self, id: Id, updates: &[((K, V), u64, isize)]) -> Result<SeqNo, Error> {
-        let sealed_frontier = self.sealed_frontier(id)?;
-        for update in updates.iter() {
-            if !sealed_frontier.less_equal(&update.1) {
-                return Err(format!(
-                    "update for {:?} with time {} before sealed frontier: {:?}",
-                    id, update.1, sealed_frontier,
-                )
-                .into());
+    pub fn write_sync(
+        &mut self,
+        updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+    ) -> Result<SeqNo, Error> {
+        for (id, updates) in updates.iter() {
+            let sealed_frontier = self.sealed_frontier(*id)?;
+            for update in updates.iter() {
+                if !sealed_frontier.less_equal(&update.1) {
+                    return Err(format!(
+                        "update for {:?} with time {} before sealed frontier: {:?}",
+                        id, update.1, sealed_frontier,
+                    )
+                    .into());
+                }
             }
         }
 
-        let entry = BufferEntry {
-            id: id,
-            updates: updates.to_vec(),
-        };
+        let entry = BufferEntry { updates };
         let mut entry_bytes = Vec::new();
         unsafe { abomonation::encode(&entry, &mut entry_bytes) }
             .expect("write to Vec is infallible");
@@ -209,14 +211,15 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             if !remaining.is_empty() {
                 return Err(format!("invalid buffer entry").into());
             }
-            // iter and cloned instead of append because I don't have a mental
-            // model of what's safe with abomonation.
-            updates_by_id.entry(entry.id).or_default().extend(
-                entry
-                    .updates
-                    .iter()
-                    .map(|((key, val), ts, diff)| (seqno, (key.clone(), val.clone()), *ts, *diff)),
-            );
+            for (id, updates) in entry.updates.iter() {
+                // iter and cloned instead of append because I don't have a mental
+                // model of what's safe with abomonation.
+                updates_by_id.entry(*id).or_default().extend(
+                    updates.iter().map(|((key, val), ts, diff)| {
+                        (seqno, (key.clone(), val.clone()), *ts, *diff)
+                    }),
+                );
+            }
 
             Ok(())
         })?;
@@ -465,10 +468,12 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                     let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
                         unsafe { Abomonated::new(buf.to_owned()) }
                             .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
-                    if entry.id != id || !buf_lower.less_equal(&seqno) {
-                        return Ok(());
+                    for (entry_id, updates) in entry.updates.iter() {
+                        if *entry_id != id || !buf_lower.less_equal(&seqno) {
+                            continue;
+                        }
+                        data.extend(updates.iter().cloned());
                     }
-                    data.extend(entry.updates.iter().cloned());
                     Ok(())
                 })?
                 .end;
@@ -570,7 +575,7 @@ mod tests {
         assert_eq!(trace.read_to_end(), vec![]);
 
         // After a write, all data is in the buffer.
-        i.write_sync(id, &updates)?;
+        i.write_sync(vec![(id, updates.clone())])?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
         assert_eq!(buf.read_to_end(), updates);
@@ -625,7 +630,7 @@ mod tests {
         // Write the data and move it into the future part of the index, which
         // orders it within each batch by time. It's not, so this will fire a
         // validations error if the sort code doesn't work.
-        i.write_sync(id, &updates)?;
+        i.write_sync(vec![(id, updates)])?;
         i.step()?;
 
         // Now move it into the trace part of the index, which orders it within
@@ -653,12 +658,12 @@ mod tests {
         // consolidates updates to identical ((k, v), t). Since the writes are
         // not already consolidated this test will fail if the consolidation
         // code does not work.
-        i.write_sync(id, &updates)?;
+        i.write_sync(vec![(id, updates.clone())])?;
         i.step()?;
 
         // Add another set of identical updates and place into another future
         // batch.
-        i.write_sync(id, &updates)?;
+        i.write_sync(vec![(id, updates)])?;
         i.step()?;
 
         // Now move the data to the trace part of the index, which consolidates
@@ -680,12 +685,12 @@ mod tests {
 
         // Write an empty set of updates and try to move it into the future part
         // of the index.
-        i.write_sync(id, &[])?;
+        i.write_sync(vec![(id, vec![])])?;
         i.step()?;
 
         // Sending updates with dif = 0.
         let updates = vec![(("1".to_string(), "".to_string()), 1, 0)];
-        i.write_sync(id, &updates)?;
+        i.write_sync(vec![(id, updates)])?;
         i.step()?;
 
         // Now try again with a set of updates that consolidates down to the empty
@@ -695,7 +700,7 @@ mod tests {
             (("1".to_string(), "".to_string()), 1, -2),
         ];
 
-        i.write_sync(id, &updates)?;
+        i.write_sync(vec![(id, updates)])?;
         i.step()?;
         Ok(())
     }
@@ -763,16 +768,16 @@ mod tests {
         // and debug mode), so we just need the following to run without error
         // to verify the fix.
         let s1 = i.register("s1");
-        i.write_sync(s1, &[(((), ()), 0, 1)])?;
+        i.write_sync(vec![(s1, vec![(((), ()), 0, 1)])])?;
         i.step()?;
         let s2 = i.register("s2");
-        i.write_sync(s2, &[(((), ()), 1, 1)])?;
+        i.write_sync(vec![(s2, vec![(((), ()), 1, 1)])])?;
         i.step()?;
 
         // The second flavor is similar. If we then write to the first stream
         // again and step, it is then missing X..Y. (A stream not written to
         // between two step calls doesn't get a batch.)
-        i.write_sync(s1, &[(((), ()), 2, 1)])?;
+        i.write_sync(vec![(s1, vec![(((), ()), 2, 1)])])?;
         i.step()?;
 
         Ok(())

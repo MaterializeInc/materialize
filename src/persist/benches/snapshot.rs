@@ -56,7 +56,7 @@ where
     let id = i.register("0");
 
     // Write the data out to the index's buffer.
-    i.write_sync(id, &data)
+    i.write_sync(vec![(id, data)])
         .expect("writing to index cannot fail");
     c.bench_function(&format!("{}_buffer_snapshot", name), |b| {
         bench_snapshot(&i, id, data_len, b)

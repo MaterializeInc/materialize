@@ -70,6 +70,7 @@
 // - Vary key size
 // - Non-uniform (zipfian) distribution of keys (any other distributions?)
 // - Deleting streams
+// - Atomic multi-stream writes
 
 use std::env;
 

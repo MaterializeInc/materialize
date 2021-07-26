@@ -33,10 +33,11 @@ pub struct Id(pub u64);
 /// - The updates field is non-empty.
 #[derive(Debug, Abomonation)]
 pub struct BufferEntry<K, V> {
-    /// Id of the stream this batch belongs to.
-    pub id: Id,
-    /// The updates themselves.
-    pub updates: Vec<((K, V), u64, isize)>,
+    /// Pairs of stream id and the updates themselves.
+    //
+    // We could require that each Id is included at most once, but at the
+    // moment, there's no particular reason we'd need to.
+    pub updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -623,16 +624,12 @@ mod tests {
     fn buffer_entry_validate() {
         // Normal case
         let b = BufferEntry {
-            id: Id(0),
-            updates: vec![update_with_key(0, "0")],
+            updates: vec![(Id(0), vec![update_with_key(0, "0")])],
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BufferEntry<String, String> = BufferEntry {
-            id: Id(0),
-            updates: vec![],
-        };
+        let b: BufferEntry<String, String> = BufferEntry { updates: vec![] };
         assert_eq!(b.validate(), Err("updates is empty".into()));
     }
 
