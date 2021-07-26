@@ -115,6 +115,7 @@ impl<T> CmdResponse<T> {
     }
 }
 
+#[derive(Debug)]
 struct RuntimeCore<K, V> {
     handle: Mutex<Option<JoinHandle<()>>>,
     tx: crossbeam_channel::Sender<Cmd<K, V>>,
@@ -190,6 +191,7 @@ impl<K, V> Drop for RuntimeCore<K, V> {
 /// NB: The methods below are executed concurrently. For a some call X to be
 /// guaranteed as "previous" to another call Y, X's response must have been
 /// received before Y's call started.
+#[derive(Debug)]
 pub struct RuntimeClient<K, V> {
     core: Arc<RuntimeCore<K, V>>,
 }
@@ -278,6 +280,7 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
 
 /// A handle that allows writes of ((Key, Value), Time, Diff) updates into an
 /// [crate::indexed::Indexed] via a [RuntimeClient].
+#[derive(Debug)]
 pub struct StreamWriteHandle<K, V> {
     id: Id,
     runtime: RuntimeClient<K, V>,
@@ -312,6 +315,7 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
 
 /// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
+#[derive(Debug)]
 pub struct StreamReadHandle<K, V> {
     id: Id,
     runtime: RuntimeClient<K, V>,
