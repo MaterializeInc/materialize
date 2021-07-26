@@ -743,7 +743,6 @@ pub fn plan_create_source(
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
         sql_parser::ast::Envelope::CdcV2 => {
-            scx.require_experimental_mode("ENVELOPE MATERIALIZE")?;
             if let Connector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
