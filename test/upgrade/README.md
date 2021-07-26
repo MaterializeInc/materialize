@@ -58,12 +58,12 @@ Make sure the ```TESTS``` line includes the version under test **and all other**
 
 ## Adding a new test
 
-1. Decide which is the earlest version ```vX.Y.Z``` that supports the desired functionality and create a test named ```create-in-vX.Y.Z-feature_under_test.td``` where you will be creating the database objects that will be surviving an upgrade attempt. Use ```any``` if the feature exists in all versions listed in ```mzcompose.yml``` and ```latest``` if you are adding the feature just now and it does not exist in any previous released version.
+1. Decide which is the earlest version ```vX.Y.Z``` that supports the desired functionality and create a test named ```create-in-vX.Y.Z-feature_under_test.td``` where you will be creating the database objects that will be surviving an upgrade attempt. Use ```any_version``` if the feature exists in all versions listed in ```mzcompose.yml``` and ```latest_version``` if you are adding the feature just now and it does not exist in any previously released version.
 
-2. In a file named ```check-from-vX.Y.Z-feature_undex_test.td``` put queries that will be testing that the object has survived the upgrade intact. This may include any of the following:
+2. In a file named ```check-from-vX.Y.Z-feature_undex_test.td``` put the queries that will be testing that the object has survived the upgrade intact. This may include any of the following:
 
 - checking that the metadata has survived intact both in the catalog and as observed by an end user, e.g.  ```pg_typeof```
 - checking that the object can be ```SELECT```ed from and returns the right data
- if a source, check that new data can still be ingested
+- if a source, check that new data can still be ingested
 - if a sink, check that new data can still be output post-upgrade
- if any DDL statements can be run that impact the object, test them. At the very least, test that ```DROP```is able to drop the object (and confirm that the object is gone).
+- if any DDL statements can be run against the object, test them. At the very least, test that ```DROP``` is able to drop the object (and confirm that the object is gone).
