@@ -85,7 +85,7 @@ CREATE TABLE "space table" ("space column" INTEGER);
 ! CREATE MATERIALIZED SOURCE "no_such_host"
   FROM POSTGRES CONNECTION 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source';
-error connecting to server: failed to lookup address information: Name or service not known
+failed to lookup address information
 
 ! CREATE MATERIALIZED SOURCE "no_such_port"
   FROM POSTGRES CONNECTION 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
