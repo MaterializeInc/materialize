@@ -109,7 +109,7 @@
     description: The cube root of `x`.
 
   - signature: 'ceil(x: N) -> N'
-    description: The largest integer >= `x`
+    description: The smallest integer >= `x`
 
   - signature: 'exp(x: N) -> N'
     description: Exponential of `x` (e raised to the given power)
