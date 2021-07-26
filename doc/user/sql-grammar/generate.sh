@@ -18,7 +18,7 @@ cd "$(dirname "$0")"
 dest=../layouts/partials/sql-grammar
 
 # Clean up files from last run.
-rm -rf scratch $dest
+rm -rf scratch
 
 # Run the railroad diagram generator, using a pinned version from our custom
 # fork.
@@ -38,4 +38,10 @@ mkdir scratch
         fi
     done
 )
+
+rm -rf $dest
 mv scratch $dest
+
+# ping hugo again
+sleep 3
+touch "$dest"/*
