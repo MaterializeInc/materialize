@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use interchange::json::JsonEncoder;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info};
@@ -598,7 +599,7 @@ where
             let schema_generator =
                 AvroSchemaGenerator::new(key_desc, value_desc, connector.consistency.is_some());
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
-            avro_encode_stream(
+            encode_stream(
                 stream,
                 as_of.clone(),
                 connector
@@ -610,9 +611,19 @@ where
                 name.clone(),
             )
         }
-        _ => {
-            // this will not be true once we add new kafka sink formats!
-            unreachable!("kafka sink without schemas")
+        None => {
+            let encoder = JsonEncoder::new(key_desc, value_desc);
+            encode_stream(
+                stream,
+                as_of.clone(),
+                connector
+                    .consistency
+                    .clone()
+                    .and_then(|consistency| consistency.gate_ts),
+                encoder,
+                connector.fuel,
+                name.clone(),
+            )
         }
     };
 
@@ -969,7 +980,7 @@ where
     Box::new(KafkaSinkToken { shutdown_flag })
 }
 
-/// Encodes a stream of `(Option<Row>, Option<Row>)` updates using Avro.
+/// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
 ///
 /// This operator will only encode `fuel` number of updates per invocation. If necessary, it will
 /// stash updates and use an [`timely::scheduling::Activator`] to re-schedule future invocations.
@@ -986,7 +997,7 @@ where
 /// that behave suboptimal when receiving updates that are too far in the future with respect
 /// to the current frontier. The order of updates that arrive at the same timestamp will not be
 /// changed.
-fn avro_encode_stream<G>(
+fn encode_stream<G>(
     input_stream: &Stream<G, ((Option<Row>, Option<Row>), Timestamp, Diff)>,
     as_of: SinkAsOf,
     gate_ts: Option<Timestamp>,

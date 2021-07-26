@@ -10,7 +10,8 @@
 use std::iter;
 use std::rc::Rc;
 
-use crate::avro::{column_names_and_types, DiffPair};
+use crate::avro::DiffPair;
+use crate::encode::column_names_and_types;
 use differential_dataflow::{
     lattice::Lattice,
     trace::BatchReader,

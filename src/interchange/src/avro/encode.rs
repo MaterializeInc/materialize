@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
 use std::fmt;
 
 use byteorder::{NetworkEndian, WriteBytesExt};
@@ -20,7 +19,7 @@ use repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PREC
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
-use crate::encode::Encode;
+use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::json::build_row_schema_json;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
@@ -258,36 +257,6 @@ impl Encode for AvroEncoder {
     }
 }
 
-/// Extracts deduplicated column names and types from a relation description.
-pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType)> {
-    // Invent names for columns that don't have a name.
-    let mut columns: Vec<_> = desc
-        .into_iter()
-        .enumerate()
-        .map(|(i, (name, ty))| match name {
-            None => (ColumnName::from(format!("column{}", i + 1)), ty),
-            Some(name) => (name, ty),
-        })
-        .collect();
-
-    // Deduplicate names.
-    let mut seen = HashSet::new();
-    for (name, _ty) in &mut columns {
-        let stem_len = name.as_str().len();
-        let mut i = 1;
-        while seen.contains(name) {
-            name.as_mut_str().truncate(stem_len);
-            if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
-                name.as_mut_str().push('_');
-            }
-            name.as_mut_str().push_str(&i.to_string());
-            i += 1;
-        }
-        seen.insert(name);
-    }
-    columns
-}
-
 /// Encodes a sequence of `Datum` as Avro (key and value), using supplied column names and types.
 pub fn encode_datums_as_avro<'a, I>(datums: I, names_types: &[(ColumnName, ColumnType)]) -> Value
 where
@@ -304,20 +273,6 @@ where
         .collect();
     let v = Value::Record(value_fields);
     v
-}
-
-/// Bundled information sufficient to encode as Avro.
-#[derive(Debug)]
-pub struct TypedDatum<'a> {
-    datum: Datum<'a>,
-    typ: ColumnType,
-}
-
-impl<'a> TypedDatum<'a> {
-    /// Pairs a datum and its type, for Avro encoding.
-    pub fn new(datum: Datum<'a>, typ: ColumnType) -> Self {
-        Self { datum, typ }
-    }
 }
 
 impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
