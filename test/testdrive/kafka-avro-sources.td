@@ -290,7 +290,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=1)
+  WITH (start_offset=1, topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
@@ -299,7 +299,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 # Erroneously adds start_offsets for non-existent partitions.
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=[0,1])
+  WITH (start_offset=[0,1], topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
@@ -350,7 +350,7 @@ count
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=[1,1])
+  WITH (start_offset=[1,1], topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
