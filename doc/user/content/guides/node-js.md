@@ -190,9 +190,6 @@ async function main() {
 main();
 ```
 
-Multiple rows can be
-
-
 ## Manage sources, views, indexes
 
 Creation of sources, views and indexes in Materialize should be treated with the same care as schema creation and updates in a traditional database. These are typically done during Materialize deployment. However, a Node.js app is perfectly capable of executing these DDL statements.
