@@ -18,12 +18,8 @@ use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use log::{debug, error, info};
-use prometheus::{
-    register_int_counter_vec, register_uint_gauge_vec, IntCounter, IntCounterVec, UIntGauge,
-    UIntGaugeVec,
-};
+use ore::metrics::{IntCounter, UIntGauge};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
@@ -50,6 +46,7 @@ use interchange::encode::Encode;
 use ore::cast::CastFrom;
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
+use super::{KafkaBaseMetrics, SinkBaseMetrics};
 use crate::render::sinks::SinkRender;
 use crate::render::RenderState;
 use crate::source::timestamp::TimestampBindingRc;
@@ -88,6 +85,7 @@ where
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+        metrics: &SinkBaseMetrics,
     ) -> Option<Box<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -149,6 +147,7 @@ where
             sink.as_of.clone(),
             source_ts_histories,
             shared_frontier.clone(),
+            &metrics.kafka,
         );
 
         if active_write_worker {
@@ -164,6 +163,7 @@ where
 /// Per-Kafka sink metrics.
 #[derive(Clone)]
 pub struct SinkMetrics {
+    // TODO: make these delete-on-drop?
     messages_sent_counter: IntCounter,
     message_send_errors_counter: IntCounter,
     message_delivery_errors_counter: IntCounter,
@@ -172,47 +172,21 @@ pub struct SinkMetrics {
 }
 
 impl SinkMetrics {
-    fn new(topic_name: &str, sink_id: &str, worker_id: &str) -> SinkMetrics {
-        lazy_static! {
-            static ref MESSAGES_SENT_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_kafka_messages_sent_total",
-                "The number of messages the Kafka producer successfully sent for this sink",
-                &["topic", "sink_id", "worker_id"]
-            )
-            .unwrap();
-            static ref MESSAGE_SEND_ERRORS_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_kafka_message_send_errors_total",
-                "The number of times the Kafka producer encountered an error on send",
-                &["topic", "sink_id", "worker_id"]
-            )
-            .unwrap();
-            static ref MESSAGE_DELIVERY_ERRORS_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_kafka_message_delivery_errors_total",
-                "The number of messages that the Kafka producer could not deliver to the topic",
-                &["topic", "sink_id", "worker_id"]
-            )
-            .unwrap();
-            static ref ROWS_QUEUED: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_kafka_sink_rows_queued",
-                "The current number of rows queued by the Kafka sink operator (note that one row can generate multiple Kafka messages)",
-                &["topic", "sink_id", "worker_id"]
-            )
-            .unwrap();
-            static ref MESSAGES_IN_FLIGHT: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_kafka_sink_messages_in_flight",
-                "The current number of messages waiting to be delivered by the Kafka producer",
-                &["topic", "sink_id", "worker_id"]
-            )
-            .unwrap();
-        }
+    fn new(
+        base: &KafkaBaseMetrics,
+        topic_name: &str,
+        sink_id: &str,
+        worker_id: &str,
+    ) -> SinkMetrics {
         let labels = &[topic_name, sink_id, worker_id];
         SinkMetrics {
-            messages_sent_counter: MESSAGES_SENT_COUNTER.with_label_values(labels),
-            message_send_errors_counter: MESSAGE_SEND_ERRORS_COUNTER.with_label_values(labels),
-            message_delivery_errors_counter: MESSAGE_DELIVERY_ERRORS_COUNTER
+            messages_sent_counter: base.messages_sent_counter.with_label_values(labels),
+            message_send_errors_counter: base.message_send_errors_counter.with_label_values(labels),
+            message_delivery_errors_counter: base
+                .message_delivery_errors_counter
                 .with_label_values(labels),
-            rows_queued: ROWS_QUEUED.with_label_values(labels),
-            messages_in_flight: MESSAGES_IN_FLIGHT.with_label_values(labels),
+            rows_queued: base.rows_queued.with_label_values(labels),
+            messages_in_flight: base.messages_in_flight.with_label_values(labels),
         }
     }
 }
@@ -302,10 +276,11 @@ impl KafkaSinkState {
         activator: Activator,
         latest_progress_ts: Timestamp,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+        metrics: &KafkaBaseMetrics,
     ) -> Self {
         let config = Self::create_producer_config(&connector);
 
-        let metrics = SinkMetrics::new(&connector.topic, &sink_id.to_string(), &worker_id);
+        let metrics = SinkMetrics::new(metrics, &connector.topic, &sink_id.to_string(), &worker_id);
 
         let producer = config
             .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
@@ -586,6 +561,7 @@ fn kafka<G>(
     as_of: SinkAsOf,
     source_timestamp_histories: Vec<TimestampBindingRc>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+    metrics: &KafkaBaseMetrics,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -628,6 +604,7 @@ where
         as_of,
         source_timestamp_histories,
         write_frontier,
+        metrics,
     )
 }
 
@@ -650,6 +627,7 @@ pub fn produce_to_kafka<G>(
     as_of: SinkAsOf,
     source_timestamp_histories: Vec<TimestampBindingRc>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+    metrics: &KafkaBaseMetrics,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -678,6 +656,7 @@ where
         activator,
         latest_progress_ts,
         write_frontier,
+        metrics,
     );
 
     // Keep track of whether this operator/worker ever received updates. We

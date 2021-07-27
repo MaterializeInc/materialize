@@ -33,6 +33,8 @@ use mz_avro::{AvroRead, Schema, Skip};
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
+use super::metrics::SourceBaseMetrics;
+
 /// Contains all information necessary to ingest data from file sources
 pub struct FileSourceReader {
     /// Unique source ID
@@ -68,6 +70,7 @@ impl SourceReader for FileSourceReader {
         connector: ExternalSourceConnector,
         encoding: SourceDataEncoding,
         _: Option<Logger>,
+        _: SourceBaseMetrics,
     ) -> Result<(FileSourceReader, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {

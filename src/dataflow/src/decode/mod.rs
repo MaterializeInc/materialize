@@ -21,7 +21,6 @@ use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use prometheus::core::GenericCounter;
 use prometheus::UIntGauge;
 use repr::MessagePayload;
 use timely::dataflow::channels::pact::Exchange;
@@ -40,12 +39,12 @@ use repr::{Diff, Row, Timestamp};
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
+use crate::metrics::Metrics;
 use crate::source::DecodeResult;
 use crate::source::SourceOutput;
 
 mod avro;
 mod csv;
-mod metrics;
 mod protobuf;
 
 /// Update row to blank out retractions of rows that we have never seen
@@ -182,7 +181,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 // they just go from sequences of vectors of bytes (for which we already know the delimiters)
 // to rows, and can eventually just be planned as `HirRelationExpr::Map`. (TODO)
 #[derive(Debug)]
-enum PreDelimitedFormat {
+pub(crate) enum PreDelimitedFormat {
     Bytes,
     Text,
     Regex(Regex, Row),
@@ -241,7 +240,7 @@ impl PreDelimitedFormat {
 }
 
 #[derive(Debug)]
-enum DataDecoderInner {
+pub(crate) enum DataDecoderInner {
     Avro(AvroDecoderState),
     DelimitedBytes {
         delimiter: u8,
@@ -255,6 +254,7 @@ enum DataDecoderInner {
 #[derive(Debug)]
 struct DataDecoder {
     inner: DataDecoderInner,
+    metrics: Metrics,
 }
 
 impl DataDecoder {
@@ -309,33 +309,12 @@ impl DataDecoder {
         }
     }
 
-    fn get_counter(&self, is_success: bool) -> &GenericCounter<prometheus::core::AtomicI64> {
-        let ev = match &self.inner {
-            DataDecoderInner::Avro(_) => &crate::metrics::EVENTS_COUNTER.avro,
-            DataDecoderInner::Csv(_) => &crate::metrics::EVENTS_COUNTER.csv,
-            DataDecoderInner::DelimitedBytes { format, .. }
-            | DataDecoderInner::PreDelimited(format) => match format {
-                PreDelimitedFormat::Bytes => &crate::metrics::EVENTS_COUNTER.raw,
-                PreDelimitedFormat::Text => &crate::metrics::EVENTS_COUNTER.text,
-                PreDelimitedFormat::Regex(..) => &crate::metrics::EVENTS_COUNTER.regex,
-                PreDelimitedFormat::Protobuf(..) => &crate::metrics::EVENTS_COUNTER.protobuf,
-            },
-        };
-        if is_success {
-            &ev.success
-        } else {
-            &ev.error
-        }
-    }
-
     pub fn log_errors(&self, n: usize) {
-        let counter = self.get_counter(false);
-        counter.inc_by(n as i64)
+        self.metrics.count_errors(&self.inner, n);
     }
 
     pub fn log_successes(&self, n: usize) {
-        let counter = self.get_counter(true);
-        counter.inc_by(n as i64)
+        self.metrics.count_successes(&self.inner, n);
     }
 }
 
@@ -349,6 +328,7 @@ fn get_decoder(
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
     is_connector_delimited: bool,
+    metrics: Metrics,
 ) -> DataDecoder {
     match encoding {
         DataEncoding::Avro(AvroEncoding {
@@ -374,6 +354,7 @@ fn get_decoder(
             .expect("Failed to create avro decoder");
             DataDecoder {
                 inner: DataDecoderInner::Avro(state),
+                metrics,
             }
         }
         DataEncoding::Text
@@ -403,7 +384,7 @@ fn get_decoder(
                     format: after_delimiting,
                 }
             };
-            DataDecoder { inner }
+            DataDecoder { inner, metrics }
         }
         DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => match envelope {
             SourceEnvelope::Debezium(..) => {
@@ -418,6 +399,7 @@ fn get_decoder(
                 .expect("Schema was verified to be correct during purification");
                 DataDecoder {
                     inner: DataDecoderInner::Avro(state),
+                    metrics,
                 }
             }
 
@@ -433,6 +415,7 @@ fn get_decoder(
                 .expect("Schema was verified to be correct during purification");
                 DataDecoder {
                     inner: DataDecoderInner::Avro(state),
+                    metrics,
                 }
             }
         },
@@ -440,6 +423,7 @@ fn get_decoder(
             let state = CsvDecoderState::new(enc, operators);
             DataDecoder {
                 inner: DataDecoderInner::Csv(state),
+                metrics,
             }
         }
         DataEncoding::Postgres => {
@@ -471,6 +455,7 @@ pub fn render_decode_delimited<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
+    metrics: Metrics,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
 where
     G: Scope,
@@ -491,6 +476,7 @@ where
             operators,
             false,
             true,
+            metrics.clone(),
         )
     });
 
@@ -506,6 +492,7 @@ where
         operators,
         fast_forwarded,
         true,
+        metrics,
     );
 
     // The Debezium deduplication and upsert logic rely on elements for the same key going to the same worker.
@@ -646,6 +633,7 @@ pub fn render_decode<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
+    metrics: Metrics,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -666,6 +654,7 @@ where
             operators,
             false,
             false,
+            metrics.clone(),
         )
     });
 
@@ -681,6 +670,7 @@ where
         operators,
         fast_forwarded,
         false,
+        metrics,
     );
 
     let mut value_buf = vec![];

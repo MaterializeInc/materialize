@@ -17,7 +17,8 @@ use std::{
 };
 
 use chrono::NaiveDateTime;
-use prometheus::{proto::MetricType, Registry};
+use ore::metrics::MetricsRegistry;
+use prometheus::proto::MetricType;
 use repr::{Datum, Diff, Row, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -31,10 +32,10 @@ use super::{
 
 /// Scrapes the prometheus registry in a regular interval and submits a batch of metric data to a
 /// logging worker, to be inserted into a table.
-pub struct Scraper<'a> {
+pub struct Scraper {
     interval: Duration,
     retain_for: u64,
-    registry: &'a Registry,
+    registry: MetricsRegistry,
     command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
     internal_tx: UnboundedSender<super::Message>,
 }
@@ -131,11 +132,11 @@ fn metric_family_metadata(family: &prometheus::proto::MetricFamily) -> Row {
     ])
 }
 
-impl<'a> Scraper<'a> {
+impl Scraper {
     pub fn new(
         interval: Duration,
         retain_for: Duration,
-        registry: &'a Registry,
+        registry: MetricsRegistry,
         command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
         internal_tx: UnboundedSender<super::Message>,
     ) -> Self {

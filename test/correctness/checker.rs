@@ -37,8 +37,6 @@ fn main() -> Result<(), Error> {
         .target(Target::Stdout)
         .init();
 
-    mz_process_collector::register_default_process_collector()?;
-
     let args: Args = ore::cli::parse_args();
     let config = args::load_config(args.config_file.as_deref(), args.checks.as_deref())?;
     if args.help_config {

@@ -7,72 +7,37 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use lazy_static::lazy_static;
+use crate::source::metrics::SourceBaseMetrics;
+use ore::metrics::{CounterVecExt, DeleteOnDropCounter};
 use prometheus::core::AtomicU64;
-use prometheus::{register_uint_counter_vec, DeleteOnDropCounter, UIntCounterVec};
 
 pub(super) struct BucketMetrics {
     // public because the normal `inc` flow should *not* increment this, it is
     // specifically used when we aren't incrementing anything else
-    pub objects_duplicate: DeleteOnDropCounter<'static, AtomicU64>,
-    objects_downloaded: DeleteOnDropCounter<'static, AtomicU64>,
-    bytes_downloaded: DeleteOnDropCounter<'static, AtomicU64>,
-    messages_ingested: DeleteOnDropCounter<'static, AtomicU64>,
+    pub objects_duplicate: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    objects_downloaded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    bytes_downloaded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    messages_ingested: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
-impl BucketMetrics {
-    pub(super) fn new(source_id: &str, bucket_id: &str) -> BucketMetrics {
-        const LABELS: &[&str] = &["bucket_id", "source_id"];
-        lazy_static! {
-            static ref OBJECTS_DOWNLOADED: UIntCounterVec = register_uint_counter_vec!(
-                "mz_s3_objects_downloaded",
-                "The number of s3 objects that we have downloaded.",
-                LABELS
-            )
-            .unwrap();
-            static ref OBJECTS_DUPLICATE: UIntCounterVec = register_uint_counter_vec!(
-                "mz_s3_objects_duplicate_detected",
-                "The number of s3 objects that are duplicates, and therefore not downloaded.",
-                LABELS
-            )
-            .unwrap();
-            static ref BYTES_DOWNLOADED: UIntCounterVec = register_uint_counter_vec!(
-                "mz_s3_bytes_downloaded",
-                "The total count of bytes downloaded for this source.",
-                LABELS
-            )
-            .unwrap();
-            static ref MESSAGES_INGESTED: UIntCounterVec = register_uint_counter_vec!(
-                "mz_s3_messages_ingested",
-                "The number of messages ingested for this bucket.",
-                LABELS
-            )
-            .unwrap();
-        }
+impl<'a> BucketMetrics {
+    pub(super) fn new(base_metrics: &SourceBaseMetrics, source_id: &str, bucket_id: &str) -> Self {
+        let labels = &[bucket_id.to_string(), source_id.to_string()];
+        let s3 = &base_metrics.s3;
 
-        let labels = &[bucket_id, source_id];
-
-        BucketMetrics {
-            objects_downloaded: DeleteOnDropCounter::new_with_error_handler(
-                OBJECTS_DOWNLOADED.with_label_values(labels),
-                &OBJECTS_DOWNLOADED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            objects_duplicate: DeleteOnDropCounter::new_with_error_handler(
-                OBJECTS_DUPLICATE.with_label_values(labels),
-                &OBJECTS_DUPLICATE,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            bytes_downloaded: DeleteOnDropCounter::new_with_error_handler(
-                BYTES_DOWNLOADED.with_label_values(labels),
-                &BYTES_DOWNLOADED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            messages_ingested: DeleteOnDropCounter::new_with_error_handler(
-                MESSAGES_INGESTED.with_label_values(labels),
-                &MESSAGES_INGESTED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
+        Self {
+            objects_downloaded: s3
+                .objects_downloaded
+                .get_delete_on_drop_counter(labels.to_vec()),
+            objects_duplicate: s3
+                .objects_duplicate
+                .get_delete_on_drop_counter(labels.to_vec()),
+            bytes_downloaded: s3
+                .bytes_downloaded
+                .get_delete_on_drop_counter(labels.to_vec()),
+            messages_ingested: s3
+                .messages_ingested
+                .get_delete_on_drop_counter(labels.to_vec()),
         }
     }
 
@@ -85,27 +50,21 @@ impl BucketMetrics {
 }
 
 pub(super) struct ScanBucketMetrics {
-    pub(super) objects_discovered: DeleteOnDropCounter<'static, AtomicU64>,
+    pub(super) objects_discovered: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ScanBucketMetrics {
-    pub(super) fn new(source_id: &str, bucket_id: &str) -> ScanBucketMetrics {
-        const LABELS: &[&str] = &["source_id", "bucket_id"];
-        lazy_static! {
-            static ref OBJECTS_DISCOVERED: UIntCounterVec = register_uint_counter_vec!(
-                "mz_s3_objects_discovered",
-                "The number of s3 objects that we have discovered via SCAN or SQS.",
-                LABELS
-            )
-            .unwrap();
-        }
-
+    pub(super) fn new(
+        base_metrics: &SourceBaseMetrics,
+        source_id: &str,
+        bucket_id: &str,
+    ) -> ScanBucketMetrics {
+        let labels = vec![bucket_id.to_string(), source_id.to_string()];
         ScanBucketMetrics {
-            objects_discovered: DeleteOnDropCounter::new_with_error_handler(
-                OBJECTS_DISCOVERED.with_label_values(&[source_id, bucket_id]),
-                &OBJECTS_DISCOVERED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
+            objects_discovered: base_metrics
+                .s3
+                .objects_discovered
+                .get_delete_on_drop_counter(labels),
         }
     }
 }

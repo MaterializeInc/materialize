@@ -41,6 +41,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
+use ore::metrics::MetricsRegistry;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -543,6 +544,7 @@ impl Runner {
             safe_mode: false,
             telemetry: None,
             introspection_frequency: Duration::from_secs(1),
+            metrics_registry: MetricsRegistry::new(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;

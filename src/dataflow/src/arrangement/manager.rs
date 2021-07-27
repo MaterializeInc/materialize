@@ -17,6 +17,11 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{OrdKeyBatch, OrdValBatch};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::TraceReader;
+use ore::metric;
+use ore::metrics::{
+    CounterVec, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
+    MetricsRegistry, UIntGaugeVec,
+};
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use dataflow_types::DataflowError;
@@ -30,35 +35,59 @@ pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 pub type ErrsHandle = TraceKeyHandle<DataflowError, Timestamp, Diff>;
 
-use lazy_static::lazy_static;
 use prometheus::core::{AtomicF64, AtomicU64};
-use prometheus::{
-    register_counter_vec, register_uint_gauge_vec, CounterVec, DeleteOnDropCounter,
-    DeleteOnDropGauge, UIntGaugeVec,
-};
 use std::time::Instant;
+
+/// Base metrics for arrangements.
+#[derive(Clone, Debug)]
+pub struct TraceMetrics {
+    total_maintenance_time: CounterVec,
+    doing_maintenance: UIntGaugeVec,
+}
+
+impl TraceMetrics {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            total_maintenance_time: registry.register(metric!(
+                name: "mz_arrangement_maintenance_seconds_total",
+                help: "The total time spent maintaining an arrangement",
+                var_labels: ["worker_id", "arrangement_id"],
+            )),
+            doing_maintenance: registry.register(metric!(
+                name: "mz_arrangement_maintenance_active_info",
+                help: "Whether or not maintenance is currently occurring",
+                var_labels: ["worker_id"],
+            )),
+        }
+    }
+
+    fn maintenance_time_metric(
+        &self,
+        worker_id: usize,
+        id: GlobalId,
+    ) -> DeleteOnDropCounter<'static, AtomicF64, Vec<String>> {
+        self.total_maintenance_time
+            .get_delete_on_drop_counter(vec![worker_id.to_string(), id.to_string()])
+    }
+
+    fn maintenance_flag_metric(
+        &self,
+        worker_id: usize,
+    ) -> DeleteOnDropGauge<'static, AtomicU64, Vec<String>> {
+        self.doing_maintenance
+            .get_delete_on_drop_gauge(vec![worker_id.to_string()])
+    }
+}
 
 struct MaintenanceMetrics {
     /// total time spent doing maintenance. More useful in the general case.
-    total_maintenance_time: DeleteOnDropCounter<'static, AtomicF64>,
+    total_maintenance_time: DeleteOnDropCounter<'static, AtomicF64, Vec<String>>,
 }
 
 impl MaintenanceMetrics {
-    fn new(worker_id: &str, arrangement_id: &str) -> Self {
-        lazy_static! {
-            static ref TOTAL_MAINTENANCE_TIME: CounterVec = register_counter_vec!(
-                "mz_arrangement_maintenance_seconds_total",
-                "The total time spent maintaining an arrangement",
-                &["worker_id", "arrangement_id"]
-            )
-            .unwrap();
-        }
+    fn new(metrics: &TraceMetrics, worker_id: usize, arrangement_id: GlobalId) -> Self {
         MaintenanceMetrics {
-            total_maintenance_time: DeleteOnDropCounter::new_with_error_handler(
-                TOTAL_MAINTENANCE_TIME.with_label_values(&[worker_id, arrangement_id]),
-                &TOTAL_MAINTENANCE_TIME,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
+            total_maintenance_time: metrics.maintenance_time_metric(worker_id, arrangement_id),
         }
     }
 }
@@ -74,30 +103,19 @@ pub struct TraceManager {
     /// If maintenance turns out to take a very long time, this will allow us
     /// to gain a sense that materialize is stuck on maintenance before the
     /// maintenance completes
-    doing_maintenance: DeleteOnDropGauge<'static, AtomicU64>,
+    doing_maintenance: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    metrics: TraceMetrics,
 }
 
 impl TraceManager {
-    pub fn new(worker_id: usize) -> Self {
-        lazy_static! {
-            static ref DOING_MAINTENANCE: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_arrangement_maintenance_active_info",
-                "Whether or not maintenance is currently occuring",
-                &["worker_id"]
-            )
-            .unwrap();
-        }
-
-        let id_str = worker_id.to_string();
+    pub fn new(metrics: TraceMetrics, worker_id: usize) -> Self {
+        let doing_maintenance = metrics.maintenance_flag_metric(worker_id);
         TraceManager {
             traces: HashMap::new(),
             worker_id,
+            metrics,
             maintenance_metrics: HashMap::new(),
-            doing_maintenance: DeleteOnDropGauge::new_with_error_handler(
-                DOING_MAINTENANCE.with_label_values(&[&id_str]),
-                &DOING_MAINTENANCE,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
+            doing_maintenance,
         }
     }
 
@@ -160,7 +178,7 @@ impl TraceManager {
     pub fn set(&mut self, id: GlobalId, trace: TraceBundle) {
         self.maintenance_metrics.insert(
             id,
-            MaintenanceMetrics::new(&self.worker_id.to_string(), &id.to_string()),
+            MaintenanceMetrics::new(&self.metrics, self.worker_id, id),
         );
         self.traces.insert(id, trace);
     }

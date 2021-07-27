@@ -26,6 +26,7 @@ use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
+use crate::sink::SinkBaseMetrics;
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
@@ -39,6 +40,7 @@ where
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
+        metrics: &SinkBaseMetrics,
     ) {
         let sink_render = get_sink_render_for(&sink.connector);
 
@@ -66,7 +68,7 @@ where
         // if we figure out a protocol for that.
 
         let sink_token =
-            sink_render.render_continuous_sink(render_state, sink, sink_id, collection);
+            sink_render.render_continuous_sink(render_state, sink, sink_id, collection, metrics);
 
         if let Some(sink_token) = sink_token {
             needed_sink_tokens.push(sink_token);
@@ -209,6 +211,7 @@ where
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+        metrics: &SinkBaseMetrics,
     ) -> Option<Box<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>;

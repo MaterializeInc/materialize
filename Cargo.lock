@@ -808,7 +808,6 @@ dependencies = [
  "postgres-protocol",
  "postgres-util",
  "prometheus",
- "prometheus-static-metric",
  "pubnub-hyper",
  "rand",
  "rdkafka",
@@ -2332,6 +2331,7 @@ version = "0.0.0"
 dependencies = [
  "lazy_static",
  "libc",
+ "ore",
  "procfs",
  "prometheus",
 ]
@@ -2542,6 +2542,7 @@ dependencies = [
  "either",
  "futures",
  "openssl",
+ "prometheus",
  "smallvec",
  "structopt",
  "tokio",
@@ -2769,7 +2770,6 @@ dependencies = [
  "ore",
  "pgrepr",
  "postgres",
- "prometheus",
  "repr",
  "sql",
  "tokio",
@@ -3089,17 +3089,6 @@ dependencies = [
  "parking_lot",
  "regex",
  "thiserror",
-]
-
-[[package]]
-name = "prometheus-static-metric"
-version = "0.5.0-rc.1"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#8bd8207fd0ac3ebb594a0832e5e5a70ddd8e1a60"
-dependencies = [
- "lazy_static",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -4288,7 +4277,6 @@ dependencies = [
  "pgrepr",
  "postgres",
  "postgres-types",
- "prometheus",
  "regex",
  "repr",
  "serde",
