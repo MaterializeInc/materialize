@@ -95,7 +95,9 @@ query T multiline
 EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
 %0 =
-| Constant (0) (1) (2) (-2) (-1)
+| Constant ()
+| FlatMap generate_series(-2, 2)
+| | demand = (#0)
 
 EOF
 
