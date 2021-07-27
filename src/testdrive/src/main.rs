@@ -203,13 +203,17 @@ async fn main() {
         }
     }
 
+    if config.ci_output {
+        print!("+++ ")
+    }
     if errors.is_empty() {
         println!("testdrive completed successfully.");
     } else {
-        eprintln!("{} errors were encountered during execution", errors.len());
+        println!("!!! Error Report");
+        println!("{} errors were encountered during execution", errors.len());
 
         if !error_files.is_empty() {
-            eprintln!("files involved: {}", error_files.join(" "));
+            println!("files involved: {}", error_files.join(" "));
         }
 
         process::exit(1);
