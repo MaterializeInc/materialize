@@ -4258,6 +4258,7 @@ dependencies = [
  "build-info",
  "ccsr",
  "chrono",
+ "csv",
  "datadriven",
  "dataflow-types",
  "dec",

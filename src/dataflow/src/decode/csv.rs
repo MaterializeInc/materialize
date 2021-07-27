@@ -9,15 +9,13 @@
 
 use std::iter;
 
-use dataflow_types::CsvEncoding;
-use dataflow_types::LinearOperator;
-
-use dataflow_types::{DataflowError, DecodeError};
+use dataflow_types::{CsvEncoding, DataflowError, DecodeError, LinearOperator};
 use repr::{Datum, Row};
 
 #[derive(Debug)]
 pub struct CsvDecoderState {
-    header_row: bool,
+    next_row_is_header: bool,
+    header_names: Option<Vec<String>>,
     n_cols: usize,
     output: Vec<u8>,
     output_cursor: usize,
@@ -36,11 +34,8 @@ impl CsvDecoderState {
     }
 
     pub fn new(format: CsvEncoding, operators: &mut Option<LinearOperator>) -> Self {
-        let CsvEncoding {
-            header_row,
-            n_cols,
-            delimiter,
-        } = format;
+        let CsvEncoding { columns, delimiter } = format;
+        let n_cols = columns.arity();
 
         let operators = operators.take();
         let demanded = (0..n_cols)
@@ -52,8 +47,10 @@ impl CsvDecoderState {
             })
             .collect::<Vec<_>>();
 
+        let header_names = columns.into_header_names();
         Self {
-            header_row,
+            next_row_is_header: header_names.is_some(),
+            header_names,
             n_cols,
             output: vec![0],
             output_cursor: 0,
@@ -117,21 +114,27 @@ impl CsvDecoderState {
                                         row_packer.extend(
                                             (0..self.n_cols)
                                                 .map(|i| {
-                                                    Datum::String(if self.demanded[i] {
-                                                        &output[self.ends[i]..self.ends[i + 1]]
-                                                    } else {
-                                                        ""
-                                                    })
+                                                    Datum::String(
+                                                        if self.next_row_is_header
+                                                            || self.demanded[i]
+                                                        {
+                                                            &output[self.ends[i]..self.ends[i + 1]]
+                                                        } else {
+                                                            ""
+                                                        },
+                                                    )
                                                 })
                                                 .chain(iter::once(Datum::from(coord))),
                                         );
                                     } else {
                                         row_packer.extend((0..self.n_cols).map(|i| {
-                                            Datum::String(if self.demanded[i] {
-                                                &output[self.ends[i]..self.ends[i + 1]]
-                                            } else {
-                                                ""
-                                            })
+                                            Datum::String(
+                                                if self.next_row_is_header || self.demanded[i] {
+                                                    &output[self.ends[i]..self.ends[i + 1]]
+                                                } else {
+                                                    ""
+                                                },
+                                            )
                                         }));
                                     }
                                     self.row_packer = row_packer;
@@ -150,10 +153,32 @@ impl CsvDecoderState {
                             }
                         }
                     };
-                    if self.header_row {
-                        self.header_row = false;
+
+                    // skip header rows, do not send them into dataflow
+                    if self.next_row_is_header {
+                        self.next_row_is_header = false;
+
+                        if let Ok(Some(row)) = &result {
+                            let mismatched = row
+                                .iter()
+                                .zip(self.header_names.iter().flatten())
+                                .enumerate()
+                                .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
+                            if let Some((i, (actual, expected))) = mismatched {
+                                break Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                                    "source file contains incorrect columns '{:?}', \
+                                     first mismatched column at index {} expected={} actual={}",
+                                    row,
+                                    i + 1,
+                                    expected,
+                                    actual
+                                ))));
+                            }
+                        }
                         if chunk.is_empty() {
                             break Ok(None);
+                        } else if result.is_err() {
+                            break result;
                         }
                     } else {
                         break result;

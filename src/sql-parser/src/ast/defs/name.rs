@@ -71,6 +71,12 @@ impl From<&str> for Ident {
     }
 }
 
+impl From<String> for Ident {
+    fn from(value: String) -> Self {
+        Ident(value)
+    }
+}
+
 /// More-or-less a direct translation of the Postgres function for doing the same thing:
 ///
 ///   <https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/ruleutils.c#L10730-L10812>

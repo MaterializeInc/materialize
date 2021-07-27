@@ -1456,13 +1456,14 @@ impl<'a> Parser<'a> {
             Format::Regex(regex)
         } else if self.parse_keyword(CSV) {
             self.expect_keyword(WITH)?;
-            let (header_row, n_cols) = if self.parse_keyword(HEADER) || self.parse_keyword(HEADERS)
-            {
-                (true, None)
+            let columns = if self.parse_keyword(HEADER) || self.parse_keyword(HEADERS) {
+                CsvColumns::Header {
+                    names: self.parse_parenthesized_column_list(Optional)?,
+                }
             } else {
                 let n_cols = self.parse_literal_uint()? as usize;
                 self.expect_keyword(COLUMNS)?;
-                (false, Some(n_cols))
+                CsvColumns::Count(n_cols)
             };
             let delimiter = if self.parse_keywords(&[DELIMITED, BY]) {
                 let s = self.parse_literal_string()?;
@@ -1473,11 +1474,7 @@ impl<'a> Parser<'a> {
             } else {
                 ','
             };
-            Format::Csv {
-                header_row,
-                n_cols,
-                delimiter,
-            }
+            Format::Csv { columns, delimiter }
         } else if self.parse_keyword(JSON) {
             Format::Json
         } else if self.parse_keyword(TEXT) {
