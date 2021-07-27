@@ -25,7 +25,7 @@ topics.
 
 ### format_spec
 
-{{< diagram "format-spec-protobuf.svg" >}}
+{{< diagram "format-spec.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only upsert" keyConstraint=true %}}
 
