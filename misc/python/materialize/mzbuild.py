@@ -87,12 +87,15 @@ class RepositoryDetails:
     Attributes:
         root: The path to the root of the repository.
         release_mode: Whether the repository is being built in release mode.
+        coverage: Whether the repository has code coverage instrumentation
+            enabled.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
     """
 
-    def __init__(self, root: Path, release_mode: bool):
+    def __init__(self, root: Path, release_mode: bool, coverage: bool):
         self.root = root
         self.release_mode = release_mode
+        self.coverage = coverage
         self.cargo_workspace = cargo.Workspace(root)
 
     def xcargo(self) -> str:
@@ -224,8 +227,15 @@ class CargoPreImage(PreImage):
         }
 
     def extra(self) -> str:
-        # Cargo images depend on the release mode.
-        return str(self.rd.release_mode)
+        # Cargo images depend on the release mode and whether coverage is
+        # enabled.
+        flags: List[str] = []
+        if self.rd.release_mode:
+            flags += "release"
+        if self.rd.coverage:
+            flags += "coverage"
+        flags.sort()
+        return ",".join(flags)
 
 
 class CargoBuild(CargoPreImage):
@@ -237,6 +247,13 @@ class CargoBuild(CargoPreImage):
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
         self.rustflags = config.pop("rustflags", "")
+        if rd.coverage:
+            self.rustflags += " -Zinstrument-coverage -C link-dead-code "
+            # Nix generates some unresolved symbols that -Zinstrument-coverage
+            # somehow causes the linker to complain about, so just disable
+            # warnings about unresolved symbols and hope it all works out.
+            # See: https://github.com/nix-rust/nix/issues/1116
+            self.rustflags += " -Clink-arg=-Wl,--warn-unresolved-symbols"
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
@@ -701,14 +718,16 @@ class Repository:
 
     Args:
         root: The path to the root of the repository.
+        release_mode: Whether to build the repository in release mode.
+        coverage: Whether to enable code coverage instrumentation.
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
         compose_dirs: The set of directories containing an `mzcompose.yml` file.
     """
 
-    def __init__(self, root: Path, release_mode: bool = True):
-        self.rd = RepositoryDetails(root, release_mode)
+    def __init__(self, root: Path, release_mode: bool = True, coverage: bool = False):
+        self.rd = RepositoryDetails(root, release_mode, coverage)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
         for (path, dirs, files) in os.walk(self.root, topdown=True):
