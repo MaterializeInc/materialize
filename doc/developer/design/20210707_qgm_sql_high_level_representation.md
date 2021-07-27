@@ -35,6 +35,9 @@ and the one proposed in this document, which adds normalization at the SQL level
 * Proper support of `LATERAL` joins ([#6875](https://github.com/MaterializeInc/materialize/issues/6875))
 * Support for functional dependency analysis during name resolution.
 
+Existing issues that should be addressed sooner rather than later:
+* [sql: handle aggregates that refer exclusively to outer columns #3720](https://github.com/MaterializeInc/materialize/issues/3720)
+
 ## Non-Goals
 
 * List transformations that will be applied during normalization
