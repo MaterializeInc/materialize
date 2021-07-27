@@ -19,7 +19,14 @@ use crate::{TransformArgs, TransformError};
 
 /// Replace operators on constants collections with constant collections.
 #[derive(Debug)]
-pub struct FoldConstants;
+pub struct FoldConstants {
+    /// An optional maximum size, after which optimization can cease.
+    ///
+    /// The `None` value here indicates no maximum size, but does not
+    /// currently guarantee that any constant expression will be reduced
+    /// to a `MirRelationExpr::Constant` variant.
+    pub limit: Option<usize>,
+}
 
 impl crate::Transform for FoldConstants {
     fn transform(
@@ -33,6 +40,10 @@ impl crate::Transform for FoldConstants {
 
 impl FoldConstants {
     /// Replace operators on constants collections with constant collections.
+    ///
+    /// This transform will cease optimization if it encounters constant collections
+    /// that are larger than `self.limit`, if that is set. It is not guaranteed that
+    /// a constant input within the limit will be reduced to a `Constant` variant.
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         let relation_type = relation.typ();
         match relation {
@@ -161,12 +172,23 @@ impl FoldConstants {
 
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = match rows {
-                        Ok(rows) => Self::fold_flat_map_constant(func, exprs, rows),
+                        Ok(rows) => Self::fold_flat_map_constant(func, exprs, rows, self.limit),
                         Err(e) => Err(e.clone()),
                     };
-                    *relation = MirRelationExpr::Constant {
-                        rows: new_rows,
-                        typ: relation_type,
+                    match new_rows {
+                        Ok(None) => {}
+                        Ok(Some(rows)) => {
+                            *relation = MirRelationExpr::Constant {
+                                rows: Ok(rows),
+                                typ: relation_type,
+                            };
+                        }
+                        Err(err) => {
+                            *relation = MirRelationExpr::Constant {
+                                rows: Err(err),
+                                typ: relation_type,
+                            };
+                        }
                     };
                 }
             }
@@ -446,25 +468,35 @@ impl FoldConstants {
         func: &TableFunc,
         exprs: &[MirScalarExpr],
         rows: &[(Row, Diff)],
-    ) -> Result<Vec<(Row, Diff)>, EvalError> {
+        limit: Option<usize>,
+    ) -> Result<Option<Vec<(Row, Diff)>>, EvalError> {
+        // We cannot exceed `usize::MAX` in any array, so this is a fine upper bound.
+        let limit = limit.unwrap_or(usize::MAX);
         let mut new_rows = Vec::new();
         let mut row_packer = Row::default();
         for (input_row, diff) in rows {
             let datums = input_row.unpack();
             let temp_storage = RowArena::new();
-            let output_rows = func.eval(
-                exprs
-                    .iter()
-                    .map(|expr| expr.eval(&datums, &temp_storage))
-                    .collect::<Result<Vec<_>, _>>()?,
-                &temp_storage,
-            );
-            for (output_row, diff2) in output_rows {
+            let mut output_rows = func
+                .eval(
+                    exprs
+                        .iter()
+                        .map(|expr| expr.eval(&datums, &temp_storage))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    &temp_storage,
+                )
+                .fuse();
+            for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
                 row_packer.extend(input_row.clone().into_iter().chain(output_row.into_iter()));
                 new_rows.push((row_packer.finish_and_reuse(), diff2 * *diff))
             }
+            // If we still have records to enumerate, but dropped out of the iteration,
+            // it means we have exhausted `limit` and should stop.
+            if output_rows.next() != None {
+                return Ok(None);
+            }
         }
-        Ok(new_rows)
+        Ok(Some(new_rows))
     }
 
     fn fold_filter_constant(
