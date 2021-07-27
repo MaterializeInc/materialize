@@ -21,7 +21,7 @@ use log;
 
 use crate::error::Error;
 use crate::indexed::encoding::Id;
-use crate::indexed::{Indexed, IndexedSnapshot};
+use crate::indexed::{Indexed, IndexedSnapshot, ListenFn};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
 
@@ -32,6 +32,7 @@ enum Cmd<K, V> {
     Seal(Id, u64, CmdResponse<()>),
     AllowCompaction(Id, u64, CmdResponse<()>),
     Snapshot(Id, CmdResponse<IndexedSnapshot<K, V>>),
+    Listen(Id, ListenFn<K, V>, CmdResponse<()>),
     Stop(CmdResponse<()>),
 }
 
@@ -172,6 +173,9 @@ impl<K, V> RuntimeCore<K, V> {
                 Cmd::Snapshot(_, res) => {
                     res.send(Err(Error::from("snapshot cmd sent to stopped runtime")))
                 }
+                Cmd::Listen(_, _, res) => {
+                    res.send(Err(Error::from("listen cmd sent to stopped runtime")))
+                }
             }
         }
     }
@@ -285,6 +289,12 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// The id must have previously been registered.
     fn snapshot(&self, id: Id, res: CmdResponse<IndexedSnapshot<K, V>>) {
         self.core.send(Cmd::Snapshot(id, res))
+    }
+
+    /// Asynchronously registers a callback to be invoked on successful writes
+    /// and seals.
+    fn listen(&self, id: Id, listen_fn: ListenFn<K, V>, res: CmdResponse<()>) {
+        self.core.send(Cmd::Listen(id, listen_fn, res))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -440,6 +450,13 @@ impl<K: Clone, V: Clone> StreamReadHandle<K, V> {
             .and_then(std::convert::identity)
     }
 
+    /// Registers a callback to be invoked on successful writes and seals.
+    pub fn listen(&self, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
+        let (rx, tx) = mpsc::channel();
+        self.runtime.listen(self.id, listen_fn, rx.into());
+        tx.recv().map_err(|_| Error::RuntimeShutdown)?
+    }
+
     /// Unblocks compaction for updates at or before `since`.
     pub fn allow_compaction(&mut self, since: u64, res: CmdResponse<()>) {
         self.runtime.allow_compaction(self.id, since, res);
@@ -493,6 +510,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
             }
             Cmd::Snapshot(id, res) => {
                 let r = self.indexed.snapshot(id);
+                res.send(r);
+            }
+            Cmd::Listen(id, listen_fn, res) => {
+                let r = self.indexed.listen(id, listen_fn);
                 res.send(r);
             }
         }
