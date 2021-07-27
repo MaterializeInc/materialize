@@ -276,6 +276,14 @@ impl FoldConstants {
                     let mut row_packer = Row::default();
                     for input in inputs.iter() {
                         if let MirRelationExpr::Constant { rows: Ok(rows), .. } = input {
+                            if let Some(limit) = self.limit {
+                                if old_rows.len() * rows.len() > limit {
+                                    // Bail out if we have produced too many rows.
+                                    // TODO: progressively apply equivalences to narrow this count
+                                    // as we go, rather than at the end.
+                                    return Ok(());
+                                }
+                            }
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
