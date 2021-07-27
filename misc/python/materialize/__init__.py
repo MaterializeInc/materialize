@@ -24,5 +24,5 @@ Consider writing additional Python code when:
   * You've already written a Bash script whose complexity and maintainability
     has deteriorated as the script's responsibilities have grown.
 
-[materialized]: https://mtrlz.dev/api/materialized/index.html
+[materialized]: https://dev.materialize.com/api/rust/materialized/index.html
 """
