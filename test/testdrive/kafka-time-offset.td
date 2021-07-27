@@ -206,7 +206,7 @@ grape:grape
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
-  WITH (kafka_time_offset=5)
+  WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
   ENVELOPE UPSERT
 
