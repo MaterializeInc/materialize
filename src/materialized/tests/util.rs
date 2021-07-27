@@ -117,6 +117,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         }
         Some(data_directory) => (data_directory, None),
     };
+    let metrics_registry = MetricsRegistry::new();
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         logging: config
             .logging_granularity
@@ -137,11 +138,12 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         safe_mode: config.safe_mode,
         telemetry: None,
         introspection_frequency: Duration::from_secs(1),
-        metrics_registry: MetricsRegistry::new(),
+        metrics_registry: metrics_registry.clone(),
     }))?;
     let server = Server {
         inner,
         runtime,
+        metrics_registry,
         _temp_dir: temp_dir,
     };
     Ok(server)
@@ -151,6 +153,7 @@ pub struct Server {
     pub inner: materialized::Server,
     pub runtime: Arc<Runtime>,
     _temp_dir: Option<TempDir>,
+    pub metrics_registry: MetricsRegistry,
 }
 
 impl Server {
