@@ -47,7 +47,10 @@ where
 
 /// Constructs a `Datum` from a `&str` and a `ScalarType`.
 ///
-/// See [get_scalar_type_or_default] for creating a ScalarType from a string.
+/// See [get_scalar_type_or_default] for creating a `ScalarType` from a string.
+/// Because Datums do not own their strings, if `littyp` is
+/// `ScalarType::String`, make sure that `litval` has already
+/// been unquoted by [unquote_string].
 pub fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Datum<'a>, String> {
     if litval == "null" {
         return Ok(Datum::Null);
@@ -60,8 +63,17 @@ pub fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Da
         ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
         ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
         ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
-        ScalarType::String => Ok(Datum::from(litval.trim_matches('"'))),
+        ScalarType::String => Ok(Datum::from(litval)),
         _ => Err(format!("Unsupported literal type {:?}", littyp)),
+    }
+}
+
+/// Changes `"\"foo\""` to `"foo"` if scalar type is String
+pub fn unquote_string(litval: &str, littyp: &ScalarType) -> String {
+    if littyp == &ScalarType::String {
+        lowertest::unquote(litval)
+    } else {
+        litval.to_string()
     }
 }
 
@@ -92,7 +104,7 @@ where
         None => {
             if ["true", "false", "null"].contains(&litval) {
                 Ok(ScalarType::Bool)
-            } else if litval.starts_with('\"') {
+            } else if litval.starts_with('"') {
                 Ok(ScalarType::String)
             } else if litval.contains('.') {
                 Ok(ScalarType::Float64)

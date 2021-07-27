@@ -64,6 +64,16 @@ build-datum
 String("hello")
 
 build-datum
+"hel\"lo" string
+----
+String("hel\"lo")
+
+build-datum
+"\"hello\"" string
+----
+String("\"hello\"")
+
+build-datum
 null string
 ----
 Null
