@@ -22,7 +22,7 @@ use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use log::error;
+use log::{debug, error};
 use regex::Regex;
 use reqwest::Url;
 
@@ -1244,7 +1244,6 @@ pub fn plan_create_views(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
-    scx: &StatementContext,
     format: Option<Format<Raw>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
@@ -1259,6 +1258,23 @@ fn kafka_sink_builder(
         None => None,
         Some(Value::String(topic)) => Some(topic),
         Some(_) => bail!("consistency_topic must be a string"),
+    };
+
+    let reuse_topic = match with_options.remove("reuse_topic") {
+        Some(Value::Boolean(b)) => b,
+        None => false,
+        Some(_) => bail!("reuse_topic must be a boolean"),
+    };
+
+    let consistency_topic = if reuse_topic && consistency_topic.is_none() {
+        let default_consistency_topic = format!("{}-consistency", topic_prefix);
+        debug!(
+            "Using default consistency topic '{}' for topic '{}'",
+            default_consistency_topic, topic_prefix
+        );
+        Some(default_consistency_topic)
+    } else {
+        consistency_topic
     };
 
     let config_options = kafka_util::extract_config(with_options)?;
@@ -1308,16 +1324,6 @@ fn kafka_sink_builder(
 
     let broker_addrs = broker.parse()?;
 
-    let reuse_topic = match with_options.remove("reuse_topic") {
-        Some(Value::Boolean(b)) => b,
-        None => false,
-        Some(_) => bail!("reuse_topic must be a boolean"),
-    };
-
-    if reuse_topic && consistency_topic.is_none() {
-        bail!("reuse_topic requires a consistency topic");
-    }
-
     let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source {
@@ -1326,8 +1332,6 @@ fn kafka_sink_builder(
                     "reuse_topic requires that sink input dependencies are replayable, {} is not",
                     item.name()
                 );
-                } else if !item.source_connector()?.is_byo() {
-                    scx.require_experimental_mode("Exactly-once sinks")?;
                 }
             } else if item.item_type() != CatalogItemType::Source {
                 bail!(
@@ -1536,7 +1540,6 @@ pub fn plan_create_sink(
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
-            scx,
             format,
             &mut with_options,
             broker,

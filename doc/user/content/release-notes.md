@@ -54,6 +54,10 @@ Wrap your release notes at the 80 character mark.
 - Respect the [`no_proxy` environment variable](/cli/#http-proxies) to exclude
   certain hosts from the configured HTTP/HTTPS proxy, if any.
 
+- Add [`reuse_topic`](/sql/create-sink/#enabling-topic-reuse-after-restart) as
+  a beta feature for Kafka Sinks. This allows re-using the output topic across
+  restarts of Materialize.
+
 {{% version-header v0.8.3 %}}
 - The `MZ_LOG` environment variable is no longer recognized. Setting the log
   level can be done using the `--log-filter` command line parameter or the

@@ -54,8 +54,8 @@ Field                | Value type | Description
 ---------------------|------------|------------
 `partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
-`reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. `consistency_topic` is required if true. The default is false.
-`consistency_topic`  | `text`     | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks.
+`reuse_topic`        | `bool`     | Use the existing Kafka topic after Materialize restarts, instead of creating a new one. The default is false.
+`consistency_topic`  | `text`     | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. If `reuse_topic` is `true`, a default `consistency_topic` will be used when not explicitly set. The default consistency topic name is formed by appending `-consistency` to the output topic name.
 `security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 
@@ -98,7 +98,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 
 - Materialize currently only supports Avro-formatted sinks that write to either a topic or an Avro object container file.
 - For most sinks, Materialize creates new, distinct topics and files for each sink on restart.
-- For Avro-formatted Kafka sinks, an experimental feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#enabling-topic-reuse-after-restart).
+- For Avro-formatted Kafka sinks, a beta feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#enabling-topic-reuse-after-restart).
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
 - Materialize generates Avro schemas for views and sources that are stored in sinks.
 - Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction id information inline with the data, and adds a separate transaction metadata topic.
@@ -169,7 +169,7 @@ You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
 #### Enabling topic reuse after restart
 
-{{< experimental v0.8.2 />}}
+{{< beta v0.8.4 />}}
 
 By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead, Materialize must be able to reconstruct the prior history of the sinked object and all objects on which it is dependent--that is, events must have replayable timestamps--and must ensure that no other processes write to the output topic.
 
@@ -178,11 +178,11 @@ This is currently available only for Kafka sources and the views based on them.
 When you create a sink, you must:
 
 * Enable the `reuse_topic` switch.
-* Specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system.
+* Optionally specify a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system. If not specified, a default consistency topic name will be created by appending `-consistency` to the output topic name.
 
 The sink consistency topic cannot be written to by any other process, including another Materialize instance or another sink.
 
-Because this feature is still experimental, we strongly suggest that you start with test data, rather than with production. Please [escalate](https://github.com/MaterializeInc/materialize/issues/new/choose) any issues to us.
+Because this feature is still in beta, we strongly suggest that you start with test data, rather than with production. Please [escalate](https://github.com/MaterializeInc/materialize/issues/new/choose) any issues to us.
 
 #### Consistency metadata
 
@@ -219,6 +219,8 @@ In addition to the inline information, Materialize creates a new "consistency to
 ```nofmt
 {consistency_topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
 ```
+
+**Note:** With `reuse_topic` enabled, this schema for topic naming is ignored. Instead, the topic name specified via the `consistency_topic` option is used as is.
 
 Each message in the consistency topic has the schema below.
 ```

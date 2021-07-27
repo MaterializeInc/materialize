@@ -205,7 +205,6 @@ pub struct Config {
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
-    let experimental_mode = config.experimental_mode;
     let workers = config.command_receivers.len();
     assert!(workers > 0);
 
@@ -249,7 +248,6 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
                 metrics: Metrics::for_worker_id(worker_idx),
-                experimental_mode,
                 now,
             }
             .run()
@@ -285,8 +283,6 @@ where
     last_bindings_feedback: Instant,
     /// Metrics bundle.
     metrics: Metrics,
-    /// Whether the server is running in experimental mode
-    experimental_mode: bool,
     now: NowFn,
 }
 
@@ -537,23 +533,22 @@ where
                 }
             }
 
-            if self.experimental_mode {
-                for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
-                    new_frontier.clone_from(&frontier.borrow());
-                    let prev_frontier = self
-                        .reported_frontiers
-                        .get_mut(&id)
-                        .expect("Sink frontier missing!");
-                    assert!(<_ as PartialOrder>::less_equal(
-                        prev_frontier,
-                        &new_frontier
-                    ));
-                    if prev_frontier != &new_frontier {
-                        add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                        prev_frontier.clone_from(&new_frontier);
-                    }
+            for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+                new_frontier.clone_from(&frontier.borrow());
+                let prev_frontier = self
+                    .reported_frontiers
+                    .get_mut(&id)
+                    .expect("Sink frontier missing!");
+                assert!(<_ as PartialOrder>::less_equal(
+                    prev_frontier,
+                    &new_frontier
+                ));
+                if prev_frontier != &new_frontier {
+                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    prev_frontier.clone_from(&new_frontier);
                 }
             }
+
             if !progress.is_empty() {
                 feedback_tx
                     .send(WorkerFeedbackWithMeta {
@@ -572,8 +567,7 @@ where
     fn report_timestamp_bindings(&mut self) {
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
-        if !self.experimental_mode
-            || self.feedback_tx.is_none()
+        if self.feedback_tx.is_none()
             || self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS
         {
             return;
@@ -587,6 +581,10 @@ where
         // If that frontier is different than the durability frontier we've previously reported then we also need to
         // get the new bindings we've produced and send them to the coordinator.
         for (id, history) in self.render_state.ts_histories.iter() {
+            if !history.requires_persistence() {
+                continue;
+            }
+
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
             let prev_frontier = self
@@ -839,22 +837,18 @@ where
                     ..
                 } = connector
                 {
-                    let byo_default = TimestampBindingRc::new(None, self.now);
+                    let byo_default = TimestampBindingRc::new(None, self.now, true);
                     let rt_default = TimestampBindingRc::new(
                         Some(ts_frequency.as_millis().try_into().unwrap()),
                         self.now,
+                        false,
                     );
                     match (connector, consistency) {
                         (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
                             byo_default.add_partition(PartitionId::Kafka(0));
-                            // NB: mark BYO sources as fully durable when not running in experimental
-                            // because, because we don't actually write durability updates in that context
-                            // but we still rely on BYO sources being default durable for EOS.
-                            // Need to remove this when we move RT EOS sinks to non-experimental
-                            // status.
-                            if !self.experimental_mode {
-                                byo_default.set_durability_frontier(Antichain::new().borrow());
-                            }
+                            // TODO(aljoscha): Hey Ruchir 😃, should we always pull this to +Inf,
+                            // and never persist bindings for BYO sources, like this?
+                            byo_default.set_durability_frontier(Antichain::new().borrow());
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
