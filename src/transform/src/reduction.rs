@@ -154,20 +154,27 @@ impl FoldConstants {
                     expr.reduce(&input_typ);
                 }
 
-                // Guard against evaluating expression that may contain temporal expressions.
-                if exprs.iter().any(|e| e.contains_temporal()) {
-                    return Ok(());
-                }
+                // TODO: Until #6790 is fixed, it is unwise to execute a flatmap
+                // function outside of the data plane, as it can take unbounded
+                // resources. The following code is dead, but not deleted so that
+                // in fixing the issue we needn't re-invent it.
+                let execute_unbounded_flatmap_funcs = false;
+                if execute_unbounded_flatmap_funcs {
+                    // Guard against evaluating expression that may contain temporal expressions.
+                    if exprs.iter().any(|e| e.contains_temporal()) {
+                        return Ok(());
+                    }
 
-                if let MirRelationExpr::Constant { rows, .. } = &**input {
-                    let new_rows = match rows {
-                        Ok(rows) => Self::fold_flat_map_constant(func, exprs, rows),
-                        Err(e) => Err(e.clone()),
-                    };
-                    *relation = MirRelationExpr::Constant {
-                        rows: new_rows,
-                        typ: relation_type,
-                    };
+                    if let MirRelationExpr::Constant { rows, .. } = &**input {
+                        let new_rows = match rows {
+                            Ok(rows) => Self::fold_flat_map_constant(func, exprs, rows),
+                            Err(e) => Err(e.clone()),
+                        };
+                        *relation = MirRelationExpr::Constant {
+                            rows: new_rows,
+                            typ: relation_type,
+                        };
+                    }
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
@@ -442,6 +449,7 @@ impl FoldConstants {
         Ok(new_rows)
     }
 
+    #[allow(dead_code)]
     fn fold_flat_map_constant(
         func: &TableFunc,
         exprs: &[MirScalarExpr],
