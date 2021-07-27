@@ -76,6 +76,7 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
     // and this representation is optimized for the metadata serialization path,
     // which is less rare.
     id_mapping: Vec<(String, Id)>,
+    graveyard: Vec<(String, Id)>,
     buf: U,
     blob: BlobCache<K, V, L>,
     futures: HashMap<Id, BlobFuture<K, V>>,
@@ -119,6 +120,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             next_stream_id: meta.next_stream_id,
             futures_seqno_upper: meta.futures_seqno_upper,
             id_mapping: meta.id_mapping,
+            graveyard: meta.graveyard,
             buf,
             blob,
             futures,
@@ -144,7 +146,13 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// stream name, returning the corresponding internal stream id.
     ///
     /// This method is idempotent: ids may be registered multiple times.
-    pub fn register(&mut self, id_str: &str) -> Id {
+    pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
+        if self.graveyard.iter().any(|(s, _)| s == &id_str) {
+            return Err(Error::from(format!(
+                "invalid registration: stream {} already destroyed",
+                id_str
+            )));
+        }
         let id = self.id_mapping.iter().find(|(s, _)| s == &id_str);
         let id = match id {
             Some((_, id)) => *id,
@@ -161,7 +169,47 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         self.traces
             .entry(id)
             .or_insert_with_key(|id| BlobTrace::new(BlobTraceMeta::new(*id)));
-        id
+        Ok(id)
+    }
+
+    /// Removes a stream from the index.
+    ///
+    /// This method is idempotent and may be called multiple times. It returns
+    /// true if the stream was destroyed from this call, and false if it was
+    /// already destroyed.
+    pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
+        if self
+            .graveyard
+            .iter()
+            .any(|(destroyed_name, _)| destroyed_name == &id_str)
+        {
+            return Ok(false);
+        }
+
+        let mapping = self.id_mapping.iter().find(|(name, _)| name == &id_str);
+
+        let mapping = match mapping {
+            Some(mapping) => mapping.clone(),
+            None => {
+                return Err(Error::from(format!(
+                    "invalid destroy of stream {} that was never registered or destroyed",
+                    id_str
+                )));
+            }
+        };
+
+        // TODO: actually physically delete the future and trace batches.
+        let future = self.futures.remove(&mapping.1);
+        let trace = self.traces.remove(&mapping.1);
+
+        // Sanity check that we actually removed the future and trace for this
+        // stream.
+        debug_assert!(future.is_some());
+        debug_assert!(trace.is_some());
+
+        self.graveyard.push(mapping);
+
+        return Ok(true);
     }
 
     /// Drains writes from the buffer into the future and does any necessary
@@ -435,6 +483,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             next_stream_id: self.next_stream_id,
             futures_seqno_upper: self.futures_seqno_upper,
             id_mapping: self.id_mapping.clone(),
+            graveyard: self.graveyard.clone(),
             futures: self
                 .futures
                 .iter()
@@ -566,7 +615,7 @@ mod tests {
             MemBuffer::new("single_stream"),
             MemBlob::new("single_stream"),
         )?;
-        let id = i.register("0");
+        let id = i.register("0")?;
 
         // Empty things are empty.
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
@@ -625,7 +674,7 @@ mod tests {
             MemBuffer::new("batch_sorting"),
             MemBlob::new("batch_sorting"),
         )?;
-        let id = i.register("0");
+        let id = i.register("0")?;
 
         // Write the data and move it into the future part of the index, which
         // orders it within each batch by time. It's not, so this will fire a
@@ -652,7 +701,7 @@ mod tests {
             MemBuffer::new("batch_consolidation"),
             MemBlob::new("batch_consolidation"),
         )?;
-        let id = i.register("0");
+        let id = i.register("0")?;
 
         // Write the data and move it into the future part of the index, which
         // consolidates updates to identical ((k, v), t). Since the writes are
@@ -681,7 +730,7 @@ mod tests {
             MemBuffer::new("batch_future_empty"),
             MemBlob::new("batch_future_empty"),
         )?;
-        let id = i.register("0");
+        let id = i.register("0")?;
 
         // Write an empty set of updates and try to move it into the future part
         // of the index.
@@ -711,7 +760,7 @@ mod tests {
             MemBuffer::new("drain_buf_validate"),
             MemBlob::new("drain_buf_validate"),
         )?;
-        let id = i.register("0");
+        let id = i.register("0")?;
 
         // Normal case (equals lower)
         assert_eq!(
@@ -767,10 +816,10 @@ mod tests {
         // This caused a violation of our invariants (which are checked in tests
         // and debug mode), so we just need the following to run without error
         // to verify the fix.
-        let s1 = i.register("s1");
+        let s1 = i.register("s1")?;
         i.write_sync(vec![(s1, vec![(((), ()), 0, 1)])])?;
         i.step()?;
-        let s2 = i.register("s2");
+        let s2 = i.register("s2")?;
         i.write_sync(vec![(s2, vec![(((), ()), 1, 1)])])?;
         i.step()?;
 
@@ -779,6 +828,38 @@ mod tests {
         // between two step calls doesn't get a batch.)
         i.write_sync(vec![(s1, vec![(((), ()), 2, 1)])])?;
         i.step()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_destroy() -> Result<(), IndexedError> {
+        let mut i: Indexed<String, String, _, _> =
+            Indexed::new(MemBuffer::new("destroy"), MemBlob::new("destroy"))?;
+
+        let _ = i.register("stream")?;
+
+        // Normal case: destroy registered stream.
+        assert_eq!(i.destroy("stream"), Ok(true));
+
+        // Normal case: destroy already destroyed stream.
+        assert_eq!(i.destroy("stream"), Ok(false));
+
+        // Destroy stream that was never created.
+        assert_eq!(
+            i.destroy("stream2"),
+            Err(IndexedError::from(
+                "invalid destroy of stream stream2 that was never registered or destroyed"
+            ))
+        );
+
+        // Creating a previously destroyed stream.
+        assert_eq!(
+            i.register("stream"),
+            Err(IndexedError::from(
+                "invalid registration: stream stream already destroyed"
+            ))
+        );
 
         Ok(())
     }
