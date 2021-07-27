@@ -657,7 +657,6 @@ fn jsonb_each<'a>(
     })
 }
 
-// TODO: Convert this to an `impl Iterator` return value.
 fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     let map = match a {
         Datum::Map(dict) => dict,
@@ -668,7 +667,6 @@ fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a
         .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
 }
 
-// TODO: Convert this to an `impl Iterator` return value.
 fn jsonb_array_elements<'a>(
     a: Datum<'a>,
     temp_storage: &'a RowArena,
@@ -697,19 +695,13 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
     Some((Row::pack(datums), 1))
 }
 
-fn generate_series_int32<'a>(
-    start: Datum<'a>,
-    stop: Datum,
-) -> impl Iterator<Item = (Row, Diff)> + 'a {
+fn generate_series_int32(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
     let start = start.unwrap_int32();
     let stop = stop.unwrap_int32();
     (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
 }
 
-fn generate_series_int64<'a>(
-    start: Datum<'a>,
-    stop: Datum,
-) -> impl Iterator<Item = (Row, Diff)> + 'a {
+fn generate_series_int64(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
     let start = start.unwrap_int64();
     let stop = stop.unwrap_int64();
     (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
@@ -830,9 +822,13 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
         .collect()
 }
 
-pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
+pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     let n = Diff::cast_from(a.unwrap_int64());
-    vec![(Row::default(), n)]
+    if n != 0 {
+        Some((Row::default(), n))
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
@@ -867,7 +863,7 @@ impl TableFunc {
             }
             TableFunc::JsonbObjectKeys => Box::new(jsonb_object_keys(datums[0])),
             TableFunc::JsonbArrayElements { stringify } => {
-                Box::new(jsonb_array_elements(datums[0], temp_storage, *stringify).into_iter())
+                Box::new(jsonb_array_elements(datums[0], temp_storage, *stringify))
             }
             TableFunc::RegexpExtract(a) => Box::new(regexp_extract(datums[0], a).into_iter()),
             TableFunc::CsvExtract(n_cols) => Box::new(csv_extract(datums[0], *n_cols).into_iter()),

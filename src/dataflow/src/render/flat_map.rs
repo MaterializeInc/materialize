@@ -61,7 +61,7 @@ where
                         // Extend datums with additional columns, replace some with dummy values.
                         datums_local.extend(output_row.iter());
                         mfp_plan
-                            .evaluate(&mut datums_local, temp_storage, time, diff * r)
+                            .evaluate(&mut datums_local, temp_storage, time, diff * *r)
                             .map(|x| x.map_err(|(e, t, r)| (DataflowError::from(e), t, r)))
                             .collect::<Vec<_>>()
                     })
