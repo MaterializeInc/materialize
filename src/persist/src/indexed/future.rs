@@ -190,6 +190,13 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
         ts_upper: Antichain<u64>,
         blob: &BlobCache<K, V, L>,
     ) -> Result<FutureSnapshot<K, V>, Error> {
+        if PartialOrder::less_than(&ts_upper, &ts_lower) {
+            return Err(Error::from(format!(
+                "invalid snapshot request: ts_upper {:?} is less than ts_lower {:?}",
+                ts_upper, ts_lower
+            )));
+        }
+
         let mut updates = Vec::with_capacity(self.batches.len());
         for meta in self.batches.iter() {
             // We want to read this batch as long as it contains times [lo, hi] s.t.
@@ -531,7 +538,12 @@ mod tests {
         assert_eq!(slurp_from(&f, &blob, 3, Some(3))?, vec![]);
 
         // invalid args: hi < lo
-        assert_eq!(slurp_from(&f, &blob, 4, Some(3))?, vec![]);
+        assert_eq!(
+            slurp_from(&f, &blob, 4, Some(3)),
+            Err(Error::from(
+                    "invalid snapshot request: ts_upper Antichain { elements: [3] } is less than ts_lower Antichain { elements: [4] }"
+            ))
+        );
 
         // lo == batch_min, hi == batch_max + 1
         assert_eq!(slurp_from(&f, &blob, 3, Some(6))?, updates);
