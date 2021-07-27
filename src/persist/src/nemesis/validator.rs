@@ -12,13 +12,14 @@ use std::fmt;
 
 use crate::error::Error;
 use crate::nemesis::{
-    ReadSnapshotReq, ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step, TakeSnapshotReq,
-    WriteReq, WriteRes,
+    AllowCompactionReq, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step,
+    TakeSnapshotReq, WriteReq, WriteRes,
 };
 use crate::storage::SeqNo;
 
 pub struct Validator {
     sealed: HashMap<String, u64>,
+    allowed_compaction: HashMap<String, u64>,
     writes_by_seqno: BTreeMap<(String, SeqNo), ((String, ()), u64, isize)>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
@@ -43,6 +44,7 @@ impl Validator {
     fn new() -> Self {
         Validator {
             sealed: HashMap::new(),
+            allowed_compaction: HashMap::new(),
             writes_by_seqno: BTreeMap::new(),
             available_snapshots: HashMap::new(),
             errors: Vec::new(),
@@ -65,6 +67,7 @@ impl Validator {
         match s.res {
             Res::Write(req, res) => self.step_write(s.req_id, req, res),
             Res::Seal(req, res) => self.step_seal(s.req_id, req, res),
+            Res::AllowCompaction(req, res) => self.step_allow_compaction(s.req_id, req, res),
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
             Res::ReadSnapshot(req, res) => self.step_read_snapshot(s.req_id, req, res),
             Res::Restart(res) => self.step_restart(s.req_id, res),
@@ -114,6 +117,27 @@ impl Validator {
         self.check_success(req_id, &res, should_succeed);
         if let Ok(_) = res {
             self.sealed.insert(req.stream, req.ts);
+        }
+    }
+
+    fn step_allow_compaction(
+        &mut self,
+        req_id: ReqId,
+        req: AllowCompactionReq,
+        res: Result<(), Error>,
+    ) {
+        let should_succeed = self.runtime_available
+            && self.storage_available
+            && req.ts
+                > self
+                    .allowed_compaction
+                    .get(&req.stream)
+                    .copied()
+                    .unwrap_or_default()
+            && req.ts < self.sealed.get(&req.stream).copied().unwrap_or_default();
+        self.check_success(req_id, &res, should_succeed);
+        if let Ok(_) = res {
+            self.allowed_compaction.insert(req.stream, req.ts);
         }
     }
 

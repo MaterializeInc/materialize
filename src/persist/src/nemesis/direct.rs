@@ -15,8 +15,8 @@ use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
 use crate::indexed::{IndexedSnapshot, Snapshot};
 use crate::nemesis::{
-    Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId, Step,
-    TakeSnapshotReq, WriteReq, WriteRes,
+    AllowCompactionReq, Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq,
+    SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteRes,
 };
 use crate::unreliable::UnreliableHandle;
 
@@ -33,6 +33,9 @@ impl Runtime for Direct {
         let res = match i.req {
             Req::Write(req) => Res::Write(req.clone(), self.write(req)),
             Req::Seal(req) => Res::Seal(req.clone(), self.seal(req)),
+            Req::AllowCompaction(req) => {
+                Res::AllowCompaction(req.clone(), self.allow_compaction(req))
+            }
             Req::TakeSnapshot(req) => Res::TakeSnapshot(req.clone(), self.take_snapshot(req)),
             Req::ReadSnapshot(req) => Res::ReadSnapshot(req.clone(), self.read_snapshot(req)),
             Req::Restart => Res::Restart(self.restart()),
@@ -92,6 +95,13 @@ impl Direct {
         let (write, _) = self.stream(&req.stream)?;
         let (tx, rx) = mpsc::channel();
         write.seal(req.ts, tx.into());
+        rx.recv().map_err(|_| Error::RuntimeShutdown)?
+    }
+
+    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<(), Error> {
+        let (_, meta) = self.stream(&req.stream)?;
+        let (tx, rx) = mpsc::channel();
+        meta.allow_compaction(req.ts, tx.into());
         rx.recv().map_err(|_| Error::RuntimeShutdown)?
     }
 
