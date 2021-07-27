@@ -89,7 +89,7 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:$KAFKA_VERSION
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      - ZOOKEEPER_CLIENT_PORT=2181
 
   kafka:
     image: confluentinc/cp-kafka:$KAFKA_VERSION

@@ -94,7 +94,7 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-kafka:5.5.4
     environment:
@@ -119,16 +119,16 @@ services:
     ports:
       - 8083
     environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      CONFIG_STORAGE_TOPIC: connect_configs
-      OFFSET_STORAGE_TOPIC: connect_offsets
-      STATUS_STORAGE_TOPIC: connect_statuses
-      # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
-      # record the schema
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    - BOOTSTRAP_SERVERS=kafka:9092
+    - CONFIG_STORAGE_TOPIC=connect_configs
+    - OFFSET_STORAGE_TOPIC=connect_offsets
+    - STATUS_STORAGE_TOPIC=connect_statuses
+    # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
+    # record the schema
+    - KEY_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+    - CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
     depends_on: [kafka, schema-registry]
 
 volumes:

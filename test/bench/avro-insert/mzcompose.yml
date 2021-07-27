@@ -68,7 +68,7 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
     ports:
@@ -76,21 +76,20 @@ services:
       - *kafka-external
     depends_on: [zookeeper]
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
-      KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
-      KAFKA_BROKER_ID: 1
-      KAFKA_LOG_RETENTION_HOURS: -1
-      KAFKA_NUM_PARTITIONS: 30
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      #KAFKA_LOG_CLEANUP_POLICY: "compact"
-      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
-      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
+      - KAFKA_METRIC_REPORTERS=io.confluent.metrics.reporter.ConfluentMetricsReporter
+      - KAFKA_BROKER_ID=1
+      - KAFKA_LOG_RETENTION_HOURS=-1
+      - KAFKA_NUM_PARTITIONS=30
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS=kafka:9092
+      - CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS=1
       # To avoid race condition with control-center
-      CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
-      KAFKA_JMX_PORT: 9991
+      - CONFLUENT_METRICS_REPORTER_TOPIC_CREATE=false
+      - KAFKA_JMX_PORT=9991
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
     ports:
@@ -105,9 +104,9 @@ services:
   metric-verifier:
     mzbuild: metric-verifier
     environment:
-      MZ_WORKERS: ${MZ_WORKERS:-0}
-      MZBENCH_GIT_REF: ${MZBENCH_GIT_REF:-None}
-      MZBENCH_ID: ${MZBENCH_ID:-0}
+      - MZ_WORKERS=${MZ_WORKERS:-0}
+      - MZBENCH_GIT_REF=${MZBENCH_GIT_REF:-None}
+      - MZBENCH_ID=${MZBENCH_ID:-0}
   # All monitoring
   dashboard:
     mzbuild: dashboard
