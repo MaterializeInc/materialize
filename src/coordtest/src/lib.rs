@@ -355,7 +355,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                 }
                 "print-catalog" => {
                     let catalog = ct.make_catalog().await;
-                    format!("{:#?}", catalog)
+                    format!("{:#?}\n", catalog)
                 }
                 _ => panic!("unknown directive {}", tc.directive),
             };
