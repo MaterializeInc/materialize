@@ -24,11 +24,11 @@
 //! directives are not in the same session). Output is formatted
 //! [`ExecuteResponse`](coord::ExecuteResponse). The input can contain the
 //! string `<TEMP>` which will be replaced with a temporary directory.
-//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout
-//! which will panic) until all datums returned (all columns in all
-//! rows in all statements) are `true`. Prior to each attempt, all
-//! pending feedback messages from the dataflow server are sent to the
-//! Coordinator. Messages for specified items can be skipped by specifying
+//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout which
+//! will panic) until all datums returned (all columns in all rows in all
+//! statements) are `true`. Prior to each attempt, all pending feedback
+//! messages from the dataflow server are sent to the Coordinator. Messages
+//! for specified items can be skipped (but requeued) by specifying
 //! `exclude-uppers=database.schema.item` as an argument. After each failed
 //! attempt, the timestamp is incremented by 1 to give any new data an
 //! opportunity to be observed.
@@ -81,6 +81,7 @@ pub struct CoordTest {
     coord_feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     client: Option<Client>,
     _handle: JoinOnDropHandle<()>,
+    dataflow_feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     dataflow_feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
     _catalog_file: NamedTempFile,
     temp_dir: TempDir,
@@ -94,12 +95,19 @@ impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
         let catalog_file = NamedTempFile::new()?;
         let metrics_registry = MetricsRegistry::new();
-        let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp) =
-            coord::serve_debug(catalog_file.path(), metrics_registry.clone());
+        let (
+            handle,
+            client,
+            coord_feedback_tx,
+            dataflow_feedback_rx,
+            dataflow_feedback_tx,
+            timestamp,
+        ) = coord::serve_debug(catalog_file.path(), metrics_registry.clone());
         let coordtest = CoordTest {
             _handle: handle,
             client: Some(client),
             coord_feedback_tx,
+            dataflow_feedback_tx,
             dataflow_feedback_rx,
             _catalog_file: catalog_file,
             temp_dir: tempfile::tempdir().unwrap(),
@@ -137,14 +145,28 @@ impl CoordTest {
     }
 
     async fn drain_uppers(&mut self, exclude: &HashSet<GlobalId>) {
+        let mut msgs = vec![];
         loop {
             if let Some(Some(mut msg)) = self.dataflow_feedback_rx.recv().now_or_never() {
                 // Filter out requested ids.
                 if let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message {
+                    // Requeue excluded uppers so future wait-sql directives don't always have to
+                    // specify the same exclude list forever.
+                    let mut requeue = uppers.clone();
+                    requeue.retain(|(id, _data)| exclude.contains(id));
+                    if !requeue.is_empty() {
+                        msgs.push(WorkerFeedbackWithMeta {
+                            worker_id: msg.worker_id,
+                            message: WorkerFeedback::FrontierUppers(requeue),
+                        });
+                    }
                     uppers.retain(|(id, _data)| !exclude.contains(id));
                 }
                 self.coord_feedback_tx.send(msg).unwrap();
             } else {
+                for msg in msgs {
+                    self.dataflow_feedback_tx.send(msg).unwrap();
+                }
                 return;
             }
         }

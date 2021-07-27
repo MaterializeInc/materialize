@@ -3486,6 +3486,7 @@ pub fn serve_debug(
     Client,
     tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     tokio::sync::mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
+    tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     Arc<Mutex<u64>>,
 ) {
     lazy_static! {
@@ -3555,6 +3556,7 @@ pub fn serve_debug(
 
     let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
     let handle = TokioHandle::current();
+    let broadcast_feedback_tx = feedback_tx.clone();
     let thread = thread::spawn(move || {
         let mut coord = Coordinator {
             worker_guards,
@@ -3581,7 +3583,7 @@ pub fn serve_debug(
             sink_writes: HashMap::new(),
             now: get_debug_timestamp,
         };
-        coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
+        coord.broadcast(SequencedCommand::EnableFeedback(broadcast_feedback_tx));
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
         handle.block_on(coord.serve(
@@ -3600,6 +3602,7 @@ pub fn serve_debug(
         client,
         inner_feedback_tx,
         inner_feedback_rx,
+        feedback_tx,
         DEBUG_TIMESTAMP.clone(),
     )
 }
