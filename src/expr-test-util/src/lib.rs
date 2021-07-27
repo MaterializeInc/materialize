@@ -33,7 +33,7 @@ gen_reflect_info_func!(
         MirRelationExpr,
         JoinImplementation
     ],
-    [ColumnType, RelationType]
+    [AggregateExpr, ColumnOrder, ColumnType, RelationType]
 );
 
 lazy_static! {
