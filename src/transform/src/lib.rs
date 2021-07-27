@@ -187,7 +187,7 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(crate::reduction::FoldConstants),
+                Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
             ],
         }
     }
@@ -292,7 +292,7 @@ impl Optimizer {
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
-                    Box::new(crate::reduction::FoldConstants),
+                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::fusion::filter::Filter),
                     // fill in the new demand after maps have been shifted
                     // around.
@@ -306,7 +306,7 @@ impl Optimizer {
             Box::new(crate::projection_lifting::ProjectionLifting),
             Box::new(crate::join_implementation::JoinImplementation),
             Box::new(crate::fusion::project::Project),
-            Box::new(crate::reduction::FoldConstants),
+            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
         let mut optimizer = Self::for_view();
         optimizer.transforms.extend(transforms);
@@ -318,7 +318,7 @@ impl Optimizer {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             Box::new(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet),
-            Box::new(crate::reduction::FoldConstants),
+            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
             Box::new(crate::projection_extraction::ProjectionExtraction),

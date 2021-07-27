@@ -52,7 +52,8 @@ where
                 // borrows are moved in and used by `mfp.evaluate`.
                 let temp_storage = &temp_storage;
                 let mfp_plan = &mfp_plan;
-                output_rows
+                let output_rows_vec: Vec<_> = output_rows.collect();
+                output_rows_vec
                     .iter()
                     .flat_map(move |(output_row, r)| {
                         // Remove any additional columns added in prior evaluation.

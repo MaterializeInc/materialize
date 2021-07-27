@@ -638,48 +638,50 @@ impl AggregateFunc {
     }
 }
 
-fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
-    match a {
-        Datum::Map(dict) => dict
-            .iter()
-            .map(move |(k, mut v)| {
-                if stringify {
-                    v = jsonb_stringify(v, temp_storage);
-                }
-                (Row::pack_slice(&[Datum::String(k), v]), 1)
-            })
-            .collect(),
-        _ => vec![],
-    }
+fn jsonb_each<'a>(
+    a: Datum<'a>,
+    temp_storage: &'a RowArena,
+    stringify: bool,
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    // First produce a map, so that a common iterator can be returned.
+    let map = match a {
+        Datum::Map(dict) => dict,
+        _ => repr::DatumMap::empty(),
+    };
+
+    map.iter().map(move |(k, mut v)| {
+        if stringify {
+            v = jsonb_stringify(v, temp_storage);
+        }
+        (Row::pack_slice(&[Datum::String(k), v]), 1)
+    })
 }
 
-fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<(Row, Diff)> {
-    match a {
-        Datum::Map(dict) => dict
-            .iter()
-            .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
-            .collect(),
-        _ => vec![],
-    }
+fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let map = match a {
+        Datum::Map(dict) => dict,
+        _ => repr::DatumMap::empty(),
+    };
+
+    map.iter()
+        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
 }
 
 fn jsonb_array_elements<'a>(
     a: Datum<'a>,
     temp_storage: &'a RowArena,
     stringify: bool,
-) -> Vec<(Row, Diff)> {
-    match a {
-        Datum::List(list) => list
-            .iter()
-            .map(move |mut e| {
-                if stringify {
-                    e = jsonb_stringify(e, temp_storage);
-                }
-                (Row::pack_slice(&[e]), 1)
-            })
-            .collect(),
-        _ => vec![],
-    }
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let list = match a {
+        Datum::List(list) => list,
+        _ => repr::DatumList::empty(),
+    };
+    list.iter().map(move |mut e| {
+        if stringify {
+            e = jsonb_stringify(e, temp_storage);
+        }
+        (Row::pack_slice(&[e]), 1)
+    })
 }
 
 fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
@@ -693,35 +695,29 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
     Some((Row::pack(datums), 1))
 }
 
-fn generate_series_int32(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
+fn generate_series_int32(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
     let start = start.unwrap_int32();
     let stop = stop.unwrap_int32();
-    (start..=stop)
-        .map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
-        .collect()
+    (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
 }
 
-fn generate_series_int64(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
+fn generate_series_int64(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
     let start = start.unwrap_int64();
     let stop = stop.unwrap_int64();
-    (start..=stop)
-        .map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
-        .collect()
+    (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
 }
 
-fn unnest_array(a: Datum) -> Vec<(Row, Diff)> {
+fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
         .iter()
         .map(move |e| (Row::pack_slice(&[e]), 1))
-        .collect()
 }
 
-fn unnest_list(a: Datum) -> Vec<(Row, Diff)> {
+fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_list()
         .iter()
         .map(move |e| (Row::pack_slice(&[e]), 1))
-        .collect()
 }
 
 impl fmt::Display for AggregateFunc {
@@ -807,6 +803,7 @@ impl AnalyzedRegex {
     }
 }
 
+// TODO: Convert to an `impl Iterator` return value.
 pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
     let bytes = a.unwrap_str().as_bytes();
     let mut row = Row::default();
@@ -825,9 +822,13 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
         .collect()
 }
 
-pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
+pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     let n = Diff::cast_from(a.unwrap_int64());
-    vec![(Row::default(), n)]
+    if n != 0 {
+        Some((Row::default(), n))
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
@@ -850,25 +851,27 @@ impl TableFunc {
         &'a self,
         datums: Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
-    ) -> Vec<(Row, Diff)> {
+    ) -> Box<dyn Iterator<Item = (Row, Diff)> + 'a> {
         if self.empty_on_null_input() {
             if datums.iter().any(|d| d.is_null()) {
-                return vec![];
+                return Box::new(vec![].into_iter());
             }
         }
         match self {
-            TableFunc::JsonbEach { stringify } => jsonb_each(datums[0], temp_storage, *stringify),
-            TableFunc::JsonbObjectKeys => jsonb_object_keys(datums[0]),
-            TableFunc::JsonbArrayElements { stringify } => {
-                jsonb_array_elements(datums[0], temp_storage, *stringify)
+            TableFunc::JsonbEach { stringify } => {
+                Box::new(jsonb_each(datums[0], temp_storage, *stringify))
             }
-            TableFunc::RegexpExtract(a) => regexp_extract(datums[0], a).into_iter().collect(),
-            TableFunc::CsvExtract(n_cols) => csv_extract(datums[0], *n_cols).into_iter().collect(),
-            TableFunc::GenerateSeriesInt32 => generate_series_int32(datums[0], datums[1]),
-            TableFunc::GenerateSeriesInt64 => generate_series_int64(datums[0], datums[1]),
-            TableFunc::Repeat => repeat(datums[0]),
-            TableFunc::UnnestArray { .. } => unnest_array(datums[0]),
-            TableFunc::UnnestList { .. } => unnest_list(datums[0]),
+            TableFunc::JsonbObjectKeys => Box::new(jsonb_object_keys(datums[0])),
+            TableFunc::JsonbArrayElements { stringify } => {
+                Box::new(jsonb_array_elements(datums[0], temp_storage, *stringify))
+            }
+            TableFunc::RegexpExtract(a) => Box::new(regexp_extract(datums[0], a).into_iter()),
+            TableFunc::CsvExtract(n_cols) => Box::new(csv_extract(datums[0], *n_cols).into_iter()),
+            TableFunc::GenerateSeriesInt32 => Box::new(generate_series_int32(datums[0], datums[1])),
+            TableFunc::GenerateSeriesInt64 => Box::new(generate_series_int64(datums[0], datums[1])),
+            TableFunc::Repeat => Box::new(repeat(datums[0]).into_iter()),
+            TableFunc::UnnestArray { .. } => Box::new(unnest_array(datums[0])),
+            TableFunc::UnnestList { .. } => Box::new(unnest_list(datums[0])),
         }
     }
 
