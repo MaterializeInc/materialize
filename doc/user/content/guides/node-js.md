@@ -22,7 +22,13 @@ Connect to a local materialized instance using a connection URI:
 ```js
 const { Client } = require('pg');
 const client = new Client('postgres://materialize@localhost:6875/materialize');
-client.connect();
+
+async function main() {
+    await client.connect();
+    /* Work with Materialize */
+}
+
+main();
 ```
 
 This code uses connection URI shorthand (`postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`) to connect to a local materialized instance.
@@ -42,7 +48,13 @@ const client = new Client({
         cert : fs.readFileSync("client-cert.pem").toString(),
     }
 });
-client.connect();
+
+async function main() {
+    await client.connect();
+    /* Work with Materialize */
+}
+
+main();
 ```
 
 Replace `MY_INSTANCE_ID`) in the code above with your Materialize Cloud instance ID. The [`ssl` property](https://node-postgres.com/features/ssl), loads the certificate files downloaded from the Materialize Cloud [Connect](/cloud/connect-to-materialize-cloud/) dialog.
@@ -125,9 +137,9 @@ Query a view `my_view` with a select statement:
 ```js
 const { Client } = require('pg');
 const client = new Client('postgres://materialize@localhost:6875/materialize');
-client.connect();
 
 async function main() {
+  await client.connect();
   const res = await client.query('SELECT * FROM my_view');
   console.log(res.rows);
 };
@@ -161,15 +173,16 @@ Intermediary System | Notes and Resources
 Most data in Materialize will stream in via a `SOURCE`, but a [`TABLE` in Materialize](https://materialize.com/docs/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
 
 **Basic Example:** [Insert a row](https://materialize.com/docs/sql/insert/) of data into a table named `countries` in Materialize.
+
 ```js
 const { Client } = require('pg');
 const client = new Client('postgres://materialize@localhost:6875/materialize');
-client.connect();
 
 const text = 'INSERT INTO countries(code, name) VALUES($1, $2);';
 const values = ['GH', 'GHANA'];
 
 async function main() {
+    await client.connect();
     const res = await client.query(text, values);
     console.log(res);
 }
@@ -189,9 +202,9 @@ Creation of sources, views and indexes in Materialize should be treated with the
 ```js
 const { Client } = require('pg');
 const client = new Client('postgres://materialize@localhost:6875/materialize');
-client.connect();
 
 async function main() {
+    await client.connect();
     const res = await client.query(
         `CREATE SOURCE market_orders_raw_2 FROM PUBNUB
             SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
@@ -210,9 +223,9 @@ See [`CREATE SOURCE`](/sql/create-source/) reference for more information.
 ```js
 const { Client } = require('pg');
 const client = new Client('postgres://materialize@localhost:6875/materialize');
-client.connect();
 
 async function main() {
+    await client.connect();
     const res = await client.query(
         `CREATE VIEW market_orders_2 AS
             SELECT
