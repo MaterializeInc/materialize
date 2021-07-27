@@ -1,7 +1,10 @@
 ---
-name: "Internal: release checklist"
-about: >
-  A tracking issue for a new release of Materialize. Contributor use only.
+name: 'Internal: release checklist'
+about: A tracking issue for a new release of Materialize. Contributor use only.
+title: ''
+labels: ''
+assignees: ''
+
 ---
 
 ## Current status: 🚢 Progressing 🚢
