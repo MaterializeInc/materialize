@@ -52,7 +52,8 @@ where
                 // borrows are moved in and used by `mfp.evaluate`.
                 let temp_storage = &temp_storage;
                 let mfp_plan = &mfp_plan;
-                output_rows
+                let output_rows_vec: Vec<_> = output_rows.collect();
+                output_rows_vec
                     .iter()
                     .flat_map(move |(output_row, r)| {
                         // Remove any additional columns added in prior evaluation.
@@ -60,7 +61,7 @@ where
                         // Extend datums with additional columns, replace some with dummy values.
                         datums_local.extend(output_row.iter());
                         mfp_plan
-                            .evaluate(&mut datums_local, temp_storage, time, diff * *r)
+                            .evaluate(&mut datums_local, temp_storage, time, diff * r)
                             .map(|x| x.map_err(|(e, t, r)| (DataflowError::from(e), t, r)))
                             .collect::<Vec<_>>()
                     })
