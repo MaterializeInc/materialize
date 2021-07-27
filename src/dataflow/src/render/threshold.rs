@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::arrangement::manager::RowSpine;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
+use crate::{arrange_exchange_fn, MzExchange};
 
 /// A plan describing how to compute a threshold operation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -147,8 +148,11 @@ where
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
-            use differential_dataflow::operators::arrange::ArrangeBySelf;
-            let errs = errs.as_collection(|k, _| k.clone()).arrange_by_self();
+            use differential_dataflow::operators::arrange::Arrange;
+            let errs = errs.as_collection(|k, _| (k.clone(), ())).arrange_core(
+                MzExchange::new(arrange_exchange_fn),
+                "ArrangeBySelf Threshold",
+            );
             CollectionBundle::from_columns(0..arity, ArrangementFlavor::Local(oks, errs))
         }
     }

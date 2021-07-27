@@ -25,6 +25,7 @@ use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
+use crate::{arrange_exchange_fn, MzExchange};
 use dataflow_types::logging::LoggingConfig;
 use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
 
@@ -437,7 +438,10 @@ pub fn construct<A: Allocate>(
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange::<RowSpine<_, _, _, _>>()
+                    .arrange_core::<_, RowSpine<_, _, _, _>>(
+                        MzExchange::new(arrange_exchange_fn),
+                        "Arrange Timely Log",
+                    )
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }

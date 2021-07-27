@@ -27,6 +27,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
+use crate::{arrange_exchange_fn, MzExchange};
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
 use repr::{Diff, Row, RowArena};
@@ -424,10 +425,16 @@ where
                 });
 
                 use differential_dataflow::operators::arrange::Arrange;
-                let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
+                let oks = oks_keyed.arrange_core::<_, RowSpine<Row, Row, _, _>>(
+                    MzExchange::new(arrange_exchange_fn),
+                    &name,
+                );
                 let errs = errs
                     .concat(&errs_keyed)
-                    .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                    .arrange_core::<_, ErrSpine<_, _, _>>(
+                        MzExchange::new(arrange_exchange_fn),
+                        &format!("{}-errors", name),
+                    );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }

@@ -68,7 +68,6 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::Collection;
@@ -89,6 +88,7 @@ use crate::render::context::Arrangement;
 use crate::render::context::CollectionBundle;
 use crate::render::datum_vec::DatumVec;
 use crate::render::ArrangementFlavor;
+use crate::{arrange_exchange_fn, MzExchange};
 
 use crate::arrangement::manager::RowSpine;
 
@@ -769,6 +769,7 @@ where
 
     use differential_dataflow::collection::concatenate;
     concatenate(scope, to_concat)
+        .arrange_core::<_, RowSpine<_, _, _, _>>(MzExchange::new(arrange_exchange_fn), "ReduceCollationArrangement")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceCollation", {
             let mut row_packer = Row::default();
             move |key, input, output| {
@@ -835,8 +836,12 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    collection.reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
-        |key, _input, output| {
+    let arranged = collection.arrange_core::<_, RowSpine<_, _, _, _>>(
+        MzExchange::new(arrange_exchange_fn),
+        "DistinctByArrangement",
+    );
+    arranged.reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
+        |key: &Row, _input, output| {
             output.push((key.clone(), 1));
         }
     })
@@ -851,8 +856,12 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    let negated_result = collection.reduce_named("DistinctBy Retractions", {
-        |key, input, output| {
+    let arranged = collection.arrange_core::<_, RowSpine<_, _, _, _>>(
+        MzExchange::new(arrange_exchange_fn),
+        "DistinctByRetractionsArrangement",
+    );
+    let negated_result = arranged.reduce_named("DistinctBy Retractions", {
+        |key: &Row, input, output| {
             output.push((key.clone(), -1));
             output.extend(
                 input
@@ -861,14 +870,15 @@ where
             );
         }
     });
-    use timely::dataflow::operators::Map;
     negated_result
         .negate()
         .concat(&collection)
-        .consolidate()
-        .inner
-        .map(|((k, _), time, count)| (k, time, count))
-        .as_collection()
+        .map(|k| (k, ()))
+        .arrange_core::<_, RowSpine<_, _, _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "DistinctBy Retractions combined",
+        )
+        .as_collection(|(d, _): &(Row, _), _| d.clone())
 }
 
 /// Build the dataflow to compute and arrange multiple non-accumulable,
@@ -901,9 +911,13 @@ where
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
+        .arrange_core::<_, RowSpine<Row, _, _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "ReduceFuseBasicArrangement",
+        )
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
             let mut row_packer = Row::default();
-            move |key, input, output| {
+            move |key: &Row, input, output| {
                 // First, fill our output row with key information if requested.
                 if prepend_key {
                     row_packer.extend(key.iter());
@@ -962,7 +976,12 @@ where
         partial = partial.distinct();
     }
 
-    partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
+    partial
+        .arrange_core::<_, RowSpine<_, _, _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "ReduceInaccumulableArrangement",
+        )
+        .reduce_abelian::<_, RowSpine<Row, Row, _, _>>("ReduceInaccumulable", {
         let mut row_packer = Row::default();
         move |key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
@@ -1043,7 +1062,12 @@ where
 
     // Build a series of stages for the reduction
     // Arrange the final result into (key, Row)
-    partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
+    partial
+        .arrange_core::<_, RowSpine<_, _, _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "ReduceMinsMaxesArrangement",
+        )
+        .reduce_abelian::<_, RowSpine<Row, _, _, _>>("ReduceMinsMaxes", {
         let mut row_packer = Row::default();
         move |key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
@@ -1091,7 +1115,11 @@ where
     let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
 
     let negated_output = input
-        .reduce_named("MinsMaxesHierarchical", {
+        .arrange_core::<_, RowSpine<(Row, u64), _, _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "MinsMaxesHierarchicalArrangement",
+        )
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("MinsMaxesHierarchical", {
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
@@ -1119,7 +1147,7 @@ where
                     target.extend(source.iter().map(|(values, cnt)| ((*values).clone(), *cnt)));
                 }
             }
-        });
+        }).as_collection(|k, v| (k.clone(), v.clone()));
 
     negated_output.negate().concat(&input).consolidate()
 }
@@ -1159,7 +1187,11 @@ where
     // We arrange the inputs ourself to force it into a leaner structure because we know we
     // won't care about values.
     let partial = collection
-        .consolidate()
+        .arrange_core::<_, RowSpine<(Row, _), _, _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "Consolidate Monotonic Partial",
+        )
+        .as_collection(|k, _| k.clone())
         .inner
         .map(move |((key, values), time, diff)| {
             assert!(diff > 0);
@@ -1170,12 +1202,15 @@ where
                 ));
             }
 
-            (key, time, output)
+            ((key, ()), time, output)
         })
         .as_collection();
     partial
-        .arrange_by_self()
-        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
+        .arrange_core::<_, RowSpine<_, _, _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "ArrangeBySelf Monotonic Partial",
+        )
+        .reduce_abelian::<_, RowSpine<Row, _, _, _>>("ReduceMonotonic", {
             let mut row_packer = Row::default();
             move |key, input, output| {
                 let accum = &input[0].1;
@@ -1617,7 +1652,11 @@ where
         differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate);
 
     collection
-        .arrange_by_self()
+        .map(|k| (k, ()))
+        .arrange_core::<_, RowSpine<Row, (), _, _>>(
+            MzExchange::new(arrange_exchange_fn),
+            "ArrangeBySelf Accumulable",
+        )
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
             let mut row_packer = Row::default();
             move |key, input, output| {

@@ -11,7 +11,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::Collection;
@@ -34,8 +34,10 @@ use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
 use crate::render::RenderState;
+use crate::{arrange_exchange_fn, MzExchange};
 
 use super::SinkBaseMetrics;
+use crate::arrangement::manager::RowSpine;
 
 impl<G> SinkRender<G> for TailSinkConnector
 where
@@ -107,7 +109,7 @@ fn tail<G>(
             let v = v.expect("tail must have values");
             (sink_id, v)
         })
-        .arrange_by_key()
+        .arrange_core::<_, RowSpine<_, _, _, _>>(MzExchange::new(arrange_exchange_fn), "Tail")
         .stream;
 
     let mut packer = Row::default();

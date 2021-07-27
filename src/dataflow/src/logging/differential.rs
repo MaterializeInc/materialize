@@ -20,6 +20,7 @@ use timely::logging::WorkerIdentifier;
 use super::{DifferentialLog, LogVariant};
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
+use crate::{arrange_exchange_fn, MzExchange};
 use repr::{Datum, Row, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
@@ -130,7 +131,10 @@ pub fn construct<A: Allocate>(
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange::<RowSpine<_, _, _, _>>()
+                    .arrange_core::<_, RowSpine<_, _, _, _>>(
+                        MzExchange::new(arrange_exchange_fn),
+                        "Arrange Differential Log",
+                    )
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }

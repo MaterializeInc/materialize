@@ -21,6 +21,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
+use crate::{arrange_exchange_fn, MzExchange};
 use expr::{GlobalId, SourceInstanceId};
 use repr::{Datum, Row, Timestamp};
 
@@ -565,7 +566,10 @@ pub fn construct<A: Allocate>(
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange::<RowSpine<_, _, _, _>>()
+                    .arrange_core::<_, RowSpine<_, _, _, _>>(
+                        MzExchange::new(arrange_exchange_fn),
+                        "Arrange Materialized Log",
+                    )
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }

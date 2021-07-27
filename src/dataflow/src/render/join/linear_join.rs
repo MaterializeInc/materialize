@@ -28,6 +28,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::{Arrangement, ArrangementFlavor, ArrangementImport, Context};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
+use crate::{arrange_exchange_fn, MzExchange};
 
 // TODO(mcsherry): Identical to `DeltaPathPlan`; consider unifying.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -322,7 +323,10 @@ where
             });
             errors.push(errs);
             use crate::arrangement::manager::RowSpine;
-            let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
+            let arranged = keyed.arrange_core::<_, RowSpine<_, _, _, _>>(
+                MzExchange::new(arrange_exchange_fn),
+                &format!("JoinStage"),
+            );
             joined = JoinedFlavor::Local(arranged);
         }
 
