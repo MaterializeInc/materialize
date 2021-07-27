@@ -1202,6 +1202,7 @@ dependencies = [
  "proc-macro2",
  "repr",
  "repr_test_util",
+ "serde",
  "serde_json",
 ]
 
