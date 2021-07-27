@@ -68,27 +68,27 @@ grape:grape
 
 > CREATE MATERIALIZED SOURCE append_time_offset_1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=1)
+  WITH (kafka_time_offset=1, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=2)
+  WITH (kafka_time_offset=2, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=3)
+  WITH (kafka_time_offset=3, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=4)
+  WITH (kafka_time_offset=4, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=5)
+  WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > SELECT * FROM append_time_offset_0
