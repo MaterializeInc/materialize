@@ -202,14 +202,25 @@ explain
 select c1, c1 + a from (select 1 as c1, x as c2, 3 as c3 from generate_series(1, 3) as x union all select 1, x, 3 from generate_series(5, 8) as x), t;
 ----
 %0 =
-| Constant (1) (2) (3) (5) (6) (7) (8)
+| Constant ()
+| FlatMap generate_series(1, 3)
+| | demand = ()
 
 %1 =
-| Get materialize.public.t (u1)
+| Constant ()
+| FlatMap generate_series(5, 8)
+| | demand = ()
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+| Union %0 %1
+| ArrangeBy ()
+
+%3 =
+| Get materialize.public.t (u1)
+
+%4 =
+| Join %2 %3
+| | implementation = Differential %3 %2.()
 | | demand = (#1)
 | Map (1 + #1), 1
 | Project (#4, #3)
@@ -221,7 +232,11 @@ explain
 select * from (select 1 as f1, 2 as f2), generate_series(f1, f2);
 ----
 %0 =
-| Constant (1, 2, 1) (1, 2, 2)
+| Constant ()
+| FlatMap generate_series(1, 2)
+| | demand = (#0)
+| Map 1, 2
+| Project (#1, #2, #0)
 
 EOF
 
@@ -231,7 +246,17 @@ explain typed plan for
 select c.* from (select f1, f2 from (select f2, f1 from (select 1 as f1), generate_series(2, 4) as f2) group by f2, f1) as c, t;
 ----
 %0 =
-| Constant (2) (3) (4)
+| Constant ()
+| | types = ()
+| | keys = (())
+| FlatMap generate_series(2, 4)
+| | demand = (#0)
+| | types = (integer)
+| | keys = ()
+| Distinct group=(#0)
+| | types = (integer)
+| | keys = ((#0))
+| ArrangeBy ()
 | | types = (integer)
 | | keys = ((#0))
 
@@ -260,7 +285,21 @@ explain typed plan for
 select c.* from (select f2, f1, f3 from (select f3, f2, f1 from generate_series(2, 4) as f2, generate_series(3, 5) as f3, (select 1 as f1)) group by f2, f3, f1) as c, t;
 ----
 %0 =
-| Constant (2, 3) (2, 4) (2, 5) (3, 3) (3, 4) (3, 5) (4, 3) (4, 4) (4, 5)
+| Constant ()
+| | types = ()
+| | keys = (())
+| FlatMap generate_series(2, 4)
+| | demand = (#0)
+| | types = (integer)
+| | keys = ()
+| FlatMap generate_series(3, 5)
+| | demand = (#0, #1)
+| | types = (integer, integer)
+| | keys = ()
+| Distinct group=(#0, #1)
+| | types = (integer, integer)
+| | keys = ((#0, #1))
+| ArrangeBy ()
 | | types = (integer, integer)
 | | keys = ((#0, #1))
 
