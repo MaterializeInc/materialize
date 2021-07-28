@@ -360,7 +360,10 @@ async fn build_kafka(
     let client = config
         .create::<AdminClient<_>>()
         .context("creating admin client failed")?;
-    let ccsr = builder.format.ccsr_config().clone().build()?;
+    let ccsr = match builder.format.ccsr_config() {
+        Some(config) => Some(config.clone().build()?),
+        None => None,
+    };
 
     register_kafka_topic(
         &client,
@@ -377,15 +380,21 @@ async fn build_kafka(
             value_schema,
             ..
         } => {
-            let (key_schema_id, value_schema_id) =
-                publish_kafka_schemas(&ccsr, &topic, &value_schema, key_schema.as_deref())
-                    .await
-                    .context("error publishing kafka schemas for sink")?;
+            let (key_schema_id, value_schema_id) = publish_kafka_schemas(
+                ccsr.as_ref()
+                    .expect("confluent schema registry client must exist"),
+                &topic,
+                &value_schema,
+                key_schema.as_deref(),
+            )
+            .await
+            .context("error publishing kafka schemas for sink")?;
             Some(PublishedSchemaInfo {
                 key_schema_id,
                 value_schema_id,
             })
         }
+        dataflow_types::KafkaSinkFormat::Json => None,
     };
 
     let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
@@ -409,7 +418,8 @@ async fn build_kafka(
         let consistency_schema_id = match &builder.format {
             dataflow_types::KafkaSinkFormat::Avro { .. } => {
                 let (_, consistency_schema_id) = publish_kafka_schemas(
-                    &ccsr,
+                    ccsr.as_ref()
+                        .expect("confluent schema registry client must exist"),
                     &consistency_topic,
                     &consistency_value_schema,
                     None,
@@ -417,6 +427,11 @@ async fn build_kafka(
                 .await
                 .context("error publishing kafka consistency schemas for sink")?;
                 consistency_schema_id
+            }
+            _ => {
+                // todo@jldlaughlin: fix this!
+                // https://github.com/MaterializeInc/materialize/pull/7505#discussion_r676597211
+                unreachable!("non-Avro consistency topics")
             }
         };
 

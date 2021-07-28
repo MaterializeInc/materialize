@@ -1139,12 +1139,14 @@ pub enum KafkaSinkFormat {
         value_schema: String,
         ccsr_config: ccsr::ClientConfig,
     },
+    Json,
 }
 
 impl KafkaSinkFormat {
-    pub fn ccsr_config(&self) -> &ccsr::ClientConfig {
+    pub fn ccsr_config(&self) -> Option<&ccsr::ClientConfig> {
         match self {
-            KafkaSinkFormat::Avro { ccsr_config, .. } => &ccsr_config,
+            KafkaSinkFormat::Avro { ccsr_config, .. } => Some(&ccsr_config),
+            KafkaSinkFormat::Json => None,
         }
     }
 }

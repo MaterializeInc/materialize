@@ -201,5 +201,18 @@ creating admin client failed: Client creation error: Invalid sasl.kerberos.kinit
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 error registering kafka topic for sink
 
+#
+# FORMAT
+#
+
+! CREATE SINK invalid_format FROM v1
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
+sink without format not yet supported
+
+! CREATE SINK invalid_format FROM v1
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
+  FORMAT NO_SUCH_FORMAT
+found identifier "no_such_format"
+
 # Expect empty output
 > SHOW SINKS

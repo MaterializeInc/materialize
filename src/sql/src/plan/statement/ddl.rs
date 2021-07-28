@@ -1315,11 +1315,15 @@ fn kafka_sink_builder(
                 ccsr_config,
             }
         }
-        _ => {
-            // TODO@jldlaughlin: if format is not Avro with schema, fail if
-            // user has provided a consistency topic!
-            unsupported!("non-confluent schema registry avro sinks")
+        Some(Format::Json) => {
+            if consistency_topic.is_some() {
+                // todo@jldlaughlin: fix this!
+                unsupported!("JSON sink with consistency topic")
+            }
+            KafkaSinkFormat::Json
         }
+        Some(format) => unsupported!(format!("sink format {:?}", format)),
+        None => unsupported!("sink without format"),
     };
 
     let broker_addrs = broker.parse()?;
