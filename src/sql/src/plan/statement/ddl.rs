@@ -50,8 +50,8 @@ use crate::ast::{
     CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement,
     DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
-    ViewDefinition, WithOption,
+    IfExistsBehavior, KafkaConsistency, ObjectType, Raw, SqlOption, Statement,
+    UnresolvedObjectName, Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -1245,6 +1245,7 @@ pub fn plan_create_views(
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
     format: Option<Format<Raw>>,
+    _consistency: Option<KafkaConsistency<Raw>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
@@ -1539,8 +1540,14 @@ pub fn plan_create_sink(
 
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
-        Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
+        Connector::Kafka {
+            broker,
+            topic,
+            consistency,
+            ..
+        } => kafka_sink_builder(
             format,
+            consistency,
             &mut with_options,
             broker,
             topic,

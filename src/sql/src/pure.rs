@@ -349,7 +349,7 @@ pub fn purify(
 
 async fn purify_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut Connector,
+    connector: &mut Connector<Raw>,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
@@ -412,7 +412,7 @@ async fn purify_format(
 
 async fn purify_format_single(
     format: &mut Format<Raw>,
-    connector: &mut Connector,
+    connector: &mut Connector<Raw>,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,

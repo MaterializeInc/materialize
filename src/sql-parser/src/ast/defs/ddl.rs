@@ -362,7 +362,7 @@ impl AstDisplay for DbzMode {
 impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Connector {
+pub enum Connector<T: AstInfo> {
     File {
         path: String,
         compression: Compression,
@@ -371,6 +371,7 @@ pub enum Connector {
         broker: String,
         topic: String,
         key: Option<Vec<Ident>>,
+        consistency: Option<KafkaConsistency<T>>,
     },
     Kinesis {
         arn: String,
@@ -402,7 +403,7 @@ pub enum Connector {
     },
 }
 
-impl AstDisplay for Connector {
+impl<T: AstInfo> AstDisplay for Connector<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Connector::File { path, compression } => {
@@ -414,7 +415,12 @@ impl AstDisplay for Connector {
                     f.write_node(compression);
                 }
             }
-            Connector::Kafka { broker, topic, key } => {
+            Connector::Kafka {
+                broker,
+                topic,
+                key,
+                consistency,
+            } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
@@ -425,6 +431,9 @@ impl AstDisplay for Connector {
                     f.write_str(" KEY (");
                     f.write_node(&display::comma_separated(&key));
                     f.write_str(")");
+                }
+                if let Some(consistency) = consistency.as_ref() {
+                    f.write_node(consistency);
                 }
             }
             Connector::Kinesis { arn } => {
@@ -483,7 +492,27 @@ impl AstDisplay for Connector {
         }
     }
 }
-impl_display!(Connector);
+impl_display_t!(Connector);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaConsistency<T: AstInfo> {
+    pub topic: String,
+    pub topic_format: Option<Format<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(" CONSISTENCY TOPIC '");
+        f.write_node(&display::escape_single_quote_string(&self.topic));
+        f.write_str("'");
+
+        if let Some(format) = self.topic_format.as_ref() {
+            f.write_str(" CONSISTENCY FORMAT ");
+            f.write_node(format);
+        }
+    }
+}
+impl_display_t!(KafkaConsistency);
 
 /// Information about upstream Postgres tables used for replication sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

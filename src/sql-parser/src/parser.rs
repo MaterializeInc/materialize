@@ -1758,7 +1758,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
+    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -1813,7 +1813,13 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Ok(Connector::Kafka { broker, topic, key })
+                let consistency = self.parse_kafka_consistency()?;
+                Ok(Connector::Kafka {
+                    broker,
+                    topic,
+                    key,
+                    consistency,
+                })
             }
             KINESIS => {
                 self.expect_keyword(ARN)?;
@@ -1871,6 +1877,23 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {
+        if self.parse_keywords(&[CONSISTENCY, TOPIC]) {
+            let topic = self.parse_literal_string()?;
+            let topic_format = if self.parse_keywords(&[CONSISTENCY, FORMAT]) {
+                Some(self.parse_format()?)
+            } else {
+                None
+            };
+            Ok(Some(KafkaConsistency {
+                topic,
+                topic_format,
+            }))
+        } else {
+            Ok(None)
         }
     }
 

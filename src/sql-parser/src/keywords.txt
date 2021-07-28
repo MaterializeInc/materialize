@@ -60,6 +60,7 @@ Committed
 Compression
 Confluent
 Connection
+Consistency
 Constraint
 Copy
 Create
