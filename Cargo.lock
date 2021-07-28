@@ -3430,6 +3430,7 @@ dependencies = [
  "num-traits",
  "ordered-float",
  "ore",
+ "persist",
  "proptest",
  "rand",
  "regex",

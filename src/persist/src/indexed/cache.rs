@@ -17,7 +17,6 @@ use abomonation::abomonated::Abomonated;
 use crate::error::Error;
 use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch};
 use crate::storage::Blob;
-use crate::Data;
 
 /// A disk-backed cache for objects in [Blob] storage.
 ///
@@ -32,14 +31,14 @@ use crate::Data;
 /// unpredictable. I think we probably want a soft limit and a hard limit where
 /// the soft limit does some alerting and the hard limit starts blocking (or
 /// erroring) until disk space frees up.
-pub struct BlobCache<K, V, L: Blob> {
+pub struct BlobCache<L: Blob> {
     blob: Arc<Mutex<L>>,
     // TODO: Use a disk-backed LRU cache.
-    future: Arc<Mutex<HashMap<String, Arc<BlobFutureBatch<K, V>>>>>,
-    trace: Arc<Mutex<HashMap<String, Arc<BlobTraceBatch<K, V>>>>>,
+    future: Arc<Mutex<HashMap<String, Arc<BlobFutureBatch>>>>,
+    trace: Arc<Mutex<HashMap<String, Arc<BlobTraceBatch>>>>,
 }
 
-impl<K, V, L: Blob> Clone for BlobCache<K, V, L> {
+impl<L: Blob> Clone for BlobCache<L> {
     fn clone(&self) -> Self {
         BlobCache {
             blob: self.blob.clone(),
@@ -49,7 +48,7 @@ impl<K, V, L: Blob> Clone for BlobCache<K, V, L> {
     }
 }
 
-impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
+impl<L: Blob> BlobCache<L> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
@@ -72,7 +71,7 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
 
     /// Returns the batch for the given key, blocking to fetch if it's not
     /// already in the cache.
-    pub fn get_future_batch(&self, key: &str) -> Result<Arc<BlobFutureBatch<K, V>>, Error> {
+    pub fn get_future_batch(&self, key: &str) -> Result<Arc<BlobFutureBatch>, Error> {
         {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.
@@ -86,9 +85,8 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
             .lock()?
             .get(key)?
             .ok_or_else(|| Error::from(format!("no blob for key: {}", key)))?;
-        let batch: Abomonated<BlobFutureBatch<K, V>, Vec<u8>> =
-            unsafe { Abomonated::new(bytes) }
-                .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
+        let batch: Abomonated<BlobFutureBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
+            .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
@@ -101,11 +99,7 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
     }
 
     /// Writes a batch to backing [Blob] storage.
-    pub fn set_future_batch(
-        &mut self,
-        key: String,
-        batch: BlobFutureBatch<K, V>,
-    ) -> Result<(), Error> {
+    pub fn set_future_batch(&mut self, key: String, batch: BlobFutureBatch) -> Result<(), Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }
@@ -120,7 +114,7 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
 
     /// Returns the batch for the given key, blocking to fetch if it's not
     /// already in the cache.
-    pub fn get_trace_batch(&self, key: &str) -> Result<Arc<BlobTraceBatch<K, V>>, Error> {
+    pub fn get_trace_batch(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
         {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.
@@ -134,7 +128,7 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
             .lock()?
             .get(key)?
             .ok_or_else(|| Error::from(format!("no blob for key: {}", key)))?;
-        let batch: Abomonated<BlobTraceBatch<K, V>, Vec<u8>> = unsafe { Abomonated::new(bytes) }
+        let batch: Abomonated<BlobTraceBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
             .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
@@ -148,11 +142,7 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
     }
 
     /// Writes a batch to backing [Blob] storage.
-    pub fn set_trace_batch(
-        &mut self,
-        key: String,
-        batch: BlobTraceBatch<K, V>,
-    ) -> Result<(), Error> {
+    pub fn set_trace_batch(&mut self, key: String, batch: BlobTraceBatch) -> Result<(), Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }

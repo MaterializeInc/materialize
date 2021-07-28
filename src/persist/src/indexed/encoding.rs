@@ -33,12 +33,12 @@ pub struct Id(pub u64);
 /// Invariants:
 /// - The updates field is non-empty.
 #[derive(Debug, Abomonation)]
-pub struct BufferEntry<K, V> {
+pub struct BufferEntry {
     /// Pairs of stream id and the updates themselves.
     //
     // We could require that each Id is included at most once, but at the
     // moment, there's no particular reason we'd need to.
-    pub updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+    pub updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -70,9 +70,9 @@ pub struct BlobMeta {
     /// Internal stream id indexed by external stream name.
     ///
     /// Invariant: Each stream name and stream id are in here at most once.
-    pub id_mapping: Vec<(String, Id)>,
+    pub id_mapping: Vec<StreamRegistration>,
     /// Set of deleted streams, indexed by external stream name.
-    pub graveyard: Vec<(String, Id)>,
+    pub graveyard: Vec<StreamRegistration>,
     /// BlobFutures indexed by stream id.
     ///
     /// Invariant: Each stream id is in here at most once. This would be more
@@ -85,6 +85,19 @@ pub struct BlobMeta {
     /// naturally be modeled as a map from Id to BlobTraceMeta, but that doesn't
     /// work with Abomonation.
     pub traces: Vec<BlobTraceMeta>,
+}
+
+/// Registration information for a single stream.
+#[derive(Clone, Debug, Abomonation)]
+pub struct StreamRegistration {
+    /// The external stream name.
+    pub name: String,
+    /// The internal stream id.
+    pub id: Id,
+    /// The codec used to encode and decode keys in this stream.
+    pub key_codec_name: String,
+    /// The codec used to encode and decode values in this stream.
+    pub val_codec_name: String,
 }
 
 /// The metadata necessary to reconstruct a BlobFuture.
@@ -177,11 +190,11 @@ pub struct BlobTraceBatchMeta {
 /// - All entries have a non-zero diff.
 /// - The updates field is non-empty.
 #[derive(Clone, Debug, Abomonation)]
-pub struct BlobFutureBatch<K, V> {
+pub struct BlobFutureBatch {
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
     /// The updates themselves.
-    pub updates: Vec<((K, V), u64, isize)>,
+    pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -213,14 +226,14 @@ pub struct BlobFutureBatch<K, V> {
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
 #[derive(Clone, Debug, Abomonation)]
-pub struct BlobTraceBatch<K, V> {
+pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
     /// The updates themselves.
-    pub updates: Vec<((K, V), u64, isize)>,
+    pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
 }
 
-impl<K, V> BufferEntry<K, V> {
+impl BufferEntry {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -252,61 +265,61 @@ impl BlobMeta {
     pub fn validate(&self) -> Result<(), Error> {
         let mut ids = HashSet::new();
         let mut names = HashSet::new();
-        for (name, id) in self.id_mapping.iter() {
-            if id >= &self.next_stream_id {
+        for r in self.id_mapping.iter() {
+            if r.id >= self.next_stream_id {
                 return Err(format!(
                     "contained stream id {:?} >= next_stream_id: {:?}",
-                    id, self.next_stream_id
+                    r.id, self.next_stream_id
                 )
                 .into());
             }
-            if names.contains(name) {
-                return Err(format!("duplicate external stream name: {}", name).into());
+            if names.contains(&r.name) {
+                return Err(format!("duplicate external stream name: {}", r.name).into());
             }
-            names.insert(name.clone());
-            if ids.contains(id) {
-                return Err(format!("duplicate internal stream id: {:?}", id).into());
+            names.insert(r.name.clone());
+            if ids.contains(&r.id) {
+                return Err(format!("duplicate internal stream id: {:?}", r.id).into());
             }
-            ids.insert(*id);
+            ids.insert(r.id);
         }
 
         let mut deleted_ids = HashSet::new();
         let mut deleted_names = HashSet::new();
 
-        for (name, id) in self.graveyard.iter() {
-            if id >= &self.next_stream_id {
+        for r in self.graveyard.iter() {
+            if r.id >= self.next_stream_id {
                 return Err(format!(
                     "graveyard contained stream id {:?} >= next_stream_id: {:?}",
-                    id, self.next_stream_id
+                    r.id, self.next_stream_id
                 )
                 .into());
             }
 
-            if names.contains(name) {
+            if names.contains(&r.name) {
                 return Err(format!(
                     "duplicate external stream name {} across deleted and registered streams",
-                    name
+                    r.name
                 )
                 .into());
             }
 
-            if ids.contains(id) {
+            if ids.contains(&r.id) {
                 return Err(format!(
                     "duplicate internal stream id {:?} across deleted and registered streams",
-                    id
+                    r.id
                 )
                 .into());
             }
 
-            if deleted_names.contains(name) {
-                return Err(format!("duplicate deleted external stream name: {}", name).into());
+            if deleted_names.contains(&r.name) {
+                return Err(format!("duplicate deleted external stream name: {}", r.name).into());
             }
-            deleted_names.insert(name.clone());
+            deleted_names.insert(r.name.clone());
 
-            if deleted_ids.contains(id) {
-                return Err(format!("duplicate deleted internal stream id: {:?}", id).into());
+            if deleted_ids.contains(&r.id) {
+                return Err(format!("duplicate deleted internal stream id: {:?}", r.id).into());
             }
-            deleted_ids.insert(*id);
+            deleted_ids.insert(r.id);
         }
 
         if u64::cast_from(deleted_ids.len() + ids.len()) != self.next_stream_id.0 {
@@ -519,11 +532,7 @@ impl BlobTraceBatchMeta {
     }
 }
 
-impl<K, V> BlobFutureBatch<K, V>
-where
-    K: fmt::Debug + Ord,
-    V: fmt::Debug + Ord,
-{
+impl BlobFutureBatch {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -539,11 +548,11 @@ where
             return Err("updates is empty".into());
         }
 
-        let mut prev: Option<(&u64, &K, &V)> = None;
+        let mut prev: Option<(&u64, PrettyBytes<'_>, PrettyBytes<'_>)> = None;
         for update in self.updates.iter() {
             let ((key, val), ts, diff) = update;
             // Check ordering.
-            let this = (ts, key, val);
+            let this = (ts, PrettyBytes(key), PrettyBytes(val));
             if let Some(prev) = prev {
                 match prev.cmp(&this) {
                     Ordering::Less => {} // Correct.
@@ -557,7 +566,7 @@ where
 
             // Check data invariants.
             if *diff == 0 {
-                return Err(format!("update with 0 diff: {:?}", update).into());
+                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
             }
         }
 
@@ -565,11 +574,7 @@ where
     }
 }
 
-impl<K, V> BlobTraceBatch<K, V>
-where
-    K: fmt::Debug + Ord,
-    V: fmt::Debug + Ord,
-{
+impl BlobTraceBatch {
     /// Asserts the documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -580,7 +585,7 @@ where
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
-        let mut prev: Option<(&K, &V, &u64)> = None;
+        let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, &u64)> = None;
         for update in self.updates.iter() {
             let ((key, val), ts, diff) = update;
             // Check ts against desc.
@@ -609,7 +614,7 @@ where
             }
 
             // Check ordering.
-            let this = (key, val, ts);
+            let this = (PrettyBytes(key), PrettyBytes(val), ts);
             if let Some(prev) = prev {
                 match prev.cmp(&this) {
                     Ordering::Less => {} // Correct.
@@ -623,10 +628,31 @@ where
 
             // Check data invariants.
             if *diff == 0 {
-                return Err(format!("update with 0 diff: {:?}", update).into());
+                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
             }
         }
         Ok(())
+    }
+}
+
+#[derive(PartialOrd, Ord, PartialEq, Eq)]
+struct PrettyBytes<'a>(&'a [u8]);
+
+impl fmt::Debug for PrettyBytes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match std::str::from_utf8(self.0) {
+            Ok(x) => fmt::Debug::fmt(x, f),
+            Err(_) => fmt::Debug::fmt(self.0, f),
+        }
+    }
+}
+
+struct PrettyRecord<'a>(&'a ((Vec<u8>, Vec<u8>), u64, isize));
+
+impl fmt::Debug for PrettyRecord<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ((k, v), ts, diff) = &self.0;
+        fmt::Debug::fmt(&((PrettyBytes(&k), PrettyBytes(&v)), ts, diff), f)
     }
 }
 
@@ -636,11 +662,11 @@ mod tests {
 
     use super::*;
 
-    fn update_with_ts(ts: u64) -> ((String, String), u64, isize) {
+    fn update_with_ts(ts: u64) -> ((Vec<u8>, Vec<u8>), u64, isize) {
         (("".into(), "".into()), ts, 1)
     }
 
-    fn update_with_key(ts: u64, key: &'static str) -> ((String, String), u64, isize) {
+    fn update_with_key(ts: u64, key: &'static str) -> ((Vec<u8>, Vec<u8>), u64, isize) {
         ((key.into(), "".into()), ts, 1)
     }
 
@@ -693,6 +719,18 @@ mod tests {
         }
     }
 
+    impl From<(&'_ str, Id)> for StreamRegistration {
+        fn from(x: (&'_ str, Id)) -> Self {
+            let (name, id) = x;
+            StreamRegistration {
+                name: name.to_owned(),
+                id: id,
+                key_codec_name: "".into(),
+                val_codec_name: "".into(),
+            }
+        }
+    }
+
     #[test]
     fn buffer_entry_validate() {
         // Normal case
@@ -702,7 +740,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BufferEntry<String, String> = BufferEntry { updates: vec![] };
+        let b: BufferEntry = BufferEntry { updates: vec![] };
         assert_eq!(b.validate(), Err("updates is empty".into()));
     }
 
@@ -716,14 +754,14 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(0, 2),
             updates: vec![],
         };
         assert_eq!(b.validate(), Err("updates is empty".into()));
 
         // Invalid desc
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(2, 0),
             updates: vec![],
         };
@@ -735,7 +773,7 @@ mod tests {
         );
 
         // Empty desc
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(0, 0),
             updates: vec![],
         };
@@ -769,7 +807,7 @@ mod tests {
         );
 
         // Invalid update
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
@@ -789,14 +827,14 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 2),
             updates: vec![],
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Invalid desc
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(2, 0),
             updates: vec![],
         };
@@ -808,7 +846,7 @@ mod tests {
         );
 
         // Empty desc
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 0),
             updates: vec![],
         };
@@ -877,7 +915,7 @@ mod tests {
         assert_eq!(b.validate(), Err(Error::from("timestamp 5 is greater than the batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [4] } }")));
 
         // Invalid update
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
@@ -1100,7 +1138,7 @@ mod tests {
         // Normal case
         let b = BlobMeta {
             next_stream_id: Id(2),
-            id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
+            id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
             futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
             traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
@@ -1110,7 +1148,7 @@ mod tests {
         // Duplicate external stream id
         let b = BlobMeta {
             next_stream_id: Id(2),
-            id_mapping: vec![("1".into(), Id(0)), ("1".into(), Id(1))],
+            id_mapping: vec![("1", Id(0)).into(), ("1", Id(1)).into()],
             futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
             traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
@@ -1123,7 +1161,7 @@ mod tests {
         // Duplicate internal stream id
         let b = BlobMeta {
             next_stream_id: Id(2),
-            id_mapping: vec![("0".into(), Id(1)), ("1".into(), Id(1))],
+            id_mapping: vec![("0", Id(1)).into(), ("1", Id(1)).into()],
             futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
             traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
@@ -1136,7 +1174,7 @@ mod tests {
         // Invalid next_stream_id
         let b = BlobMeta {
             next_stream_id: Id(1),
-            id_mapping: vec![("0".into(), Id(0)), ("1".into(), Id(1))],
+            id_mapping: vec![("0", Id(0)).into(), ("1", Id(1)).into()],
             futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(1))],
             traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(1))],
             ..Default::default()
@@ -1151,7 +1189,7 @@ mod tests {
         // Missing future
         let b = BlobMeta {
             next_stream_id: Id(1),
-            id_mapping: vec![("0".into(), Id(0))],
+            id_mapping: vec![("0", Id(0)).into()],
             futures: vec![],
             traces: vec![BlobTraceMeta::new(Id(0))],
             ..Default::default()
@@ -1164,7 +1202,7 @@ mod tests {
         // Missing trace
         let b = BlobMeta {
             next_stream_id: Id(1),
-            id_mapping: vec![("0".into(), Id(0))],
+            id_mapping: vec![("0", Id(0)).into()],
             futures: vec![BlobFutureMeta::new(Id(0))],
             traces: vec![],
             ..Default::default()
@@ -1203,7 +1241,7 @@ mod tests {
         // Duplicate in futures
         let b = BlobMeta {
             next_stream_id: Id(1),
-            id_mapping: vec![("0".into(), Id(0))],
+            id_mapping: vec![("0", Id(0)).into()],
             futures: vec![BlobFutureMeta::new(Id(0)), BlobFutureMeta::new(Id(0))],
             traces: vec![BlobTraceMeta::new(Id(0))],
             ..Default::default()
@@ -1213,7 +1251,7 @@ mod tests {
         // Duplicate in traces
         let b = BlobMeta {
             next_stream_id: Id(1),
-            id_mapping: vec![("0".into(), Id(0))],
+            id_mapping: vec![("0", Id(0)).into()],
             futures: vec![BlobFutureMeta::new(Id(0))],
             traces: vec![BlobTraceMeta::new(Id(0)), BlobTraceMeta::new(Id(0))],
             ..Default::default()
@@ -1223,7 +1261,7 @@ mod tests {
         // Future ts_lower doesn't match trace ts_upper
         let b = BlobMeta {
             next_stream_id: Id(1),
-            id_mapping: vec![("0".into(), Id(0))],
+            id_mapping: vec![("0", Id(0)).into()],
             futures: vec![BlobFutureMeta {
                 id: Id(0),
                 ts_lower: vec![2].into(),
@@ -1249,7 +1287,7 @@ mod tests {
         // future_seqno_upper less than one of the future seqno uppers
         let b = BlobMeta {
             next_stream_id: Id(1),
-            id_mapping: vec![("0".into(), Id(0))],
+            id_mapping: vec![("0", Id(0)).into()],
             futures_seqno_upper: SeqNo(2),
             futures: vec![BlobFutureMeta {
                 id: Id(0),
@@ -1270,7 +1308,7 @@ mod tests {
         // Duplicate id in graveyard.
         let b = BlobMeta {
             next_stream_id: Id(1),
-            graveyard: vec![("deleted".into(), Id(0)), ("1".into(), Id(0))],
+            graveyard: vec![("deleted", Id(0)).into(), ("1", Id(0)).into()],
             ..Default::default()
         };
 
@@ -1282,7 +1320,7 @@ mod tests {
         // Duplicate stream name in graveyard.
         let b = BlobMeta {
             next_stream_id: Id(2),
-            graveyard: vec![("deleted".into(), Id(0)), ("deleted".into(), Id(1))],
+            graveyard: vec![("deleted", Id(0)).into(), ("deleted", Id(1)).into()],
             ..Default::default()
         };
 
@@ -1296,8 +1334,8 @@ mod tests {
         // Duplicate id across graveyard and id_mapping.
         let b = BlobMeta {
             next_stream_id: Id(2),
-            id_mapping: vec![("deleted".into(), Id(0))],
-            graveyard: vec![("1".into(), Id(0))],
+            id_mapping: vec![("deleted", Id(0)).into()],
+            graveyard: vec![("1", Id(0)).into()],
             ..Default::default()
         };
 
@@ -1311,8 +1349,8 @@ mod tests {
         // Duplicate stream name across graveyard and id_mapping.
         let b = BlobMeta {
             next_stream_id: Id(2),
-            id_mapping: vec![("name".into(), Id(1))],
-            graveyard: vec![("name".into(), Id(0))],
+            id_mapping: vec![("name", Id(1)).into()],
+            graveyard: vec![("name", Id(0)).into()],
             ..Default::default()
         };
 
@@ -1326,7 +1364,7 @@ mod tests {
         // Next stream id != id_mapping + deleted
         let b = BlobMeta {
             next_stream_id: Id(2),
-            id_mapping: vec![("name".into(), Id(0))],
+            id_mapping: vec![("name", Id(0)).into()],
             ..Default::default()
         };
 

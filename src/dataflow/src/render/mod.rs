@@ -161,7 +161,7 @@ pub struct RenderState {
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
+    pub persist: Option<RuntimeClient>,
     /// Shared buffer with TAIL operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the tail instance)

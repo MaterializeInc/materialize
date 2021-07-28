@@ -220,7 +220,7 @@ pub struct Config {
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
     /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
+    pub persist: Option<RuntimeClient>,
     /// Responses to commands should be sent into this channel.
     pub feedback_tx: mpsc::UnboundedSender<Response>,
 }

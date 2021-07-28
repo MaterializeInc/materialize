@@ -13,16 +13,17 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::{Concat, ToStream};
+use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
 use timely::dataflow::{Scope, Stream};
-use timely::Data;
+use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::ListenEvent;
-use crate::operators;
+use crate::operators::flatten_decoded_update;
+use crate::{operators, Codec};
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
-pub trait PersistedSource<G: Scope<Timestamp = u64>, K: Data, V: Data> {
+pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// Emits a snapshot of the persisted stream taken as of this call and
     /// listens for any new data added to the persisted stream after that.
     fn persisted_source(
@@ -37,8 +38,8 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: Data, V: Data> {
 impl<G, K, V> PersistedSource<G, K, V> for G
 where
     G: Scope<Timestamp = u64>,
-    K: Data + Send,
-    V: Data + Send,
+    K: TimelyData + Codec + Send,
+    V: TimelyData + Codec + Send,
 {
     fn persisted_source(
         &mut self,
@@ -53,58 +54,63 @@ where
             // We should probably allow the listen to deregister itself.
             let _ = listen_tx.send(e);
         });
-        let err_new = match read.listen(listen_fn) {
+        let err_new_register = match read.listen(listen_fn) {
             Ok(_) => operator::empty(self),
             Err(err) => vec![(err.to_string(), 0, 1)].to_stream(self),
         };
 
         // TODO: Plumb the name of the stream down through the handles and use
         // it for the operator.
-        let ok_new = operator::source(self, "PersistedSource", |capability, info| {
-            let worker_index = self.index();
-            let activator = self.activator_for(&info.address[..]);
-            let mut cap = Some(capability);
-            move |output| {
-                let mut done = false;
-                if let Some(cap) = cap.as_mut() {
-                    let mut session = output.session(cap);
-                    match listen_rx.try_recv() {
-                        Ok(e) => match e {
-                            ListenEvent::Records(mut records) => {
-                                // TODO: This currently works by only emitting the persisted data on worker
-                                // 0 because that was the simplest thing to do initially. Instead, we should
-                                // shard up the responsibility between all the workers.
-                                if worker_index == 0 {
-                                    session.give_vec(&mut records);
+        let (ok_new, err_new_decode) =
+            operator::source(self, "PersistedSource", |capability, info| {
+                let worker_index = self.index();
+                let activator = self.activator_for(&info.address[..]);
+                let mut cap = Some(capability);
+                move |output| {
+                    let mut done = false;
+                    if let Some(cap) = cap.as_mut() {
+                        let mut session = output.session(cap);
+                        match listen_rx.try_recv() {
+                            Ok(e) => match e {
+                                ListenEvent::Records(mut records) => {
+                                    // TODO: This currently works by only emitting the persisted data on worker
+                                    // 0 because that was the simplest thing to do initially. Instead, we should
+                                    // shard up the responsibility between all the workers.
+                                    if worker_index == 0 {
+                                        session.give_vec(&mut records);
+                                    }
+                                    activator.activate();
                                 }
-                                activator.activate();
+                                ListenEvent::Sealed(ts) => {
+                                    cap.downgrade(&ts);
+                                    activator.activate();
+                                }
+                            },
+                            Err(TryRecvError::Empty) => {
+                                // TODO: Hook the activator up to the callback instead of
+                                // TryRecvError::Empty.
+                                activator.activate_after(Duration::from_millis(100));
                             }
-                            ListenEvent::Sealed(ts) => {
-                                cap.downgrade(&ts);
-                                activator.activate();
+                            Err(TryRecvError::Disconnected) => {
+                                done = true;
                             }
-                        },
-                        Err(TryRecvError::Empty) => {
-                            // TODO: Hook the activator up to the callback instead of
-                            // TryRecvError::Empty.
-                            activator.activate_after(Duration::from_millis(100));
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            done = true;
                         }
                     }
+                    if done {
+                        cap = None;
+                    }
                 }
-                if done {
-                    cap = None;
-                }
-            }
-        });
+            })
+            .ok_err(|u| flatten_decoded_update(u));
+        let err_new_decode = err_new_decode.flat_map(std::convert::identity);
 
         // Replay the previously persisted data, if any.
         let (ok_previous, err_previous) = operators::replay(self, &read);
 
         let ok_all = ok_previous.concat(&ok_new);
-        let err_all = err_previous.concat(&err_new);
+        let err_all = err_previous
+            .concat(&err_new_register)
+            .concat(&err_new_decode);
         (ok_all, err_all)
     }
 }
@@ -130,7 +136,7 @@ mod tests {
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
-                let (_, read) = p.create_or_load("1").unwrap();
+                let (_, read) = p.create_or_load::<String, ()>("1").unwrap();
                 let (ok_stream, _) = scope.persisted_source(&read);
                 ok_stream.capture()
             });
@@ -192,7 +198,7 @@ mod tests {
         // Execute a second dataflow with a different number of workers (2).
         // This is mainly testing that we only get one copy of the original
         // persisted data in the stream (as opposed to one per worker).
-        let p = registry.open::<String, ()>("multiple_workers", "lock 2")?;
+        let p = registry.open("multiple_workers", "lock 2")?;
         let (tx, rx) = mpsc::channel();
         let capture_tx = Arc::new(Mutex::new(tx));
         timely::execute(Config::process(2), move |worker| {
@@ -245,12 +251,12 @@ mod tests {
     fn error_stream() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable::<(), ()>("1", "error_stream", unreliable.clone())?;
+        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let (_, read) = p.create_or_load("1").unwrap();
+                let (_, read) = p.create_or_load::<(), ()>("1").unwrap();
                 let (_, err_stream) = scope.persisted_source(&read);
                 err_stream.capture()
             })

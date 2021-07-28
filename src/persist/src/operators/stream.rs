@@ -12,14 +12,14 @@
 
 use timely::dataflow::operators::{Concat, OkErr};
 use timely::dataflow::{Scope, Stream};
-use timely::Data;
+use timely::Data as TimelyData;
 
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
-use crate::operators;
+use crate::{operators, Codec};
 
 /// A Timely Dataflow operator that passes through its input after persisting
 /// it.
-pub trait Persist<G: Scope<Timestamp = u64>, K: Data, V: Data> {
+pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// Persist each element of the stream, emitting it after it's been durably
     /// recorded.
     fn persist(
@@ -34,8 +34,8 @@ pub trait Persist<G: Scope<Timestamp = u64>, K: Data, V: Data> {
 impl<G, K, V> Persist<G, K, V> for Stream<G, ((K, V), u64, isize)>
 where
     G: Scope<Timestamp = u64>,
-    K: Data,
-    V: Data,
+    K: TimelyData + Codec,
+    V: TimelyData + Codec,
 {
     fn persist(
         &self,
@@ -137,12 +137,12 @@ mod tests {
     fn error_stream() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable::<(), ()>("1", "error_stream", unreliable.clone())?;
+        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let token = p.create_or_load("error_stream").unwrap();
+                let token = p.create_or_load::<(), ()>("error_stream").unwrap();
                 let stream = operator::empty(scope);
                 let (_, err_stream) = stream.persist(token);
                 err_stream.capture()
