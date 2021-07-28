@@ -399,8 +399,7 @@ impl Coordinator {
                     let connector = sink_connector::build(builder.clone(), entry.id())
                         .await
                         .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)
-                        .await?;
+                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)?;
                 }
                 _ => (), // Handled in prior loop.
             }
@@ -500,12 +499,10 @@ impl Coordinator {
 
         while let Some(msg) = messages.next().await {
             match msg {
-                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::Command(cmd) => self.message_command(cmd),
                 Message::Worker(worker) => self.message_worker(worker),
                 Message::StatementReady(ready) => self.message_statement_ready(ready).await,
-                Message::SinkConnectorReady(ready) => {
-                    self.message_sink_connector_ready(ready).await
-                }
+                Message::SinkConnectorReady(ready) => self.message_sink_connector_ready(ready),
                 Message::AdvanceSourceTimestamp(advance) => {
                     self.message_advance_source_timestamp(advance)
                 }
@@ -644,12 +641,12 @@ impl Coordinator {
             .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
             .await
         {
-            Ok(plan) => self.sequence_plan(tx, session, plan).await,
+            Ok(plan) => self.sequence_plan(tx, session, plan),
             Err(e) => tx.send(Err(e), session),
         }
     }
 
-    async fn message_sink_connector_ready(
+    fn message_sink_connector_ready(
         &mut self,
         SinkConnectorReady {
             session,
@@ -671,7 +668,6 @@ impl Coordinator {
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
                     self.handle_sink_connector_ready(id, oid, connector)
-                        .await
                         .expect("marking sink ready should never fail");
                 } else {
                     // Another session dropped the sink while we were
@@ -686,7 +682,6 @@ impl Coordinator {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_by_id(id).is_some() {
                     self.catalog_transact(vec![catalog::Op::DropItem(id)])
-                        .await
                         .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
@@ -713,7 +708,7 @@ impl Coordinator {
         self.broadcast(SequencedCommand::AdvanceSourceTimestamp { id, update });
     }
 
-    async fn message_command(&mut self, cmd: Command) {
+    fn message_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
                 session,
@@ -966,7 +961,7 @@ impl Coordinator {
             }
 
             Command::Terminate { mut session } => {
-                self.handle_terminate(&mut session).await;
+                self.handle_terminate(&mut session);
             }
 
             Command::StartTransaction {
@@ -1252,11 +1247,11 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    async fn handle_terminate(&mut self, session: &mut Session) {
+    fn handle_terminate(&mut self, session: &mut Session) {
         let (drop_sinks, _) = session.clear_transaction();
         self.drop_sinks(drop_sinks);
 
-        self.drop_temp_items(session.conn_id()).await;
+        self.drop_temp_items(session.conn_id());
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
@@ -1265,14 +1260,13 @@ impl Coordinator {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    async fn drop_temp_items(&mut self, conn_id: u32) {
+    fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
-            .await
             .expect("unable to drop temporary items for conn_id");
     }
 
-    async fn handle_sink_connector_ready(
+    fn handle_sink_connector_ready(
         &mut self,
         id: GlobalId,
         oid: u32,
@@ -1295,7 +1289,7 @@ impl Coordinator {
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         let as_of = SinkAsOf {
             frontier: self.determine_frontier(sink.from),
             strict: !sink.with_snapshot,
@@ -1330,7 +1324,7 @@ impl Coordinator {
         Ok(self.ship_dataflow(df))
     }
 
-    async fn sequence_plan(
+    fn sequence_plan(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -1338,55 +1332,46 @@ impl Coordinator {
     ) {
         match plan {
             Plan::CreateDatabase(plan) => {
-                tx.send(self.sequence_create_database(plan).await, session);
+                tx.send(self.sequence_create_database(plan), session);
             }
             Plan::CreateSchema(plan) => {
-                tx.send(self.sequence_create_schema(plan).await, session);
+                tx.send(self.sequence_create_schema(plan), session);
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(plan).await, session);
+                tx.send(self.sequence_create_role(plan), session);
             }
             Plan::CreateTable(plan) => {
-                tx.send(
-                    self.sequence_create_table(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_table(&mut session, plan), session);
             }
             Plan::CreateSource(plan) => {
-                tx.send(
-                    self.sequence_create_source(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_source(&mut session, plan), session);
             }
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, plan, tx).await;
+                self.sequence_create_sink(session, plan, tx);
             }
             Plan::CreateView(plan) => {
-                tx.send(self.sequence_create_view(&mut session, plan).await, session);
+                tx.send(self.sequence_create_view(&mut session, plan), session);
             }
             Plan::CreateViews(plan) => {
-                tx.send(
-                    self.sequence_create_views(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_views(&mut session, plan), session);
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan).await, session);
+                tx.send(self.sequence_create_index(plan), session);
             }
             Plan::CreateType(plan) => {
-                tx.send(self.sequence_create_type(plan).await, session);
+                tx.send(self.sequence_create_type(plan), session);
             }
             Plan::DropDatabase(plan) => {
-                tx.send(self.sequence_drop_database(plan).await, session);
+                tx.send(self.sequence_drop_database(plan), session);
             }
             Plan::DropSchema(plan) => {
-                tx.send(self.sequence_drop_schema(plan).await, session);
+                tx.send(self.sequence_drop_schema(plan), session);
             }
             Plan::DropRoles(plan) => {
-                tx.send(self.sequence_drop_roles(plan).await, session);
+                tx.send(self.sequence_drop_roles(plan), session);
             }
             Plan::DropItems(plan) => {
-                tx.send(self.sequence_drop_items(plan).await, session);
+                tx.send(self.sequence_drop_items(plan), session);
             }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
@@ -1454,7 +1439,7 @@ impl Coordinator {
                 );
             }
             Plan::AlterItemRename(plan) => {
-                tx.send(self.sequence_alter_item_rename(plan).await, session);
+                tx.send(self.sequence_alter_item_rename(plan), session);
             }
             Plan::AlterIndexSetOptions(plan) => {
                 tx.send(self.sequence_alter_index_set_options(plan), session);
@@ -1463,12 +1448,12 @@ impl Coordinator {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(session.conn_id()).await;
+                self.drop_temp_items(session.conn_id());
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(session.conn_id()).await;
+                    self.drop_temp_items(session.conn_id());
                     let drop_sinks = session.reset();
                     self.drop_sinks(drop_sinks);
                     Ok(ExecuteResponse::DiscardedAll)
@@ -1510,7 +1495,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_database(
+    fn sequence_create_database(
         &mut self,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1527,7 +1512,7 @@ impl Coordinator {
                 oid: schema_oid,
             },
         ];
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -1537,7 +1522,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_schema(
+    fn sequence_create_schema(
         &mut self,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1547,7 +1532,7 @@ impl Coordinator {
             schema_name: plan.schema_name,
             oid,
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -1557,7 +1542,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_role(
+    fn sequence_create_role(
         &mut self,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1567,11 +1552,10 @@ impl Coordinator {
             oid,
         };
         self.catalog_transact(vec![op])
-            .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    async fn sequence_create_table(
+    fn sequence_create_table(
         &mut self,
         session: &Session,
         plan: CreateTablePlan,
@@ -1615,23 +1599,20 @@ impl Coordinator {
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
-        match self
-            .catalog_transact(vec![
-                catalog::Op::CreateItem {
-                    id: table_id,
-                    oid: table_oid,
-                    name,
-                    item: CatalogItem::Table(table),
-                },
-                catalog::Op::CreateItem {
-                    id: index_id,
-                    oid: index_oid,
-                    name: index_name,
-                    item: CatalogItem::Index(index),
-                },
-            ])
-            .await
-        {
+        match self.catalog_transact(vec![
+            catalog::Op::CreateItem {
+                id: table_id,
+                oid: table_oid,
+                name,
+                item: CatalogItem::Table(table),
+            },
+            catalog::Op::CreateItem {
+                id: index_id,
+                oid: index_oid,
+                name: index_name,
+                item: CatalogItem::Index(index),
+            },
+        ]) {
             Ok(_) => {
                 let df = self.dataflow_builder().build_index_dataflow(index_id);
                 self.ship_dataflow(df);
@@ -1645,7 +1626,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_source(
+    fn sequence_create_source(
         &mut self,
         session: &mut Session,
         plan: CreateSourcePlan,
@@ -1670,7 +1651,7 @@ impl Coordinator {
 
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(()) => {
                 self.ship_sources(metadata);
                 Ok(ExecuteResponse::CreatedSource { existed: false })
@@ -1764,7 +1745,7 @@ impl Coordinator {
         Ok((metadata, ops))
     }
 
-    async fn sequence_create_sink(
+    fn sequence_create_sink(
         &mut self,
         session: Session,
         plan: CreateSinkPlan,
@@ -1813,7 +1794,7 @@ impl Coordinator {
                 depends_on,
             }),
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => (),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -1919,7 +1900,7 @@ impl Coordinator {
         Ok((ops, index_id))
     }
 
-    async fn sequence_create_view(
+    fn sequence_create_view(
         &mut self,
         session: &Session,
         plan: CreateViewPlan,
@@ -1927,7 +1908,7 @@ impl Coordinator {
         let if_not_exists = plan.if_not_exists;
         let (ops, index_id) = self.generate_view_ops(session, plan)?;
 
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     let df = self.dataflow_builder().build_index_dataflow(index_id);
@@ -1943,7 +1924,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_views(
+    fn sequence_create_views(
         &mut self,
         session: &mut Session,
         plan: CreateViewsPlan,
@@ -1959,7 +1940,7 @@ impl Coordinator {
             }
         }
 
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(()) => {
                 let mut dfs = vec![];
                 for index_id in index_ids {
@@ -1975,7 +1956,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_index(
+    fn sequence_create_index(
         &mut self,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2005,7 +1986,7 @@ impl Coordinator {
             name,
             item: CatalogItem::Index(index),
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => {
                 let df = self.dataflow_builder().build_index_dataflow(id);
                 self.ship_dataflow(df);
@@ -2020,7 +2001,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_type(
+    fn sequence_create_type(
         &mut self,
         plan: CreateTypePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2037,49 +2018,43 @@ impl Coordinator {
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
     }
 
-    async fn sequence_drop_database(
+    fn sequence_drop_database(
         &mut self,
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(plan.name);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
-    async fn sequence_drop_schema(
+    fn sequence_drop_schema(
         &mut self,
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.name);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
-    async fn sequence_drop_roles(
-        &mut self,
-        plan: DropRolesPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    fn sequence_drop_roles(&mut self, plan: DropRolesPlan) -> Result<ExecuteResponse, CoordError> {
         let ops = plan
             .names
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
-    async fn sequence_drop_items(
-        &mut self,
-        plan: DropItemsPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    fn sequence_drop_items(&mut self, plan: DropItemsPlan) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -2854,7 +2829,7 @@ impl Coordinator {
         self.sequence_insert(session, plan)
     }
 
-    async fn sequence_alter_item_rename(
+    fn sequence_alter_item_rename(
         &mut self,
         plan: AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2862,7 +2837,7 @@ impl Coordinator {
             id: plan.id,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -2893,7 +2868,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
+    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
