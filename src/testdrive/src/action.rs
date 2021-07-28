@@ -691,17 +691,17 @@ pub async fn create_state(
     )
     .expect("both parts of AWS Credentials are present");
 
-    let kinesis_client = aws_util::client::kinesis(aws_info.clone()).await.err_hint(
+    let kinesis_client = aws_util::client::kinesis(aws_info.clone()).err_hint(
         "creating Kinesis client",
         &[format!("region: {}", aws_info.region.name())],
     )?;
 
-    let s3_client = aws_util::client::s3(aws_info.clone()).await.err_hint(
+    let s3_client = aws_util::client::s3(aws_info.clone()).err_hint(
         "creating S3 client",
         &[format!("region: {}", aws_info.region.name(),)],
     )?;
 
-    let sqs_client = aws_util::client::sqs(aws_info.clone()).await.err_hint(
+    let sqs_client = aws_util::client::sqs(aws_info.clone()).err_hint(
         "creating SQS client",
         &[format!("region: {}", aws_info.region.name(),)],
     )?;

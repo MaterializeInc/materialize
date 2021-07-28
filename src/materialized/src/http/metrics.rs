@@ -46,7 +46,7 @@ fn load_prom_metrics(
     result
 }
 
-pub async fn handle_prometheus(
+pub fn handle_prometheus(
     _: Request<Body>,
     _: &mut coord::SessionClient,
     start_time: Instant,
@@ -65,7 +65,7 @@ pub async fn handle_prometheus(
     Ok(Response::new(Body::from(buffer)))
 }
 
-pub async fn handle_status(
+pub fn handle_status(
     _: Request<Body>,
     _: &mut coord::SessionClient,
     start_time: Instant,

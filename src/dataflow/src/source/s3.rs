@@ -104,7 +104,7 @@ async fn download_objects_task(
     compression: Compression,
     metrics: SourceBaseMetrics,
 ) {
-    let client = match aws_util::client::s3(aws_info).await {
+    let client = match aws_util::client::s3(aws_info) {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(S3Error::ClientConstructionFailed(e)))
@@ -224,7 +224,7 @@ async fn scan_bucket_task(
     tx: tokio_mpsc::Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
-    let client = match aws_util::client::s3(aws_info).await {
+    let client = match aws_util::client::s3(aws_info) {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(S3Error::ClientConstructionFailed(e)))
@@ -355,7 +355,7 @@ async fn read_sqs_task(
         source_id
     );
 
-    let client = match aws_util::client::sqs(aws_info).await {
+    let client = match aws_util::client::sqs(aws_info) {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(S3Error::ClientConstructionFailed(e)))

@@ -174,36 +174,28 @@ impl Server {
 
                 let res = match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
-                    (&Method::GET, "/metrics") => {
-                        metrics::handle_prometheus(
-                            req,
-                            &mut coord_client,
-                            start_time,
-                            &metrics_registry,
-                            &global_metrics,
-                        )
-                        .await
-                    }
-                    (&Method::GET, "/status") => {
-                        metrics::handle_status(
-                            req,
-                            &mut coord_client,
-                            start_time,
-                            &metrics_registry,
-                            &global_metrics,
-                        )
-                        .await
-                    }
+                    (&Method::GET, "/metrics") => metrics::handle_prometheus(
+                        req,
+                        &mut coord_client,
+                        start_time,
+                        &metrics_registry,
+                        &global_metrics,
+                    ),
+                    (&Method::GET, "/status") => metrics::handle_status(
+                        req,
+                        &mut coord_client,
+                        start_time,
+                        &metrics_registry,
+                        &global_metrics,
+                    ),
                     (&Method::GET, "/prof") => prof::handle_prof(req, &mut coord_client).await,
-                    (&Method::GET, "/memory") => {
-                        memory::handle_memory(req, &mut coord_client).await
-                    }
+                    (&Method::GET, "/memory") => memory::handle_memory(req, &mut coord_client),
                     (&Method::POST, "/prof") => prof::handle_prof(req, &mut coord_client).await,
                     (&Method::POST, "/sql") => sql::handle_sql(req, &mut coord_client).await,
                     (&Method::GET, "/internal/catalog") => {
                         catalog::handle_internal_catalog(req, &mut coord_client).await
                     }
-                    _ => root::handle_static(req, &mut coord_client).await,
+                    _ => root::handle_static(req, &mut coord_client),
                 };
                 coord_client.terminate().await;
                 res
