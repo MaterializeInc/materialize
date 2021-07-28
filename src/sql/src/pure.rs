@@ -94,8 +94,14 @@ pub fn purify(
 
                     // Verify that the provided security options are valid and then test them.
                     config_options = kafka_util::extract_config(&mut with_options_map)?;
-                    let consumer =
-                        kafka_util::create_consumer(&broker, &topic, &config_options).await?;
+                    let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
+                        .await
+                        .map_err(|e| {
+                            anyhow!(
+                                "Cannot create Kafka Consumer for determining start offsets: {}",
+                                e
+                            )
+                        })?;
 
                     // Translate `kafka_time_offset` to `start_offset`.
                     match kafka_util::lookup_start_offsets(
