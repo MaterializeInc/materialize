@@ -1255,30 +1255,10 @@ fn kafka_sink_builder(
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
-    let consistency_topic = match with_options.remove("consistency_topic") {
-        None => None,
-        Some(Value::String(topic)) => Some(topic),
-        Some(_) => bail!("consistency_topic must be a string"),
-    };
-    if consistency_topic.is_some() && consistency.is_some() {
-        bail!("cannot specify consistency_topic and WITH CONSISTENCY")
-    }
-
     let reuse_topic = match with_options.remove("reuse_topic") {
         Some(Value::Boolean(b)) => b,
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
-    };
-
-    let consistency_topic = if reuse_topic && consistency_topic.is_none() {
-        let default_consistency_topic = format!("{}-consistency", topic_prefix);
-        debug!(
-            "Using default consistency topic '{}' for topic '{}'",
-            default_consistency_topic, topic_prefix
-        );
-        Some(default_consistency_topic)
-    } else {
-        consistency_topic
     };
 
     let config_options = kafka_util::extract_config(with_options)?;
@@ -1305,7 +1285,7 @@ fn kafka_sink_builder(
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
-                consistency_topic.is_some(),
+                consistency.is_some(),
             );
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
@@ -1319,15 +1299,91 @@ fn kafka_sink_builder(
                 ccsr_config,
             }
         }
-        Some(Format::Json) => {
-            if consistency_topic.is_some() {
-                // todo@jldlaughlin: fix this!
-                unsupported!("JSON sink with consistency topic")
-            }
-            KafkaSinkFormat::Json
-        }
+        Some(Format::Json) => KafkaSinkFormat::Json,
         Some(format) => unsupported!(format!("sink format {:?}", format)),
         None => unsupported!("sink without format"),
+    };
+
+    // Check required for backwards compatibility.
+    let consistency_topic = match with_options.remove("consistency_topic") {
+        None => None,
+        Some(Value::String(topic)) => Some(topic),
+        Some(_) => bail!("consistency_topic must be a string"),
+    };
+    if consistency_topic.is_some() && consistency.is_some() {
+        bail!("cannot specify consistency_topic and WITH CONSISTENCY simultaneously")
+    }
+
+    let (consistency_topic, consistency_format) = match consistency {
+        Some(ConsistencyInfo::Kafka { topic, format }) => match format {
+            Some(Format::Avro(AvroSchema::CsrUrl {
+                url,
+                seed,
+                with_options,
+            })) => {
+                if seed.is_some() {
+                    bail!("SEED option does not make sense with sinks");
+                }
+                let schema_registry_url = url.parse::<Url>()?;
+                let ccsr_with_options = normalize::options(&with_options);
+                let ccsr_config = kafka_util::generate_ccsr_client_config(
+                    schema_registry_url.clone(),
+                    &config_options,
+                    ccsr_with_options,
+                )?;
+
+                (
+                    Some(topic),
+                    Some(KafkaSinkFormat::Avro {
+                        schema_registry_url,
+                        key_schema: None,
+                        value_schema: avro::get_debezium_transaction_schema().canonical_form(),
+                        ccsr_config,
+                    }),
+                )
+            }
+            Some(other) => unsupported!(format!("consistency format {}", &other)),
+            None => unreachable!("consistency with format"),
+        },
+        None => {
+            // Support backwards compatibility use of `consistency_topic` with option
+            // if and only if the sink is Avro-formatted.
+            if reuse_topic | consistency_topic.is_some() {
+                match &format {
+                    KafkaSinkFormat::Avro {
+                        schema_registry_url,
+                        ccsr_config,
+                        ..
+                    } => {
+                        let consistency_topic = match consistency_topic {
+                            Some(topic) => topic,
+                            None => {
+                                let default_consistency_topic =
+                                    format!("{}-consistency", topic_prefix);
+                                debug!(
+                                    "Using default consistency topic '{}' for topic '{}'",
+                                    default_consistency_topic, topic_prefix
+                                );
+                                default_consistency_topic
+                            }
+                        };
+                        (
+                            Some(consistency_topic),
+                            Some(KafkaSinkFormat::Avro {
+                                schema_registry_url: schema_registry_url.clone(),
+                                key_schema: None,
+                                value_schema: avro::get_debezium_transaction_schema()
+                                    .canonical_form(),
+                                ccsr_config: ccsr_config.clone(),
+                            }),
+                        )
+                    }
+                    KafkaSinkFormat::Json => unsupported!("JSON-formatted consistency topic"),
+                }
+            } else {
+                (None, None)
+            }
+        }
     };
 
     let broker_addrs = broker.parse()?;
@@ -1389,6 +1445,7 @@ fn kafka_sink_builder(
         format,
         topic_prefix,
         consistency_topic_prefix: consistency_topic,
+        consistency_format,
         topic_suffix_nonce,
         partition_count,
         replication_factor,

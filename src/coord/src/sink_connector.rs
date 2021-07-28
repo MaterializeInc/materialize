@@ -21,8 +21,8 @@ use rdkafka::{Message, Offset, TopicPartitionList};
 
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkConnector,
-    SinkConnectorBuilder,
+    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, KafkaSinkFormat, PublishedSchemaInfo,
+    SinkConnector, SinkConnectorBuilder,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -397,71 +397,63 @@ async fn build_kafka(
         dataflow_types::KafkaSinkFormat::Json => None,
     };
 
-    let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
-        let consistency_topic = maybe_append_nonce(
-            builder
-                .consistency_topic_prefix
-                .as_ref()
-                .expect("known to exist"),
-        );
+    let consistency = match builder.consistency_format {
+        Some(KafkaSinkFormat::Avro { value_schema, .. }) => {
+            let consistency_topic = maybe_append_nonce(
+                builder
+                    .consistency_topic_prefix
+                    .as_ref()
+                    .expect("known to exist"),
+            );
 
-        // create consistency topic/schema and retrieve schema id
-        register_kafka_topic(
-            &client,
-            &consistency_topic,
-            1,
-            builder.replication_factor,
-            builder.reuse_topic,
-        )
-        .await
-        .context("error registering kafka consistency topic for sink")?;
-        let consistency_schema_id = match &builder.format {
-            dataflow_types::KafkaSinkFormat::Avro { .. } => {
-                let (_, consistency_schema_id) = publish_kafka_schemas(
-                    ccsr.as_ref()
-                        .expect("confluent schema registry client must exist"),
-                    &consistency_topic,
-                    &consistency_value_schema,
-                    None,
-                )
-                .await
-                .context("error publishing kafka consistency schemas for sink")?;
-                consistency_schema_id
-            }
-            _ => {
-                // todo@jldlaughlin: fix this!
-                // https://github.com/MaterializeInc/materialize/pull/7505#discussion_r676597211
-                unreachable!("non-Avro consistency topics")
-            }
-        };
+            // create consistency topic/schema and retrieve schema id
+            register_kafka_topic(
+                &client,
+                &consistency_topic,
+                1,
+                builder.replication_factor,
+                builder.reuse_topic,
+            )
+            .await
+            .context("error registering kafka consistency topic for sink")?;
 
-        // get latest committed timestamp from consistencty topic
-        let gate_ts = if builder.reuse_topic {
-            let mut consumer_config = config.clone();
-            consumer_config
-                .set("group.id", format!("materialize-bootstrap-{}", topic))
-                .set("isolation.level", "read_committed")
-                .set("enable.auto.commit", "false")
-                .set("auto.offset.reset", "earliest");
+            let (_, consistency_schema_id) = publish_kafka_schemas(
+                ccsr.as_ref()
+                    .expect("confluent schema registry client must exist"),
+                &consistency_topic,
+                &value_schema,
+                None,
+            )
+            .await
+            .context("error publishing kafka consistency schemas for sink")?;
 
-            let mut consumer = consumer_config
-                .create::<BaseConsumer>()
-                .context("creating consumer client failed")?;
+            // get latest committed timestamp from consistencty topic
+            let gate_ts = if builder.reuse_topic {
+                let mut consumer_config = config.clone();
+                consumer_config
+                    .set("group.id", format!("materialize-bootstrap-{}", topic))
+                    .set("isolation.level", "read_committed")
+                    .set("enable.auto.commit", "false")
+                    .set("auto.offset.reset", "earliest");
 
-            get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
-                .await
-                .context("error restarting from existing kafka consistency topic for sink")?
-        } else {
-            None
-        };
+                let mut consumer = consumer_config
+                    .create::<BaseConsumer>()
+                    .context("creating consumer client failed")?;
 
-        Some(KafkaSinkConsistencyConnector {
-            topic: consistency_topic,
-            schema_id: consistency_schema_id,
-            gate_ts,
-        })
-    } else {
-        None
+                get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
+                    .await
+                    .context("error restarting from existing kafka consistency topic for sink")?
+            } else {
+                None
+            };
+
+            Some(KafkaSinkConsistencyConnector {
+                topic: consistency_topic,
+                schema_id: consistency_schema_id,
+                gate_ts,
+            })
+        }
+        _ => None,
     };
 
     Ok(SinkConnector::Kafka(KafkaSinkConnector {
