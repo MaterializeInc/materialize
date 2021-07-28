@@ -270,31 +270,119 @@ It is important to restate the constraint mentioned above: all column references
 *must* only point to quantifiers either within the same box or within an ancestor box through a chain of unique
 children (correlation).
 
-This section explains how the query graph model being built can be used for name resolution purposes using the following
-query as an example:
+The only information missing in the query graph needed for name resolution purposes is what quantifiers can be
+used for name resolution within each box/context. That information is stored in a new `NameResolutionContext`
+defined as:
 
-![Name resolution](qgm/name-resolution-1.svg)
+```rust
+struct NameResolutionContext<'a> {
+    owner_box: Option<BoxId>,
+    quantifiers: Vec<QuantifierId>,
+    ctes: Option<HashMap<String, BoxId>>,
+    parent_context: Option<&'a NameResolutionContext<'a>>,
+    sibling_context: Option<&'a NameResolutionContext<'a>>,
+    is_lateral: bool,
+}
+```
 
-When planning the `WHERE` clause, belongs in box 0 as shown above, the resulting expression must only reference
-quantifiers Q0 and Q5, however the relations visible in the scope according to the SQL standard are the relations
-represented by Q0, Q1 and Q4, ie. the leaf quantifiers of the comma join (represented by box 0).
+`parent_context` is a linked list that points to the context of the outer query (the context of its FROM clause)
+and, hence, it is only set within a context that is meant to see the outer query (for example, a subquery).
 
-A new `NameResolutionContext` struct will encapsulate the name resolution logic, which resolves column names
-against the leaf quantifiers but lifts the column references through the projection of the intermediate boxes,
-all the way up to the current box.
+`sibling_context` is a linked list that connects all the intermediate joins from the current one to the comma-join
+of the FROM clause. This linked list is only meant to be traversed when `is_lateral` is `true`. From within a lateral
+join operand, we have to traverse the list of `sibling_context`s first, ie. move laterally, and them up.
 
-Following with the example, when resolving the reference to `y` in the `WHERE` clause, we will find that among
-the leaf quantifiers (Q0, Q1, Q4), only quantifier Q4 projects a column named `y`, so the column is resolved as
-`Q4.c0`, ie. the first column among the columns projected by Q4's input box (box 4).
-Since we must return a expression referencing only Q0 and Q5, we need to follow the linked chain made by
-`Quantifier::parent_box` and `QueryBox::ranging_quantifiers` until we reach a quantifier ranged over by
-box 0. The parent box of `Q4` is box 2, which projects `Q4.c0` as its forth column and it's ranged over by Q5.
-Therefore, following that chain, we have resolved that `y` means `Q5.c3` within the context of box 0.
+All the contexts in the `sibling_context` share the same parent context, ie. the same outer query.
 
-In the query above had and explicit projection or an ORDER BY clause names would be resolved against the same
-leaf quantifiers and the resulting column references lifted following the same process.
+`quantifiers` contains leaf quantifiers of the join, the ones that are used for name resolution.
 
-Basically, a `NameResolutionContext` instance will represent the context of the `FROM` clause.
+A new `NameResoltionContext` is created for each intermediate join within the join tree, which leaves quantifiers
+are merged into the context of the parent join when after processing the intermeidate join, unless it is a nested
+join with an alias. In that case, the quantifier that is added in the parent context is the one ranging over
+the sub-join. This distinction is needed to properly support this case:
+
+```
+materialize=> select * from a, (b inner join c on true) where b.b > 1;
+ a | b | c
+---+---+---
+(0 rows)
+
+materialize=> select * from a, (b inner join c on true) z where b.b > 1;
+ERROR:  WHERE clause error: column "b.b" does not exist
+materialize=>
+```
+
+When a colum name is resolved against any of the leaf quantifiers in the current context, the resulting column
+reference must be lifted through the projection of all the intermediate boxes until reaching a quantifier
+in the current box (the one referenced in `NameResolution::owner_box` in the current context).
+
+#### Name resolution in LATERAL joins
+
+A lateral join operand must see all quantifiers at its left in all the intermediate joins up to the comma join.
+In the following examples query there is a lateral join operand in the rightmost position of the join tree,
+that must see the symbols from the tables in the left-hand side of all the intermediate joins up to the comma-join
+(included).
+
+![Name resolution in joins](qgm/name-resolution-1.svg)
+
+Box16 represents the lateral join operand. When processing its content, the context stack looks like this:
+
+```
+Context 16 {
+ owner_box = 16
+ quantifiers = {10}
+ sibling_context = None
+ parent_context = Some(Context 13)
+ is_lateral = false
+}
+
+Context 13 {
+ owner_box = 13
+ quantifiers = {9}
+ sibling_context = Some(Context 9)
+ parent_context = None
+ is_lateral = true
+}
+
+Context 9 {
+ owner_box = 9
+ quantifiers = {7}
+ sibling_context = Some(Context 5)
+ parent_context = None
+ is_lateral = false
+}
+
+Context 5 {
+ owner_box = 5
+ quantifiers = {5}
+ sibling_context = Some(Context 0)
+ parent_context = None
+ is_lateral = false
+}
+
+Context 0 {
+ owner_box = 0
+ quantifiers = {1, 3}
+ sibling_context = None
+ parent_context = None
+ is_lateral = false
+}
+```
+
+After processing the join tree in the FROM clause, we end up with the following Context 0 for processing the
+expressions in the projection and ORDER BY:
+
+```
+Context 0 {
+ quantifiers = {1(a), 3(b), 5(c), 7(d), 9(f), 12(<anonymous>)}
+ sibling_context = None
+ parent_context = None
+ is_lateral = false
+}
+```
+
+Note that Boxes 8 and 12 are pass-through boxes created by the prototype every time there is a join within parenthesis.
+`SelectMerge` rewrite will take care of them. Boxes 2, 4, 7, 11, 15 and 18 are just there for the column aliases.
 
 #### Name resolution within subqueries
 
@@ -302,28 +390,6 @@ Expressions within subqueries must see the symbols visible from the context the 
 `NameResultionContext` will contain an optional reference to a parent `NameResolutionContext`, that is passed
 down for planning the subquery, so that if a name cannot be resolved against the context of the `FROM` clause of
 the subquery, we go through the chain of parent contexts until we find a symbol that matches in one of them.
-
-#### Name resolution within the `ON` and `USING` clauses
-
-In the following example, the binary `LEFT JOIN` is represented by box 2, and hence, the `ON` clause belongs in
-that box.
-
-![Name resolution within the `ON` clause](qgm/name-resolution-3.svg)
-
-When planning a binary join, we will create a new `NameResolutionContext` which parent context is the same
-as the parent context of the parent comma join. The `NameResolutionContext` for the comma join is the sibling
-context, only visible by `LATERAL` join operands (more on that in the next subsection).
-
-The leaf quantifiers for the binary `LEFT JOIN` in the example above are Q1 and Q4. Once we are done planning
-the binary join, these leaf quantifiers are added as leaf quantifiers in the `NameResoltionContext` of the
-parent join.
-
-#### Name resolution within `LATERAL` joins
-
-When planning a `LATERAL` join operand, the `NameResolutionContext` for the join the `LATERAL` operand
-belongs to will be put temporarily in `lateral` mode, and passed down as the parent context of the query
-within the `LATERAL` join operand. When in `lateral` mode, a `NameResolutionContext` tries to resolve
-a name against its sibling context before it goes to its parent context.
 
 #### Name resolution of `GROUP BY` queries
 
@@ -350,24 +416,6 @@ Lifting expressions through a grouping box is a bit special:
 A `NameResolutionContext` instance will be created for storing the processed CTEs. When resolving an unqualified
 table name, we will first traverse the list of active contexts, ie. through the list made by `parent_context`,
 until matching CTE is found. Otherwise, we will use the system catalog.
-
-#### Name resolution implementation
-
-An example of implementation of the name resolution process described in this section can be seen
-[here](https://github.com/asenac/rust-sql/blob/master/src/query_model/model_generator.rs#L19).
-The code will be very similar, with the difference being that in that implementation boxes and quantifiers
-are referenced using shared pointers, rather than identifiers.
-
-```rust
-struct NameResolutionContext<'a> {
-    owner_box: Option<BoxId>,
-    quantifiers: Vec<QuantifierId>,
-    ctes: Option<HashMap<String, BoxId>>,
-    parent_context: Option<&'a NameResolutionContext<'a>>,
-    sibling_context: Option<&'a NameResolutionContext<'a>>,
-    is_lateral: bool,
-}
-```
 
 ### Distinctness and unique keys
 
