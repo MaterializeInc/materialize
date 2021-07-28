@@ -242,7 +242,7 @@ ORDER BY
 | |   delta %1 %4.(#0) %0.(#0) %2.(#0) %3.(#0)
 | |   delta %2 %3.(#0) %0.(#3) %1.(#1) %4.(#0)
 | |   delta %3 %2.(#2) %0.(#3) %1.(#1) %4.(#0)
-| | demand = (#0, #2, #4, #5, #10, #11, #13..#15, #19, #22)
+| | demand = (#0..#15, #18..#20, #22..#24, #26, #27)
 | Filter "^.*BRASS$" ~(varchartostr(#4)), (#5 = 15)
 
 %6 =
@@ -261,15 +261,16 @@ ORDER BY
 | | demand = (#0, #4)
 | Reduce group=(#0)
 | | agg min(#4)
-| ArrangeBy (#0, #1)
+| ArrangeBy (#0, canonnumeric(#1))
 
 %8 =
-| Join %5 %7 (= #0 #28) (= #19 #29)
-| | implementation = Differential %5 %7.(#0, #1)
-| | demand = (#0, #2, #10, #11, #13..#15, #22)
-| Project (#14, #10, #22, #0, #2, #11, #13, #15)
+| Join %5 %7 (= #0 #28) (= canonnumeric(#19) canonnumeric(#29))
+| | implementation = Differential %5 %7.(#0, canonnumeric(#1))
+| | demand = (#0..#15, #18..#20, #22..#24, #26, #27)
+| Map canonnumeric(#14)
+| Project (#0..#15, #0, #9, #18..#20, #12, #22..#24, #23, #26, #27, #30)
 
-Finish order_by=(#0 desc, #2 asc, #1 asc, #3 asc) limit=none offset=0 project=(#0..#7)
+Finish order_by=(#28 desc, #22 asc, #10 asc, #0 asc) limit=none offset=0 project=(#14, #10, #22, #0, #2, #11, #13, #15)
 
 EOF
 
@@ -321,9 +322,9 @@ ORDER BY
 | Filter (#6 = "BUILDING"), (#12 < 1995-03-15), (#27 > 1995-03-15)
 | Reduce group=(#8, #12, #15)
 | | agg sum((#22 * (1 - #23)))
-| Project (#0, #3, #1, #2)
+| Map canonnumeric(#3)
 
-Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..#3)
+Finish order_by=(#4 desc, #1 asc) limit=none offset=0 project=(#0, #3, #1, #2)
 
 EOF
 
@@ -444,8 +445,9 @@ ORDER BY
 | Filter (#45 = "ASIA"), (#12 < 1995-01-01), (#12 >= 1994-01-01)
 | Reduce group=(#41)
 | | agg sum((#22 * (1 - #23)))
+| Map canonnumeric(#1)
 
-Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#2 desc) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -801,11 +803,11 @@ ORDER BY
 | |   delta %3 %0.(#3) %1.(#1) %2.(#0)
 | | demand = (#0..#2, #4, #5, #7, #12, #22, #23, #25, #34)
 | Filter (#25 = "R"), (#12 < 1994-01-01), (datetots(#12) < 1994-01-01 00:00:00), (#12 >= 1993-10-01)
-| Reduce group=(#0, #1, #5, #4, #34, #2, #7)
+| Reduce group=(#0, #1, canonnumeric(#5), #4, #34, #2, #7)
 | | agg sum((#22 * (1 - #23)))
-| Project (#0, #1, #7, #2, #4, #5, #3, #6)
+| Map canonnumeric(#7)
 
-Finish order_by=(#2 desc) limit=none offset=0 project=(#0..#7)
+Finish order_by=(#8 desc) limit=none offset=0 project=(#0, #1, #7, #2, #4, #5, #3, #6)
 
 EOF
 
@@ -878,9 +880,10 @@ ORDER BY
 | | implementation = Differential %4 %5.()
 | | demand = (#0, #1, #3)
 | Filter (#1 > #3)
-| Project (#0, #1)
+| Map canonnumeric(#1)
+| Project (#0, #1, #4)
 
-Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#2 desc) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -1052,7 +1055,7 @@ WHERE
 
 %6 =
 | Union %2 %5
-| Map ((100 * #0) / #1)
+| Map ((100.00 * #0) / #1)
 | Project (#2)
 
 EOF
@@ -1111,11 +1114,11 @@ ORDER BY
 | Get %0 (l0)
 | Reduce group=()
 | | agg max(#1)
-| ArrangeBy (#0)
+| ArrangeBy (canonnumeric(#0))
 
 %4 =
-| Join %1 %2 %3 (= #0 #7) (= #8 #9)
-| | implementation = Differential %1.(#0) %2.(#0) %3.(#0)
+| Join %1 %2 %3 (= #0 #7) (= canonnumeric(#8) canonnumeric(#9))
+| | implementation = Differential %1.(#0) %2.(#0) %3.(canonnumeric(#0))
 | | demand = (#0..#2, #4, #8)
 | Project (#0..#2, #4, #8)
 
@@ -1292,7 +1295,7 @@ WHERE
 
 %9 =
 | Union %5 %8
-| Map (#0 / 7)
+| Map (#0 / 7.0)
 | Project (#1)
 
 EOF
@@ -1373,10 +1376,11 @@ ORDER BY
 | | implementation = Differential %3 %5.(#0)
 | | demand = (#0, #1, #8, #11, #12, #21, #34)
 | Filter (#34 > 300)
-| Reduce group=(#1, #0, #8, #12, #11)
+| Reduce group=(#1, #0, #8, #12, canonnumeric(#11))
 | | agg sum(#21)
+| Map canonnumeric(#4)
 
-Finish order_by=(#4 desc, #3 asc) limit=none offset=0 project=(#0..#5)
+Finish order_by=(#6 desc, #3 asc) limit=none offset=0 project=(#0..#5)
 
 EOF
 
@@ -1749,7 +1753,7 @@ ORDER BY
 
 %1 =
 | Get materialize.public.customer (u15)
-| Filter ((((((("13" = substr(chartostr(#4), 1, 2)) || ("31" = substr(chartostr(#4), 1, 2))) || ("23" = substr(chartostr(#4), 1, 2))) || ("29" = substr(chartostr(#4), 1, 2))) || ("30" = substr(chartostr(#4), 1, 2))) || ("18" = substr(chartostr(#4), 1, 2))) || ("17" = substr(chartostr(#4), 1, 2))), (#5 > 0)
+| Filter ((((((("13" = substr(chartostr(#4), 1, 2)) || ("31" = substr(chartostr(#4), 1, 2))) || ("23" = substr(chartostr(#4), 1, 2))) || ("29" = substr(chartostr(#4), 1, 2))) || ("30" = substr(chartostr(#4), 1, 2))) || ("18" = substr(chartostr(#4), 1, 2))) || ("17" = substr(chartostr(#4), 1, 2))), (#5 > 0.00)
 | Reduce group=()
 | | agg sum(#5)
 | | agg count(true)

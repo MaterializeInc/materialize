@@ -948,11 +948,24 @@ impl MirScalarExpr {
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
         self.visit(&mut |e| {
-            if let MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) = e {
+            if e.is_temporal() {
                 contains = true;
             }
         });
         contains
+    }
+
+    /// True iff the expression is `NullaryFunc::MzLogicalTimestamp` or a call
+    /// to `UnaryFunc::CanonicalizeNumeric` on it.
+    pub fn is_temporal(&self) -> bool {
+        match self {
+            MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) => true,
+            MirScalarExpr::CallUnary {
+                func: UnaryFunc::CanonicalizeNumeric,
+                expr,
+            } => expr.is_temporal(),
+            _ => false,
+        }
     }
 }
 

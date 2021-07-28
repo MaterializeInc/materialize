@@ -978,6 +978,93 @@ fn plan_subquery(
     Ok((expr.project(finishing.project), scope))
 }
 
+/// Canonicalizes `expr` in preparation for a set operation like `UNION` or
+/// `DISTINCT`.
+///
+/// If `restrict_to` is not-None, only the specified columns will be
+/// canonicalized.
+///
+/// At the moment, canonicalization only applies to data of numeric type, so
+/// that e.g. `1.0` and `1.00` are both trimmed to 1 so that they compare as
+/// equivalent.
+fn canonicalize_relation_expr(
+    types: &[ColumnType],
+    expr: HirRelationExpr,
+    restrict_to: Option<&[usize]>,
+) -> HirRelationExpr {
+    let should_consider = |i| match restrict_to {
+        Some(cols) => cols.contains(&i),
+        None => true,
+    };
+    let mut map_exprs = vec![];
+    let mut project_exprs = vec![];
+    for (i, ty) in types.iter().enumerate() {
+        match canonicalize_scalar_expr(
+            HirScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: i,
+            }),
+            &ty.scalar_type,
+        ) {
+            Some(map_expr) if should_consider(i) => {
+                project_exprs.push(types.len() + map_exprs.len());
+                map_exprs.push(map_expr);
+            }
+            _ => project_exprs.push(i),
+        }
+    }
+    expr.map(map_exprs).project(project_exprs)
+}
+
+pub(crate) fn canonicalize_scalar_expr(
+    expr: HirScalarExpr,
+    typ: &ScalarType,
+) -> Option<HirScalarExpr> {
+    let lower_expr = |expr: HirScalarExpr| {
+        expr.lower_uncorrelated().expect(
+            "lower_uncorrelated should not fail given that there is no correlation \
+                in the input col_expr",
+        )
+    };
+
+    // Column reference appropriate for invoking a MirScalarExpr on a list's items.
+    const EL_COL: HirScalarExpr = HirScalarExpr::Column(ColumnRef {
+        level: 0,
+        column: 0,
+    });
+
+    match typ {
+        ScalarType::Numeric { .. } => Some(expr.call_unary(UnaryFunc::CanonicalizeNumeric)),
+        ScalarType::List { element_type, .. } => {
+            canonicalize_scalar_expr(EL_COL.clone(), element_type).map(|can_expr| {
+                expr.call_unary(UnaryFunc::CanonicalizeList {
+                    canonicalization_expr: Box::new(lower_expr(can_expr)),
+                })
+            })
+        }
+        ScalarType::Record { fields, .. } => {
+            let mut found_expr = false;
+            let canonicalization_exprs = fields
+                .iter()
+                .map(|(_, col_typ)| {
+                    canonicalize_scalar_expr(EL_COL.clone(), &col_typ.scalar_type).map(|can_expr| {
+                        found_expr = true;
+                        lower_expr(can_expr)
+                    })
+                })
+                .collect();
+            if found_expr {
+                Some(expr.call_unary(UnaryFunc::CanonicalizeRecord {
+                    canonicalization_exprs,
+                }))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn plan_set_expr(
     qcx: &mut QueryContext,
     q: &SetExpr<Aug>,
@@ -1023,6 +1110,9 @@ fn plan_set_expr(
                     );
                 }
             }
+
+            let left_expr = canonicalize_relation_expr(&left_types, left_expr, None);
+            let right_expr = canonicalize_relation_expr(&right_types, right_expr, None);
 
             let relation_expr = match op {
                 SetOperator::Union => {
@@ -1343,10 +1433,16 @@ fn plan_view_select(
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr =
-                relation_expr
-                    .map(group_exprs)
-                    .reduce(group_key, agg_exprs, expected_group_size);
+            relation_expr = relation_expr.map(group_exprs);
+
+            // Ensure all grouped by columns are canonicalized.
+            relation_expr = canonicalize_relation_expr(
+                &qcx.relation_type(&relation_expr).column_types,
+                relation_expr,
+                Some(&group_key),
+            );
+
+            relation_expr = relation_expr.reduce(group_key, agg_exprs, expected_group_size);
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope
@@ -1456,6 +1552,14 @@ fn plan_view_select(
                     bail!("for SELECT DISTINCT, ORDER BY expressions must appear in select list");
                 }
                 assert!(map_exprs.is_empty());
+
+                // Canonicalize expressions that are distincted.
+                relation_expr = canonicalize_relation_expr(
+                    &qcx.relation_type(&relation_expr).column_types,
+                    relation_expr,
+                    Some(&project_key),
+                );
+
                 relation_expr = relation_expr.distinct();
             }
             Some(Distinct::On(exprs)) => {
@@ -1495,16 +1599,18 @@ fn plan_view_select(
                     if ord.column >= map_scope.len() {
                         expr = &map_exprs[ord.column - map_scope.len()];
                     };
-                    match distinct_exprs.iter().position(move |e| e == expr) {
-                        None => bail!("SELECT DISTINCT ON expressions must match initial ORDER BY expressions"),
-                        Some(pos) => {
-                            distinct_exprs.remove(pos);
-                        }
-                    }
+                    let pos = distinct_exprs
+                        .iter()
+                        .position(|e| e == expr)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "SELECT DISTINCT ON expressions must match initial ORDER BY expressions"
+                            )
+                        })?;
+                    distinct_exprs.remove(pos);
                     distinct_key.push(ord.column);
                 }
 
-                // Add any remaining `DISTINCT ON` expressions to the key.
                 for expr in distinct_exprs {
                     // If the expression is a reference to an existing column,
                     // do not introduce a new column to support it.
@@ -1515,6 +1621,7 @@ fn plan_view_select(
                             map_scope.len() + map_exprs.len() - 1
                         }
                     };
+                    // Add any remaining `DISTINCT ON` expressions to the key.
                     distinct_key.push(column);
                 }
 
@@ -1662,13 +1769,15 @@ fn plan_order_by_or_distinct_expr(
     expr: &Expr<Aug>,
     project_key: &[usize],
 ) -> Result<HirScalarExpr, anyhow::Error> {
-    match check_col_index(&ecx.name, expr, project_key.len())? {
-        Some(i) => Ok(HirScalarExpr::Column(ColumnRef {
+    let expr = match check_col_index(&ecx.name, expr, project_key.len())? {
+        Some(i) => HirScalarExpr::Column(ColumnRef {
             level: 0,
             column: project_key[i],
-        })),
-        None => plan_expr(ecx, expr)?.type_as_any(ecx),
-    }
+        }),
+        None => plan_expr(ecx, expr)?.type_as_any(ecx)?,
+    };
+
+    Ok(canonicalize_scalar_expr(expr.clone(), &ecx.scalar_type(&expr)).unwrap_or(expr))
 }
 
 fn plan_table_with_joins<'a>(
@@ -2239,6 +2348,11 @@ fn plan_using_constraint(
         )?;
         let (expr1, expr2) = (exprs.remove(0), exprs.remove(0));
 
+        let expr1 =
+            canonicalize_scalar_expr(expr1.clone(), &ecx.scalar_type(&expr1)).unwrap_or(expr1);
+        let expr2 =
+            canonicalize_scalar_expr(expr2.clone(), &ecx.scalar_type(&expr2)).unwrap_or(expr2);
+
         join_exprs.push(HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1: Box::new(expr1.clone()),
@@ -2729,6 +2843,13 @@ fn plan_aggregate(
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
     let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
+    let expr_typ = ecx.scalar_type(&expr);
+
+    // Distincted expressions require canonicalization.
+    if sql_func.distinct {
+        expr = canonicalize_scalar_expr(expr.clone(), &expr_typ).unwrap_or(expr);
+    }
+
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -2740,7 +2861,7 @@ fn plan_aggregate(
         //
         // where <identity> is the identity input for <agg>.
         let cond = plan_expr(&ecx.with_name("FILTER"), filter)?.type_as(ecx, &ScalarType::Bool)?;
-        let expr_typ = ecx.scalar_type(&expr);
+
         expr = HirScalarExpr::If {
             cond: Box::new(cond),
             then: Box::new(expr),

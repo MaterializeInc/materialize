@@ -195,13 +195,11 @@ sum_a
 
 > INSERT INTO numeric_scaled_insertions VALUES ('1.2'), ('2.3'), ('3.4001');
 
-# Even though the sum is supposed to be rescaled to 3 decimals, the reduction
-# before packing the values into a row trims the trailing zeroes. However, the
-# rescale still works because the values are rounded to 3 units of scale.
+# Values rounded on rescale
 > SELECT sum_a::text AS sum_a FROM numeric_scaled_values_sum;
 sum_a
 ----
-6.9
+6.900
 
 # Values < 5e(-scale) round to a version of zero
 > INSERT INTO numeric_scaled_insertions VALUES ('0.00009');
@@ -209,7 +207,7 @@ sum_a
 > SELECT sum_a::text AS sum_a FROM numeric_scaled_values_sum;
 sum_a
 ----
-6.9
+6.900
 
 > INSERT INTO numeric_scaled_insertions VALUES ('0.0005');
 

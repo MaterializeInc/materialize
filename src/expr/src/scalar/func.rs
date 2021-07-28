@@ -147,6 +147,40 @@ fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn canonicalize_list<'a>(
+    a: Datum<'a>,
+    canonicalize_expr: &'a MirScalarExpr,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut canonicalized_datums = Vec::new();
+    for el in a.unwrap_list().iter() {
+        // Once you find the datums, apply the canonicalization expression.
+        canonicalized_datums.push(canonicalize_expr.eval(&[el], temp_storage)?);
+    }
+    Ok(temp_storage.make_datum(|packer| packer.push_list(canonicalized_datums)))
+}
+
+fn canonicalize_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_numeric();
+    numeric::cx_datum().reduce(&mut a.0);
+    Datum::Numeric(a)
+}
+
+fn canonicalize_record<'a>(
+    a: Datum<'a>,
+    canonicalize_exprs: &[Option<MirScalarExpr>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut canonicalized_datums = Vec::new();
+    for (el, can) in a.unwrap_list().iter().zip(canonicalize_exprs.iter()) {
+        canonicalized_datums.push(match can {
+            None => el,
+            Some(can_expr) => can_expr.eval(&[el], temp_storage)?,
+        })
+    }
+    Ok(temp_storage.make_datum(|packer| packer.push_list(canonicalized_datums)))
+}
+
 fn cast_bool_to_string_nonstandard<'a>(a: Datum<'a>) -> Datum<'a> {
     // N.B. this function differs from `cast_bool_to_string_implicit` because
     // the SQL specification requires `true` and `false` to be spelled out in
@@ -3544,6 +3578,15 @@ pub enum UnaryFunc {
     AbsFloat32,
     AbsFloat64,
     AbsNumeric,
+    CanonicalizeList {
+        // The expression to canonicalize the list's elements
+        canonicalization_expr: Box<MirScalarExpr>,
+    },
+    CanonicalizeNumeric,
+    CanonicalizeRecord {
+        // The optional expressions to canonicalize the records' fields
+        canonicalization_exprs: Vec<Option<MirScalarExpr>>,
+    },
     CastBoolToString,
     CastBoolToStringNonstandard,
     CastBoolToInt32,
@@ -3774,6 +3817,13 @@ impl UnaryFunc {
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
             UnaryFunc::AbsNumeric => Ok(abs_numeric(a)),
+            UnaryFunc::CanonicalizeList {
+                canonicalization_expr,
+            } => canonicalize_list(a, &**canonicalization_expr, temp_storage),
+            UnaryFunc::CanonicalizeNumeric => Ok(canonicalize_numeric(a)),
+            UnaryFunc::CanonicalizeRecord {
+                canonicalization_exprs,
+            } => canonicalize_record(a, &canonicalization_exprs, temp_storage),
             UnaryFunc::CastBoolToString => Ok(cast_bool_to_string(a)),
             UnaryFunc::CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
@@ -3983,6 +4033,13 @@ impl UnaryFunc {
                 ScalarType::Bool.nullable(nullable)
             }
 
+            CanonicalizeList { .. } | CanonicalizeRecord { .. } => input_type
+                .scalar_type
+                .default_embedded_value()
+                .nullable(nullable),
+
+            CanonicalizeNumeric => ScalarType::Numeric { scale: None }.nullable(nullable),
+
             CastStringToBytes => ScalarType::Bytes.nullable(nullable),
             CastStringToInterval | CastTimeToInterval => ScalarType::Interval.nullable(nullable),
             CastStringToUuid => ScalarType::Uuid.nullable(nullable),
@@ -4183,6 +4240,7 @@ impl UnaryFunc {
             CastStringToBytes | CastStringToInterval | CastTimeToInterval | CastStringToJsonb => {
                 false
             }
+            CanonicalizeList { .. } | CanonicalizeNumeric | CanonicalizeRecord { .. } => false,
             CastBoolToString
             | CastBoolToStringNonstandard
             | CastCharToString
@@ -4317,6 +4375,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsNumeric => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
+            UnaryFunc::CanonicalizeList { .. } => f.write_str("canonlist"),
+            UnaryFunc::CanonicalizeNumeric => f.write_str("canonnumeric"),
+            UnaryFunc::CanonicalizeRecord { .. } => f.write_str("canonrecord"),
             UnaryFunc::CastBoolToString => f.write_str("booltostr"),
             UnaryFunc::CastBoolToStringNonstandard => f.write_str("booltostrns"),
             UnaryFunc::CastBoolToInt32 => f.write_str("booltoi32"),

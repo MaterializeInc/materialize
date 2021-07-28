@@ -8,4 +8,4 @@
 # by the Apache License, Version 2.0.
 
 > SELECT f1::text, pg_typeof(f1) FROM row_view;
-"(1,a,42)" "record(f1: integer,f2: text,f3: numeric)"
+"(1,a,42.0)" "record(f1: integer,f2: text,f3: numeric)"

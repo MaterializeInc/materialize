@@ -1743,13 +1743,13 @@ SELECT (LIST[1] || '{2}')::text
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '{2.3}'::numeric(38,0) list)::text;
 ----
-{1.2,2}
+{1.20000,2}
 
 # ...including on multiple dimensions
 query T
 SELECT ('{{1.2}}'::numeric(38,5) list list || '{{2.3}}'::numeric(38,0) list list)::text;
 ----
-{{1.2},{2}}
+{{1.20000},{2}}
 
 # Determining common list element type for numerics does not rescale values
 query T
@@ -1772,7 +1772,7 @@ SELECT (LIST[1, 2] || 3)::text
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '2.3'::numeric(38,0))::text;
 ----
-{1.2,2}
+{1.20000,2}
 
 # 🔬🔬🔬 element + list
 
@@ -1784,7 +1784,7 @@ SELECT (1 || LIST[2, 3])::text
 query T
 SELECT ('1.2'::numeric(38,5) || '{2.3}'::numeric(38,0) list)::text;
 ----
-{1.2,2}
+{1.20000,2}
 
 # 🔬🔬🔬 list list + list (list + element)
 
@@ -1796,7 +1796,7 @@ SELECT (LIST[[1], [2]] || LIST[3])::text
 query T
 SELECT ('{{1.2}}'::numeric(38,5) list list || '{2.3}'::numeric(38,0) list)::text;
 ----
-{{1.2},{2}}
+{{1.20000},{2}}
 
 # 🔬🔬🔬 list + list list (element + list)
 
@@ -1808,7 +1808,7 @@ SELECT (LIST[1] || LIST[[2], [3]])::text
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '{{2.3}}'::numeric(38,0) list list)::text;
 ----
-{{1.2},{2}}
+{{1.20000},{2}}
 
 # 🔬🔬🔬 NULL elements
 
@@ -2189,12 +2189,12 @@ SELECT ('{1.2,2.3}'::numeric_list_c)::text;
 query T
 SELECT ('{1.2,2.34567890}'::numeric_list_c::numeric(38,5) list)::text;
 ----
-{1.2,2.34568}
+{1.20000,2.34568}
 
 query T
 SELECT ('{1.2,2.3}'::numeric(38,5) list::numeric_list_c)::text;
 ----
-{1.2,2.3}
+{1.20000,2.30000}
 
 # 🔬 Implicit casts between custom types
 

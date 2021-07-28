@@ -2563,7 +2563,11 @@ lazy_static! {
             // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
             // operations).
             "=" => Scalar {
-                params!(Numeric, Numeric) => BinaryFunc::Eq, 1752;
+                params!(Numeric, Numeric) => Operation::binary(|_ecx, lhs, rhs| {
+                    let lhs = lhs.call_unary(UnaryFunc::CanonicalizeNumeric);
+                    let rhs = rhs.call_unary(UnaryFunc::CanonicalizeNumeric);
+                    Ok(rhs.call_binary(lhs, Eq))
+                }), 1752;
                 params!(Bool, Bool) => BinaryFunc::Eq, 91;
                 params!(Int16, Int16) => BinaryFunc::Eq, 94;
                 params!(Int32, Int32) => BinaryFunc::Eq, 96;
@@ -2581,7 +2585,15 @@ lazy_static! {
                 params!(String, String) => BinaryFunc::Eq, 98;
                 params!(Char, Char) => BinaryFunc::Eq, 1054;
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
-                params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
+                params!(ListAny, ListAny) => Operation::binary(|ecx, lhs, rhs| {
+                    let lhs_scalar_type = ecx.scalar_type(&lhs);
+                    let lhs = query::canonicalize_scalar_expr(lhs.clone(), &lhs_scalar_type).unwrap_or(lhs);
+
+                    let rhs_scalar_type = ecx.scalar_type(&rhs);
+                    let rhs = query::canonicalize_scalar_expr(rhs.clone(), &rhs_scalar_type).unwrap_or(rhs);
+
+                    Ok(rhs.call_binary(lhs, Eq))
+                }), oid::FUNC_LIST_EQ_OID;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
             },
             "<>" => Scalar {
