@@ -402,8 +402,8 @@ impl SourceReader for KafkaSourceReader {
 
                 let last_offset = *last_offset_ref;
                 if offset <= last_offset {
-                    warn!(
-                        "Kafka message before expected offset: \
+                    info!(
+                        "Kafka message before expected offset, skipping: \
                              source {} (reading topic {}, partition {}) \
                              received offset {} expected offset {:?}",
                         self.source_name,
