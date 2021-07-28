@@ -203,6 +203,30 @@ impl<T: AstInfo> Format<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConsistencyInfo<T: AstInfo> {
+    Kafka {
+        topic: String,
+        format: Option<Format<T>>,
+    },
+}
+
+impl<T: AstInfo> AstDisplay for ConsistencyInfo<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ConsistencyInfo::Kafka { topic, format } => {
+                f.write_str(" TOPIC '");
+                f.write_node(&display::escape_single_quote_string(topic));
+                f.write_str("'");
+                if let Some(format) = &format {
+                    f.write_str(" FORMAT ");
+                    f.write_node(format);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceKeyEnvelope {
     /// `INCLUDE KEY` is absent
     None,

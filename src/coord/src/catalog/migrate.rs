@@ -235,6 +235,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     with_options: _,
                     format: _,
                     envelope: _,
+                    consistency: _,
                     with_snapshot: _,
                     as_of,
                     if_not_exists: _,

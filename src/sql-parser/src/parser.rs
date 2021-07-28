@@ -1501,6 +1501,17 @@ impl<'a> Parser<'a> {
         Ok(format)
     }
 
+    fn parse_consistency(&mut self) -> Result<ConsistencyInfo<Raw>, ParserError> {
+        self.expect_keyword(TOPIC)?;
+        let topic = self.parse_literal_string()?;
+        let format = if self.parse_keyword(FORMAT) {
+            Some(self.parse_format()?)
+        } else {
+            None
+        };
+        Ok(ConsistencyInfo::Kafka { topic, format })
+    }
+
     fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
             let url = self.parse_literal_string()?;
@@ -1733,6 +1744,11 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let consistency = if self.parse_keywords(&[WITH, CONSISTENCY]) {
+            Some(self.parse_consistency()?)
+        } else {
+            None
+        };
         let with_snapshot = if self.parse_keyword(WITH) {
             self.expect_keyword(SNAPSHOT)?;
             true
@@ -1752,6 +1768,7 @@ impl<'a> Parser<'a> {
             with_options,
             format,
             envelope,
+            consistency,
             with_snapshot,
             as_of,
             if_not_exists,
