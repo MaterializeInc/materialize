@@ -220,7 +220,7 @@ impl<'a> FromSql<'a> for Numeric {
         // Reducing before taking to datum width lets us check for any status
         // for errors.
         if d.is_infinite() || cx.status().any() {
-            return Err(format!("Unable to take bytes to APD value; rendered {}", d).into());
+            return Err(format!("Unable to take bytes to numeric value; rendered {}", d).into());
         }
         Ok(Numeric::from(d_datum))
     }
@@ -272,7 +272,7 @@ fn test_to_from_sql_roundtrip() {
     inner("-.00009876");
     inner("NaN");
 
-    // Test infinity, which is a valid value in aggregations over APD
+    // Test infinity, which is a valid value in aggregations over numeric
     let mut cx = numeric::cx_datum();
     let v = vec![
         cx.parse("-999999999999999999999999999999999999999")

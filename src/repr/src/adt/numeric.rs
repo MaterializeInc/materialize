@@ -333,7 +333,7 @@ fn test_twos_complement_roundtrip() {
 }
 
 #[test]
-fn test_twos_comp_apd_primitive() {
+fn test_twos_comp_numeric_primitive() {
     fn inner_inner<P>(i: P, i_be_bytes: &mut [u8])
     where
         P: Into<Numeric> + TryFrom<Numeric> + Eq + PartialEq + std::fmt::Debug + Copy,
