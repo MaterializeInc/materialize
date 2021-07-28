@@ -54,12 +54,9 @@ function Views() {
     const search = new URLSearchParams(location.search);
     const dataflow = search.get('dataflow');
     if (dataflow) {
-      setCurrent([dataflow, dataflow]);
+      setCurrent(dataflow);
     }
-    const includeSystemCatalog = search.get('system_catalog');
-    if (includeSystemCatalog) {
-      setIncludeSystemCatalog([includeSystemCatalog, includeSystemCatalog]);
-    }
+    setIncludeSystemCatalog(search.get('system_catalog') === 'true');
   }, []);
 
   const [current, setCurrent] = useState(null);
@@ -88,14 +85,18 @@ function Views() {
           name="include_system_catalog"
           onChange={(event) => {
             const params = new URLSearchParams(location.search);
-            params.set('system_catalog', event.target.checked);
+            if (event.target.checked) {
+              params.set('system_catalog', 'true');
+            } else {
+              params.delete('system_catalog');
+            }
             window.history.replaceState({}, '', `${location.pathname}?${params}`);
 
-            setIncludeSystemCatalog(event.target.checked);
+            setIncludeSystemCatalog(event.target.checked === true);
           }}
           checked={includeSystemCatalog}
         />
-        <label for="include_system_catalog">Include system catalog</label>
+        <label htmlFor="include_system_catalog">Include system catalog</label>
       </div>
       {loading ? (
         <div>Loading...</div>
@@ -122,7 +123,7 @@ function Views() {
                         params.set('dataflow', v[0]);
                         window.history.replaceState({}, '', `${location.pathname}?${params}`);
 
-                        setCurrent(v);
+                        setCurrent(v[0]);
                       }}
                     >
                       +
@@ -134,7 +135,7 @@ function Views() {
               ))}
             </tbody>
           </table>
-          <div>{current ? <View dataflow_id={current[0]} /> : null}</div>
+          <div>{current ? <View dataflow_id={current} /> : null}</div>
         </div>
       )}
     </div>
