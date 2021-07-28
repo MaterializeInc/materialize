@@ -98,8 +98,6 @@ pub enum SequencedCommand {
         ///
         /// Used in responses and cancelation requests.
         conn_id: u32,
-        /// A communication link for sending a response.
-        tx: mpsc::UnboundedSender<PeekResponse>,
         /// The logical timestamp at which the arrangement is queried.
         timestamp: Timestamp,
         /// Actions to apply to the result set before returning them.
@@ -192,6 +190,8 @@ pub enum WorkerFeedback {
     /// Timestamp bindings and prior and new frontiers for those bindings for all
     /// sources
     TimestampBindings(TimestampBindingFeedback),
+    /// The worker's response to a specified (by connection id) peek.
+    PeekResponse(u32, PeekResponse),
 }
 
 /// Configures a dataflow server.
@@ -738,7 +738,6 @@ where
                 key,
                 timestamp,
                 conn_id,
-                tx,
                 finishing,
                 map_filter_project,
             } => {
@@ -763,7 +762,6 @@ where
                     id,
                     key,
                     conn_id,
-                    tx,
                     timestamp,
                     finishing,
                     trace_bundle,
@@ -774,14 +772,22 @@ where
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), true));
                 }
                 // Attempt to fulfill the peek.
-                let fulfilled = peek.seek_fulfillment(&mut Antichain::new());
-                if !fulfilled {
-                    self.pending_peeks.push(peek);
-                } else {
+                if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
+                    // Respond with the response.
+                    if let Some(feedback) = &mut self.feedback_tx {
+                        feedback
+                            .send(WorkerFeedbackWithMeta {
+                                worker_id: self.timely_worker.index(),
+                                message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+                            })
+                            .expect("feedback receiver should not drop first");
+                    }
                     // Log the fulfillment of the peek.
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                     }
+                } else {
+                    self.pending_peeks.push(peek);
                 }
                 self.metrics.observe_pending_peeks(&self.pending_peeks);
             }
@@ -790,14 +796,9 @@ where
                 let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
-                        peek.tx
-                            .send(PeekResponse::Canceled)
-                            .expect("peek receiver should not drop first");
-
                         if let Some(logger) = logger {
                             logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                         }
-
                         false // don't retain
                     } else {
                         true // retain
@@ -1015,14 +1016,22 @@ where
             Vec::with_capacity(pending_peeks_len),
         );
         for mut peek in pending_peeks.drain(..) {
-            let success = peek.seek_fulfillment(&mut upper);
-            if !success {
-                self.pending_peeks.push(peek);
-            } else {
+            if let Some(response) = peek.seek_fulfillment(&mut upper) {
+                // Respond with the response.
+                if let Some(feedback) = &mut self.feedback_tx {
+                    feedback
+                        .send(WorkerFeedbackWithMeta {
+                            worker_id: self.timely_worker.index(),
+                            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+                        })
+                        .expect("feedback receiver should not drop first");
+                }
                 // Log the fulfillment of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                 }
+            } else {
+                self.pending_peeks.push(peek);
             }
         }
     }
@@ -1042,8 +1051,6 @@ struct PendingPeek {
     key: Option<Row>,
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
-    /// A transmitter connected to the intended recipient of the peek.
-    tx: mpsc::UnboundedSender<PeekResponse>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -1073,23 +1080,20 @@ impl PendingPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
-    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> bool {
+    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.timestamp) {
-            return false;
+            return None;
         }
         self.trace_bundle.errs_mut().read_upper(upper);
         if upper.less_equal(&self.timestamp) {
-            return false;
+            return None;
         }
         let response = match self.collect_finished_data() {
             Ok(rows) => PeekResponse::Rows(rows),
             Err(text) => PeekResponse::Error(text),
         };
-        self.tx
-            .send(response)
-            .expect("peek receiver should not drop first");
-        true
+        Some(response)
     }
 
     /// Collects data for a known-complete peek.

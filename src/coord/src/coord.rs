@@ -247,6 +247,10 @@ pub struct Coordinator {
     txn_reads: HashMap<u32, TxnReads>,
     /// Tracks write frontiers for active exactly-once sinks.
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
+
+    /// A map from pending peeks to the queue into which responses are sent, and the
+    /// pending response count (initialized to the number of dataflow workers).
+    pending_peeks: HashMap<u32, (mpsc::UnboundedSender<PeekResponse>, usize)>,
 }
 
 /// Metadata about an active connection.
@@ -582,6 +586,18 @@ impl Coordinator {
         }: WorkerFeedbackWithMeta,
     ) {
         match message {
+            WorkerFeedback::PeekResponse(conn_id, response) => {
+                // We use an `if let` here because the peek could have been cancelled already.
+                if let Some((channel, countdown)) = self.pending_peeks.get_mut(&conn_id) {
+                    channel
+                        .send(response)
+                        .expect("Peek endpoint terminated prematurely");
+                    *countdown -= 1;
+                    if *countdown == 0 {
+                        self.pending_peeks.remove(&conn_id);
+                    }
+                }
+            }
             WorkerFeedback::FrontierUppers(updates) => {
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
@@ -1266,7 +1282,16 @@ impl Coordinator {
                 return;
             }
 
-            // Tell dataflow to cancel any pending peeks.
+            // Cancel the peek. We use an `if let` because the peek could be completed
+            // and removed before the cancellation is received.
+            if let Some((channel, count)) = self.pending_peeks.get(&conn_id) {
+                for _ in 0..*count {
+                    channel
+                        .send(PeekResponse::Canceled)
+                        .expect("Peek channel closed prematurely");
+                }
+            }
+            // Allow dataflow to cancel any pending peeks.
             self.broadcast(SequencedCommand::CancelPeek { conn_id });
 
             // Inform the target session (if it asks) about the cancellation.
@@ -2510,11 +2535,13 @@ impl Coordinator {
                     ))
                 })?;
 
+            // Insert the pending peek, and initialize to expect the number of workers.
+            self.pending_peeks
+                .insert(session.conn_id(), (rows_tx, self.num_workers()));
             self.broadcast(SequencedCommand::Peek {
                 id: index_id,
                 key: literal_row,
                 conn_id: session.conn_id(),
-                tx: rows_tx,
                 timestamp,
                 finishing: finishing.clone(),
                 map_filter_project: mfp_plan,
@@ -3553,6 +3580,7 @@ pub async fn serve(
                 since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
                 now,
+                pending_peeks: HashMap::new(),
             };
             coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
             if let Some(config) = &logging {
@@ -3712,6 +3740,7 @@ pub fn serve_debug(
             since_updates: Rc::new(RefCell::new(HashMap::new())),
             sink_writes: HashMap::new(),
             now: get_debug_timestamp,
+            pending_peeks: HashMap::new(),
         };
         coord.broadcast(SequencedCommand::EnableFeedback(broadcast_feedback_tx));
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
