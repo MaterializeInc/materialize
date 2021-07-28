@@ -1,23 +1,21 @@
 ---
 title: "Node.js and Materialize"
-description: "This guide explains how to use a Node.js application to connect, insert data, manage, and read data from Materialize."
+description: "Reference and examples on using a Node.js application to connect, insert data, manage, and read data from Materialize."
 weight: 10
 menu:
   main:
     parent: guides
 ---
 
-This guide explains all you need to know to start working with Materialize from a Node.js Application.
-
-Materialize is **PostgreSQL-compatible**, this means that a Node.js application can use any existing PostgreSQL client like `pg` ([node-postgres](https://node-postgres.com/)) to connect, manage, and read from Materialize as if it were a PostgreSQL database.
+Materialize is **PostgreSQL-compatible**, which means that Node.js applications can use any existing PostgreSQL client to interact with Materialize as if it were a PostgreSQL database. In this guide, we'll use the  [`node-postgres` library](https://node-postgres.com/) to connect to Materialize and issue PostgreSQL commands.
 
 ## Connect
 
-Connecting to Materialize is the same as [connecting to PostgreSQL with `node-postgres`](https://node-postgres.com/features/connecting).
+You connect to Materialize the same way you [connect to PostgreSQL with `node-postgres`](https://node-postgres.com/features/connecting).
 
 ### Local Instance
 
-Connect to a local materialized instance using a connection URI:
+You can connect to a local Materialize instance with code that uses the connection URI shorthand (`postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`) to define the URI:
 
 ```js
 const { Client } = require('pg');
@@ -31,11 +29,9 @@ async function main() {
 main();
 ```
 
-This code uses connection URI shorthand (`postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`) to connect to a local materialized instance.
-
 ### Materialize Cloud Instance
 
-Connect to a Materialize Cloud instance using a connection URI and certificates:
+Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-materialize-cloud/) dialog and specify the path to each file in the [`ssl` property](https://node-postgres.com/features/ssl). Replace `MY_INSTANCE_ID` in the `connectionString` property with your Materialize Cloud instance ID.
 
 ```js
 const { Client } = require('pg');
@@ -43,9 +39,9 @@ const { fs } = require('fs');
 const client = new Client({
     connectionString: "postgresql://materialize@MY_INSTANCE_ID.materialize.cloud:6875/materialize"
     ssl: {
-        ca   : fs.readFileSync("server-ca.pem").toString(),
-        key  : fs.readFileSync("client-key.pem").toString(),
-        cert : fs.readFileSync("client-cert.pem").toString(),
+        ca   : fs.readFileSync("ca.crt").toString(),
+        key  : fs.readFileSync("materialize.key").toString(),
+        cert : fs.readFileSync("materialize.crt").toString(),
     }
 });
 
@@ -57,13 +53,11 @@ async function main() {
 main();
 ```
 
-Replace `MY_INSTANCE_ID`) in the code above with your Materialize Cloud instance ID. The [`ssl` property](https://node-postgres.com/features/ssl), loads the certificate files downloaded from the Materialize Cloud [Connect](/cloud/connect-to-materialize-cloud/) dialog.
-
 ## Stream
 
-To take advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full  advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
 
-Read a stream of updates from a materialized view named `my_view` into Node.js:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query.
 
 ```js
 const { Client } = require('pg');
@@ -84,9 +78,7 @@ async function main() {
 main();
 ```
 
-The code above opens a long-lived transaction with `BEGIN` and uses [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to receive a stream of updates to `my_view`. The [TAIL Output format](/sql/tail/#output) of `res.rows` is an array of view update objects.
-
-**Note on output format:** When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+The [TAIL Output format](/sql/tail/#output) of `res.rows` is an array of view update objects. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
 
 ```js
 [
@@ -132,6 +124,8 @@ client.connect((err, client) => {
 
 Querying Materialize is identical to querying a traditional PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
+Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries and polling (repeatedly querying) a view doesn't impact performance.
+
 Query a view `my_view` with a select statement:
 
 ```js
@@ -147,20 +141,15 @@ async function main() {
 main();
 ```
 
-Polling _(repeatedly querying)_ of a view is fine, and response times are much faster than traditional database queries because Materialize maintains materialized views in memory. For more, refer to the node-postgres documentation of [Queries in node-postgres](https://node-postgres.com/features/queries) and [pg.Result](https://node-postgres.com/api/result) for output reference.
-
-**Note:** If your SELECT queries do more than read out of a materialization, think about whether you should materialize part of the query, or the whole thing.
+For more details, see the  [`node-postgres` query](https://node-postgres.com/features/queries) and [pg.Result](https://node-postgres.com/api/result) documentation.
 
 ## Push data to a source
 
-Data produced in a Node.js app **cannot be sent directly to a [`SOURCE` in Materialize](/sql/create-source/)** for a couple of reasons:
+Materialize processes live streams of data and maintains views in memory, relying on other systems (traditional databases, S3, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system.** Materialize connects to the intermediary system as a "source" and reads streaming updates from that.
 
--  Materialize relies on another system (a traditional database, S3 or Kafka) to serve as the "system of record" for data. Materialize processes a live stream of data and maintains views in memory.
--  Sending data to an intermediary system helps decouple the operation of the Node.js app from the operation of Materialize.
+The table below lists the intermediary systems a Node.js application can use to stream data for Materialize:
 
-The table below lists the options for **intermediary systems** that a Node.js Application can send data through to reach Materialize.
-
-Intermediary System | Notes and Resources
+Intermediary System | Notes
 -------------|-------------
 **Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Materialize Kafka Source](/sql/create-source/json-kafka/) to consume them. Kafka is recommended for scenarios where low-latency and high-throughput are important.
 **Kinesis** | Send data from [Node.js to a Kinesis stream](https://docs.aws.amazon.com/streams/latest/dev/kinesis-record-processor-implementation-app-nodejs.html) and consume them with a [Materialize Kinesis source](/sql/create-source/json-kinesis/). Kinesis is easier to configure and maintain than Kafka but less fully-featured and configurable. For example, Kinesis is a [volatile source](/overview/volatility/) because it cannot do infinite retention.
@@ -190,11 +179,11 @@ async function main() {
 main();
 ```
 
-## Manage sources, views, indexes
+## Manage sources, views, and indexes
 
-Creation of sources, views and indexes in Materialize should be treated with the same care as schema creation and updates in a traditional database. These are typically done during Materialize deployment. However, a Node.js app is perfectly capable of executing these DDL statements.
+Typically, you create sources, views, and indexes when deploying Materialize, although it is possible to use a Node.js app to execute common DDL statements.
 
-**Create a source from Node.js:**
+### Create a source from Node.js
 
 ```js
 const { Client } = require('pg');
@@ -213,9 +202,9 @@ async function main() {
 main();
 ```
 
-See [`CREATE SOURCE`](/sql/create-source/) reference for more information.
+For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
-**Create a view from Node.js:**
+### Create a view from Node.js
 
 ```js
 const { Client } = require('pg');
@@ -236,10 +225,8 @@ async function main() {
 main();
 ```
 
-See [`CREATE VIEW`](/sql/create-view/) reference for more information.
+For more information, see [`CREATE VIEW`](/sql/create-view/).
 
 ## Node.js ORMs
 
-While it communicates over the same wire protocol as PostgreSQL, Materialize doesn't currently respond to the entire catalog of PostgreSQL system metadata API endpoints. Object-relational-mapping (ORM) systems like **Prisma**, **Sequelize** or **TypeORM** use these PostgreSQL system calls (often within the `pg_catalog` namespace) to introspect the database and do extra work behind the scenes.
-
-Attempting to use an ORM system to interact with Materialize as if it were a PostgreSQL database will currently not work. Libraries that currently return `pg_catalog` errors may work properly once [full `pg_catalog` support](https://github.com/MaterializeInc/materialize/issues/2157) is implemented.
+Materialize doesn't currently support the full catalog of PostgreSQL system metadata API endpoints, including the system calls that object relational mapping systems (ORMs) like **Prisma**, **Sequelize**, or **TypeORM** use to introspect databases and do extra work behind the scenes. This means that ORM system attempts to interact with Materialize will currently fail. Once [full `pg_catalog` support](https://github.com/MaterializeInc/materialize/issues/2157) is implemented, the features that depend on  `pg_catalog` may work properly.
