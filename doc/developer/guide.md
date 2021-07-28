@@ -190,7 +190,7 @@ very inefficient. It is, however, excellent for manually taking Materialize
 for a spin without the hassle of setting up various Kafka topics and Avro
 schemas. It also powers our sqllogictest runner.
 
-See the [symbiosis crate documentation](https://mtrlz.dev/api/symbiosis) for
+See the [symbiosis crate documentation](https://dev.materialize.com/api/rust/symbiosis) for
 more details.
 
 **Note:** As of August 2020, we're laying the groundwork to phase out symbiosis
