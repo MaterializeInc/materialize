@@ -977,6 +977,43 @@ fn plan_subquery(
     Ok((expr.project(finishing.project), scope))
 }
 
+/// Canonicalizes `expr` in preparation for a set operation like `UNION` or
+/// `DISTINCT`.
+///
+/// If `restrict_to` is not-None, only the specified columns will be
+/// canonicalized.
+///
+/// At the moment, canonicalization only applies to data of numeric type, so
+/// that e.g. `1.0` and `1.00` are both trimmed to 1 so that they compare as
+/// equivalent.
+fn canonicalize_relation_expr(
+    types: &[ColumnType],
+    expr: HirRelationExpr,
+    restrict_to: Option<&[usize]>,
+) -> HirRelationExpr {
+    let should_consider = |i| match restrict_to {
+        Some(cols) => cols.contains(&i),
+        None => true,
+    };
+    let mut map_exprs = vec![];
+    let mut project_exprs = vec![];
+    for (i, ty) in types.iter().enumerate() {
+        if should_consider(i) && matches!(ty.scalar_type, ScalarType::Numeric { scale: None }) {
+            project_exprs.push(types.len() + map_exprs.len());
+            map_exprs.push(
+                HirScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: i,
+                })
+                .call_unary(UnaryFunc::CanonicalizeNumeric),
+            );
+        } else {
+            project_exprs.push(i);
+        }
+    }
+    expr.map(map_exprs).project(project_exprs)
+}
+
 fn plan_set_expr(
     qcx: &mut QueryContext,
     q: &SetExpr<Aug>,
@@ -1022,6 +1059,9 @@ fn plan_set_expr(
                     );
                 }
             }
+
+            let left_expr = canonicalize_relation_expr(&left_types, left_expr, None);
+            let right_expr = canonicalize_relation_expr(&right_types, right_expr, None);
 
             let relation_expr = match op {
                 SetOperator::Union => {
@@ -1342,10 +1382,13 @@ fn plan_view_select(
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr =
-                relation_expr
-                    .map(group_exprs)
-                    .reduce(group_key, agg_exprs, expected_group_size);
+            relation_expr = relation_expr.map(group_exprs);
+            relation_expr = canonicalize_relation_expr(
+                &qcx.relation_type(&relation_expr).column_types,
+                relation_expr,
+                Some(&group_key),
+            );
+            relation_expr = relation_expr.reduce(group_key, agg_exprs, expected_group_size);
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope

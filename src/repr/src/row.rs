@@ -24,7 +24,6 @@ use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
 };
 use crate::adt::interval::Interval;
-use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::Datum;
 use fmt::Debug;
@@ -543,12 +542,7 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
         }
         Datum::JsonNull => data.push(Tag::JsonNull as u8),
         Datum::Dummy => data.push(Tag::Dummy as u8),
-        Datum::Numeric(mut n) => {
-            // Pseudo-canonical representation of decimal values with
-            // insignificant zeroes trimmed. This compresses the number further
-            // than `Numeric::trim` by removing all zeroes, and not only those in
-            // the fractional component.
-            numeric::cx_datum().reduce(&mut n.0);
+        Datum::Numeric(n) => {
             let (digits, exponent, bits, lsu) = n.0.to_raw_parts();
             data.push(Tag::Numeric as u8);
             push_copy!(
@@ -636,12 +630,8 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::JsonNull => 1,
         Datum::Dummy => 1,
         Datum::Numeric(d) => {
-            let mut d = d.0.clone();
-            // Values must be reduced to determine appropriate number of
-            // coefficient units.
-            numeric::cx_datum().reduce(&mut d);
             // 4 = 1 bit each for tag, digits, exponent, bits
-            4 + (d.coefficient_units().len() * 2)
+            4 + (d.0.coefficient_units().len() * 2)
         }
     }
 }
@@ -1314,6 +1304,8 @@ impl Default for RowArena {
 
 #[cfg(test)]
 mod tests {
+    use crate::adt::numeric;
+
     use super::*;
 
     #[test]
