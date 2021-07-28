@@ -2395,7 +2395,11 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte, 1075;
             },
             "=" => Scalar {
-                params!(Numeric, Numeric) => BinaryFunc::Eq, 1752;
+                params!(Numeric, Numeric) => Operation::binary(|_ecx, lhs, rhs| {
+                    let lhs = lhs.call_unary(UnaryFunc::CanonicalizeNumeric);
+                    let rhs = rhs.call_unary(UnaryFunc::CanonicalizeNumeric);
+                    Ok(rhs.call_binary(lhs, Eq))
+                }), 1752;
                 params!(Bool, Bool) => BinaryFunc::Eq, 91;
                 params!(Int16, Int16) => BinaryFunc::Eq, 94;
                 params!(Int32, Int32) => BinaryFunc::Eq, 96;

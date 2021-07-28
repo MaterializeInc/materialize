@@ -147,6 +147,12 @@ fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn canonicalize_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut a = a.unwrap_numeric();
+    numeric::cx_datum().reduce(&mut a.0);
+    Datum::Numeric(a)
+}
+
 fn cast_bool_to_string_nonstandard<'a>(a: Datum<'a>) -> Datum<'a> {
     // N.B. this function differs from `cast_bool_to_string_implicit` because
     // the SQL specification requires `true` and `false` to be spelled out in
@@ -3488,6 +3494,7 @@ pub enum UnaryFunc {
     AbsFloat32,
     AbsFloat64,
     AbsNumeric,
+    CanonicalizeNumeric,
     CastBoolToString,
     CastBoolToStringNonstandard,
     CastBoolToInt32,
@@ -3699,6 +3706,7 @@ impl UnaryFunc {
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
             UnaryFunc::AbsNumeric => Ok(abs_numeric(a)),
+            UnaryFunc::CanonicalizeNumeric => Ok(canonicalize_numeric(a)),
             UnaryFunc::CastBoolToString => Ok(cast_bool_to_string(a)),
             UnaryFunc::CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
@@ -3950,6 +3958,8 @@ impl UnaryFunc {
             | CastFloat64ToNumeric(scale)
             | CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
 
+            CanonicalizeNumeric => ScalarType::Numeric { scale: None }.nullable(nullable),
+
             CastInt32ToOid => ScalarType::Oid.nullable(nullable),
             CastOidToInt32 => ScalarType::Oid.nullable(nullable),
 
@@ -4080,6 +4090,7 @@ impl UnaryFunc {
             CastStringToBytes | CastStringToInterval | CastTimeToInterval | CastStringToJsonb => {
                 false
             }
+            CanonicalizeNumeric => false,
             CastBoolToString
             | CastBoolToStringNonstandard
             | CastInt16ToString
@@ -4207,6 +4218,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsNumeric => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
+            UnaryFunc::CanonicalizeNumeric => f.write_str("canonnumeric"),
             UnaryFunc::CastBoolToString => f.write_str("booltostr"),
             UnaryFunc::CastBoolToStringNonstandard => f.write_str("booltostrns"),
             UnaryFunc::CastBoolToInt32 => f.write_str("booltoi32"),

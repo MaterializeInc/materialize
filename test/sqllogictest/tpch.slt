@@ -277,11 +277,11 @@ ORDER BY
 | Filter (#18 = "EUROPE")
 | Reduce group=(#0)
 | | agg min(#4)
-| ArrangeBy (#0, #1)
+| ArrangeBy (#0, canonnumeric(#1))
 
 %12 =
-| Join %5 %11 (= #0 #28) (= #19 #29)
-| | implementation = Differential %5 %11.(#0, #1)
+| Join %5 %11 (= #0 #28) (= canonnumeric(#19) canonnumeric(#29))
+| | implementation = Differential %5 %11.(#0, canonnumeric(#1))
 | | demand = (#0, #2, #10, #11, #13..#15, #22)
 | Project (#14, #10, #22, #0, #2, #11, #13, #15)
 
@@ -1087,7 +1087,7 @@ WHERE
 
 %6 =
 | Union %2 %5
-| Map ((100 * #0) / #1)
+| Map ((100.00 * #0) / #1)
 | Project (#2)
 
 EOF
@@ -1146,11 +1146,11 @@ ORDER BY
 | Get %0 (l0)
 | Reduce group=()
 | | agg max(#1)
-| ArrangeBy (#0)
+| ArrangeBy (canonnumeric(#0))
 
 %4 =
-| Join %1 %2 %3 (= #0 #7) (= #8 #9)
-| | implementation = Differential %1.(#0) %2.(#0) %3.(#0)
+| Join %1 %2 %3 (= #0 #7) (= canonnumeric(#8) canonnumeric(#9))
+| | implementation = Differential %1.(#0) %2.(#0) %3.(canonnumeric(#0))
 | | demand = (#0..#2, #4, #8)
 | Project (#0..#2, #4, #8)
 
@@ -1331,7 +1331,7 @@ WHERE
 
 %10 =
 | Union %6 %9
-| Map (#0 / 7)
+| Map (#0 / 7.0)
 | Project (#1)
 
 EOF
@@ -1796,7 +1796,7 @@ ORDER BY
 
 %1 =
 | Get materialize.public.customer (u15)
-| Filter ((((((("13" = substr(#4, 1, 2)) || ("31" = substr(#4, 1, 2))) || ("23" = substr(#4, 1, 2))) || ("29" = substr(#4, 1, 2))) || ("30" = substr(#4, 1, 2))) || ("18" = substr(#4, 1, 2))) || ("17" = substr(#4, 1, 2))), (#5 > 0)
+| Filter ((((((("13" = substr(#4, 1, 2)) || ("31" = substr(#4, 1, 2))) || ("23" = substr(#4, 1, 2))) || ("29" = substr(#4, 1, 2))) || ("30" = substr(#4, 1, 2))) || ("18" = substr(#4, 1, 2))) || ("17" = substr(#4, 1, 2))), (#5 > 0.00)
 | Reduce group=()
 | | agg sum(#5)
 | | agg count(true)
