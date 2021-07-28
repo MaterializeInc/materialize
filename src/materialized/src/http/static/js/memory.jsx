@@ -65,7 +65,7 @@ function Views() {
   const [current, setCurrent] = useState(null);
   const [includeSystemCatalog, setIncludeSystemCatalog] = useState(false);
 
-  const where_fragment = includeSystemCatalog ? ``: `WHERE name NOT LIKE 'Dataflow: mz_catalog.%'`;
+  const where_fragment = includeSystemCatalog ? `` : `WHERE name NOT LIKE 'Dataflow: mz_catalog.%'`;
 
   const queryMaterializedViews = `
     SELECT
@@ -82,15 +82,14 @@ function Views() {
   return (
     <div>
       <div>
-        <input type="checkbox" id="include_system_catalog" name="include_system_catalog"
+        <input
+          type="checkbox"
+          id="include_system_catalog"
+          name="include_system_catalog"
           onChange={(event) => {
             const params = new URLSearchParams(location.search);
             params.set('system_catalog', event.target.checked);
-            window.history.replaceState(
-              {},
-              '',
-              `${location.pathname}?${params}`
-            );
+            window.history.replaceState({}, '', `${location.pathname}?${params}`);
 
             setIncludeSystemCatalog(event.target.checked);
           }}
@@ -121,11 +120,7 @@ function Views() {
                       onClick={() => {
                         const params = new URLSearchParams(location.search);
                         params.set('dataflow', v[0]);
-                        window.history.replaceState(
-                          {},
-                          '',
-                          `${location.pathname}?${params}`
-                        );
+                        window.history.replaceState({}, '', `${location.pathname}?${params}`);
 
                         setCurrent(v);
                       }}
@@ -387,8 +382,9 @@ function View(props) {
       if (to_id === undefined) {
         return `// ${to} or not in lookup`;
       }
-      return sent == null ? `_${from_id} -> _${to_id} [style="dashed"];` :
-        `_${from_id} -> _${to_id} [label="sent ${sent}"];`;
+      return sent == null
+        ? `_${from_id} -> _${to_id} [style="dashed"];`
+        : `_${from_id} -> _${to_id} [label="sent ${sent}"];`;
     });
     const oper_labels = Object.entries(opers).map(([id, name]) => {
       if (!addrs[id].length) {
@@ -401,9 +397,7 @@ function View(props) {
         // Any operator that can have records will have a red border (even if it
         // currently has 0 records). The fill color is a deeper red based on how many
         // records this operator has compared to the operator with the most records.
-        const pct = record_count
-          ? Math.floor((record_count / max_record_count) * 0xff)
-          : 0;
+        const pct = record_count ? Math.floor((record_count / max_record_count) * 0xff) : 0;
         const alpha = pct.toString(16).padStart(2, '0');
         notes.push(`${record_count} records`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
@@ -436,9 +430,7 @@ function View(props) {
     viewText = (
       <div style={{ margin: '1em' }}>
         View: {view.name}
-        <div style={{ padding: '.5em', backgroundColor: '#f5f5f5' }}>
-          {view.create}
-        </div>
+        <div style={{ padding: '.5em', backgroundColor: '#f5f5f5' }}>{view.create}</div>
       </div>
     );
   }
@@ -469,8 +461,7 @@ function View(props) {
       ) : (
         <div>
           <h3>
-            Name: {stats.name}, dataflow_id: {props.dataflow_id}, records:{' '}
-            {stats.records}
+            Name: {stats.name}, dataflow_id: {props.dataflow_id}, records: {stats.records}
           </h3>
           {dotLink}
           {viewText}
@@ -537,9 +528,7 @@ async function getCreateView(dataflow_name) {
     throw 'could not determine view';
   }
   const name = view_name_table.rows[0];
-  const create_table = await query(
-    `SHOW CREATE VIEW "${name[0]}"."${name[1]}"."${name[2]}"`
-  );
+  const create_table = await query(`SHOW CREATE VIEW "${name[0]}"."${name[1]}"."${name[2]}"`);
   return { name: create_table.rows[0][0], create: create_table.rows[0][1] };
 }
 
