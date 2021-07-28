@@ -55,6 +55,7 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use ore::metrics::MetricsRegistry;
+use ore::retry::Retry;
 use rand::Rng;
 use repr::adt::numeric;
 use timely::communication::WorkerGuards;
@@ -2956,8 +2957,21 @@ impl Coordinator {
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop);
         }
-        for (conn, slot_names) in replication_slots_to_drop {
-            postgres_util::drop_replication_slots(&conn, &slot_names).await?;
+
+        // We don't want to block the coordinator on an external postgres server, so
+        // move the drop slots to a separate task. This does mean that a failed drop
+        // slot won't bubble up to the user as an error message. However, even if it
+        // did (and how the code previously worked), mz has already dropped it from our
+        // catalog, and so we wouldn't be able to retry anyway.
+        if !replication_slots_to_drop.is_empty() {
+            tokio::spawn(async move {
+                for (conn, slot_names) in replication_slots_to_drop {
+                    // Try to drop the replication slots, but give up after a while.
+                    let _ = Retry::default()
+                        .retry(|_state| postgres_util::drop_replication_slots(&conn, &slot_names))
+                        .await;
+                }
+            });
         }
 
         Ok(())
