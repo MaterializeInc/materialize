@@ -18,6 +18,7 @@ use lowertest::{
     deserialize_optional, gen_reflect_info_func, GenericTestDeserializeContext, MzEnumReflect,
     MzStructReflect, ReflectedTypeInfo,
 };
+use repr::adt::numeric::Numeric;
 use repr::{ColumnType, Datum, ScalarType};
 
 /* #region Generate information required to construct arbitrary `ScalarType`*/
@@ -53,7 +54,7 @@ pub fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Da
     }
     match littyp {
         ScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
-        ScalarType::Numeric { .. } => Ok(Datum::from(parse_litval::<i128>(litval, "i128")?)),
+        ScalarType::Numeric { .. } => Ok(Datum::from(parse_litval::<Numeric>(litval, "Numeric")?)),
         ScalarType::Int16 => Ok(Datum::from(parse_litval::<i16>(litval, "i16")?)),
         ScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
         ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),

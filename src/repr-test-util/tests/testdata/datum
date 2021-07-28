@@ -79,6 +79,11 @@ build-datum
 Int32(5)
 
 build-datum
+5.2 numeric
+----
+Numeric(OrderedDecimal(5.2))
+
+build-datum
 2 (list jsonb 100)
 ----
 error: Unsupported literal type List { element_type: Jsonb, custom_oid: Some(100) }

@@ -16,7 +16,7 @@ use std::fmt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzEnumReflect;
+use lowertest::{MzEnumReflect, MzStructReflect};
 use ore::collections::CollectionExt;
 use repr::{ColumnType, Datum, Diff, RelationType, Row};
 
@@ -1367,11 +1367,12 @@ impl MirRelationExpr {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzStructReflect)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
     /// Whether to sort in descending order.
+    #[serde(default)]
     pub desc: bool,
 }
 
@@ -1402,13 +1403,14 @@ impl IdGen {
 }
 
 /// Describes an aggregation expression.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
     /// An expression which extracts from each row the input to `func`.
     pub expr: MirScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
+    #[serde(default)]
     pub distinct: bool,
 }
 
