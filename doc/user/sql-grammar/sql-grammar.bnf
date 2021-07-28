@@ -36,16 +36,17 @@ create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
-    create_sink ::=
-       'CREATE SINK' 'IF NOT EXISTS'? sink_name
-       'FROM' item_name
-       'INTO' (
-        sink_kafka_connector |
-       'AVRO OCF' path-prefix
-       )
-       ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
-       ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
-       ('AS OF' timestamp_expression)?
+create_sink ::=
+    'CREATE SINK' 'IF NOT EXISTS'? sink_name
+    'FROM' item_name
+    'INTO' (
+    sink_kafka_connector |
+    'AVRO OCF' path-prefix
+    )
+    ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
+    ('WITH CONSISTENCY' 'TOPIC' topic 'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url)?
+    ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
+    ('AS OF' timestamp_expression)?
 create_source_avro_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
