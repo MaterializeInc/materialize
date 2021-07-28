@@ -250,6 +250,9 @@ ts
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 
+> CREATE MATERIALIZED VIEW v2 AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts;
+
+> CREATE MATERIALIZED VIEW v3 AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts AND mz_logical_timestamp() = b.ts;
 
 #
 # Various errors in the placement of mz_logical_timestamp()
