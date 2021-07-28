@@ -14,7 +14,7 @@
 
 use std::convert::TryFrom;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use dec::{Context, Decimal};
 use lazy_static::lazy_static;
 
@@ -98,6 +98,63 @@ pub fn cx_datum() -> Context<Numeric> {
 pub fn cx_agg() -> Context<NumericAgg> {
     CX_AGG.clone()
 }
+
+/// Casts a numeric value to a primitive integer. However, unlike the native
+/// decimal API, this implementation accepts values with an exponent > 0.
+///
+/// Note that this is meant for internal types, and not SQL types. For instance,
+/// when casting numeric datums to smallints, the numeric values can have
+/// fractional components that are rounded away.
+pub trait TryFromNumeric<T> {
+    fn try_from_numeric(n: Numeric) -> Result<T, anyhow::Error>;
+}
+
+// Goes from numeric -> i32 -> target type because decimal library doesn't
+// natively support cast.
+macro_rules! try_from_numeric_i32_int {
+    ($t:ty) => {
+        impl TryFromNumeric<$t> for $t {
+            fn try_from_numeric(mut n: Numeric) -> Result<$t, anyhow::Error> {
+                if n.exponent() < 0 {
+                    bail!("out of range integral type conversion attempted")
+                }
+                let mut cx = cx_datum();
+                cx.rescale(&mut n, &Numeric::zero());
+                let i = cx.try_into_i32(n).map_err(|e| anyhow!(e.to_string()))?;
+                <$t>::try_from(i).map_err(|e| anyhow!(e.to_string()))
+            }
+        }
+    };
+}
+
+try_from_numeric_i32_int!(u8);
+try_from_numeric_i32_int!(i8);
+try_from_numeric_i32_int!(u16);
+try_from_numeric_i32_int!(i16);
+
+macro_rules! try_from_numeric {
+    ($t:ty) => {
+        impl TryFromNumeric<$t> for $t {
+            fn try_from_numeric(mut n: Numeric) -> Result<$t, anyhow::Error> {
+                if n.exponent() < 0 {
+                    bail!("out of range integral type conversion attempted")
+                }
+                let mut cx = cx_datum();
+                cx.rescale(&mut n, &Numeric::zero());
+                <$t>::try_from(n).map_err(|e| anyhow!(e.to_string()))
+            }
+        }
+    };
+}
+
+try_from_numeric!(u32);
+try_from_numeric!(i32);
+try_from_numeric!(u64);
+try_from_numeric!(i64);
+try_from_numeric!(usize);
+try_from_numeric!(isize);
+try_from_numeric!(u128);
+try_from_numeric!(i128);
 
 fn twos_complement_be_to_u128(input: &[u8]) -> u128 {
     assert!(input.len() <= 16);

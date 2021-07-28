@@ -763,9 +763,11 @@ pub fn eval_as_of<'a>(
     let evaled = ex.eval(&[], temp_storage)?;
 
     Ok(match ex.typ(desc.typ()).scalar_type {
-        ScalarType::Numeric { .. } => numeric::cx_datum()
-            .try_into_i128(evaled.unwrap_numeric().0)?
-            .try_into()?,
+        ScalarType::Numeric { .. } => {
+            use numeric::TryFromNumeric;
+            let ts = u64::try_from_numeric(evaled.unwrap_numeric().0)?;
+            ts.try_into()?
+        }
         ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
