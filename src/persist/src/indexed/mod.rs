@@ -33,7 +33,6 @@ use crate::indexed::encoding::{
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
-use crate::Data;
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
@@ -69,7 +68,7 @@ use crate::Data;
 /// that they are no longer needed. This would make them immediately available
 /// for indexed use, instead of the current situation, which is more complicated
 /// to reason about.
-pub struct Indexed<K, V, U: Buffer, L: Blob> {
+pub struct Indexed<U: Buffer, L: Blob> {
     next_stream_id: Id,
     futures_seqno_upper: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
@@ -78,13 +77,13 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
     id_mapping: Vec<(String, Id)>,
     graveyard: Vec<(String, Id)>,
     buf: U,
-    blob: BlobCache<K, V, L>,
-    futures: HashMap<Id, BlobFuture<K, V>>,
-    traces: HashMap<Id, BlobTrace<K, V>>,
-    listeners: HashMap<Id, Vec<ListenFn<K, V>>>,
+    blob: BlobCache<L>,
+    futures: HashMap<Id, BlobFuture>,
+    traces: HashMap<Id, BlobTrace>,
+    listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
 }
 
-impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
+impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// Returns a new Indexed, initializing each Future and Trace with the
     /// existing data for them in the blob storage, if any.
     pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
@@ -231,7 +230,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// with the given id.
     pub fn write_sync(
         &mut self,
-        updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
     ) -> Result<SeqNo, Error> {
         for (id, updates) in updates.iter() {
             let sealed_frontier = self.sealed_frontier(*id)?;
@@ -263,10 +262,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Atomically moves all writes currently in the buffer into the future.
     fn drain_buf(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = HashMap::new();
+        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (Vec<u8>, Vec<u8>), u64, isize)>> =
+            HashMap::new();
         let desc = self.buf.snapshot(|seqno, buf| {
             let mut buf = buf.to_vec();
-            let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry<K, V>>(&mut buf) }
+            let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry>(&mut buf) }
                 .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
             if !remaining.is_empty() {
                 return Err(format!("invalid buffer entry").into());
@@ -319,7 +319,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     fn drain_buf_inner(
         &mut self,
         id: Id,
-        mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
+        mut updates: Vec<(SeqNo, (Vec<u8>, Vec<u8>), u64, isize)>,
         desc: &Range<SeqNo>,
     ) -> Result<(), Error> {
         if cfg!(any(debug, test)) {
@@ -467,7 +467,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     ///
     /// The caller is responsible for updating META after they've finished
     /// updating futures.
-    fn append_future(&mut self, id: Id, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
+    fn append_future(&mut self, id: Id, batch: BlobFutureBatch) -> Result<(), Error> {
         let future = self
             .futures
             .get_mut(&id)
@@ -477,7 +477,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Appends the given `batch` to the trace for `id`, writing the data into
     /// blob storage.
-    fn append_trace(&mut self, id: Id, batch: BlobTraceBatch<K, V>) -> Result<(), Error> {
+    fn append_trace(&mut self, id: Id, batch: BlobTraceBatch) -> Result<(), Error> {
         let trace = self
             .traces
             .get_mut(&id)
@@ -513,7 +513,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     }
 
     /// Returns a [Snapshot] for the given id.
-    pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot<K, V>, Error> {
+    pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot, Error> {
         let future = self
             .futures
             .get(&id)
@@ -533,7 +533,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             let seqno = self
                 .buf
                 .snapshot(|seqno, buf| {
-                    let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
+                    let entry: Abomonated<BufferEntry, Vec<u8>> =
                         unsafe { Abomonated::new(buf.to_owned()) }
                             .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
                     for (entry_id, updates) in entry.updates.iter() {
@@ -555,7 +555,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     //
     // TODO: Finish the naming bikeshed for this. Other options so far include
     // tail, subscribe, tee, inspect, and capture.
-    pub fn listen(&mut self, id: Id, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
+    pub fn listen(&mut self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
         // Verify that id has been registered.
         let _ = self.sealed_frontier(id)?;
         self.listeners.entry(id).or_default().push(listen_fn);
@@ -614,13 +614,13 @@ impl<K, V> Snapshot<K, V> for BufferSnapshot<K, V> {
 
 /// A consistent snapshot of all data currently stored for an id.
 #[derive(Debug)]
-pub struct IndexedSnapshot<K, V>(
-    BufferSnapshot<K, V>,
-    FutureSnapshot<K, V>,
-    TraceSnapshot<K, V>,
+pub struct IndexedSnapshot(
+    BufferSnapshot<Vec<u8>, Vec<u8>>,
+    FutureSnapshot,
+    TraceSnapshot,
 );
 
-impl<K, V> IndexedSnapshot<K, V> {
+impl IndexedSnapshot {
     /// Returns the SeqNo at which this snapshot was run.
     ///
     /// All writes assigned a seqno < this are included.
@@ -629,8 +629,8 @@ impl<K, V> IndexedSnapshot<K, V> {
     }
 }
 
-impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         self.0.read(buf) || self.1.read(buf) || self.2.read(buf)
     }
 }
@@ -645,15 +645,15 @@ mod tests {
 
     use super::*;
 
-    fn record_with_seqno(seqno: u64) -> (SeqNo, (String, String), u64, isize) {
-        (SeqNo(seqno), ("".to_string(), "".to_string()), 1, 1)
+    fn record_with_seqno(seqno: u64) -> (SeqNo, (Vec<u8>, Vec<u8>), u64, isize) {
+        (SeqNo(seqno), ("".into(), "".into()), 1, 1)
     }
 
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".to_string(), "".to_string()), 1, 1),
-            (("2".to_string(), "".to_string()), 2, 1),
+            (("1".into(), "".into()), 1, 1),
+            (("2".into(), "".into()), 2, 1),
         ];
 
         let mut i = Indexed::new(
@@ -670,7 +670,7 @@ mod tests {
 
         // Register a listener for writes.
         let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn: ListenFn<String, String> = Box::new(move |e| match e {
+        let listen_fn: ListenFn<Vec<u8>, Vec<u8>> = Box::new(move |e| match e {
             ListenEvent::Records(records) => {
                 for ((k, v), ts, diff) in records.iter() {
                     listen_tx
@@ -735,8 +735,8 @@ mod tests {
     #[test]
     fn batch_sorting() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".to_string(), "".to_string()), 2, 1),
-            (("2".to_string(), "".to_string()), 1, 1),
+            (("1".into(), "".into()), 2, 1),
+            (("2".into(), "".into()), 1, 1),
         ];
 
         let mut i = Indexed::new(
@@ -762,8 +762,8 @@ mod tests {
     #[test]
     fn batch_consolidation() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".to_string(), "".to_string()), 1, 1),
-            (("1".to_string(), "".to_string()), 1, 1),
+            (("1".into(), "".into()), 1, 1),
+            (("1".into(), "".into()), 1, 1),
         ];
 
         let mut i = Indexed::new(
@@ -807,15 +807,15 @@ mod tests {
         i.step()?;
 
         // Sending updates with dif = 0.
-        let updates = vec![(("1".to_string(), "".to_string()), 1, 0)];
+        let updates = vec![(("1".into(), "".into()), 1, 0)];
         i.write_sync(vec![(id, updates)])?;
         i.step()?;
 
         // Now try again with a set of updates that consolidates down to the empty
         // set.
         let updates = vec![
-            (("1".to_string(), "".to_string()), 1, 2),
-            (("1".to_string(), "".to_string()), 1, -2),
+            (("1".into(), "".into()), 1, 2),
+            (("1".into(), "".into()), 1, -2),
         ];
 
         i.write_sync(vec![(id, updates)])?;
@@ -886,16 +886,16 @@ mod tests {
         // and debug mode), so we just need the following to run without error
         // to verify the fix.
         let s1 = i.register("s1")?;
-        i.write_sync(vec![(s1, vec![(((), ()), 0, 1)])])?;
+        i.write_sync(vec![(s1, vec![(("".into(), "".into()), 0, 1)])])?;
         i.step()?;
         let s2 = i.register("s2")?;
-        i.write_sync(vec![(s2, vec![(((), ()), 1, 1)])])?;
+        i.write_sync(vec![(s2, vec![(("".into(), "".into()), 1, 1)])])?;
         i.step()?;
 
         // The second flavor is similar. If we then write to the first stream
         // again and step, it is then missing X..Y. (A stream not written to
         // between two step calls doesn't get a batch.)
-        i.write_sync(vec![(s1, vec![(((), ()), 2, 1)])])?;
+        i.write_sync(vec![(s1, vec![(("".into(), "".into()), 2, 1)])])?;
         i.step()?;
 
         Ok(())
@@ -903,7 +903,7 @@ mod tests {
 
     #[test]
     fn test_destroy() -> Result<(), IndexedError> {
-        let mut i: Indexed<String, String, _, _> =
+        let mut i: Indexed<_, _> =
             Indexed::new(MemBuffer::new("destroy"), MemBlob::new("destroy"))?;
 
         let _ = i.register("stream")?;

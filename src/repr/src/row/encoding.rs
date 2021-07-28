@@ -51,19 +51,28 @@
 use std::io::Read;
 
 use ore::cast::CastFrom;
+use persist::EncodeDecode;
 
 use crate::Row;
 
-impl Row {
-    const CURRENT_VERSION: u8 = 0u8;
+const CURRENT_VERSION: u8 = 0u8;
+
+impl EncodeDecode for Row {
+    fn codec_name() -> &'static str {
+        "RowV0"
+    }
+
+    fn size_hint(&self) -> usize {
+        1 + 8 + self.data.len()
+    }
 
     /// Encodes a row into the permanent storage format.
     ///
     /// This perfectly round-trips through [Row::decode]. It's guaranteed to be
     /// readable by future versions of Materialize through v(TODO: Figure out
     /// our policy).
-    pub fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
-        buf.extend(&[Self::CURRENT_VERSION]);
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        buf.extend(&[CURRENT_VERSION]);
         // TODO: Storing the length here will be pretty wasteful. Revisit.
         let len: u64 = u64::cast_from(self.data.len());
         buf.extend(&len.to_le_bytes());
@@ -77,7 +86,7 @@ impl Row {
     /// our policy).
     //
     // TODO: Return a RowRef instead?
-    pub fn decode(buf: &[u8]) -> Result<Row, String> {
+    fn decode(buf: &[u8]) -> Result<Row, String> {
         let mut buf = buf;
 
         let mut version_raw = [0u8; 1];
@@ -86,7 +95,7 @@ impl Row {
         // Only one version supported at the moment. This will get more
         // complicated once we change the format and have to migrate old formats
         // to the current one.
-        if version_raw[0] != Self::CURRENT_VERSION {
+        if version_raw[0] != CURRENT_VERSION {
             return Err("unknown version".into());
         }
 
@@ -110,6 +119,8 @@ impl Row {
 
 #[cfg(test)]
 mod tests {
+    use persist::EncodeDecode;
+
     use crate::{Datum, Row};
 
     // TODO: datadriven golden tests for various interesting Datums and Rows to

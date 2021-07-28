@@ -19,10 +19,10 @@ use persist::mem::{MemBlob, MemBuffer};
 use persist::storage::{Blob, Buffer};
 
 fn read_full_snapshot<U: Buffer, L: Blob>(
-    index: &Indexed<String, String, U, L>,
+    index: &Indexed<U, L>,
     id: Id,
     expected_len: usize,
-) -> Vec<((String, String), u64, isize)> {
+) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
     let mut buf = Vec::with_capacity(expected_len);
     let mut snapshot = index.snapshot(id).expect("reading snapshot cannot fail");
 
@@ -33,7 +33,7 @@ fn read_full_snapshot<U: Buffer, L: Blob>(
 }
 
 fn bench_snapshot<U: Buffer, L: Blob>(
-    index: &Indexed<String, String, U, L>,
+    index: &Indexed<U, L>,
     id: Id,
     expected_len: usize,
     b: &mut Bencher,
@@ -45,11 +45,17 @@ fn bench_indexed_snapshots<U, L, F>(c: &mut Criterion, name: &str, mut new_fn: F
 where
     U: Buffer,
     L: Blob,
-    F: FnMut(usize) -> Result<Indexed<String, String, U, L>, Error>,
+    F: FnMut(usize) -> Result<Indexed<U, L>, Error>,
 {
     let data_len = 100_000;
     let data: Vec<_> = (0..data_len)
-        .map(|i| ((format!("key{}", i), format!("val{}", i)), i as u64, 1))
+        .map(|i| {
+            (
+                (format!("key{}", i).into(), format!("val{}", i).into()),
+                i as u64,
+                1,
+            )
+        })
         .collect();
 
     let mut i = new_fn(1).expect("creating index cannot fail");

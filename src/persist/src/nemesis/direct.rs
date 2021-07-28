@@ -12,8 +12,9 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 
 use crate::error::Error;
-use crate::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
-use crate::indexed::{IndexedSnapshot, Snapshot};
+use crate::indexed::runtime::{
+    self, DecodedSnapshot, RuntimeClient, StreamReadHandle, StreamWriteHandle,
+};
 use crate::nemesis::{
     Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId, Step,
     TakeSnapshotReq, WriteReq, WriteRes,
@@ -21,11 +22,11 @@ use crate::nemesis::{
 use crate::unreliable::UnreliableHandle;
 
 pub struct Direct {
-    start_fn: Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient<String, ()>, Error>>,
-    persister: RuntimeClient<String, ()>,
+    start_fn: Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient, Error>>,
+    persister: RuntimeClient,
     unreliable: UnreliableHandle,
     streams: HashMap<String, (StreamWriteHandle<String, ()>, StreamReadHandle<String, ()>)>,
-    snapshots: HashMap<SnapshotId, IndexedSnapshot<String, ()>>,
+    snapshots: HashMap<SnapshotId, DecodedSnapshot<String, ()>>,
 }
 
 impl Runtime for Direct {
@@ -55,7 +56,7 @@ impl Runtime for Direct {
 }
 
 impl Direct {
-    pub fn new<F: FnMut(UnreliableHandle) -> Result<RuntimeClient<String, ()>, Error> + 'static>(
+    pub fn new<F: FnMut(UnreliableHandle) -> Result<RuntimeClient, Error> + 'static>(
         mut start_fn: F,
     ) -> Result<Self, Error> {
         let unreliable = UnreliableHandle::default();

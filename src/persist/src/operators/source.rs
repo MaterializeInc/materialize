@@ -19,7 +19,7 @@ use timely::Data;
 
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::ListenEvent;
-use crate::operators;
+use crate::{operators, EncodeDecode};
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
 pub trait PersistedSource<G: Scope<Timestamp = u64>, K: Data, V: Data> {
@@ -37,8 +37,8 @@ pub trait PersistedSource<G: Scope<Timestamp = u64>, K: Data, V: Data> {
 impl<G, K, V> PersistedSource<G, K, V> for G
 where
     G: Scope<Timestamp = u64>,
-    K: Data + Send,
-    V: Data + Send,
+    K: Data + EncodeDecode + Send,
+    V: Data + EncodeDecode + Send,
 {
     fn persisted_source(
         &mut self,
@@ -130,7 +130,7 @@ mod tests {
 
         let recv = timely::execute_directly(move |worker| {
             let recv = worker.dataflow(|scope| {
-                let (_, read) = p.create_or_load("1").unwrap();
+                let (_, read) = p.create_or_load::<String, ()>("1").unwrap();
                 let (ok_stream, _) = scope.persisted_source(&read);
                 ok_stream.capture()
             });
@@ -188,7 +188,7 @@ mod tests {
         // Execute a second dataflow with a different number of workers (2).
         // This is mainly testing that we only get one copy of the original
         // persisted data in the stream (as opposed to one per worker).
-        let p = registry.open::<String, ()>("multiple_workers", "lock 2")?;
+        let p = registry.open("multiple_workers", "lock 2")?;
         let (tx, rx) = mpsc::channel();
         let capture_tx = Arc::new(Mutex::new(tx));
         timely::execute(Config::process(2), move |worker| {
@@ -249,12 +249,12 @@ mod tests {
     fn error_stream() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable::<(), ()>("1", "error_stream", unreliable.clone())?;
+        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let (_, read) = p.create_or_load("1").unwrap();
+                let (_, read) = p.create_or_load::<(), ()>("1").unwrap();
                 let (_, err_stream) = scope.persisted_source(&read);
                 err_stream.capture()
             })

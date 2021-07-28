@@ -19,7 +19,6 @@ use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableBuffer, UnreliableHandle};
-use crate::Data;
 
 struct MemBufferCore {
     seqno: Range<SeqNo>,
@@ -291,27 +290,19 @@ impl MemRegistry {
     }
 
     /// Open a [RuntimeClient] associated with `path`.
-    pub fn open<K, V>(&mut self, path: &str, lock_info: &str) -> Result<RuntimeClient<K, V>, Error>
-    where
-        K: Data + Send + Sync + 'static,
-        V: Data + Send + Sync + 'static,
-    {
+    pub fn open(&mut self, path: &str, lock_info: &str) -> Result<RuntimeClient, Error> {
         let buffer = self.buffer(path, lock_info)?;
         let blob = self.blob(path, lock_info)?;
         runtime::start(buffer, blob)
     }
 
     /// Open a [RuntimeClient] with unreliable storage associated with `path`.
-    pub fn open_unreliable<K, V>(
+    pub fn open_unreliable(
         &mut self,
         path: &str,
         lock_info: &str,
         unreliable: UnreliableHandle,
-    ) -> Result<RuntimeClient<K, V>, Error>
-    where
-        K: Data + Send + Sync + 'static,
-        V: Data + Send + Sync + 'static,
-    {
+    ) -> Result<RuntimeClient, Error> {
         let buffer = self.buffer(path, lock_info)?;
         let buffer = UnreliableBuffer::from_handle(buffer, unreliable.clone());
         let blob = self.blob(path, lock_info)?;

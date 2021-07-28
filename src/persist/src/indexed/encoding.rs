@@ -33,12 +33,12 @@ pub struct Id(pub u64);
 /// Invariants:
 /// - The updates field is non-empty.
 #[derive(Debug, Abomonation)]
-pub struct BufferEntry<K, V> {
+pub struct BufferEntry {
     /// Pairs of stream id and the updates themselves.
     //
     // We could require that each Id is included at most once, but at the
     // moment, there's no particular reason we'd need to.
-    pub updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+    pub updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -175,11 +175,11 @@ pub struct BlobTraceBatchMeta {
 /// - All entries have a non-zero diff.
 /// - The updates field is non-empty.
 #[derive(Clone, Debug, Abomonation)]
-pub struct BlobFutureBatch<K, V> {
+pub struct BlobFutureBatch {
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
     /// The updates themselves.
-    pub updates: Vec<((K, V), u64, isize)>,
+    pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -211,14 +211,14 @@ pub struct BlobFutureBatch<K, V> {
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
 #[derive(Clone, Debug, Abomonation)]
-pub struct BlobTraceBatch<K, V> {
+pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
     /// The updates themselves.
-    pub updates: Vec<((K, V), u64, isize)>,
+    pub updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
 }
 
-impl<K, V> BufferEntry<K, V> {
+impl BufferEntry {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -508,11 +508,7 @@ impl BlobTraceBatchMeta {
     }
 }
 
-impl<K, V> BlobFutureBatch<K, V>
-where
-    K: fmt::Debug + Ord,
-    V: fmt::Debug + Ord,
-{
+impl BlobFutureBatch {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -528,11 +524,11 @@ where
             return Err("updates is empty".into());
         }
 
-        let mut prev: Option<(&u64, &K, &V)> = None;
+        let mut prev: Option<(&u64, PrettyBytes<'_>, PrettyBytes<'_>)> = None;
         for update in self.updates.iter() {
             let ((key, val), ts, diff) = update;
             // Check ordering.
-            let this = (ts, key, val);
+            let this = (ts, PrettyBytes(key), PrettyBytes(val));
             if let Some(prev) = prev {
                 match prev.cmp(&this) {
                     Ordering::Less => {} // Correct.
@@ -546,7 +542,7 @@ where
 
             // Check data invariants.
             if *diff == 0 {
-                return Err(format!("update with 0 diff: {:?}", update).into());
+                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
             }
         }
 
@@ -554,11 +550,7 @@ where
     }
 }
 
-impl<K, V> BlobTraceBatch<K, V>
-where
-    K: fmt::Debug + Ord,
-    V: fmt::Debug + Ord,
-{
+impl BlobTraceBatch {
     /// Asserts the documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -569,7 +561,7 @@ where
             return Err(format!("invalid desc: {:?}", &self.desc).into());
         }
 
-        let mut prev: Option<(&K, &V, &u64)> = None;
+        let mut prev: Option<(PrettyBytes<'_>, PrettyBytes<'_>, &u64)> = None;
         for update in self.updates.iter() {
             let ((key, val), ts, diff) = update;
             // Check ts against desc.
@@ -598,7 +590,7 @@ where
             }
 
             // Check ordering.
-            let this = (key, val, ts);
+            let this = (PrettyBytes(key), PrettyBytes(val), ts);
             if let Some(prev) = prev {
                 match prev.cmp(&this) {
                     Ordering::Less => {} // Correct.
@@ -612,10 +604,31 @@ where
 
             // Check data invariants.
             if *diff == 0 {
-                return Err(format!("update with 0 diff: {:?}", update).into());
+                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
             }
         }
         Ok(())
+    }
+}
+
+#[derive(PartialOrd, Ord, PartialEq, Eq)]
+struct PrettyBytes<'a>(&'a [u8]);
+
+impl fmt::Debug for PrettyBytes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match std::str::from_utf8(self.0) {
+            Ok(x) => fmt::Debug::fmt(x, f),
+            Err(_) => fmt::Debug::fmt(self.0, f),
+        }
+    }
+}
+
+struct PrettyRecord<'a>(&'a ((Vec<u8>, Vec<u8>), u64, isize));
+
+impl fmt::Debug for PrettyRecord<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ((k, v), ts, diff) = &self.0;
+        fmt::Debug::fmt(&((PrettyBytes(&k), PrettyBytes(&v)), ts, diff), f)
     }
 }
 
@@ -625,11 +638,11 @@ mod tests {
 
     use super::*;
 
-    fn update_with_ts(ts: u64) -> ((String, String), u64, isize) {
+    fn update_with_ts(ts: u64) -> ((Vec<u8>, Vec<u8>), u64, isize) {
         (("".into(), "".into()), ts, 1)
     }
 
-    fn update_with_key(ts: u64, key: &'static str) -> ((String, String), u64, isize) {
+    fn update_with_key(ts: u64, key: &'static str) -> ((Vec<u8>, Vec<u8>), u64, isize) {
         ((key.into(), "".into()), ts, 1)
     }
 
@@ -691,7 +704,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BufferEntry<String, String> = BufferEntry { updates: vec![] };
+        let b: BufferEntry = BufferEntry { updates: vec![] };
         assert_eq!(b.validate(), Err("updates is empty".into()));
     }
 
@@ -705,14 +718,14 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(0, 2),
             updates: vec![],
         };
         assert_eq!(b.validate(), Err("updates is empty".into()));
 
         // Invalid desc
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(2, 0),
             updates: vec![],
         };
@@ -724,7 +737,7 @@ mod tests {
         );
 
         // Empty desc
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(0, 0),
             updates: vec![],
         };
@@ -758,7 +771,7 @@ mod tests {
         );
 
         // Invalid update
-        let b: BlobFutureBatch<String, String> = BlobFutureBatch {
+        let b: BlobFutureBatch = BlobFutureBatch {
             desc: seqno_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };
@@ -778,14 +791,14 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 2),
             updates: vec![],
         };
         assert_eq!(b.validate(), Ok(()));
 
         // Invalid desc
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(2, 0),
             updates: vec![],
         };
@@ -797,7 +810,7 @@ mod tests {
         );
 
         // Empty desc
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 0),
             updates: vec![],
         };
@@ -866,7 +879,7 @@ mod tests {
         assert_eq!(b.validate(), Err(Error::from("timestamp 5 is greater than the batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [4] } }")));
 
         // Invalid update
-        let b: BlobTraceBatch<String, String> = BlobTraceBatch {
+        let b: BlobTraceBatch = BlobTraceBatch {
             desc: u64_desc(0, 1),
             updates: vec![(("0".into(), "0".into()), 0, 0)],
         };

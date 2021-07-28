@@ -22,8 +22,8 @@ use timely::Data;
 
 use crate::error::Error;
 use crate::indexed::runtime::{CmdResponse, StreamReadHandle, StreamWriteHandle};
-use crate::operators;
 use crate::storage::SeqNo;
+use crate::{operators, EncodeDecode};
 
 /// A persistent equivalent of [UnorderedInput].
 pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
@@ -44,7 +44,7 @@ pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
 impl<G, K> PersistentUnorderedInput<G, K> for G
 where
     G: Scope<Timestamp = u64>,
-    K: Data,
+    K: Data + EncodeDecode,
 {
     fn new_persistent_unordered_input(
         &mut self,
@@ -109,7 +109,7 @@ pub struct PersistentUnorderedSession<'b, K: timely::Data> {
     >,
 }
 
-impl<'b, K: timely::Data> PersistentUnorderedSession<'b, K> {
+impl<'b, K: timely::Data + EncodeDecode> PersistentUnorderedSession<'b, K> {
     /// Transmits a single record after synchronously persisting it.
     pub fn give(&mut self, data: (K, u64, isize), res: CmdResponse<SeqNo>) {
         let (tx, rx) = mpsc::channel();
@@ -262,12 +262,12 @@ mod tests {
     fn error_stream() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable::<(), ()>("1", "error_stream", unreliable.clone())?;
+        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let token = p.create_or_load("error_stream").unwrap();
+                let token = p.create_or_load::<(), ()>("error_stream").unwrap();
                 let (_, _, err_stream) = scope.new_persistent_unordered_input(token);
                 err_stream.capture()
             })

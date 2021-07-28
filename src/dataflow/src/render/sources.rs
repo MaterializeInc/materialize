@@ -110,10 +110,7 @@ where
                             }
                         };
                         let (persist_ok_stream, decode_err_stream) =
-                            persist_ok_stream.ok_err(|((row, ()), ts, diff)| {
-                                let row = Row::decode(&row).map_err(|err| (err, ts, diff))?;
-                                Ok((row, ts, diff))
-                            });
+                            persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
                         let persist_err_collection = persist_err_stream
                             .concat(&decode_err_stream)
                             .map(move |(err, ts, diff)| {

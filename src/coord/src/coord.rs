@@ -2225,11 +2225,7 @@ impl Coordinator {
                                 }) => {
                                     let updates = rows
                                         .into_iter()
-                                        .map(|(row, diff)| {
-                                            let mut encoded_row = Vec::new();
-                                            row.encode(&mut encoded_row);
-                                            ((encoded_row, ()), timestamp, diff)
-                                        })
+                                        .map(|(row, diff)| ((row, ()), timestamp, diff))
                                         .collect();
                                     persist_streams.push(&persist.write_handle);
                                     persist_updates
@@ -3088,13 +3084,9 @@ impl Coordinator {
                 }
             });
             if let Some(persist) = persist {
-                let updates: Vec<((Vec<u8>, ()), u64, isize)> = updates
+                let updates: Vec<((Row, ()), u64, isize)> = updates
                     .into_iter()
-                    .map(|u| {
-                        let mut encoded_row = Vec::new();
-                        u.row.encode(&mut encoded_row);
-                        ((encoded_row, ()), timestamp, u.diff)
-                    })
+                    .map(|u| ((u.row, ()), timestamp, u.diff))
                     .collect();
                 // Persistence of system table inserts is best effort, so throw
                 // away the response and ignore any errors.

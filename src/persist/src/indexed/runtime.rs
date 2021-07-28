@@ -13,6 +13,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -21,18 +22,21 @@ use log;
 
 use crate::error::Error;
 use crate::indexed::encoding::Id;
-use crate::indexed::{Indexed, IndexedSnapshot, ListenFn};
+use crate::indexed::{Indexed, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
-use crate::Data;
+use crate::EncodeDecode;
 
-enum Cmd<K, V> {
+enum Cmd {
     Register(String, CmdResponse<Id>),
     Destroy(String, CmdResponse<bool>),
-    Write(Vec<(Id, Vec<((K, V), u64, isize)>)>, CmdResponse<SeqNo>),
+    Write(
+        Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+        CmdResponse<SeqNo>,
+    ),
     Seal(Id, u64, CmdResponse<()>),
     AllowCompaction(Id, u64, CmdResponse<()>),
-    Snapshot(Id, CmdResponse<IndexedSnapshot<K, V>>),
-    Listen(Id, ListenFn<K, V>, CmdResponse<()>),
+    Snapshot(Id, CmdResponse<IndexedSnapshot>),
+    Listen(Id, ListenFn<Vec<u8>, Vec<u8>>, CmdResponse<()>),
     Stop(CmdResponse<()>),
 }
 
@@ -44,10 +48,8 @@ enum Cmd<K, V> {
 // TODO: At the moment, this runs IO and heavy cpu work in a single thread.
 // Move this work out into whatever async runtime the user likes, via something
 // like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
-pub fn start<K, V, U, L>(buf: U, blob: L) -> Result<RuntimeClient<K, V>, Error>
+pub fn start<U, L>(buf: U, blob: L) -> Result<RuntimeClient, Error>
 where
-    K: Data + Send + Sync + 'static,
-    V: Data + Send + Sync + 'static,
     U: Buffer + Send + 'static,
     L: Blob + Send + 'static,
 {
@@ -138,13 +140,13 @@ impl RuntimeId {
 }
 
 #[derive(Debug)]
-struct RuntimeCore<K, V> {
+struct RuntimeCore {
     handle: Mutex<Option<JoinHandle<()>>>,
-    tx: crossbeam_channel::Sender<Cmd<K, V>>,
+    tx: crossbeam_channel::Sender<Cmd>,
 }
 
-impl<K, V> RuntimeCore<K, V> {
-    fn send(&self, cmd: Cmd<K, V>) {
+impl RuntimeCore {
+    fn send(&self, cmd: Cmd) {
         if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
             // According to the docs, a SendError can only happen if the
             // receiver has hung up, which in this case only happens if the
@@ -203,7 +205,7 @@ impl<K, V> RuntimeCore<K, V> {
     }
 }
 
-impl<K, V> Drop for RuntimeCore<K, V> {
+impl Drop for RuntimeCore {
     fn drop(&mut self) {
         if let Err(err) = self.stop() {
             log::error!("error while stopping dropped persist runtime: {}", err);
@@ -219,22 +221,13 @@ impl<K, V> Drop for RuntimeCore<K, V> {
 /// NB: The methods below are executed concurrently. For a some call X to be
 /// guaranteed as "previous" to another call Y, X's response must have been
 /// received before Y's call started.
-#[derive(Debug)]
-pub struct RuntimeClient<K, V> {
+#[derive(Debug, Clone)]
+pub struct RuntimeClient {
     id: RuntimeId,
-    core: Arc<RuntimeCore<K, V>>,
+    core: Arc<RuntimeCore>,
 }
 
-impl<K, V> Clone for RuntimeClient<K, V> {
-    fn clone(&self) -> Self {
-        RuntimeClient {
-            id: self.id.clone(),
-            core: self.core.clone(),
-        }
-    }
-}
-
-impl<K: Clone, V: Clone> RuntimeClient<K, V> {
+impl RuntimeClient {
     /// Synchronously registers a new stream for writes and reads.
     ///
     /// This method is idempotent. Returns read and write handles used to
@@ -242,7 +235,7 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     ///
     /// If data was written by a previous [RuntimeClient] for this id, it's
     /// loaded and replayed into the stream once constructed.
-    pub fn create_or_load(
+    pub fn create_or_load<K: EncodeDecode, V: EncodeDecode>(
         &self,
         id: &str,
     ) -> Result<(StreamWriteHandle<K, V>, StreamReadHandle<K, V>), Error> {
@@ -258,7 +251,11 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// streams with the given ids.
     ///
     /// The ids must have previously been registered.
-    fn write(&self, updates: Vec<(Id, Vec<((K, V), u64, isize)>)>, res: CmdResponse<SeqNo>) {
+    fn write(
+        &self,
+        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+        res: CmdResponse<SeqNo>,
+    ) {
         self.core.send(Cmd::Write(updates, res))
     }
 
@@ -287,13 +284,13 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// This snapshot is guaranteed to include any previous writes.
     ///
     /// The id must have previously been registered.
-    fn snapshot(&self, id: Id, res: CmdResponse<IndexedSnapshot<K, V>>) {
+    fn snapshot(&self, id: Id, res: CmdResponse<IndexedSnapshot>) {
         self.core.send(Cmd::Snapshot(id, res))
     }
 
     /// Asynchronously registers a callback to be invoked on successful writes
     /// and seals.
-    fn listen(&self, id: Id, listen_fn: ListenFn<K, V>, res: CmdResponse<()>) {
+    fn listen(&self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>, res: CmdResponse<()>) {
         self.core.send(Cmd::Listen(id, listen_fn, res))
     }
 
@@ -321,7 +318,8 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
 #[derive(Debug)]
 pub struct StreamWriteHandle<K, V> {
     id: Id,
-    runtime: RuntimeClient<K, V>,
+    runtime: RuntimeClient,
+    _phantom: PhantomData<(K, V)>,
 }
 
 impl<K, V> Clone for StreamWriteHandle<K, V> {
@@ -329,14 +327,19 @@ impl<K, V> Clone for StreamWriteHandle<K, V> {
         StreamWriteHandle {
             id: self.id,
             runtime: self.runtime.clone(),
+            _phantom: self._phantom,
         }
     }
 }
 
-impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
+impl<K: EncodeDecode, V: EncodeDecode> StreamWriteHandle<K, V> {
     /// Returns a new [StreamWriteHandle] for the given stream.
-    pub fn new(id: Id, runtime: RuntimeClient<K, V>) -> Self {
-        StreamWriteHandle { id, runtime }
+    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+        StreamWriteHandle {
+            id,
+            runtime,
+            _phantom: PhantomData,
+        }
     }
 
     /// Returns the stream [Id] for this handle.
@@ -346,7 +349,16 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
 
     /// Synchronously writes (Key, Value, Time, Diff) updates.
     pub fn write(&self, updates: &[((K, V), u64, isize)], res: CmdResponse<SeqNo>) {
-        self.runtime.write(vec![(self.id, updates.to_vec())], res);
+        let updates = updates
+            .iter()
+            .map(|((k, v), ts, diff)| {
+                let (mut key_encoded, mut val_encoded) = (Vec::new(), Vec::new());
+                k.encode(&mut key_encoded);
+                v.encode(&mut val_encoded);
+                ((key_encoded, val_encoded), *ts, *diff)
+            })
+            .collect();
+        self.runtime.write(vec![(self.id, updates)], res);
     }
 
     /// Closes the stream at the given timestamp, migrating data strictly less
@@ -359,10 +371,11 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
 /// A handle for atomically writing to multiple streams.
 pub struct AtomicWriteHandle<K, V> {
     ids: HashSet<Id>,
-    runtime: RuntimeClient<K, V>,
+    runtime: RuntimeClient,
+    _phantom: PhantomData<(K, V)>,
 }
 
-impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
+impl<K: EncodeDecode, V: EncodeDecode> AtomicWriteHandle<K, V> {
     /// Returns a new [AtomicWriteHandle] for the given streams.
     pub fn new(handles: &[&StreamWriteHandle<K, V>]) -> Result<Self, Error> {
         let mut stream_ids = HashSet::new();
@@ -385,6 +398,7 @@ impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
         Ok(AtomicWriteHandle {
             ids: stream_ids,
             runtime,
+            _phantom: PhantomData,
         })
     }
 
@@ -413,7 +427,70 @@ impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
                 return;
             }
         }
+        // WIP
+        let updates = updates
+            .iter()
+            .map(|(id, updates)| {
+                let updates = updates
+                    .iter()
+                    .map(|((k, v), ts, diff)| {
+                        let (mut key_encoded, mut val_encoded) = (Vec::new(), Vec::new());
+                        k.encode(&mut key_encoded);
+                        v.encode(&mut val_encoded);
+                        ((key_encoded, val_encoded), *ts, *diff)
+                    })
+                    .collect();
+                (*id, updates)
+            })
+            .collect();
         self.runtime.write(updates, res)
+    }
+}
+
+/// WIP
+pub struct DecodedSnapshot<K, V> {
+    snap: IndexedSnapshot,
+    buf: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    _phantom: PhantomData<(K, V)>,
+}
+
+impl<K: EncodeDecode, V: EncodeDecode> DecodedSnapshot<K, V> {
+    fn new(snap: IndexedSnapshot) -> Self {
+        DecodedSnapshot {
+            snap,
+            buf: Vec::new(),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Returns the SeqNo at which this snapshot was run.
+    ///
+    /// All writes assigned a seqno < this are included.
+    pub fn seqno(&self) -> SeqNo {
+        self.snap.seqno()
+    }
+
+    /// A partial read of the data in the snapshot.
+    ///
+    /// Returns true if read needs to be called again for more data.
+    pub fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+        let ret = self.snap.read(&mut self.buf);
+        buf.extend(self.buf.drain(..).map(|((k, v), ts, diff)| {
+            let k = K::decode(&k).expect("WIP");
+            let v = V::decode(&v).expect("WIP");
+            ((k, v), ts, diff)
+        }));
+        ret
+    }
+}
+
+impl<K: EncodeDecode + Ord, V: EncodeDecode + Ord> DecodedSnapshot<K, V> {
+    /// A full read of the data in the snapshot.
+    pub fn read_to_end(mut self) -> Vec<((K, V), u64, isize)> {
+        let mut buf = Vec::new();
+        while self.read(&mut buf) {}
+        buf.sort();
+        buf
     }
 }
 
@@ -422,7 +499,8 @@ impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
 #[derive(Debug)]
 pub struct StreamReadHandle<K, V> {
     id: Id,
-    runtime: RuntimeClient<K, V>,
+    runtime: RuntimeClient,
+    _phantom: PhantomData<(K, V)>,
 }
 
 impl<K, V> Clone for StreamReadHandle<K, V> {
@@ -430,28 +508,46 @@ impl<K, V> Clone for StreamReadHandle<K, V> {
         StreamReadHandle {
             id: self.id,
             runtime: self.runtime.clone(),
+            _phantom: self._phantom,
         }
     }
 }
 
-impl<K: Clone, V: Clone> StreamReadHandle<K, V> {
+impl<K: EncodeDecode, V: EncodeDecode> StreamReadHandle<K, V> {
     /// Returns a new [StreamReadHandle] for the given stream.
-    pub fn new(id: Id, runtime: RuntimeClient<K, V>) -> Self {
-        StreamReadHandle { id, runtime }
+    pub fn new(id: Id, runtime: RuntimeClient) -> Self {
+        StreamReadHandle {
+            id,
+            runtime,
+            _phantom: PhantomData,
+        }
     }
 
     /// Returns a consistent snapshot of all previously persisted stream data.
-    pub fn snapshot(&self) -> Result<IndexedSnapshot<K, V>, Error> {
+    pub fn snapshot(&self) -> Result<DecodedSnapshot<K, V>, Error> {
         // TODO: Make snapshot signature non-blocking.
         let (rx, tx) = mpsc::channel();
         self.runtime.snapshot(self.id, rx.into());
-        tx.recv()
-            .map_err(|_| Error::RuntimeShutdown)
-            .and_then(std::convert::identity)
+        let snap = tx.recv().map_err(|_| Error::RuntimeShutdown)??;
+        Ok(DecodedSnapshot::new(snap))
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
     pub fn listen(&self, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
+        let listen_fn = Box::new(move |e: ListenEvent<Vec<u8>, Vec<u8>>| match e {
+            ListenEvent::Records(records) => {
+                let records = records
+                    .into_iter()
+                    .map(|((k, v), ts, diff)| {
+                        let k = K::decode(&k).expect("WIP");
+                        let v = V::decode(&v).expect("WIP");
+                        ((k, v), ts, diff)
+                    })
+                    .collect();
+                listen_fn(ListenEvent::Records(records))
+            }
+            ListenEvent::Sealed(ts) => listen_fn(ListenEvent::Sealed(ts)),
+        });
         let (rx, tx) = mpsc::channel();
         self.runtime.listen(self.id, listen_fn, rx.into());
         tx.recv().map_err(|_| Error::RuntimeShutdown)?
@@ -463,12 +559,12 @@ impl<K: Clone, V: Clone> StreamReadHandle<K, V> {
     }
 }
 
-struct RuntimeImpl<K, V, U: Buffer, L: Blob> {
-    indexed: Indexed<K, V, U, L>,
-    rx: crossbeam_channel::Receiver<Cmd<K, V>>,
+struct RuntimeImpl<U: Buffer, L: Blob> {
+    indexed: Indexed<U, L>,
+    rx: crossbeam_channel::Receiver<Cmd>,
 }
 
-impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
+impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
     /// Synchronously waits for the next command, executes it, and responds.
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
@@ -523,7 +619,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::indexed::SnapshotExt;
     use crate::mem::{MemBlob, MemBuffer, MemRegistry};
 
     use super::*;
@@ -553,7 +648,7 @@ mod tests {
         // Commands sent after stop return an error, but calling stop again is
         // fine.
         runtime.stop()?;
-        assert!(runtime.create_or_load("0").is_err());
+        assert!(runtime.create_or_load::<(), ()>("0").is_err());
         runtime.stop()?;
 
         Ok(())
@@ -569,7 +664,7 @@ mod tests {
         let buffer = MemBuffer::new("concurrent");
         let blob = MemBlob::new("concurrent");
         let client1 = start(buffer, blob)?;
-        let _ = client1.create_or_load("0")?;
+        let _ = client1.create_or_load::<(), ()>("0")?;
 
         // Everything is still running after client1 is dropped.
         let mut client2 = client1.clone();
@@ -626,8 +721,8 @@ mod tests {
         ];
 
         let mut registry = MemRegistry::new();
-        let client1 = registry.open::<String, ()>("1", "atomic")?;
-        let client2 = registry.open::<String, ()>("2", "atomic")?;
+        let client1 = registry.open("1", "atomic")?;
+        let client2 = registry.open("2", "atomic")?;
 
         let (c1s1, c1s1_read) = client1.create_or_load("1")?;
         let (c1s2, c1s2_read) = client1.create_or_load("2")?;
@@ -650,7 +745,7 @@ mod tests {
         assert_eq!(c1s2_read.snapshot()?.read_to_end(), data[1..].to_vec());
 
         // Cannot write to streams not specified during construction.
-        let (c1s3, _) = client1.create_or_load("3")?;
+        let (c1s3, _) = client1.create_or_load::<(), ()>("3")?;
         assert!(
             block_on(|res| atomic.write_atomic(vec![(c1s3.stream_id(), data.clone())], res))
                 .is_err()

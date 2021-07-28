@@ -16,13 +16,13 @@ use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
 use crate::indexed::runtime::StreamReadHandle;
-use crate::indexed::Snapshot;
+use crate::EncodeDecode;
 
 pub mod input;
 pub mod source;
 pub mod stream;
 
-fn replay<G: Scope<Timestamp = u64>, K: Data, V: Data>(
+fn replay<G: Scope<Timestamp = u64>, K: Data + EncodeDecode, V: Data + EncodeDecode>(
     scope: &mut G,
     read: &StreamReadHandle<K, V>,
 ) -> (

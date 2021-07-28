@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use persist::error::Error;
+use repr::Row;
 use serde::Serialize;
 
 use expr::GlobalId;
@@ -73,7 +74,7 @@ impl PersistConfig {
 #[derive(Debug, Clone)]
 pub struct PersisterWithConfig {
     pub config: PersistConfig,
-    pub persister: Option<RuntimeClient<Vec<u8>, ()>>,
+    pub persister: Option<RuntimeClient>,
 }
 
 impl PersisterWithConfig {
@@ -114,5 +115,5 @@ impl PersisterWithConfig {
 pub struct PersistDetails {
     pub stream_name: String,
     #[serde(skip)]
-    pub write_handle: StreamWriteHandle<Vec<u8>, ()>,
+    pub write_handle: StreamWriteHandle<Row, ()>,
 }

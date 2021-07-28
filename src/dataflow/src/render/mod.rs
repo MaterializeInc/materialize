@@ -161,7 +161,7 @@ pub struct RenderState {
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
-    pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
+    pub persist: Option<RuntimeClient>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.
