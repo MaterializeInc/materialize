@@ -689,9 +689,16 @@ impl Coordinator {
                 tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
             }
             Err(e) => {
-                self.catalog_transact(vec![catalog::Op::DropItem(id)])
-                    .await
-                    .expect("deleting placeholder sink cannot fail");
+                // Drop the placeholder sink if still present.
+                if self.catalog.try_get_by_id(id).is_some() {
+                    self.catalog_transact(vec![catalog::Op::DropItem(id)])
+                        .await
+                        .expect("deleting placeholder sink cannot fail");
+                } else {
+                    // Another session may have dropped the placeholder sink while we were
+                    // attempting to create the connector, in which case we don't need to do
+                    // anything.
+                }
                 tx.send(Err(e), session);
             }
         }
