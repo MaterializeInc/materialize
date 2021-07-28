@@ -641,28 +641,28 @@ CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some([Ident("a"), Ident("b")]) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: Some([Ident("a"), Ident("b")]) }, with_options: [], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
@@ -676,49 +676,56 @@ CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
 ----
 CREATE SINK foo FROM bar INTO AVRO OCF 'baz' WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: AvroOcf { path: "baz" }, with_options: [], format: None, envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: AvroOcf { path: "baz" }, with_options: [], format: None, envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
 CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: true })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: true })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF 123
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF 123
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Value(Number("123"))), if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: true, as_of: Some(Value(Number("123"))), if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: false, as_of: Some(Value(Number("123"))), if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: false, as_of: Some(Value(Number("123"))), if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF now()
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF now()
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, consistency: None, with_snapshot: true, as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
 ----
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: None, consistency: None, with_snapshot: true, as_of: None, if_not_exists: false })
+
+parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH CONSISTENCY TOPIC 'topic' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH CONSISTENCY TOPIC 'topic' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: None, consistency: Some(Kafka { topic: "topic", format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })) }), with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'

@@ -301,6 +301,7 @@ pub fn create_statement(
             with_options: _,
             format: _,
             envelope: _,
+            consistency: _,
             with_snapshot: _,
             as_of: _,
             if_not_exists,

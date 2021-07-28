@@ -22,8 +22,9 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, CreateSourceFormat, CreateSourceKeyEnvelope, DataType, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, TableConstraint, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, Connector, ConsistencyInfo, CreateSourceFormat, CreateSourceKeyEnvelope,
+    DataType, Envelope, Expr, Format, Ident, KeyConstraint, Query, TableConstraint,
+    UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -418,6 +419,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope>,
+    pub consistency: Option<ConsistencyInfo<T>>,
     pub with_snapshot: bool,
     pub as_of: Option<Expr<T>>,
     pub if_not_exists: bool,
@@ -446,6 +448,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         if let Some(envelope) = &self.envelope {
             f.write_str(" ENVELOPE ");
             f.write_node(envelope);
+        }
+        if let Some(consistency) = &self.consistency {
+            f.write_str(" WITH CONSISTENCY");
+            f.write_node(consistency);
         }
         if self.with_snapshot {
             f.write_str(" WITH SNAPSHOT");

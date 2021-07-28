@@ -40,7 +40,7 @@ use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::{CreateSourceFormat, KeyConstraint};
+use sql_parser::ast::{ConsistencyInfo, CreateSourceFormat, KeyConstraint};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -1248,6 +1248,7 @@ fn kafka_sink_builder(
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
+    consistency: Option<ConsistencyInfo<Raw>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
@@ -1259,6 +1260,9 @@ fn kafka_sink_builder(
         Some(Value::String(topic)) => Some(topic),
         Some(_) => bail!("consistency_topic must be a string"),
     };
+    if consistency_topic.is_some() && consistency.is_some() {
+        bail!("cannot specify consistency_topic and WITH CONSISTENCY")
+    }
 
     let reuse_topic = match with_options.remove("reuse_topic") {
         Some(Value::Boolean(b)) => b,
@@ -1437,6 +1441,7 @@ pub fn plan_create_sink(
         with_options,
         format,
         envelope,
+        consistency,
         with_snapshot,
         as_of,
         if_not_exists,
@@ -1544,6 +1549,7 @@ pub fn plan_create_sink(
             &mut with_options,
             broker,
             topic,
+            consistency,
             relation_key_indices,
             key_desc_and_indices,
             value_desc,
