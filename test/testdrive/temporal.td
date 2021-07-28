@@ -266,3 +266,17 @@ Unsupported temporal predicate: `mz_logical_timestamp()` must be directly compar
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE ts BETWEEN mz_logical_timestamp() AND mz_logical_timestamp() + 1;
 Unsupported temporal predicate: `mz_logical_timestamp()` must be directly compared to a non-temporal expression
+
+#
+# Numeric comparisons
+#
+
+# Checks that comparisons against mz_logical_timestamp using values with
+# fractional components are valid.
+
+> CREATE OR REPLACE MATERIALIZED VIEW numeric_trunc AS
+  SELECT 1
+  WHERE mz_logical_timestamp() > 1927418240000.1;
+
+> SELECT * FROM numeric_trunc;
+1

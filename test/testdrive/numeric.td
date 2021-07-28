@@ -32,3 +32,12 @@ a
 0
 0.01
 1.23
+
+# This previously panicked due to a failed conversion from numeric to i128
+# statement ok
+> CREATE OR REPLACE MATERIALIZED VIEW numeric_cast_ok AS
+  SELECT 1
+  WHERE mz_logical_timestamp() > 1927418240000::numeric(38,0);
+
+> SELECT * FROM numeric_cast_ok;
+1
