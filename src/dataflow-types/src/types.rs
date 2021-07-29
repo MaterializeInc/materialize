@@ -25,7 +25,6 @@ use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
-use tokio::sync::mpsc;
 use url::Url;
 use uuid::Uuid;
 
@@ -53,6 +52,17 @@ impl PeekResponse {
             }
         }
     }
+}
+
+/// Various responses that can be communicated about the progress of a TAIL command.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TailResponse {
+    /// Rows that should be returned in order to the client.
+    Rows(Vec<Row>),
+    /// Sent once the stream is complete. Indicates the end.
+    Complete,
+    /// The TAIL dataflow was dropped before completing. Indicates the end.
+    Dropped,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -1090,8 +1100,6 @@ impl SinkConnector {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct TailSinkConnector {
-    #[serde(skip)]
-    pub tx: mpsc::UnboundedSender<Vec<Row>>,
     pub emit_progress: bool,
     pub object_columns: usize,
     pub value_desc: RelationDesc,

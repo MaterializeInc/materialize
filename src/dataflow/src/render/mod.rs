@@ -162,6 +162,11 @@ pub struct RenderState {
     pub metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
+    /// Shared buffer with TAIL operator instances by which they can respond.
+    ///
+    /// The entries are pairs of sink identifier (to identify the tail instance)
+    /// and the response itself.
+    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.

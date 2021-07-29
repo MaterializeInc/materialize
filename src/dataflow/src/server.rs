@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     Consistency, DataflowDescription, DataflowError, ExternalSourceConnector, MzOffset,
-    PeekResponse, SourceConnector, TimestampSourceUpdate, Update,
+    PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::{now::NowFn, result::ResultExt};
@@ -192,6 +192,8 @@ pub enum WorkerFeedback {
     TimestampBindings(TimestampBindingFeedback),
     /// The worker's response to a specified (by connection id) peek.
     PeekResponse(u32, PeekResponse),
+    /// The worker's next response to a specified tail.
+    TailResponse(GlobalId, TailResponse),
 }
 
 /// Configures a dataflow server.
@@ -264,6 +266,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     sink_write_frontiers: HashMap::new(),
                     metrics,
                     persist: persist.clone(),
+                    tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 },
                 materialized_logger: None,
                 command_rx,
@@ -497,6 +500,7 @@ where
             self.metrics.observe_pending_peeks(&self.pending_peeks);
             self.metrics.observe_command_finish();
             self.process_peeks();
+            self.process_tails();
         }
     }
 
@@ -1024,6 +1028,19 @@ where
             } else {
                 self.pending_peeks.push(peek);
             }
+        }
+    }
+
+    /// Scan the shared tail response buffer, and forward results along.
+    fn process_tails(&mut self) {
+        let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
+        for (sink_id, response) in tail_responses.drain(..) {
+            self.feedback_tx
+                .send(WorkerFeedbackWithMeta {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::TailResponse(sink_id, response),
+                })
+                .expect("feedback receiver should not drop first");
         }
     }
 }

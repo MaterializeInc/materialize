@@ -76,7 +76,7 @@ use dataflow::{
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
-    SinkConnector, SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
+    SinkConnector, SourceConnector, TailResponse, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
@@ -251,6 +251,10 @@ pub struct Coordinator {
     /// A map from pending peeks to the queue into which responses are sent, and the
     /// pending response count (initialized to the number of dataflow workers).
     pending_peeks: HashMap<u32, (mpsc::UnboundedSender<PeekResponse>, usize)>,
+    /// A map from pending tails to the queue into which responses are sent.
+    ///
+    /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
+    pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
 }
 
 /// Metadata about an active connection.
@@ -595,6 +599,32 @@ impl Coordinator {
                     *countdown -= 1;
                     if *countdown == 0 {
                         self.pending_peeks.remove(&conn_id);
+                    }
+                }
+            }
+            WorkerFeedback::TailResponse(sink_id, response) => {
+                // We use an `if let` here because the peek could have been cancelled already.
+                // We can also potentially receive multiple `Complete` responses, followed by
+                // a `Dropped` response.
+                if let Some(channel) = self.pending_tails.get_mut(&sink_id) {
+                    match response {
+                        TailResponse::Rows(rows) => {
+                            // TODO(benesch): the lack of backpressure here can result in
+                            // unbounded memory usage.
+                            let result = channel.send(rows);
+                            if result.is_err() {
+                                // TODO(benesch): we should actually drop the sink if the
+                                // receiver has gone away. E.g. form a DROP SINK command?
+                            }
+                        }
+                        TailResponse::Complete => {
+                            // TODO: Indicate this explicitly.
+                            self.pending_tails.remove(&sink_id);
+                        }
+                        TailResponse::Dropped => {
+                            // TODO: Could perhaps do this earlier, in response to DROP SINK.
+                            self.pending_tails.remove(&sink_id);
+                        }
                     }
                 }
             }
@@ -2628,13 +2658,12 @@ impl Coordinator {
         let sink_id = self.catalog.allocate_id()?;
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
-
+        self.pending_tails.insert(sink_id, tx);
         let df = self.dataflow_builder().build_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
             SinkConnector::Tail(TailSinkConnector {
-                tx,
                 emit_progress,
                 object_columns,
                 value_desc: desc,
@@ -3582,6 +3611,7 @@ pub async fn serve(
                 sink_writes: HashMap::new(),
                 now,
                 pending_peeks: HashMap::new(),
+                pending_tails: HashMap::new(),
             };
             if let Some(config) = &logging {
                 coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
@@ -3742,6 +3772,7 @@ pub fn serve_debug(
             sink_writes: HashMap::new(),
             now: get_debug_timestamp,
             pending_peeks: HashMap::new(),
+            pending_tails: HashMap::new(),
         };
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
