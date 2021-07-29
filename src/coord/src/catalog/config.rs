@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use build_info::BuildInfo;
 
+use crate::persistcfg::PersisterWithConfig;
+
 /// Configures a catalog.
 #[derive(Clone, Debug)]
 pub struct Config<'a> {
@@ -31,4 +33,6 @@ pub struct Config<'a> {
     pub timestamp_frequency: Duration,
     /// Function to generate wall clock now; can be mocked.
     pub now: ore::now::NowFn,
+    /// Handle to persistence runtime and feature configuration.
+    pub persist: PersisterWithConfig,
 }

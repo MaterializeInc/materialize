@@ -90,6 +90,7 @@ pub struct BuiltinTable {
     pub desc: RelationDesc,
     pub id: GlobalId,
     pub index_id: GlobalId,
+    pub persistent: bool,
 }
 
 pub struct BuiltinView {
@@ -581,6 +582,7 @@ lazy_static! {
             .with_named_column("key_group", ScalarType::Int64.nullable(false)),
         id: GlobalId::System(4001),
         index_id: GlobalId::System(4002),
+        persistent: false,
     };
     pub static ref MZ_VIEW_FOREIGN_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_foreign_keys",
@@ -594,6 +596,7 @@ lazy_static! {
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
         id: GlobalId::System(4003),
         index_id: GlobalId::System(4004),
+        persistent: false,
     };
     pub static ref MZ_KAFKA_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_kafka_sinks",
@@ -605,6 +608,7 @@ lazy_static! {
             .with_key(vec![0]),
         id: GlobalId::System(4005),
         index_id: GlobalId::System(4006),
+        persistent: false,
     };
     pub static ref MZ_AVRO_OCF_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_avro_ocf_sinks",
@@ -615,6 +619,7 @@ lazy_static! {
             .with_key(vec![0]),
         id: GlobalId::System(4007),
         index_id: GlobalId::System(4008),
+        persistent: false,
     };
     pub static ref MZ_DATABASES: BuiltinTable = BuiltinTable {
         name: "mz_databases",
@@ -625,6 +630,7 @@ lazy_static! {
             .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4009),
         index_id: GlobalId::System(4010),
+        persistent: false,
     };
     pub static ref MZ_SCHEMAS: BuiltinTable = BuiltinTable {
         name: "mz_schemas",
@@ -636,6 +642,7 @@ lazy_static! {
             .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4011),
         index_id: GlobalId::System(4012),
+        persistent: false,
     };
     pub static ref MZ_COLUMNS: BuiltinTable = BuiltinTable {
         name: "mz_columns",
@@ -648,6 +655,7 @@ lazy_static! {
             .with_named_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(4013),
         index_id: GlobalId::System(4014),
+        persistent: false,
     };
     pub static ref MZ_INDEXES: BuiltinTable = BuiltinTable {
         name: "mz_indexes",
@@ -660,6 +668,7 @@ lazy_static! {
             .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4015),
         index_id: GlobalId::System(4016),
+        persistent: false,
     };
     pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
         name: "mz_index_columns",
@@ -672,6 +681,7 @@ lazy_static! {
             .with_named_column("nullable", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4017),
         index_id: GlobalId::System(4018),
+        persistent: false,
     };
     pub static ref MZ_TABLES: BuiltinTable = BuiltinTable {
         name: "mz_tables",
@@ -683,6 +693,7 @@ lazy_static! {
             .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4019),
         index_id: GlobalId::System(4020),
+        persistent: false,
     };
     pub static ref MZ_SOURCES: BuiltinTable = BuiltinTable {
         name: "mz_sources",
@@ -696,6 +707,7 @@ lazy_static! {
             .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4021),
         index_id: GlobalId::System(4022),
+        persistent: false,
     };
     pub static ref MZ_SINKS: BuiltinTable = BuiltinTable {
         name: "mz_sinks",
@@ -709,6 +721,7 @@ lazy_static! {
             .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4023),
         index_id: GlobalId::System(4024),
+        persistent: false,
     };
     pub static ref MZ_VIEWS: BuiltinTable = BuiltinTable {
         name: "mz_views",
@@ -721,6 +734,7 @@ lazy_static! {
             .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4025),
         index_id: GlobalId::System(4026),
+        persistent: false,
     };
     pub static ref MZ_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_types",
@@ -732,6 +746,7 @@ lazy_static! {
             .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4027),
         index_id: GlobalId::System(4028),
+        persistent: false,
     };
     pub static ref MZ_ARRAY_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_array_types",
@@ -741,6 +756,7 @@ lazy_static! {
             .with_named_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4029),
             index_id: GlobalId::System(4030),
+            persistent: false,
     };
     pub static ref MZ_BASE_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_base_types",
@@ -749,6 +765,7 @@ lazy_static! {
             .with_named_column("type_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4031),
             index_id: GlobalId::System(4032),
+            persistent: false,
     };
     pub static ref MZ_LIST_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_list_types",
@@ -758,6 +775,7 @@ lazy_static! {
             .with_named_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4033),
             index_id: GlobalId::System(4034),
+            persistent: false,
     };
     pub static ref MZ_MAP_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_map_types",
@@ -768,6 +786,7 @@ lazy_static! {
             .with_named_column("value_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4035),
             index_id: GlobalId::System(4036),
+            persistent: false,
     };
     pub static ref MZ_ROLES: BuiltinTable = BuiltinTable {
         name: "mz_roles",
@@ -778,6 +797,7 @@ lazy_static! {
             .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4037),
         index_id: GlobalId::System(4038),
+        persistent: false,
     };
     pub static ref MZ_PSEUDO_TYPES: BuiltinTable = BuiltinTable {
         name: "mz_pseudo_types",
@@ -786,6 +806,7 @@ lazy_static! {
             .with_named_column("type_id", ScalarType::String.nullable(false)),
         id: GlobalId::System(4039),
         index_id: GlobalId::System(4040),
+        persistent: false,
     };
     pub static ref MZ_FUNCTIONS: BuiltinTable = BuiltinTable {
         name: "mz_functions",
@@ -799,6 +820,7 @@ lazy_static! {
             .with_named_column("variadic_id", ScalarType::String.nullable(true)),
         id: GlobalId::System(4041),
         index_id: GlobalId::System(4042),
+        persistent: false,
     };
     pub static ref MZ_PROMETHEUS_READINGS: BuiltinTable = BuiltinTable {
         name: "mz_metrics",
@@ -811,6 +833,9 @@ lazy_static! {
                 .with_key(vec![0, 1, 2]),
         id: GlobalId::System(4043),
         index_id: GlobalId::System(4044),
+        // TODO: Enable this once persistence compaction is moved into its own
+        // thread.
+        persistent: false,
     };
     pub static ref MZ_PROMETHEUS_METRICS: BuiltinTable = BuiltinTable {
         name: "mz_metrics_meta",
@@ -822,6 +847,7 @@ lazy_static! {
                 .with_key(vec![0]),
         id: GlobalId::System(4045),
         index_id: GlobalId::System(4046),
+        persistent: false,
     };
     pub static ref MZ_PROMETHEUS_HISTOGRAMS: BuiltinTable = BuiltinTable {
         name: "mz_metric_histograms",
@@ -835,6 +861,9 @@ lazy_static! {
                 .with_key(vec![0, 1, 2]),
         id: GlobalId::System(4047),
         index_id: GlobalId::System(4048),
+        // TODO: Enable this once persistence compaction is moved into its own
+        // thread.
+        persistent: false,
     };
 }
 

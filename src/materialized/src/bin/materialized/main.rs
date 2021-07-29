@@ -36,7 +36,9 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
+use chrono::Utc;
 use clap::AppSettings;
+use coord::PersistConfig;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
@@ -89,6 +91,10 @@ struct Args {
     /// (cloud.materialize.com), but may be useful in other contexts as well.
     #[structopt(long, hidden = true)]
     safe: bool,
+
+    /// Enable persistent tables. Has to be used with --experimental.
+    #[structopt(long, hidden = true)]
+    persistent_tables: bool,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -551,6 +557,32 @@ swap: {swap_total}KB total, {swap_used}KB used",
             .build()?,
     );
 
+    // Configure persistence core.
+    let persist_config = {
+        let user_table_enabled = if args.experimental && args.persistent_tables {
+            true
+        } else if args.persistent_tables {
+            bail!("cannot specify --persistent-tables without --experimental");
+        } else {
+            false
+        };
+        let lock_info = format!(
+            "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
+            mz_version = materialized::BUILD_INFO.human_version(),
+            os = os_info::get(),
+            start_time = Utc::now(),
+            num_workers = args.workers.0,
+        );
+        PersistConfig {
+            // TODO: These paths are hardcoded for now, but we'll want to make
+            // them configurable once we add additional Buffer and Blob impls.
+            buffer_path: data_directory.join("persist").join("buffer"),
+            blob_path: data_directory.join("persist").join("blob"),
+            user_table_enabled,
+            lock_info,
+        }
+    };
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         workers: args.workers.0,
         timely_worker,
@@ -568,6 +600,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
             .introspection_frequency
             .unwrap_or_else(|| Duration::from_secs(1)),
         metrics_registry,
+        persist: persist_config,
     }))?;
 
     eprintln!(

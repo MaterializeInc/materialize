@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use persist::error::Error as PersistError;
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -51,6 +52,7 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
+use crate::persistcfg::{PersistConfig, PersistDetails, PersisterWithConfig};
 use crate::session::Session;
 
 mod builtin_table_updates;
@@ -107,6 +109,8 @@ pub struct Catalog {
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     config: sql::catalog::CatalogConfig,
+    /// Handle to persistence runtime and feature configuration.
+    persist: PersisterWithConfig,
 }
 
 #[derive(Debug)]
@@ -179,6 +183,7 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    pub persist: Option<PersistDetails>,
 }
 
 impl Table {
@@ -514,6 +519,7 @@ impl Catalog {
                 timestamp_frequency: config.timestamp_frequency,
                 now: config.now,
             },
+            persist: config.persist.clone(),
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
@@ -595,9 +601,10 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local(
-                                Timeline::EpochMilliseconds,
-                            ),
+                            connector: dataflow_types::SourceConnector::Local {
+                                timeline: Timeline::EpochMilliseconds,
+                                persisted_name: None,
+                            },
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
@@ -641,6 +648,11 @@ impl Catalog {
                         &index_columns,
                     );
                     let oid = catalog.allocate_oid()?;
+                    let persist = if table.persistent {
+                        catalog.persist_details(table.id)?
+                    } else {
+                        None
+                    };
                     catalog.insert_item(
                         table.id,
                         oid,
@@ -651,6 +663,7 @@ impl Catalog {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
+                            persist,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -677,7 +690,7 @@ impl Catalog {
 
                 Builtin::View(view) if config.enable_logging || !view.needs_logs => {
                     let item = catalog
-                        .parse_item(view.sql.into(), None)
+                        .parse_item(view.id, view.sql.into(), None)
                         .unwrap_or_else(|e| {
                             panic!(
                                 "internal error: failed to load bootstrap view:\n\
@@ -788,7 +801,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match c.deserialize_item(def) {
+            let item = match c.deserialize_item(id, def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -823,6 +836,7 @@ impl Catalog {
             num_workers: 0,
             timestamp_frequency: Duration::from_secs(1),
             now,
+            persist: PersistConfig::disabled().init()?,
         })?;
         Ok(catalog)
     }
@@ -1767,21 +1781,23 @@ impl Catalog {
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
 
-    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
+    fn deserialize_item(&self, id: GlobalId, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env: _,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(create_sql, Some(&PlanContext::zero()))
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
     }
 
     fn parse_item(
         &self,
+        id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let persist = self.persist_details(id)?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
@@ -1791,6 +1807,7 @@ impl Catalog {
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
+                persist,
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 let mut optimizer = Optimizer::for_view();
@@ -1952,7 +1969,7 @@ impl Catalog {
                     ExternalSourceConnector::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local(_) => Volatile,
+                SourceConnector::Local { .. } => Volatile,
             },
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one
@@ -1969,6 +1986,7 @@ impl Catalog {
                     }
                 })
             }
+            // TODO: Persisted tables should be Nonvolatile.
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
@@ -2027,6 +2045,14 @@ impl Catalog {
             }
         }
         relations.into_iter().collect()
+    }
+
+    pub fn user_table_persistence_enabled(&self) -> bool {
+        self.persist.config.user_table_enabled
+    }
+
+    pub fn persist_details(&self, id: GlobalId) -> Result<Option<PersistDetails>, PersistError> {
+        self.persist.details(id)
     }
 }
 

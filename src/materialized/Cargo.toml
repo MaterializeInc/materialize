@@ -34,6 +34,7 @@ atty = "0.2.14"
 backtrace = "0.3.60"
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "2.33.0", features = ["wrap_help"] }
 compile-time-run = "0.2.12"
 coord = { path = "../coord" }
@@ -98,7 +99,6 @@ tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unpr
 [dev-dependencies]
 assert_cmd = "1.0.7"
 bytes = "1.0.1"
-chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coordtest = { path = "../coordtest" }
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"

@@ -107,6 +107,7 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 use differential_dataflow::AsCollection;
+use persist::indexed::runtime::RuntimeClient;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
@@ -159,6 +160,8 @@ pub struct RenderState {
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
+    /// Handle to the persistence runtime. None if disabled.
+    pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.

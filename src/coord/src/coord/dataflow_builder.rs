@@ -74,7 +74,10 @@ impl<'a> DataflowBuilder<'a> {
                     dataflow.import_source(
                         entry.name().to_string(),
                         *id,
-                        SourceConnector::Local(table.timeline()),
+                        SourceConnector::Local {
+                            timeline: table.timeline(),
+                            persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                        },
                         table.desc.clone(),
                         *id,
                     );

@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use compile_time_run::run_command_str;
+use coord::PersistConfig;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use ore::{
@@ -127,6 +128,8 @@ pub struct Config {
     pub telemetry: Option<TelemetryConfig>,
     /// The place where the server's metrics will be reported from.
     pub metrics_registry: MetricsRegistry,
+    /// Configuration of the persistence runtime and features.
+    pub persist: PersistConfig,
 }
 
 /// Configures TLS encryption for connections.
@@ -287,6 +290,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
+    // Initialize persistence runtime.
+    let persist = config.persist.init()?;
+
     // Initialize coordinator.
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         workers,
@@ -300,6 +306,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
         metrics_registry: metrics_registry.clone(),
+        persist,
     })
     .await?;
 
