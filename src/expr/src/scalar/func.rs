@@ -3127,7 +3127,9 @@ impl BinaryFunc {
     pub fn propagates_nulls(&self) -> bool {
         !matches!(
             self,
-            BinaryFunc::And
+            BinaryFunc::Eq
+                | BinaryFunc::NotEq
+                | BinaryFunc::And
                 | BinaryFunc::Or
                 | BinaryFunc::ListListConcat
                 | BinaryFunc::ListElementConcat
