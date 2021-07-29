@@ -43,7 +43,7 @@ pub fn handle_static(
 ) -> Result<Response<Body>, anyhow::Error> {
     if req.method() == Method::GET {
         let path = req.uri().path();
-        let path = path.strip_prefix("/").unwrap_or(path);
+        let path = path.strip_prefix('/').unwrap_or(path);
         match get_static_file(path) {
             Some(body) => Ok(Response::new(body)),
             None => Ok(util::error_response(StatusCode::NOT_FOUND, "not found")),
