@@ -1,0 +1,65 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [int64 int64])
+----
+ok
+
+# Redundant IS NOT NULL predicate
+
+build apply=FilterFusion
+(filter (get x) [(call_unary not (call_unary is_null #0)) (call_binary eq #0 1)])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = 1)
+
+build apply=FilterFusion
+(filter (get x) [(call_unary not (call_unary is_null #1)) (call_binary eq #0 #1)])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1)
+
+build apply=FilterFusion
+(filter (filter (get x) [(call_unary not (call_unary is_null #0))]) [(call_binary eq #0 1)])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = 1)
+
+# Impossible condition detection
+
+build apply=FilterFusion
+(filter (filter (get x) [(call_unary is_null #0)]) [(call_binary eq #0 1)])
+----
+%0 =
+| Get x (u0)
+| Filter false, (#0 = 1)
+
+build apply=(FilterFusion,FoldConstants)
+(filter (filter (get x) [(call_unary is_null #0)]) [(call_binary eq #0 1)])
+----
+%0 =
+| Constant
+
+build apply=FilterFusion
+(filter (filter (get x) [(call_unary is_null #1)]) [(call_binary eq #0 #1)])
+----
+%0 =
+| Get x (u0)
+| Filter false, (#0 = #1)
+
+build apply=FilterFusion
+(filter (filter (get x) [(call_unary is_null #0)]) [(call_unary not (call_unary is_null #0))])
+----
+%0 =
+| Get x (u0)
+| Filter false, !(isnull(#0))

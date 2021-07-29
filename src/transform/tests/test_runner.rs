@@ -136,6 +136,10 @@ mod tests {
         match name {
             "ColumnKnowledge" => Ok(Box::new(transform::column_knowledge::ColumnKnowledge)),
             "Demand" => Ok(Box::new(transform::demand::Demand)),
+            "FilterFusion" => Ok(Box::new(transform::fusion::filter::Filter)),
+            "FoldConstants" => Ok(Box::new(transform::reduction::FoldConstants {
+                limit: None,
+            })),
             "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting)),
             "NonNullRequirements" => Ok(Box::new(
