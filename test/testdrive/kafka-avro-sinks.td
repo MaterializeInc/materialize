@@ -88,6 +88,18 @@ $ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
 $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
 {"before": null, "after": {"row": {"list": [{"int": 1}, {"int": 2}]}}}
 
+# Test new CONSISTENCY TOPIC and CONSISTENCY FORMAT fields
+# todo@jldlaughlin: These fields aren't currently used! Update this test when they are.
+
+> CREATE SINK consistency_params FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'consistency-params'
+  CONSISTENCY TOPIC 'ignored-topic' CONSISTENCY FORMAT JSON
+  WITH (consistency_topic='actually-used')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.consistency_params sort-messages=true
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
+
 # Bad Sinks
 
 > CREATE VIEW input (a, b) AS SELECT * FROM (VALUES (1, 2))

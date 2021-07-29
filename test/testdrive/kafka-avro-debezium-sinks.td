@@ -100,6 +100,12 @@ $ kafka-create-topic topic=input
   WITH (consistency_topic = 'non-keyed-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+> CREATE SINK another_non_keyed_sink FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'another-non-keyed-sink'
+  CONSISTENCY TOPIC 'ignored'
+  WITH (consistency_topic = 'another-non-keyed-sink-consistency') FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
 > CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
 
 # the sinked relation has the natural primary key (a)
@@ -172,6 +178,28 @@ $ kafka-verify format=avro sink=materialize.public.non_keyed_sink consistency=de
 {"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "non-keyed-sink"}]}}
 {"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
 {"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "non-keyed-sink"}]}}
+
+# Make the same assertions for another_non_keyed_sink to verify that the
+# CONSISTENCY TOPIC and CONSISTENCY FORMAT parameters don't change anything!
+# todo@jldlaughlin: update this test when new parameters are used.
+$ kafka-verify format=avro sink=materialize.public.another_non_keyed_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=avro sink=materialize.public.another_non_keyed_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+
+$ kafka-verify format=avro sink=materialize.public.another_non_keyed_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+
+$ kafka-verify format=avro sink=materialize.public.another_non_keyed_sink consistency=debezium
+{"id": "1", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "1", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "another-non-keyed-sink"}]}}
+{"id": "2", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "2", "status": "END", "event_count": {"long": 2}, "data_collections": {"array": [{"event_count": 2, "data_collection": "another-non-keyed-sink"}]}}
+{"id": "3", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "another-non-keyed-sink"}]}}
 
 # Again, compare split by transaction. See comment just above.
 
