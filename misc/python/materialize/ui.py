@@ -119,7 +119,6 @@ async def async_timeout_loop(
     end = time.monotonic() + timeout
     while True:
         before = time.monotonic()
-        print("In ATL; about to yield")
         yield end - before
         after = time.monotonic()
 

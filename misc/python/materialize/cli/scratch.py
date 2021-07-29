@@ -43,7 +43,7 @@ ROOT = os.environ["MZ_ROOT"]
 
 def launch(
     *,
-    key_name: str,
+    key_name: Optional[str],
     instance_type: str,
     ami: str,
     tags: Dict[str, str],
@@ -51,6 +51,7 @@ def launch(
     subnet_id: Optional[str] = None,
     size_gb: int,
     security_group_id: str,
+    instance_profile: Optional[str],
     nonce: str,
 ) -> Any:
     """Launch and configure an ec2 instance with the given properties."""
@@ -64,20 +65,19 @@ def launch(
     SPEAKER(f"launching instance {display_name or '(unnamed)'}")
     with open(ROOT + "/misc/load-tests/provision.bash") as f:
         provisioning_script = f.read()
-    i = boto3.resource("ec2").create_instances(
-        MinCount=1,
-        MaxCount=1,
-        ImageId=ami,
-        InstanceType=instance_type,
-        KeyName=key_name,
-        UserData=provisioning_script,
-        TagSpecifications=[
+    kwargs = {
+        "MinCount": 1,
+        "MaxCount": 1,
+        "ImageId": ami,
+        "InstanceType": instance_type,
+        "UserData": provisioning_script,
+        "TagSpecifications": [
             {
                 "ResourceType": "instance",
                 "Tags": [{"Key": k, "Value": v} for (k, v) in tags.items()],
             }
         ],
-        NetworkInterfaces=[
+        "NetworkInterfaces": [
             {
                 "AssociatePublicIpAddress": True,
                 "DeviceIndex": 0,
@@ -85,7 +85,7 @@ def launch(
                 "SubnetId": subnet_id,
             }
         ],
-        BlockDeviceMappings=[
+        "BlockDeviceMappings": [
             {
                 "DeviceName": "/dev/sda1",
                 "Ebs": {
@@ -94,12 +94,51 @@ def launch(
                 },
             }
         ],
-    )[0]
+    }
+    if key_name:
+        kwargs["KeyName"] = key_name
+    if instance_profile:
+        kwargs["IamInstanceProfile"] = {"Name": instance_profile}
+    i = boto3.resource("ec2").create_instances(**kwargs)[0]
 
     return i
 
 
-async def setup(i: Any, subnet_id: Optional[str]) -> None:
+class CommandResult(NamedTuple):
+    status: str
+    stdout: str
+    stderr: str
+
+
+async def run_ssm(i: Any, commands: List[str], timeout: int = 60) -> CommandResult:
+    id = boto3.client("ssm").send_command(
+        InstanceIds=[i.instance_id],
+        DocumentName="AWS-RunShellScript",
+        Parameters={"commands": commands},
+    )["Command"]["CommandId"]
+
+    async for remaining in ui.async_timeout_loop(timeout, 5):
+        invocation_dne = boto3.client("ssm").exceptions.InvocationDoesNotExist
+        SPEAKER(f"Waiting for commands to finish running: {remaining}s remaining")
+        try:
+            result = boto3.client("ssm").get_command_invocation(
+                CommandId=id, InstanceId=i.instance_id
+            )
+        except invocation_dne:
+            continue
+        if result["Status"] != "InProgress":
+            return CommandResult(
+                status=result["Status"],
+                stdout=result["StandardOutputContent"],
+                stderr=result["StandardErrorContent"],
+            )
+
+    raise RuntimeError(
+        f"Command {commands} on instance {i} did not run in a reasonable amount of time"
+    )
+
+
+async def setup(i: Any, subnet_id: Optional[str], local_pub_key: str) -> None:
     def is_ready(i: Any) -> bool:
         return bool(
             i.public_ip_address and i.state and i.state.get("Name") == "running"
@@ -117,6 +156,28 @@ async def setup(i: Any, subnet_id: Optional[str]) -> None:
         raise RuntimeError(
             f"Instance {i} did not become ready in a reasonable amount of time"
         )
+
+    done = False
+    invalid_instance = boto3.client("ssm").exceptions.InvalidInstanceId
+
+    commands = [
+        "mkdir -p ~ubuntu/.ssh",
+        f"echo {local_pub_key} >> ~ubuntu/.ssh/authorized_keys",
+    ]
+    import pprint
+
+    print("Running commands:")
+    pprint.pprint(commands)
+    async for remaining in ui.async_timeout_loop(180, 5):
+        try:
+            await run_ssm(i, commands, 180)
+            done = True
+            break
+        except invalid_instance:
+            pass
+
+    if not done:
+        raise RuntimeError(f"Failed to run SSM commands on instance {i}")
 
     done = False
     async for remaining in ui.async_timeout_loop(180, 5):
@@ -166,16 +227,17 @@ class MachineDesc(NamedTuple):
     size_gb: int
 
 
-async def setup_all(instances: List[Any], subnet_id: str) -> None:
-    await asyncio.gather(*(setup(i, subnet_id) for i in instances))
+async def setup_all(instances: List[Any], subnet_id: str, local_pub_key: str) -> None:
+    await asyncio.gather(*(setup(i, subnet_id, local_pub_key) for i in instances))
 
 
 def launch_cluster(
     descs: List[MachineDesc],
     nonce: str,
     subnet_id: str,
-    key_name: str,
+    key_name: Optional[str],
     security_group_id: str,
+    instance_profile: Optional[str],
     extra_tags: Dict[str, str],
 ) -> List[Any]:
     """Launch a cluster of instances with a given nonce"""
@@ -189,13 +251,17 @@ def launch_cluster(
             size_gb=d.size_gb,
             subnet_id=subnet_id,
             security_group_id=security_group_id,
+            instance_profile=instance_profile,
             nonce=nonce,
         )
         for d in descs
     ]
 
+    with open(f"{os.environ['HOME']}/.ssh/id_rsa.pub") as pk:
+        local_pub_key = pk.read().strip()
+
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(setup_all(instances, subnet_id))
+    loop.run_until_complete(setup_all(instances, subnet_id, local_pub_key))
     loop.close()
 
     hosts_str = "".join(
@@ -258,13 +324,17 @@ def main() -> None:
     # Sane defaults for internal Materialize use in the scratch account
     DEFAULT_SUBNET_ID = "subnet-0b47df5733387582b"
     DEFAULT_SG_ID = "sg-0f2d62ae0f39f93cc"
+    DEFAULT_INSTPROF_NAME = "ssm-instance-profile"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--subnet-id", type=str, default=DEFAULT_SUBNET_ID)
-    parser.add_argument("--key-name", type=str, required=True)
+    parser.add_argument("--key-name", type=str, required=False)
     parser.add_argument("--security-group-id", type=str, default=DEFAULT_SG_ID)
     parser.add_argument("--extra-tags", type=str, required=False)
+    parser.add_argument("--instance-profile", type=str, default=DEFAULT_INSTPROF_NAME)
+    parser.add_argument("--no-instance-profile", action="store_const", const=True)
     args = parser.parse_args()
+    instance_profile = None if args.no_instance_profile else args.instance_profile
     extra_tags = {}
     if args.extra_tags:
         extra_tags = json.loads(args.extra_tags)
@@ -291,8 +361,22 @@ def main() -> None:
 
     nonce = "".join(random.choice("0123456789abcdef") for n in range(8))
 
-    launch_cluster(
-        descs, nonce, args.subnet_id, args.key_name, args.security_group_id, extra_tags
+    instances = launch_cluster(
+        descs,
+        nonce,
+        args.subnet_id,
+        args.key_name,
+        args.security_group_id,
+        instance_profile,
+        extra_tags,
+    )
+    print(
+        "launched instances: {}".format(
+            [
+                f"{d.name} (instance id: {i.instance_id}, ip: {i.public_ip_address})"
+                for (i, d) in zip(instances, descs)
+            ]
+        )
     )
 
 

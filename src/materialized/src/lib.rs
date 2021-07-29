@@ -283,15 +283,24 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         local_addr,
         _drain_trigger: drain_trigger,
         _coord_handle: coord_handle,
+        _btv: Btv,
     })
 }
 
+struct Btv;
+
+impl Drop for Btv {
+    fn drop(&mut self) {
+        println!("Dropped!");
+    }
+}
 /// A running `materialized` server.
 pub struct Server {
     local_addr: SocketAddr,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
     _coord_handle: coord::Handle,
+    _btv: Btv,
 }
 
 impl Server {
