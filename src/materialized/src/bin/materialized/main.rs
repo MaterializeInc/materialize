@@ -267,7 +267,12 @@ struct WorkerCount(usize);
 
 impl Default for WorkerCount {
     fn default() -> Self {
-        WorkerCount(cmp::max(1, num_cpus::get_physical() / 2))
+        WorkerCount(cmp::max(
+            1,
+            // When inside a cgroup with a cpu limit,
+            // the logical cpus can be lower than the physical cpus.
+            cmp::min(num_cpus::get(), num_cpus::get_physical()) / 2,
+        ))
     }
 }
 
@@ -479,6 +484,10 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Configure prometheus process metrics.
     mz_process_collector::register_default_process_collector(&metrics_registry);
 
+    // When inside a cgroup with a cpu limit,
+    // the logical cpus can be lower than the physical cpus.
+    let ncpus_useful = cmp::min(num_cpus::get(), num_cpus::get_physical());
+
     // Print system information as the very first thing in the logs. The goal is
     // to increase the probability that we can reproduce a reported bug if all
     // we get is the log file.
@@ -490,7 +499,7 @@ materialized {mz_version}
 {dep_versions}
 invoked as: {invocation}
 os: {os}
-cpus: {ncpus_logical} logical, {ncpus_physical} physical
+cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used
 swap: {swap_total}KB total, {swap_used}KB used",
@@ -513,6 +522,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
         os = os_info::get(),
         ncpus_logical = num_cpus::get(),
         ncpus_physical = num_cpus::get_physical(),
+        ncpus_useful = ncpus_useful,
         cpu0 = {
             match &system.processors().get(0) {
                 None => "<unknown>".to_string(),
@@ -540,6 +550,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
     // Start Tokio runtime.
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(ncpus_useful)
             // The default thread name exceeds the Linux limit on thread name
             // length, so pick something shorter.
             .thread_name_fn(|| {
