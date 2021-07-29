@@ -12,13 +12,14 @@ use std::fmt;
 
 use crate::error::Error;
 use crate::nemesis::{
-    ReadSnapshotReq, ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step, TakeSnapshotReq,
-    WriteReq, WriteRes,
+    AllowCompactionReq, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step,
+    TakeSnapshotReq, WriteReq, WriteRes,
 };
 use crate::storage::SeqNo;
 
 pub struct Validator {
-    sealed: HashMap<String, u64>,
+    seal_frontier: HashMap<String, u64>,
+    since_frontier: HashMap<String, u64>,
     writes_by_seqno: BTreeMap<(String, SeqNo), ((String, ()), u64, isize)>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
@@ -42,7 +43,8 @@ impl Validator {
 
     fn new() -> Self {
         Validator {
-            sealed: HashMap::new(),
+            seal_frontier: HashMap::new(),
+            since_frontier: HashMap::new(),
             writes_by_seqno: BTreeMap::new(),
             available_snapshots: HashMap::new(),
             errors: Vec::new(),
@@ -65,6 +67,7 @@ impl Validator {
         match s.res {
             Res::Write(req, res) => self.step_write(s.req_id, req, res),
             Res::Seal(req, res) => self.step_seal(s.req_id, req, res),
+            Res::AllowCompaction(req, res) => self.step_allow_compaction(s.req_id, req, res),
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
             Res::ReadSnapshot(req, res) => self.step_read_snapshot(s.req_id, req, res),
             Res::Restart(res) => self.step_restart(s.req_id, res),
@@ -99,7 +102,12 @@ impl Validator {
     fn step_write(&mut self, req_id: ReqId, req: WriteReq, res: Result<WriteRes, Error>) {
         let should_succeed = self.runtime_available
             && self.storage_available
-            && req.update.1 >= self.sealed.get(&req.stream).copied().unwrap_or_default();
+            && req.update.1
+                >= self
+                    .seal_frontier
+                    .get(&req.stream)
+                    .copied()
+                    .unwrap_or_default();
         self.check_success(req_id, &res, should_succeed);
         if let Ok(res) = res {
             self.writes_by_seqno
@@ -110,10 +118,41 @@ impl Validator {
     fn step_seal(&mut self, req_id: ReqId, req: SealReq, res: Result<(), Error>) {
         let should_succeed = self.runtime_available
             && self.storage_available
-            && req.ts > self.sealed.get(&req.stream).copied().unwrap_or_default();
+            && req.ts
+                > self
+                    .seal_frontier
+                    .get(&req.stream)
+                    .copied()
+                    .unwrap_or_default();
         self.check_success(req_id, &res, should_succeed);
         if let Ok(_) = res {
-            self.sealed.insert(req.stream, req.ts);
+            self.seal_frontier.insert(req.stream, req.ts);
+        }
+    }
+
+    fn step_allow_compaction(
+        &mut self,
+        req_id: ReqId,
+        req: AllowCompactionReq,
+        res: Result<(), Error>,
+    ) {
+        let should_succeed = self.runtime_available
+            && self.storage_available
+            && req.ts
+                > self
+                    .since_frontier
+                    .get(&req.stream)
+                    .copied()
+                    .unwrap_or_default()
+            && req.ts
+                < self
+                    .seal_frontier
+                    .get(&req.stream)
+                    .copied()
+                    .unwrap_or_default();
+        self.check_success(req_id, &res, should_succeed);
+        if let Ok(_) = res {
+            self.since_frontier.insert(req.stream, req.ts);
         }
     }
 
@@ -148,6 +187,9 @@ impl Validator {
                     // TODO: This is also used by the implementation. Write a
                     // slower but more obvious impl of consolidation here and
                     // use it for validation.
+                    // TODO: The actual snapshot will eventually be compacted up
+                    // to some since frontier and the expected snapshot will need
+                    // to account for that when checking equality.
                     differential_dataflow::consolidation::consolidate_updates(&mut actual);
                     differential_dataflow::consolidation::consolidate_updates(&mut expected);
                     if actual != expected {

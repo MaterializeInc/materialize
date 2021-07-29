@@ -65,7 +65,6 @@
 // - Impl of Runtime directly using Indexed
 // - Impl of Runtime with Timely workers running in threads
 // - Impl of Runtime with Timely workers running in processes
-// - Advancing the compaction frontier
 // - Storage (buffer/blob) with variable latency/slow requests
 // - Vary key size
 // - Non-uniform (zipfian) distribution of keys (any other distributions?)
@@ -119,6 +118,7 @@ pub struct Step {
 pub enum Req {
     Write(WriteReq),
     Seal(SealReq),
+    AllowCompaction(AllowCompactionReq),
     TakeSnapshot(TakeSnapshotReq),
     ReadSnapshot(ReadSnapshotReq),
     Restart,
@@ -130,6 +130,7 @@ pub enum Req {
 pub enum Res {
     Write(WriteReq, Result<WriteRes, Error>),
     Seal(SealReq, Result<(), Error>),
+    AllowCompaction(AllowCompactionReq, Result<(), Error>),
     TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
     ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
     Restart(Result<(), Error>),
@@ -150,6 +151,12 @@ pub struct WriteRes {
 
 #[derive(Clone, Debug)]
 pub struct SealReq {
+    stream: String,
+    ts: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AllowCompactionReq {
     stream: String,
     ts: u64,
 }

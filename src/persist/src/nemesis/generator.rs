@@ -14,7 +14,8 @@ use rand::{Rng, SeedableRng};
 use serde::Serialize;
 
 use crate::nemesis::{
-    Input, ReadSnapshotReq, Req, ReqId, SealReq, SnapshotId, TakeSnapshotReq, WriteReq,
+    AllowCompactionReq, Input, ReadSnapshotReq, Req, ReqId, SealReq, SnapshotId, TakeSnapshotReq,
+    WriteReq,
 };
 
 /// Configuration of the relative probabilities of producing various
@@ -24,6 +25,7 @@ pub struct GeneratorConfig {
     pub write_unsealed_weight: u32,
     pub write_sealed_weight: u32,
     pub seal_weight: u32,
+    pub allow_compaction_weight: u32,
     pub take_snapshot_weight: u32,
     pub read_snapshot_weight: u32,
     pub restart_weight: u32,
@@ -37,6 +39,7 @@ impl GeneratorConfig {
             write_unsealed_weight: 1,
             write_sealed_weight: 1,
             seal_weight: 1,
+            allow_compaction_weight: 1,
             take_snapshot_weight: 1,
             read_snapshot_weight: 1,
             restart_weight: 1,
@@ -53,7 +56,8 @@ impl Default for GeneratorConfig {
 }
 
 struct GeneratorState {
-    sealed_by_stream: HashMap<String, u64>,
+    seal_frontier: HashMap<String, u64>,
+    since_frontier: HashMap<String, u64>,
     snap_id: SnapshotId,
     outstanding_snaps: HashMap<SnapshotId, String>,
     storage_available: bool,
@@ -62,7 +66,8 @@ struct GeneratorState {
 impl Default for GeneratorState {
     fn default() -> Self {
         GeneratorState {
-            sealed_by_stream: HashMap::new(),
+            seal_frontier: HashMap::new(),
+            since_frontier: HashMap::new(),
             snap_id: SnapshotId(0),
             outstanding_snaps: HashMap::new(),
             storage_available: true,
@@ -74,6 +79,7 @@ enum ReqGenerator {
     WriteUnsealed,
     WriteSealed,
     Seal,
+    AllowCompaction,
     TakeSnapshot,
     ReadSnapshot,
     Restart,
@@ -98,7 +104,7 @@ impl ReqGenerator {
         let stream = rng_stream(rng);
         let key = rng_key(rng);
         let stream_sealed_ts = state
-            .sealed_by_stream
+            .seal_frontier
             .get(&stream)
             .copied()
             .unwrap_or_default();
@@ -119,7 +125,7 @@ impl ReqGenerator {
     fn write_sealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let key = rng_key(rng);
         let (stream, ts) = state
-            .sealed_by_stream
+            .seal_frontier
             .iter()
             .filter(|(_, ts)| **ts > 0)
             .choose(rng)
@@ -136,12 +142,34 @@ impl ReqGenerator {
     fn seal(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let stream = rng_stream(rng);
         let stream_sealed_ts = state
-            .sealed_by_stream
+            .seal_frontier
             .get(&stream)
             .copied()
             .unwrap_or_default();
         let ts = stream_sealed_ts + rng.gen_range(0..5);
         Req::Seal(SealReq { stream, ts })
+    }
+
+    fn allow_compaction(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
+        let stream = rng_stream(rng);
+        let ts = {
+            let base = if rng.gen_bool(0.5) {
+                state
+                    .since_frontier
+                    .get(&stream)
+                    .copied()
+                    .unwrap_or_default()
+            } else {
+                state
+                    .seal_frontier
+                    .get(&stream)
+                    .copied()
+                    .unwrap_or_default()
+            };
+
+            base + rng.gen_range(0..5)
+        };
+        Req::AllowCompaction(AllowCompactionReq { stream, ts })
     }
 
     fn take_snapshot(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
@@ -168,6 +196,7 @@ impl ReqGenerator {
             ReqGenerator::WriteUnsealed => ReqGenerator::write_unsealed(rng, state),
             ReqGenerator::WriteSealed => ReqGenerator::write_sealed(rng, state),
             ReqGenerator::Seal => ReqGenerator::seal(rng, state),
+            ReqGenerator::AllowCompaction => ReqGenerator::allow_compaction(rng, state),
             ReqGenerator::TakeSnapshot => ReqGenerator::take_snapshot(rng, state),
             ReqGenerator::ReadSnapshot => ReqGenerator::read_snapshot(rng, state),
             ReqGenerator::Restart => Req::Restart,
@@ -217,9 +246,13 @@ impl Generator {
             (
                 self.config.write_sealed_weight,
                 Some(ReqGenerator::WriteSealed)
-                    .filter(|_| self.state.sealed_by_stream.iter().any(|(_, ts)| *ts > 0)),
+                    .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
             ),
             (self.config.seal_weight, Some(ReqGenerator::Seal)),
+            (
+                self.config.allow_compaction_weight,
+                Some(ReqGenerator::AllowCompaction),
+            ),
             (
                 self.config.take_snapshot_weight,
                 Some(ReqGenerator::TakeSnapshot),
@@ -307,6 +340,9 @@ mod tests {
                 closed_by_stream.insert(r.stream, ts);
                 counts.seal_weight += 1;
             }
+            Req::AllowCompaction(_) => {
+                counts.allow_compaction_weight += 1;
+            }
             Req::TakeSnapshot(_) => {
                 counts.take_snapshot_weight += 1;
             }
@@ -328,6 +364,7 @@ mod tests {
             write_unsealed_weight: 0,
             write_sealed_weight: 0,
             seal_weight: 0,
+            allow_compaction_weight: 0,
             take_snapshot_weight: 0,
             read_snapshot_weight: 0,
             restart_weight: 0,
