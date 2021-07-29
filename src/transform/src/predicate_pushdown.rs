@@ -612,6 +612,20 @@ impl PredicatePushdown {
                             push_downs[input].extend(gen_literal_equality_preds(expr));
                             equivalences[equivalence_pos].remove(expr_pos);
                         }
+
+                        // If none of the expressions in the equivalence depend on input
+                        // columns and equality predicates with them are pushed down,
+                        // we can safely remove them from the equivalence.
+                        // TODO: we could probably push equality predicates among the
+                        // remaining constants to all join inputs to prevent any computation
+                        // from happening until the condition is satisfied.
+                        if equivalences[equivalence_pos]
+                            .iter()
+                            .all(|e| e.support().is_empty())
+                            && push_downs.iter().any(|p| !p.is_empty())
+                        {
+                            equivalences[equivalence_pos].clear();
+                        }
                     } else {
                         // Case 3: There are no constants in the equivalence
                         // class. Push a predicate for every pair of expressions
