@@ -199,3 +199,32 @@ $ kafka-ingest format=avro topic=compaction-test-input-consistency timestamp=1 s
 $ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+# verify output of consistency topic with real-time timestamp bindings
+
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
+$ kafka-create-topic topic=rt-binding-consistency-test-input
+
+> CREATE MATERIALIZED SOURCE rt_binding_consistency_test_source
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-rt-binding-consistency-test-input-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+
+> CREATE SINK rt_binding_consistency_test_sink FROM rt_binding_consistency_test_source
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'rt-binding-consistency-test-output-${testdrive.seed}'
+  WITH (reuse_topic=true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+
+$ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${schema} timestamp=1
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+
+$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+
+# Verify that there is at least one cycle of consistency output. After that, we
+# can't verify more because there will now be a constant stream of END records
+# as real time advances.
+
+$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium
+{"id": "<TIMESTAMP>", "status": "BEGIN", "event_count": null, "data_collections": null}
+{"id": "<TIMESTAMP>", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "rt-binding-consistency-test-output-${testdrive.seed}"}]}}
