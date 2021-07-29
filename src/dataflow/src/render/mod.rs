@@ -630,7 +630,7 @@ pub mod plan {
     /// compelling ways to represent renderable plans. Several stages have already
     /// encapsulated much of their logic in their own stage-specific plans, and we
     /// expect more of the plans to do the same in the future, without consultation.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub enum Plan {
         /// A collection containing a pre-determined collection.
         Constant {

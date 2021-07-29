@@ -60,7 +60,7 @@ mod metrics;
 static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 
 /// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.
     ///

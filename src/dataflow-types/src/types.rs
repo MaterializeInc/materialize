@@ -84,7 +84,7 @@ pub struct BuildDesc<View> {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DataflowDescription<View> {
     /// Sources made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, (SourceDesc, GlobalId)>,
@@ -628,7 +628,7 @@ pub struct SourceDesc {
 }
 
 /// A sink for updates to a relational collection.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SinkDesc {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
@@ -1013,7 +1013,7 @@ pub enum S3KeySource {
     SqsNotifications { queue: String },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
     Tail(TailSinkConnector),
@@ -1098,7 +1098,7 @@ impl SinkConnector {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub emit_progress: bool,
     pub object_columns: usize,

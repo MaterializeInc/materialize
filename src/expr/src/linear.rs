@@ -1065,6 +1065,7 @@ pub fn memoize_expr(
 
 pub mod plan {
 
+    use serde::{Deserialize, Serialize};
     use std::convert::TryFrom;
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc};
@@ -1072,7 +1073,7 @@ pub mod plan {
     use repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct SafeMfpPlan {
         mfp: MapFilterProject,
     }
