@@ -11,8 +11,10 @@ import base64
 import concurrent.futures
 import os
 import re
+import subprocess
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import click
@@ -164,6 +166,7 @@ def finish(create_branch: Optional[str], affect_remote: bool) -> None:
         affect_remote=affect_remote,
     )
 
+    update_upgrade_tests_inner(new_version)
     checkout = None
     incorporate_inner(
         create_branch, checkout, affect_remote, fetch=False, is_finish=True
@@ -272,6 +275,114 @@ def update_versions_list(released_version: Version) -> None:
                 wrote_line = True
     if not wrote_line:
         raise errors.MzRuntimeError("Couldn't determine where to insert new version")
+
+
+@cli.command()
+@click.argument("released_version", type=Version.parse, default=None)
+def update_upgrade_tests(released_version: Optional[Version]) -> None:
+    """
+    Update the test/upgrade/mzcompose.yml file
+
+    This is done automatically as part of the 'finish' step, this command only
+    exists in case things go wrong.
+    """
+    if released_version is None:
+        released_version = get_latest_tag(fetch=False)
+    update_upgrade_tests_inner(released_version)
+
+
+def update_upgrade_tests_inner(released_version: Version) -> None:
+    if released_version.prerelease is not None:
+        say("Not updating upgrade tests for prerelease")
+        return
+
+    upgrade_dir = Path("./test/upgrade")
+    version = f"v{released_version}"
+    readme = upgrade_dir.joinpath("README.md")
+    need_upgrade = [
+        str(p) for p in upgrade_dir.glob("*latest_version*") if "smoke" not in str(p)
+    ]
+    if not need_upgrade:
+        return
+    for path in need_upgrade:
+        spawn.runv(["git", "mv", path, path.replace("latest_version", version)])
+
+    mzcompose = upgrade_dir.joinpath("mzcompose.yml")
+    with mzcompose.open() as fh:
+        contents = fh.readlines()
+
+    workflow_version = str(released_version).replace(".", "_")
+    step = f"""
+      - step: workflow
+        workflow: upgrade-from-{workflow_version}
+"""
+    found = False
+    for i, line in enumerate(contents):
+        if "workflow: upgrade-from-latest" in line:
+            contents.insert(i - 2, step)
+            found = True
+            break
+    if not found:
+        _mzcompose_confused(readme)
+        return
+
+    tests = None
+    new_workflow_location = None
+    found = False
+    for i, line in enumerate(contents):
+        if "TESTS:" in line:
+            tests = line.split(":")[1].strip()
+
+        if "upgrade-from-latest:" in line:
+            new_workflow_location = i - 1
+            workflow = f"""
+  upgrade-from-{workflow_version}:
+    env:
+      PREVIOUS_VERSION: {version}
+      TESTS: {tests}|{version}
+    steps:
+      - step: workflow
+        workflow: test-upgrade
+"""
+
+        if new_workflow_location and "TESTS:" in line:
+            if tests is None:
+                _mzcompose_confused(readme)
+                return
+            latest_tests = line.split("|")
+            latest_tests.insert(-1, version)
+            contents[i] = "|".join(latest_tests)
+            contents.insert(new_workflow_location, workflow)
+            found = True
+            break
+
+    with mzcompose.open("w") as fh:
+        fh.write("".join(contents))
+
+    if not found:
+        _mzcompose_confused(readme)
+        return
+
+    try:
+        spawn.capture(
+            "bin/mzcompose --mz-find upgrade list-workflows".split(), stderr_too=True
+        )
+    except subprocess.CalledProcessError as e:
+        say(
+            f"The generated test/upgrade/mzcompose.yml file appears to be broken, "
+            f"please consult {readme}"
+        )
+
+    git.commit_all_changed(
+        f"Update {len(need_upgrade)} latest_version upgrade tests to {version}"
+    )
+
+
+def _mzcompose_confused(readme_path: Path) -> None:
+    say(
+        f"It appears that the format for upgrade's mzcompose.yml has changed.\n"
+        f"Please update it yourself using the instructions in {readme_path}."
+    )
 
 
 def change_line(fname: str, line_start: str, replacement: str) -> None:
