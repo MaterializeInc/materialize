@@ -232,9 +232,10 @@ other_int_map_c     user
 > CREATE TABLE varchar_array_list_t (a varchar_array_list_c);
 > INSERT INTO varchar_array_list_t VALUES (LIST[ARRAY['a'::varchar,'b'::varchar]]);
 
-> CREATE TYPE char_array_list_c AS LIST (element_type=_char);
-> CREATE TABLE char_array_list_t (a char_array_list_c);
-> INSERT INTO char_array_list_t VALUES (LIST[ARRAY['a'::char,'b'::char]]);
+# Enable this when closing #7613
+# > CREATE TYPE char_array_list_c AS LIST (element_type=_char);
+# > CREATE TABLE char_array_list_t (a char_array_list_c);
+# > INSERT INTO char_array_list_t VALUES (LIST[ARRAY['a'::char,'b'::char]]);
 
 > CREATE TYPE float4_array_list_c AS LIST (element_type=_float4);
 > CREATE TABLE float4_array_list_t (a float4_array_list_c);

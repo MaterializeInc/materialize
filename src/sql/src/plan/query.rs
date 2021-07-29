@@ -2599,6 +2599,11 @@ fn plan_array(
         let out = coerce_homogeneous_exprs("ARRAY expression", ecx, out, type_hint)?;
         (ecx.scalar_type(&out[0]), out)
     };
+
+    if matches!(elem_type, ScalarType::Char { .. }) {
+        unsupported!("char[]");
+    }
+
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayCreate { elem_type },
         exprs,
@@ -2635,6 +2640,11 @@ fn plan_list(
         let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
         (ecx.scalar_type(&out[0]).default_embedded_value(), out)
     };
+
+    if matches!(elem_type, ScalarType::Char { .. }) {
+        unsupported!("char list");
+    }
+
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },
         exprs,

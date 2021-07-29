@@ -1690,20 +1690,14 @@ SELECT (LIST['ab'::char, 'cd'::varchar, 'ef'::text])::text
 # 🔬🔬 char lists
 # ensures that the list type does not pick up an elements' typmod
 
-query T
+query error char list not yet supported
 SELECT LIST['abc'::char(1), 'abc'::char(2), 'abc'::char(3)]::text;
-----
-{a,ab,abc}
 
-query T
+query error char list not yet supported
 SELECT LIST['abc'::char(3), 'abc'::char(2), 'abc'::char(1)]::text;
-----
-{abc,ab,a}
 
-query T
+query error char list not yet supported
 SELECT pg_typeof(LIST['abc'::char(1), 'abc'::char(2), 'abc'::char(3)]);
-----
-character list
 
 # 🔬🔬 varchar lists
 # ensures that the list type does not pick up an elements' typmod
