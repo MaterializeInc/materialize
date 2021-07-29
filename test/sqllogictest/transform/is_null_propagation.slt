@@ -1,0 +1,111 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+query T multiline
+EXPLAIN SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
+----
+%0 =
+| Constant
+
+EOF
+
+# TODO missing !isnull(#0) in %1
+query T multiline
+EXPLAIN SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+
+%2 =
+| Join %0 %1 (= #0 (#1 + #2))
+| | implementation = Differential %1 %0.()
+| | demand = ()
+| Project ()
+
+EOF
+
+query T multiline
+EXPLAIN SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Distinct group=(#1)
+
+%1 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy ()
+
+%2 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%3 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%4 =
+| Get materialize.public.t1 (u1)
+
+%5 = Let l1 =
+| Join %1 %2 %3 %4
+| | implementation = Differential %4 %1.() %2.() %3.()
+| | demand = (#1, #2, #6)
+| Filter (#6 > #1)
+| Reduce group=(#2)
+| | agg count(true)
+
+%6 =
+| Get materialize.public.t1 (u1)
+
+%7 =
+| Get %5 (l1)
+| Filter (#0 = i64tof64(#1))
+
+%8 =
+| Get %5 (l1)
+| Filter (#0 = 0)
+| Negate
+| Map 0
+| Project (#2)
+
+%9 =
+| Get %0 (l0)
+| Filter (#0 = 0)
+| Map 0
+| Project (#1)
+
+%10 =
+| Union %8 %9
+| Map 0
+
+%11 =
+| Union %7 %10
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%12 =
+| Join %6 %11 (= #1 #2)
+| | implementation = Differential %6 %11.(#0)
+| | demand = ()
+| Project ()
+
+EOF
