@@ -68,7 +68,7 @@ where
         bench_snapshot(&i, id, data_len, b)
     });
     // Seal the updates to move them all to the trace
-    i.seal(id, 100_001).expect("sealing update times");
+    i.seal(vec![id], 100_001).expect("sealing update times");
     c.bench_function(&format!("{}_trace_snapshot", name), |b| {
         bench_snapshot(&i, id, data_len, b)
     });

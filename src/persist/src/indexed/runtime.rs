@@ -12,6 +12,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -29,7 +30,7 @@ enum Cmd<K, V> {
     Register(String, CmdResponse<Id>),
     Destroy(String, CmdResponse<bool>),
     Write(Vec<(Id, Vec<((K, V), u64, isize)>)>, CmdResponse<SeqNo>),
-    Seal(Id, u64, CmdResponse<()>),
+    Seal(Vec<Id>, u64, CmdResponse<()>),
     AllowCompaction(Id, u64, CmdResponse<()>),
     Snapshot(Id, CmdResponse<IndexedSnapshot<K, V>>),
     Listen(Id, ListenFn<K, V>, CmdResponse<()>),
@@ -219,7 +220,6 @@ impl<K, V> Drop for RuntimeCore<K, V> {
 /// NB: The methods below are executed concurrently. For a some call X to be
 /// guaranteed as "previous" to another call Y, X's response must have been
 /// received before Y's call started.
-#[derive(Debug)]
 pub struct RuntimeClient<K, V> {
     id: RuntimeId,
     core: Arc<RuntimeCore<K, V>>,
@@ -233,6 +233,23 @@ impl<K, V> Clone for RuntimeClient<K, V> {
         }
     }
 }
+
+impl<K, V> fmt::Debug for RuntimeClient<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeClient")
+            .field(&"id", &self.id)
+            .field(&"core", &"..")
+            .finish()
+    }
+}
+
+impl<K, V> PartialEq for RuntimeClient<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id.eq(&other.id)
+    }
+}
+
+impl<K, V> Eq for RuntimeClient<K, V> {}
 
 impl<K: Clone, V: Clone> RuntimeClient<K, V> {
     /// Synchronously registers a new stream for writes and reads.
@@ -262,13 +279,13 @@ impl<K: Clone, V: Clone> RuntimeClient<K, V> {
         self.core.send(Cmd::Write(updates, res))
     }
 
-    /// Asynchronously advances the "sealed" frontier for the stream with the
-    /// given id, which restricts what times can later be sealed and/or written
-    /// for that id.
+    /// Asynchronously advances the "sealed" frontier for the streams with the
+    /// given ids, which restricts what times can later be sealed and/or written
+    /// for those ids.
     ///
-    /// The id must have previously been registered.
-    fn seal(&self, id: Id, ts: u64, res: CmdResponse<()>) {
-        self.core.send(Cmd::Seal(id, ts, res))
+    /// The ids must have previously been registered.
+    fn seal(&self, ids: &[Id], ts: u64, res: CmdResponse<()>) {
+        self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
     }
 
     /// Asynchronously advances the compaction frontier for the stream with the given id,
@@ -352,29 +369,39 @@ impl<K: Clone, V: Clone> StreamWriteHandle<K, V> {
     /// Closes the stream at the given timestamp, migrating data strictly less
     /// than it into the trace.
     pub fn seal(&self, upper: u64, res: CmdResponse<()>) {
-        self.runtime.seal(self.id, upper, res);
+        self.runtime.seal(&[self.id], upper, res);
     }
 }
 
-/// A handle for atomically writing to multiple streams.
-pub struct AtomicWriteHandle<K, V> {
+/// A handle for writing to multiple streams.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MultiWriteHandle<K, V> {
     ids: HashSet<Id>,
     runtime: RuntimeClient<K, V>,
 }
 
-impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
-    /// Returns a new [AtomicWriteHandle] for the given streams.
+impl<K, V> Clone for MultiWriteHandle<K, V> {
+    fn clone(&self) -> Self {
+        MultiWriteHandle {
+            ids: self.ids.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+}
+
+impl<K: Clone, V: Clone> MultiWriteHandle<K, V> {
+    /// Returns a new [MultiWriteHandle] for the given streams.
     pub fn new(handles: &[&StreamWriteHandle<K, V>]) -> Result<Self, Error> {
         let mut stream_ids = HashSet::new();
         let runtime = if let Some(handle) = handles.first() {
             handle.runtime.clone()
         } else {
-            return Err(Error::from("AtomicWriteHandle received no streams"));
+            return Err(Error::from("MultiWriteHandle received no streams"));
         };
         for handle in handles.iter() {
             if handle.runtime.id != runtime.id {
                 return Err(Error::from(format!(
-                    "AtomicWriteHandle got handles from two runtimes: {:?} and {:?}",
+                    "MultiWriteHandle got handles from two runtimes: {:?} and {:?}",
                     runtime.id, handle.runtime.id
                 )));
             }
@@ -382,7 +409,7 @@ impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
             // means are straightforward, so for now we support it.
             stream_ids.insert(handle.id);
         }
-        Ok(AtomicWriteHandle {
+        Ok(MultiWriteHandle {
             ids: stream_ids,
             runtime,
         })
@@ -407,13 +434,31 @@ impl<K: Clone, V: Clone> AtomicWriteHandle<K, V> {
         for (id, _) in updates.iter() {
             if !self.ids.contains(id) {
                 res.send(Err(Error::from(format!(
-                    "AtomicWriteHandle cannot write to stream: {:?}",
+                    "MultiWriteHandle cannot write to stream: {:?}",
                     id
                 ))));
                 return;
             }
         }
         self.runtime.write(updates, res)
+    }
+
+    /// Closes the streams at the given timestamp, migrating data strictly less
+    /// than it into the trace.
+    ///
+    /// Ids may not be duplicated (this is equivalent to sealing the stream
+    /// twice at the same timestamp, which we currently disallow).
+    pub fn seal(&self, ids: &[Id], upper: u64, res: CmdResponse<()>) {
+        for id in ids {
+            if !self.ids.contains(id) {
+                res.send(Err(Error::from(format!(
+                    "MultiWriteHandle cannot seal stream: {:?}",
+                    id
+                ))));
+                return;
+            }
+        }
+        self.runtime.seal(ids, upper, res)
     }
 }
 
@@ -500,8 +545,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
                 let step_res = self.indexed.step();
                 res.send(step_res.and_then(|_| write_res));
             }
-            Cmd::Seal(id, ts, res) => {
-                let r = self.indexed.seal(id, ts);
+            Cmd::Seal(ids, ts, res) => {
+                let r = self.indexed.seal(ids, ts);
                 res.send(r);
             }
             Cmd::AllowCompaction(id, ts, res) => {
@@ -619,42 +664,55 @@ mod tests {
     }
 
     #[test]
-    fn atomic() -> Result<(), Error> {
+    fn multi_write_handle() -> Result<(), Error> {
         let data = vec![
             (("key1".to_string(), ()), 1, 1),
             (("key2".to_string(), ()), 1, 1),
         ];
 
         let mut registry = MemRegistry::new();
-        let client1 = registry.open::<String, ()>("1", "atomic")?;
-        let client2 = registry.open::<String, ()>("2", "atomic")?;
+        let client1 = registry.open::<String, ()>("1", "multi")?;
+        let client2 = registry.open::<String, ()>("2", "multi")?;
 
         let (c1s1, c1s1_read) = client1.create_or_load("1")?;
         let (c1s2, c1s2_read) = client1.create_or_load("2")?;
         let (c2s1, _) = client2.create_or_load("1")?;
 
         // Cannot construct with no streams.
-        assert!(AtomicWriteHandle::<(), ()>::new(&[]).is_err());
+        assert!(MultiWriteHandle::<(), ()>::new(&[]).is_err());
 
         // Cannot construct with streams from different runtimes.
-        assert!(AtomicWriteHandle::new(&[&c1s2, &c2s1]).is_err());
+        assert!(MultiWriteHandle::new(&[&c1s2, &c2s1]).is_err());
 
-        // Normal case
-        let atomic = AtomicWriteHandle::new(&[&c1s1, &c1s2])?;
+        // Normal write
+        let multi = MultiWriteHandle::new(&[&c1s1, &c1s2])?;
         let updates = vec![
             (c1s1.stream_id(), data[..1].to_vec()),
             (c1s2.stream_id(), data[1..].to_vec()),
         ];
-        block_on(|res| atomic.write_atomic(updates, res))?;
+        block_on(|res| multi.write_atomic(updates, res))?;
         assert_eq!(c1s1_read.snapshot()?.read_to_end(), data[..1].to_vec());
         assert_eq!(c1s2_read.snapshot()?.read_to_end(), data[1..].to_vec());
+
+        // Normal seal
+        let ids = &[c1s1.stream_id(), c1s2.stream_id()];
+        block_on(|res| multi.seal(ids, 2, res))?;
+        // We don't expose reading the seal directly, so hack it a bit here by
+        // verifying that we can't re-seal at the same timestamp (which is
+        // disallowed).
+        let expected_seal_err = Err(Error::from("invalid batch bounds: Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }"));
+        assert_eq!(block_on(|res| c1s1.seal(2, res)), expected_seal_err);
+        assert_eq!(block_on(|res| c1s2.seal(2, res)), expected_seal_err);
 
         // Cannot write to streams not specified during construction.
         let (c1s3, _) = client1.create_or_load("3")?;
         assert!(
-            block_on(|res| atomic.write_atomic(vec![(c1s3.stream_id(), data.clone())], res))
+            block_on(|res| multi.write_atomic(vec![(c1s3.stream_id(), data.clone())], res))
                 .is_err()
         );
+
+        // Cannot seal streams not specified during construction.
+        assert!(block_on(|res| multi.seal(&[c1s3.stream_id()], 3, res)).is_err());
 
         Ok(())
     }

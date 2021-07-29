@@ -57,7 +57,7 @@ use lazy_static::lazy_static;
 use ore::metrics::MetricsRegistry;
 use ore::retry::Retry;
 use persist::error::Error as PersistError;
-use persist::indexed::runtime::{AtomicWriteHandle, CmdResponse};
+use persist::indexed::runtime::{CmdResponse, MultiWriteHandle};
 use persist::storage::SeqNo;
 use rand::Rng;
 use repr::adt::numeric;
@@ -2257,7 +2257,7 @@ impl Coordinator {
                             if !volatile_updates.is_empty() {
                                 coord_bail!("transaction had mixed persistent and volatile writes");
                             }
-                            let persist_atomic = AtomicWriteHandle::new(&persist_streams)
+                            let persist_multi = MultiWriteHandle::new(&persist_streams)
                                 .map_err(|err| anyhow!("{}", err))?;
                             let (tx, rx) = oneshot::channel();
                             let callback = Box::new(move |res: Result<SeqNo, PersistError>| {
@@ -2266,7 +2266,7 @@ impl Coordinator {
                                     .map_err(|err| CoordError::Unstructured(anyhow!("{}", err)));
                                 let _ = tx.send(res);
                             });
-                            persist_atomic
+                            persist_multi
                                 .write_atomic(persist_updates, CmdResponse::Callback(callback));
                             return Ok(Some(rx));
                         } else {
