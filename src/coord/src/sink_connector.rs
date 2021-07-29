@@ -344,7 +344,6 @@ async fn build_kafka(
             }
         }
     };
-
     let topic = maybe_append_nonce(&builder.topic_prefix);
 
     // Create Kafka topic with single partition.
@@ -360,10 +359,6 @@ async fn build_kafka(
     let client = config
         .create::<AdminClient<_>>()
         .context("creating admin client failed")?;
-    let ccsr = match builder.format.ccsr_config() {
-        Some(config) => Some(config.clone().build()?),
-        None => None,
-    };
 
     register_kafka_topic(
         &client,
@@ -374,21 +369,18 @@ async fn build_kafka(
     )
     .await
     .context("error registering kafka topic for sink")?;
-    let published_schema_info = match &builder.format {
+    let published_schema_info = match builder.format {
         dataflow_types::KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
+            ccsr_config,
             ..
         } => {
-            let (key_schema_id, value_schema_id) = publish_kafka_schemas(
-                ccsr.as_ref()
-                    .expect("confluent schema registry client must exist"),
-                &topic,
-                &value_schema,
-                key_schema.as_deref(),
-            )
-            .await
-            .context("error publishing kafka schemas for sink")?;
+            let ccsr = ccsr_config.build()?;
+            let (key_schema_id, value_schema_id) =
+                publish_kafka_schemas(&ccsr, &topic, &value_schema, key_schema.as_deref())
+                    .await
+                    .context("error publishing kafka schemas for sink")?;
             Some(PublishedSchemaInfo {
                 key_schema_id,
                 value_schema_id,
@@ -397,70 +389,65 @@ async fn build_kafka(
         dataflow_types::KafkaSinkFormat::Json => None,
     };
 
-    let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
-        let consistency_topic = maybe_append_nonce(
-            builder
-                .consistency_topic_prefix
-                .as_ref()
-                .expect("known to exist"),
-        );
+    let consistency = match builder.consistency_format {
+        Some(dataflow_types::KafkaSinkFormat::Avro {
+            value_schema,
+            ccsr_config,
+            ..
+        }) => {
+            let consistency_topic = maybe_append_nonce(
+                builder
+                    .consistency_topic_prefix
+                    .as_ref()
+                    .expect("known to exist"),
+            );
+            // create consistency topic/schema and retrieve schema id
+            register_kafka_topic(
+                &client,
+                &consistency_topic,
+                1,
+                builder.replication_factor,
+                builder.reuse_topic,
+            )
+            .await
+            .context("error registering kafka consistency topic for sink")?;
 
-        // create consistency topic/schema and retrieve schema id
-        register_kafka_topic(
-            &client,
-            &consistency_topic,
-            1,
-            builder.replication_factor,
-            builder.reuse_topic,
-        )
-        .await
-        .context("error registering kafka consistency topic for sink")?;
-        let consistency_schema_id = match &builder.format {
-            dataflow_types::KafkaSinkFormat::Avro { .. } => {
-                let (_, consistency_schema_id) = publish_kafka_schemas(
-                    ccsr.as_ref()
-                        .expect("confluent schema registry client must exist"),
-                    &consistency_topic,
-                    &consistency_value_schema,
-                    None,
-                )
-                .await
-                .context("error publishing kafka consistency schemas for sink")?;
-                consistency_schema_id
-            }
-            _ => {
-                // todo@jldlaughlin: fix this!
-                // https://github.com/MaterializeInc/materialize/pull/7505#discussion_r676597211
-                unreachable!("non-Avro consistency topics")
-            }
-        };
+            let ccsr = ccsr_config.build()?;
+            let (_, consistency_schema_id) =
+                publish_kafka_schemas(&ccsr, &consistency_topic, &value_schema, None)
+                    .await
+                    .context("error publishing kafka consistency schemas for sink")?;
 
-        // get latest committed timestamp from consistencty topic
-        let gate_ts = if builder.reuse_topic {
-            let mut consumer_config = config.clone();
-            consumer_config
-                .set("group.id", format!("materialize-bootstrap-{}", topic))
-                .set("isolation.level", "read_committed")
-                .set("enable.auto.commit", "false")
-                .set("auto.offset.reset", "earliest");
+            // get latest committed timestamp from consistency topic
+            let gate_ts = if builder.reuse_topic {
+                let mut consumer_config = config.clone();
+                consumer_config
+                    .set(
+                        "group.id",
+                        format!("materialize-bootstrap-{}", consistency_topic),
+                    )
+                    .set("isolation.level", "read_committed")
+                    .set("enable.auto.commit", "false")
+                    .set("auto.offset.reset", "earliest");
 
-            let mut consumer = consumer_config
-                .create::<BaseConsumer>()
-                .context("creating consumer client failed")?;
+                let mut consumer = consumer_config
+                    .create::<BaseConsumer>()
+                    .context("creating consumer client failed")?;
 
-            get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
-                .context("error restarting from existing kafka consistency topic for sink")?
-        } else {
-            None
-        };
+                get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
+                    .context("error restarting from existing kafka consistency topic for sink")?
+            } else {
+                None
+            };
 
-        Some(KafkaSinkConsistencyConnector {
-            topic: consistency_topic,
-            schema_id: consistency_schema_id,
-            gate_ts,
-        })
-    } else {
-        None
+            Some(KafkaSinkConsistencyConnector {
+                topic: consistency_topic,
+                schema_id: consistency_schema_id,
+                gate_ts,
+            })
+        }
+        Some(other) => unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other),
+        _ => None,
     };
 
     Ok(SinkConnector::Kafka(KafkaSinkConnector {

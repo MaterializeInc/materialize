@@ -1129,11 +1129,11 @@ pub struct KafkaSinkConnectorBuilder {
     pub value_desc: RelationDesc,
     pub topic_prefix: String,
     pub consistency_topic_prefix: Option<String>,
+    pub consistency_format: Option<KafkaSinkFormat>,
     pub topic_suffix_nonce: String,
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
-    pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     // Forces the sink to always write to the same topic across restarts instead
     // of picking a new topic each time.
@@ -1151,15 +1151,6 @@ pub enum KafkaSinkFormat {
         ccsr_config: ccsr::ClientConfig,
     },
     Json,
-}
-
-impl KafkaSinkFormat {
-    pub fn ccsr_config(&self) -> Option<&ccsr::ClientConfig> {
-        match self {
-            KafkaSinkFormat::Avro { ccsr_config, .. } => Some(&ccsr_config),
-            KafkaSinkFormat::Json => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

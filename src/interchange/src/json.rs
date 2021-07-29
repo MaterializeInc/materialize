@@ -10,8 +10,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use itertools::Itertools;
-
+use ore::collections::CollectionExt;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
@@ -23,10 +22,15 @@ use crate::encode::{column_names_and_types, Encode, TypedDatum};
 pub struct JsonEncoder {
     key_columns: Option<Vec<(ColumnName, ColumnType)>>,
     value_columns: Vec<(ColumnName, ColumnType)>,
+    include_transaction: bool,
 }
 
 impl JsonEncoder {
-    pub fn new(key_desc: Option<RelationDesc>, value_desc: RelationDesc) -> Self {
+    pub fn new(
+        key_desc: Option<RelationDesc>,
+        value_desc: RelationDesc,
+        include_transaction: bool,
+    ) -> Self {
         JsonEncoder {
             key_columns: if let Some(desc) = key_desc {
                 Some(column_names_and_types(desc))
@@ -34,11 +38,12 @@ impl JsonEncoder {
                 None
             },
             value_columns: column_names_and_types(value_desc),
+            include_transaction,
         }
     }
 
     pub fn encode_row(&self, row: repr::Row, names_types: &[(ColumnName, ColumnType)]) -> Vec<u8> {
-        let value = encode_datums_as_json(row.iter(), names_types);
+        let value = encode_datums_as_json(row.iter(), names_types, self.include_transaction);
         value.to_string().into_bytes()
     }
 }
@@ -75,24 +80,38 @@ impl fmt::Debug for JsonEncoder {
 pub fn encode_datums_as_json<'a, I>(
     datums: I,
     names_types: &[(ColumnName, ColumnType)],
+    include_transaction: bool,
 ) -> serde_json::value::Value
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let mut name_idx = 0;
-    let value_fields = names_types
-        .iter()
-        .zip_eq(datums)
-        .map(|((name, typ), datum)| {
-            let name = name.as_str().to_owned();
-            (
-                name,
-                TypedDatum::new(datum, typ.clone()).json(&mut move || {
-                    let ret = format!("record{}", name_idx);
-                    name_idx += 1;
-                    ret
-                }),
-            )
+    let namer = &mut move || {
+        let ret = format!("record{}", name_idx);
+        name_idx += 1;
+        ret
+    };
+    // todo@jldlaughlin: this is awful and hacky! revisit
+    let value_fields = datums
+        .into_iter()
+        .enumerate()
+        .map(|(i, datum)| {
+            if i >= names_types.len() && include_transaction {
+                let transaction_id = TypedDatum::new(
+                    datum.unwrap_list().into_first(),
+                    ColumnType {
+                        scalar_type: ScalarType::String,
+                        nullable: false,
+                    },
+                )
+                .json(namer);
+                ("transaction".to_owned(), json!({ "id": transaction_id }))
+            } else {
+                (
+                    names_types[i].0.as_str().to_owned(),
+                    TypedDatum::new(datum, names_types[i].1.clone()).json(namer),
+                )
+            }
         })
         .collect();
     serde_json::value::Value::Object(value_fields)
