@@ -17,7 +17,7 @@ pub mod future;
 pub mod runtime;
 pub mod trace;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
 use abomonation::abomonated::Abomonated;
@@ -79,9 +79,9 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
     graveyard: Vec<(String, Id)>,
     buf: U,
     blob: BlobCache<K, V, L>,
-    futures: HashMap<Id, BlobFuture<K, V>>,
-    traces: HashMap<Id, BlobTrace<K, V>>,
-    listeners: HashMap<Id, Vec<ListenFn<K, V>>>,
+    futures: BTreeMap<Id, BlobFuture<K, V>>,
+    traces: BTreeMap<Id, BlobTrace<K, V>>,
+    listeners: BTreeMap<Id, Vec<ListenFn<K, V>>>,
 }
 
 impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
@@ -126,15 +126,31 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             blob,
             futures,
             traces,
-            listeners: HashMap::new(),
+            listeners: BTreeMap::new(),
         };
+
+        indexed.check_invariants()?;
         Ok(indexed)
+    }
+
+    /// Sanity check invariants at runtime.
+    fn check_invariants(&self) -> Result<(), Error> {
+        if cfg!(any(test, debug)) {
+            let stored_meta = self.blob.get_meta()?.unwrap_or_default();
+            let local_meta = self.serialize_meta();
+
+            assert_eq!(stored_meta, local_meta);
+            local_meta.validate()?;
+        }
+
+        Ok(())
     }
 
     /// Releases exclusive-writer locks and causes all future commands to error.
     ///
     /// This method is idempotent.
     pub fn close(&mut self) -> Result<(), Error> {
+        self.check_invariants()?;
         // Make sure all the listener closures are dropped.
         self.listeners.clear();
         // Be careful to attempt to close both buf and blob even if one of the
@@ -151,6 +167,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     ///
     /// This method is idempotent: ids may be registered multiple times.
     pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
+        self.check_invariants()?;
         if self.graveyard.iter().any(|(s, _)| s == &id_str) {
             return Err(Error::from(format!(
                 "invalid registration: stream {} already destroyed",
@@ -173,6 +190,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         self.traces
             .entry(id)
             .or_insert_with_key(|id| BlobTrace::new(BlobTraceMeta::new(*id)));
+
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())?;
         Ok(id)
     }
 
@@ -182,6 +203,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// true if the stream was destroyed from this call, and false if it was
     /// already destroyed.
     pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
+        self.check_invariants()?;
         if self
             .graveyard
             .iter()
@@ -211,7 +233,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         debug_assert!(future.is_some());
         debug_assert!(trace.is_some());
 
+        self.id_mapping.retain(|id_mapping| id_mapping != &mapping);
         self.graveyard.push(mapping);
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())?;
 
         return Ok(true);
     }
@@ -223,6 +249,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// smarts about waiting to call it only after there have been some writes),
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<(), Error> {
+        self.check_invariants()?;
         self.drain_buf()?;
         self.drain_future()
         // TODO: Incrementally compact future.
@@ -234,6 +261,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         &mut self,
         updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
     ) -> Result<SeqNo, Error> {
+        self.check_invariants()?;
         for (id, updates) in updates.iter() {
             let sealed_frontier = self.sealed_frontier(*id)?;
             for update in updates.iter() {
@@ -436,6 +464,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// frontier. It is also an error to write new data with a time less than
     /// the sealed frontier.
     fn sealed_frontier(&mut self, id: Id) -> Result<Antichain<u64>, Error> {
+        self.check_invariants()?;
         let trace = self
             .traces
             .get_mut(&id)
@@ -451,6 +480,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
+        self.check_invariants()?;
         // TODO: Separate the logical work of seal which just disallows future
         // updates and seals at times <= ts_upper from the physical work of
         // moving things from the future to the trace. This could let us
@@ -489,6 +519,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// calls with a frontier <= current_compaction_frontier. We chose to mirror
     /// the `seal` API here but if that doesn't make sense, remove the restrictions.
     pub fn allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
+        self.check_invariants()?;
         let trace = self
             .traces
             .get_mut(&id)
@@ -533,6 +564,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Returns a [Snapshot] for the given id.
     pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot<K, V>, Error> {
+        self.check_invariants()?;
         let future = self
             .futures
             .get(&id)
@@ -575,6 +607,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     // TODO: Finish the naming bikeshed for this. Other options so far include
     // tail, subscribe, tee, inspect, and capture.
     pub fn listen(&mut self, id: Id, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
+        self.check_invariants()?;
         // Verify that id has been registered.
         let _ = self.sealed_frontier(id)?;
         self.listeners.entry(id).or_default().push(listen_fn);
