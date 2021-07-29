@@ -56,8 +56,8 @@ impl Default for GeneratorConfig {
 }
 
 struct GeneratorState {
-    sealed_by_stream: HashMap<String, u64>,
-    compacted_by_stream: HashMap<String, u64>,
+    seal_frontier: HashMap<String, u64>,
+    since_frontier: HashMap<String, u64>,
     snap_id: SnapshotId,
     outstanding_snaps: HashMap<SnapshotId, String>,
     storage_available: bool,
@@ -66,8 +66,8 @@ struct GeneratorState {
 impl Default for GeneratorState {
     fn default() -> Self {
         GeneratorState {
-            sealed_by_stream: HashMap::new(),
-            compacted_by_stream: HashMap::new(),
+            seal_frontier: HashMap::new(),
+            since_frontier: HashMap::new(),
             snap_id: SnapshotId(0),
             outstanding_snaps: HashMap::new(),
             storage_available: true,
@@ -104,7 +104,7 @@ impl ReqGenerator {
         let stream = rng_stream(rng);
         let key = rng_key(rng);
         let stream_sealed_ts = state
-            .sealed_by_stream
+            .seal_frontier
             .get(&stream)
             .copied()
             .unwrap_or_default();
@@ -125,7 +125,7 @@ impl ReqGenerator {
     fn write_sealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let key = rng_key(rng);
         let (stream, ts) = state
-            .sealed_by_stream
+            .seal_frontier
             .iter()
             .filter(|(_, ts)| **ts > 0)
             .choose(rng)
@@ -142,7 +142,7 @@ impl ReqGenerator {
     fn seal(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let stream = rng_stream(rng);
         let stream_sealed_ts = state
-            .sealed_by_stream
+            .seal_frontier
             .get(&stream)
             .copied()
             .unwrap_or_default();
@@ -152,12 +152,23 @@ impl ReqGenerator {
 
     fn allow_compaction(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let stream = rng_stream(rng);
-        let stream_compacted_ts = state
-            .compacted_by_stream
-            .get(&stream)
-            .copied()
-            .unwrap_or_default();
-        let ts = stream_compacted_ts + rng.gen_range(0..5);
+        let ts = {
+            let base = if rng.gen_bool(0.5) {
+                state
+                    .since_frontier
+                    .get(&stream)
+                    .copied()
+                    .unwrap_or_default()
+            } else {
+                state
+                    .seal_frontier
+                    .get(&stream)
+                    .copied()
+                    .unwrap_or_default()
+            };
+
+            base + rng.gen_range(0..5)
+        };
         Req::AllowCompaction(AllowCompactionReq { stream, ts })
     }
 
@@ -235,7 +246,7 @@ impl Generator {
             (
                 self.config.write_sealed_weight,
                 Some(ReqGenerator::WriteSealed)
-                    .filter(|_| self.state.sealed_by_stream.iter().any(|(_, ts)| *ts > 0)),
+                    .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
             ),
             (self.config.seal_weight, Some(ReqGenerator::Seal)),
             (
