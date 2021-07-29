@@ -3438,9 +3438,11 @@ dependencies = [
 name = "repr_test_util"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "datadriven",
  "lazy_static",
  "lowertest",
+ "ore",
  "proc-macro2",
  "repr",
 ]

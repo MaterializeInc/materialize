@@ -150,3 +150,19 @@ build
 | Distinct group=(#2)
 ----
 ----
+
+build
+(union [(map (get x) [(null int32)]) (get y)])
+----
+----
+%0 =
+| Get x (u0)
+| Map null
+
+%1 =
+| Get y (u1)
+
+%2 =
+| Union %0 %1
+----
+----

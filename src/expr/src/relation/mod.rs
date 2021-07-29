@@ -1223,6 +1223,11 @@ impl MirRelationExpr {
         ViewExplanation::new(self, &DummyHumanizer).to_string()
     }
 
+    /// Print this MirRelationExpr to a JSON-formatted string.
+    pub fn json(&self) -> String {
+        serde_json::to_string(self).unwrap()
+    }
+
     /// Pretty-print this MirRelationExpr to a string with type information.
     pub fn pretty_typed(&self) -> String {
         let mut explanation = ViewExplanation::new(self, &DummyHumanizer);

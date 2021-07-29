@@ -11,6 +11,7 @@
 //!
 //! These test utilities are relied by crates other than `repr`.
 
+use chrono::NaiveDateTime;
 use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 
@@ -18,6 +19,7 @@ use lowertest::{
     deserialize_optional, gen_reflect_info_func, GenericTestDeserializeContext, MzEnumReflect,
     MzStructReflect, ReflectedTypeInfo,
 };
+use ore::str::StrExt;
 use repr::adt::numeric::Numeric;
 use repr::{ColumnType, Datum, ScalarType};
 
@@ -45,12 +47,18 @@ where
     })
 }
 
-/// Constructs a `Datum` from a `&str` and a `ScalarType`.
+/// Constructs a `Datum` from `litval` and `littyp`.
 ///
-/// See [get_scalar_type_or_default] for creating a `ScalarType` from a string.
+/// See [get_scalar_type_or_default] for creating a `ScalarType`.
+///
 /// Because Datums do not own their strings, if `littyp` is
 /// `ScalarType::String`, make sure that `litval` has already
 /// been unquoted by [unquote_string].
+///
+/// Generally, `litval` can be parsed into a Datum in the manner you would
+/// imagine. Exceptions:
+/// * A Timestamp should be in the format `"\"%Y-%m-%d %H:%M:%S%.f\""` or
+///   `"\"%Y-%m-%d %H:%M:%S\""`
 pub fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Datum<'a>, String> {
     if litval == "null" {
         return Ok(Datum::Null);
@@ -64,6 +72,16 @@ pub fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Da
         ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
         ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
         ScalarType::String => Ok(Datum::from(litval)),
+        ScalarType::Timestamp => {
+            let datetime = if litval.contains('.') {
+                NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S%.f\"")
+            } else {
+                NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S\"")
+            };
+            Ok(Datum::from(datetime.map_err(|e| {
+                format!("Error while parsing NaiveDateTime: {}", e)
+            })?))
+        }
         _ => Err(format!("Unsupported literal type {:?}", littyp)),
     }
 }
@@ -77,6 +95,18 @@ pub fn unquote_string(litval: &str, littyp: &ScalarType) -> String {
     }
 }
 
+/// Convert a Datum to a String such that [get_datum_from_str] can convert the
+/// String back into the same Datum.
+///
+/// Currently supports only Datums supported by [get_datum_from_str].
+pub fn datum_to_test_spec(datum: Datum) -> String {
+    let result = format!("{}", datum);
+    match datum {
+        Datum::Timestamp(_) => result.quoted().to_string(),
+        _ => result,
+    }
+}
+
 /// Parses `ScalarType` from `scalar_type_stream` or infers it from `litval`
 ///
 /// See [lowertest::to_json] for the syntax for specifying a `ScalarType`.
@@ -84,7 +114,7 @@ pub fn unquote_string(litval: &str, littyp: &ScalarType) -> String {
 /// the literal:
 /// * If `litval` is "true", "false", or "null", will return `Bool`.
 /// * Else if starts with `'"'`, will return String.
-/// * Else if contains '.', will return Float64
+/// * Else if contains `'.'`, will return Float64.
 /// * Otherwise, returns Int64.
 pub fn get_scalar_type_or_default<I>(
     litval: &str,
@@ -104,7 +134,7 @@ where
         None => {
             if ["true", "false", "null"].contains(&litval) {
                 Ok(ScalarType::Bool)
-            } else if litval.starts_with('"') {
+            } else if litval.starts_with('\"') {
                 Ok(ScalarType::String)
             } else if litval.contains('.') {
                 Ok(ScalarType::Float64)

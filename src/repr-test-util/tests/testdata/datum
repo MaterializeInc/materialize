@@ -94,6 +94,16 @@ build-datum
 Numeric(OrderedDecimal(5.2))
 
 build-datum
+"2021-01-02 00:12:59" timestamp
+----
+Timestamp(2021-01-02T00:12:59)
+
+build-datum
+"1999-12-31 23:42:23.342" timestamp
+----
+Timestamp(1999-12-31T23:42:23.342)
+
+build-datum
 2 (list jsonb 100)
 ----
 error: Unsupported literal type List { element_type: Jsonb, custom_oid: Some(100) }

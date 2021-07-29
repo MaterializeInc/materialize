@@ -19,7 +19,7 @@ use lowertest::*;
 use ore::result::ResultExt;
 use ore::str::separated;
 use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
-use repr_test_util::{get_datum_from_str, get_scalar_type_or_default, unquote_string};
+use repr_test_util::*;
 
 gen_reflect_info_func!(
     produce_rti,
@@ -250,7 +250,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                                 let row: Row = serde_json::from_value(inner_data.clone()).unwrap();
                                 let result = format!(
                                     "({} {})",
-                                    row.unpack_first(),
+                                    datum_to_test_spec(row.unpack_first()),
                                     from_json(
                                         &serde_json::to_value(&column_type.scalar_type).unwrap(),
                                         "ScalarType",
@@ -566,6 +566,8 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                                 separated(
                                                     " ",
                                                     row.unpack()
+                                                        .into_iter()
+                                                        .map(|d| datum_to_test_spec(d))
                                                 )
                                             ))
                                         }

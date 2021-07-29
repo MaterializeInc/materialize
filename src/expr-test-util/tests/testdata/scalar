@@ -46,3 +46,8 @@ build-scalar
 (call_unary is_null null)
 ----
 isnull(null)
+
+build-scalar
+("1999-12-31 23:42:23.342" timestamp)
+----
+1999-12-31 23:42:23.342

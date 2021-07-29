@@ -91,6 +91,36 @@ mod test {
                             Err(err) => format!("error: {}\n", err),
                         }
                     }
+                    "rel-to-test" => {
+                        let mut ctx = MirRelationExprDeserializeContext::new(&catalog);
+                        let spec = from_json(
+                            &serde_json::from_str(&s.input).unwrap(),
+                            "MirRelationExpr",
+                            &RTI,
+                            &mut ctx,
+                        );
+                        let mut source_defs = ctx
+                            .list_scope_references()
+                            .map(|(name, typ)| {
+                                format!(
+                                    "(defsource {} {})",
+                                    name,
+                                    from_json(
+                                        &serde_json::to_value(typ).unwrap(),
+                                        "RelationType",
+                                        &RTI,
+                                        &mut GenericTestDeserializeContext::default()
+                                    )
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        source_defs.sort();
+                        format!(
+                            "cat\n{}\n----\nok\n\n{}\n",
+                            separated("\n", source_defs),
+                            spec
+                        )
+                    }
                     _ => panic!("unknown directive: {}", s.directive),
                 }
             })
