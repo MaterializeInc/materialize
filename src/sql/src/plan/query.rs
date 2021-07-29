@@ -22,7 +22,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::mem;
@@ -42,7 +42,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION};
+use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
     Timestamp,
@@ -763,9 +763,10 @@ pub fn eval_as_of<'a>(
     let evaled = ex.eval(&[], temp_storage)?;
 
     Ok(match ex.typ(desc.typ()).scalar_type {
-        ScalarType::Numeric { .. } => numeric::cx_datum()
-            .try_into_i128(evaled.unwrap_numeric().0)?
-            .try_into()?,
+        ScalarType::Numeric { .. } => {
+            let n = evaled.unwrap_numeric().0;
+            u64::try_from(n)?.try_into()?
+        }
         ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,

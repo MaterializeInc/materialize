@@ -16,7 +16,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.1"
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
-dec = { version = "0.4.4", features = ["serde"] }
+dec = { version = "0.4.5", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }

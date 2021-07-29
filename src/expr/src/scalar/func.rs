@@ -419,6 +419,7 @@ fn cast_numeric_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut cx = numeric::cx_datum();
     cx.round(&mut a);
+    cx.clear_status();
     let i = cx.try_into_i32(a).map_err(|_| EvalError::Int16OutOfRange)?;
     match i16::try_from(i) {
         Ok(i) => Ok(Datum::from(i)),
@@ -430,6 +431,7 @@ fn cast_numeric_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut cx = numeric::cx_datum();
     cx.round(&mut a);
+    cx.clear_status();
     match cx.try_into_i32(a) {
         Ok(i) => Ok(Datum::from(i)),
         Err(_) => Err(EvalError::Int32OutOfRange),
@@ -440,6 +442,7 @@ fn cast_numeric_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut cx = numeric::cx_datum();
     cx.round(&mut a);
+    cx.clear_status();
     match cx.try_into_i64(a) {
         Ok(i) => Ok(Datum::from(i)),
         Err(_) => Err(EvalError::Int64OutOfRange),
