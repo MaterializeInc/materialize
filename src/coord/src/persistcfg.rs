@@ -13,11 +13,12 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use persist::error::Error;
+use persist::indexed::encoding::Id;
 use serde::Serialize;
 
 use expr::GlobalId;
 use persist::file::{FileBlob, FileBuffer};
-use persist::indexed::runtime::{self, RuntimeClient, StreamWriteHandle};
+use persist::indexed::runtime::{self, MultiWriteHandle, RuntimeClient, StreamWriteHandle};
 
 /// Configuration of the persistence runtime and features.
 #[derive(Clone, Debug)]
@@ -115,4 +116,10 @@ pub struct PersistDetails {
     pub stream_name: String,
     #[serde(skip)]
     pub write_handle: StreamWriteHandle<Vec<u8>, ()>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistMultiDetails {
+    pub all_table_ids: Vec<Id>,
+    pub write_handle: MultiWriteHandle<Vec<u8>, ()>,
 }

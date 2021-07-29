@@ -57,7 +57,7 @@ use lazy_static::lazy_static;
 use ore::metrics::MetricsRegistry;
 use ore::retry::Retry;
 use persist::error::Error as PersistError;
-use persist::indexed::runtime::{AtomicWriteHandle, CmdResponse};
+use persist::indexed::runtime::CmdResponse;
 use persist::storage::SeqNo;
 use rand::Rng;
 use repr::adt::numeric;
@@ -543,22 +543,12 @@ impl Coordinator {
         }
         // These can occasionally be equal, so ignore the update in that case.
         if next_ts > self.closed_up_to {
-            if self.catalog.user_table_persistence_enabled() {
+            if let Some(persist_multi) = self.catalog.persist_multi_details() {
                 // Close out the timestamp for persisted tables.
-                //
-                // TODO: Allow sealing multiple streams at once to reduce the
-                // overhead.
                 let (tx, rx) = std::sync::mpsc::channel();
-                for entry in self.catalog.entries() {
-                    if let CatalogItem::Table(Table {
-                        persist: Some(persist),
-                        ..
-                    }) = entry.item()
-                    {
-                        persist.write_handle.seal(next_ts, tx.clone().into());
-                    }
-                }
-                drop(tx);
+                persist_multi
+                    .write_handle
+                    .seal(&persist_multi.all_table_ids, next_ts, tx.into());
                 for res in rx {
                     if let Err(err) = res {
                         // TODO: Linearizability relies on this, bubble up the error instead.
@@ -2257,8 +2247,12 @@ impl Coordinator {
                             if !volatile_updates.is_empty() {
                                 coord_bail!("transaction had mixed persistent and volatile writes");
                             }
-                            let persist_atomic = AtomicWriteHandle::new(&persist_streams)
-                                .map_err(|err| anyhow!("{}", err))?;
+                            let persist_multi =
+                                self.catalog.persist_multi_details().ok_or_else(|| {
+                                    anyhow!(
+                                        "internal error: persist_multi_details invariant violated"
+                                    )
+                                })?;
                             let (tx, rx) = oneshot::channel();
                             let callback = Box::new(move |res: Result<SeqNo, PersistError>| {
                                 let res = res
@@ -2266,7 +2260,8 @@ impl Coordinator {
                                     .map_err(|err| CoordError::Unstructured(anyhow!("{}", err)));
                                 let _ = tx.send(res);
                             });
-                            persist_atomic
+                            persist_multi
+                                .write_handle
                                 .write_atomic(persist_updates, CmdResponse::Callback(callback));
                             return Ok(Some(rx));
                         } else {

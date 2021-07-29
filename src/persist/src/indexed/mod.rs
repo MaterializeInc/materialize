@@ -387,47 +387,49 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// Sealing a time advances the "sealed" frontier for an id, which restricts
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
-    pub fn seal(&mut self, id: Id, ts_upper: u64) -> Result<(), Error> {
+    pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
         // TODO: Separate the logical work of seal which just disallows future
         // updates and seals at times <= ts_upper from the physical work of
         // moving things from the future to the trace. This could let us
         // amortize the work of doing so across frequent seal calls? All the
         // physical movement could live in `step`.
 
-        let future = self
-            .futures
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let trace = self
-            .traces
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        for id in ids.into_iter() {
+            let future = self
+                .futures
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            let trace = self
+                .traces
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
 
-        let batch_upper = Antichain::from_elem(ts_upper);
-        let desc = Description::new(trace.ts_upper(), batch_upper, trace.since());
-        if PartialOrder::less_equal(desc.upper(), desc.lower()) {
-            return Err(format!("invalid batch bounds: {:?}", desc).into());
-        }
+            let batch_upper = Antichain::from_elem(ts_upper);
+            let desc = Description::new(trace.ts_upper(), batch_upper, trace.since());
+            if PartialOrder::less_equal(desc.upper(), desc.lower()) {
+                return Err(format!("invalid batch bounds: {:?}", desc).into());
+            }
 
-        // Move a batch of data from future into trace by reading a
-        // snapshot from future...
-        let mut updates = Vec::new();
-        {
-            let mut snap =
-                future.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
-            while snap.read(&mut updates) {}
-        }
+            // Move a batch of data from future into trace by reading a
+            // snapshot from future...
+            let mut updates = Vec::new();
+            {
+                let mut snap =
+                    future.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
+                while snap.read(&mut updates) {}
+            }
 
-        // Trace batches are required to be sorted and consolidated by ((k, v), t)
-        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+            // Trace batches are required to be sorted and consolidated by ((k, v), t)
+            differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
-        // ...and atomically swapping that snapshot's data into trace.
-        let batch = BlobTraceBatch { desc, updates };
-        self.append_trace(id, batch)?;
+            // ...and atomically swapping that snapshot's data into trace.
+            let batch = BlobTraceBatch { desc, updates };
+            self.append_trace(id, batch)?;
 
-        if let Some(listen_fns) = self.listeners.get(&id) {
-            for listen_fn in listen_fns.iter() {
-                listen_fn(ListenEvent::Sealed(ts_upper));
+            if let Some(listen_fns) = self.listeners.get(&id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Sealed(ts_upper));
+                }
             }
         }
 
@@ -711,7 +713,7 @@ mod tests {
         // After a seal, the relevant data has moved into the trace part of the
         // index. Since we haven't sealed all the data, some of it is still in
         // the future.
-        i.seal(id, 2)?;
+        i.seal(vec![id], 2)?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
         assert_eq!(buf.read_to_end(), vec![]);
@@ -719,7 +721,7 @@ mod tests {
         assert_eq!(trace.read_to_end(), updates[..1]);
 
         // All the data has been sealed, so it's now all in the trace.
-        i.seal(id, 3)?;
+        i.seal(vec![id], 3)?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
         assert_eq!(buf.read_to_end(), vec![]);
@@ -755,7 +757,7 @@ mod tests {
         // each batch by key. It should currently be ordered by time, which
         // given the data is not ordered by key, so again this should fire a
         // validations error if the sort code doesn't work.
-        i.seal(id, 3)?;
+        i.seal(vec![id], 3)?;
         Ok(())
     }
 
@@ -788,7 +790,7 @@ mod tests {
         // updates at identical ((k, v), t). Since the writes are only consolidated
         // within individual future batches this test will fail if trace batch
         // consolidation does not work.
-        i.seal(id, 2)?;
+        i.seal(vec![id], 2)?;
 
         Ok(())
     }
