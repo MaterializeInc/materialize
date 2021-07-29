@@ -981,13 +981,16 @@ fn ceil_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn ceil_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_numeric();
+    let mut d = a.unwrap_numeric();
+    // ceil will be nop if has no fractional digits.
+    if d.0.exponent() >= 0 {
+        return a;
+    }
     let mut cx = numeric::cx_datum();
     cx.set_rounding(Rounding::Ceiling);
-    cx.round(&mut a.0);
-    // Avoids negative 0.
-    numeric::munge_numeric(&mut a.0).unwrap();
-    Datum::Numeric(a)
+    cx.round(&mut d.0);
+    numeric::munge_numeric(&mut d.0).unwrap();
+    Datum::Numeric(d)
 }
 
 fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -999,12 +1002,16 @@ fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn floor_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_numeric();
+    let mut d = a.unwrap_numeric();
+    // floor will be nop if has no fractional digits.
+    if d.0.exponent() >= 0 {
+        return a;
+    }
     let mut cx = numeric::cx_datum();
     cx.set_rounding(Rounding::Floor);
-    cx.round(&mut a.0);
-    numeric::munge_numeric(&mut a.0).unwrap();
-    Datum::Numeric(a)
+    cx.round(&mut d.0);
+    numeric::munge_numeric(&mut d.0).unwrap();
+    Datum::Numeric(d)
 }
 
 fn round_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1030,9 +1037,13 @@ fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn round_numeric_unary<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut a = a.unwrap_numeric();
-    numeric::cx_datum().round(&mut a.0);
-    Datum::Numeric(a)
+    let mut d = a.unwrap_numeric();
+    // round will be nop if has no fractional digits.
+    if d.0.exponent() >= 0 {
+        return a;
+    }
+    numeric::cx_datum().round(&mut d.0);
+    Datum::Numeric(d)
 }
 
 fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
