@@ -57,7 +57,7 @@ pub struct BufferEntry<K, V> {
 /// - For each id, the ts_lower in the future is == the ts_upper in the
 ///   corresponding trace.
 /// - id_mapping.len() + graveyard.len() is == next_stream_id.
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, PartialEq, Abomonation)]
 pub struct BlobMeta {
     /// The next internal stream id to assign.
     pub next_stream_id: Id,
@@ -105,6 +105,15 @@ pub struct BlobFutureMeta {
     pub next_blob_id: u64,
 }
 
+impl PartialEq for BlobFutureMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.id.eq(&other.id)
+            && self.ts_lower[0].eq(&other.ts_lower[0])
+            && self.batches.eq(&other.batches)
+            && self.next_blob_id.eq(&other.next_blob_id)
+    }
+}
+
 /// The metadata necessary to reconstruct a BlobFutureBatch.
 ///
 /// Invariants:
@@ -120,6 +129,17 @@ pub struct BlobFutureBatchMeta {
     pub ts_upper: u64,
     /// The minimum timestamp from any update contained in this batch.
     pub ts_lower: u64,
+}
+
+impl PartialEq for BlobFutureBatchMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.key.eq(&other.key)
+            && self.desc.upper()[0].eq(&other.desc.upper()[0])
+            && self.desc.lower()[0].eq(&other.desc.lower()[0])
+            && self.desc.since()[0].eq(&other.desc.since()[0])
+            && self.ts_upper.eq(&other.ts_upper)
+            && self.ts_lower.eq(&other.ts_lower)
+    }
 }
 
 /// The metadata necessary to reconstruct a BlobTrace.
@@ -148,6 +168,15 @@ pub struct BlobTraceMeta {
     pub next_blob_id: u64,
 }
 
+impl PartialEq for BlobTraceMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.id.eq(&other.id)
+            && self.since[0].eq(&other.since[0])
+            && self.batches.eq(&other.batches)
+            && self.next_blob_id.eq(&other.next_blob_id)
+    }
+}
+
 /// The metadata necessary to reconstruct a [BlobTraceBatch].
 ///
 /// Invariants:
@@ -162,6 +191,16 @@ pub struct BlobTraceBatchMeta {
     pub desc: Description<u64>,
     /// The compaction level of each batch.
     pub level: u64,
+}
+
+impl PartialEq for BlobTraceBatchMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.key.eq(&other.key)
+            && self.desc.upper()[0].eq(&other.desc.upper()[0])
+            && self.desc.lower()[0].eq(&other.desc.lower()[0])
+            && self.desc.since()[0].eq(&other.desc.since()[0])
+            && self.level.eq(&other.level)
+    }
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
