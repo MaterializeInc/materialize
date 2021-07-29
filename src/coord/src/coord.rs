@@ -3496,6 +3496,7 @@ pub async fn serve(
         now: system_time,
         metrics_registry: metrics_registry.clone(),
         persist: persister,
+        feedback_tx,
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
@@ -3582,7 +3583,6 @@ pub async fn serve(
                 now,
                 pending_peeks: HashMap::new(),
             };
-            coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
             if let Some(config) = &logging {
                 coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
                     granularity_ns: config.granularity.as_nanos(),
@@ -3661,6 +3661,12 @@ pub fn serve_debug(
         persist: persist.clone(),
     })
     .unwrap();
+
+    // We want to be able to control communication from dataflow to the
+    // coordinator, so setup an additional channel pair.
+    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
+    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
@@ -3671,13 +3677,9 @@ pub fn serve_debug(
         now: get_debug_timestamp,
         metrics_registry,
         persist: persist.persister,
+        feedback_tx: feedback_tx.clone(),
     })
     .unwrap();
-
-    // We want to be able to control communication from dataflow to the
-    // coordinator, so setup an additional channel pair.
-    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
-    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
 
     let executor = TokioHandle::current();
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
@@ -3714,7 +3716,6 @@ pub fn serve_debug(
 
     let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
     let handle = TokioHandle::current();
-    let broadcast_feedback_tx = feedback_tx.clone();
     let thread = thread::spawn(move || {
         let mut coord = Coordinator {
             worker_guards,
@@ -3742,7 +3743,6 @@ pub fn serve_debug(
             now: get_debug_timestamp,
             pending_peeks: HashMap::new(),
         };
-        coord.broadcast(SequencedCommand::EnableFeedback(broadcast_feedback_tx));
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
         handle.block_on(coord.serve(

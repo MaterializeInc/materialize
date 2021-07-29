@@ -147,7 +147,9 @@ impl CoordTest {
     async fn drain_uppers(&mut self, exclude: &HashSet<GlobalId>) {
         let mut msgs = vec![];
         loop {
+            println!("Reading");
             if let Some(Some(mut msg)) = self.dataflow_feedback_rx.recv().now_or_never() {
+                println!("RECVD: {:?}", msg);
                 // Filter out requested ids.
                 if let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message {
                     // Requeue excluded uppers so future wait-sql directives don't always have to
@@ -259,6 +261,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
 
                     let start = Instant::now();
                     loop {
+                        println!("Draining uppers");
                         ct.drain_uppers(&exclude_uppers).await;
                         let query = ct.rewrite_query(&tc.input);
                         let results = ct

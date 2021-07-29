@@ -206,7 +206,6 @@ impl CommandsProcessedMetrics {
             SequencedCommand::DropSourceTimestamping { .. } => {
                 self.drop_source_timestamping_int += 1
             }
-            SequencedCommand::EnableFeedback(..) => self.enable_feedback_int += 1,
             SequencedCommand::EnableLogging(_) => self.enable_logging_int += 1,
             SequencedCommand::Shutdown { .. } => self.shutdown_int += 1,
             SequencedCommand::AdvanceAllLocalInputs { .. } => {
