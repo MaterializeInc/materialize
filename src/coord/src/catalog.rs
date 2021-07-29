@@ -23,6 +23,7 @@ use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
 use ore::now::{to_datetime, EpochMillis, NowFn};
+use persist::indexed::runtime::MultiWriteHandle;
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -52,7 +53,7 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
-use crate::persistcfg::{PersistConfig, PersistDetails, PersisterWithConfig};
+use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
 use crate::session::Session;
 
 mod builtin_table_updates;
@@ -100,7 +101,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 #[derive(Debug, Clone)]
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
-    by_id: BTreeMap<GlobalId, CatalogEntry>,
+    by_id: CatalogEntryMap,
     by_oid: HashMap<u32, GlobalId>,
     indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
@@ -111,6 +112,97 @@ pub struct Catalog {
     config: sql::catalog::CatalogConfig,
     /// Handle to persistence runtime and feature configuration.
     persist: PersisterWithConfig,
+}
+
+// A newtype wrapper for the by_id map that makes it easier to reason about
+// maintenance of the persist_multi_details invariant (which is a cached value
+// derived from by_id, updated when by_id is updated).
+//
+// This intentionally impls Deref to make it transparently behave like the
+// BTreeMap for reads, but not DerefMut, so we have control of the mutation
+// paths.
+#[derive(Debug, Clone)]
+struct CatalogEntryMap {
+    by_id: BTreeMap<GlobalId, CatalogEntry>,
+    /// Handle allowing operations on multiple persisted streams, either for
+    /// atomicity (writing a user transaction over multiple tables) or
+    /// efficiency (advancing the timestamp of all user tables in bulk).
+    ///
+    /// Invariant: This contains the same ids and handles as the set of tables
+    /// currently being persisted (i.e it matches the output of
+    /// self.generate_persist_multi_details() and is updated whenever the set of
+    /// persisted tables changes).
+    persist_multi_details: Option<PersistMultiDetails>,
+}
+
+impl std::ops::Deref for CatalogEntryMap {
+    type Target = BTreeMap<GlobalId, CatalogEntry>;
+    fn deref(&self) -> &Self::Target {
+        &self.by_id
+    }
+}
+
+impl CatalogEntryMap {
+    pub fn new(by_id: BTreeMap<GlobalId, CatalogEntry>) -> Self {
+        let mut ret = CatalogEntryMap {
+            by_id,
+            persist_multi_details: None,
+        };
+        ret.persist_multi_details = ret.generate_persist_multi_details();
+        ret
+    }
+
+    pub fn get_mut(&mut self, key: &GlobalId) -> Option<&mut CatalogEntry> {
+        // NB: Unfortunately, there's no way for this to regenerate
+        // self.persist_multi_details after the mutation is finished. However,
+        // as of when this was written, none of the callsites used this to
+        // change whether the entry is persisted, so we should be fine.
+        self.by_id.get_mut(key)
+    }
+
+    pub fn insert(&mut self, key: GlobalId, value: CatalogEntry) -> Option<CatalogEntry> {
+        let ret = self.by_id.insert(key, value);
+        self.persist_multi_details = self.generate_persist_multi_details();
+        ret
+    }
+
+    pub fn remove(&mut self, key: &GlobalId) -> Option<CatalogEntry> {
+        let ret = self.by_id.remove(key);
+        self.persist_multi_details = self.generate_persist_multi_details();
+        ret
+    }
+
+    fn generate_persist_multi_details(&self) -> Option<PersistMultiDetails> {
+        let mut all_table_ids = Vec::new();
+        let mut handles = Vec::new();
+        for (_, entry) in self.by_id.iter() {
+            match entry.item() {
+                CatalogItem::Table(Table {
+                    persist: Some(persist),
+                    ..
+                }) => {
+                    all_table_ids.push(persist.write_handle.stream_id());
+                    handles.push(&persist.write_handle);
+                }
+                _ => {}
+            }
+        }
+        MultiWriteHandle::new(&handles)
+            .ok()
+            .map(|write_handle| PersistMultiDetails {
+                all_table_ids,
+                write_handle,
+            })
+    }
+
+    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+        // Verify the persist_multi_details invariant.
+        debug_assert_eq!(
+            &self.persist_multi_details,
+            &self.generate_persist_multi_details()
+        );
+        self.persist_multi_details.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -498,7 +590,7 @@ impl Catalog {
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
-            by_id: BTreeMap::new(),
+            by_id: CatalogEntryMap::new(BTreeMap::new()),
             by_oid: HashMap::new(),
             indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
@@ -2047,12 +2139,12 @@ impl Catalog {
         relations.into_iter().collect()
     }
 
-    pub fn user_table_persistence_enabled(&self) -> bool {
-        self.persist.config.user_table_enabled
-    }
-
     pub fn persist_details(&self, id: GlobalId) -> Result<Option<PersistDetails>, PersistError> {
         self.persist.details(id)
+    }
+
+    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+        self.by_id.persist_multi_details()
     }
 }
 
