@@ -19,7 +19,7 @@ struct MemoryTemplate<'a> {
     version: &'a str,
 }
 
-pub async fn handle_memory(
+pub fn handle_memory(
     _: Request<Body>,
     _: &mut coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {

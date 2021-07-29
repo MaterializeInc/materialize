@@ -65,7 +65,7 @@ fn get_next_message(
 }
 
 // Retrieves the latest committed timestamp from the consistency topic
-async fn get_latest_ts(
+fn get_latest_ts(
     consistency_topic: &str,
     consumer: &mut BaseConsumer,
     timeout: Duration,
@@ -449,7 +449,6 @@ async fn build_kafka(
                 .context("creating consumer client failed")?;
 
             get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
-                .await
                 .context("error restarting from existing kafka consistency topic for sink")?
         } else {
             None

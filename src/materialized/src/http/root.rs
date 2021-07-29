@@ -37,14 +37,14 @@ pub fn handle_home(
     }))
 }
 
-pub async fn handle_static(
+pub fn handle_static(
     req: Request<Body>,
     _: &mut coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     if req.method() == Method::GET {
         let path = req.uri().path();
         let path = path.strip_prefix("/").unwrap_or(path);
-        match get_static_file(path).await {
+        match get_static_file(path) {
             Some(body) => Ok(Response::new(body)),
             None => Ok(util::error_response(StatusCode::NOT_FOUND, "not found")),
         }
@@ -57,7 +57,7 @@ pub async fn handle_static(
 const STATIC_DIR: include_dir::Dir = include_dir::include_dir!("src/http/static");
 
 #[cfg(not(feature = "dev-web"))]
-async fn get_static_file(path: &str) -> Option<Body> {
+fn get_static_file(path: &str) -> Option<Body> {
     STATIC_DIR.get_file(path).map(|f| Body::from(f.contents()))
 }
 

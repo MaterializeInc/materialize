@@ -57,7 +57,7 @@ wrapped in an [`AutoRefreshingProvider`].
 The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 automatically fetching updated credentials if they've expired.
 "]
-pub async fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
+pub fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
     let request_dispatcher = http().context(
         concat!("creating HTTP client for ", $client_name))?;
     let the_client = if let Some(creds) = conn_info.credentials {

@@ -55,6 +55,7 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use ore::metrics::MetricsRegistry;
+use ore::retry::Retry;
 use rand::Rng;
 use repr::adt::numeric;
 use timely::communication::WorkerGuards;
@@ -358,7 +359,7 @@ impl Coordinator {
                 // the same multiple-build dataflow.
                 CatalogItem::Source(_) => {
                     // Inform the timestamper about this source.
-                    self.update_timestamper(entry.id(), true).await;
+                    self.update_timestamper(entry.id(), true);
                     let frontiers =
                         self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(entry.id(), frontiers);
@@ -378,7 +379,7 @@ impl Coordinator {
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
                         let df = self.dataflow_builder().build_index_dataflow(entry.id());
-                        self.ship_dataflow(df).await;
+                        self.ship_dataflow(df);
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -398,14 +399,13 @@ impl Coordinator {
                     let connector = sink_connector::build(builder.clone(), entry.id())
                         .await
                         .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)
-                        .await?;
+                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)?;
                 }
                 _ => (), // Handled in prior loop.
             }
         }
 
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        self.send_builtin_table_updates(builtin_table_updates);
 
         // Announce primary and foreign key relationships.
         if self.logging_enabled {
@@ -433,8 +433,7 @@ impl Coordinator {
                             })
                         })
                         .collect(),
-                )
-                .await;
+                );
 
                 self.send_builtin_table_updates(
                     log.variant
@@ -464,8 +463,7 @@ impl Coordinator {
                             })
                         })
                         .collect(),
-                )
-                .await;
+                );
             }
         }
 
@@ -501,24 +499,17 @@ impl Coordinator {
 
         while let Some(msg) = messages.next().await {
             match msg {
-                Message::Command(cmd) => self.message_command(cmd).await,
-                Message::Worker(worker) => self.message_worker(worker).await,
+                Message::Command(cmd) => self.message_command(cmd),
+                Message::Worker(worker) => self.message_worker(worker),
                 Message::StatementReady(ready) => self.message_statement_ready(ready).await,
-                Message::SinkConnectorReady(ready) => {
-                    self.message_sink_connector_ready(ready).await
-                }
+                Message::SinkConnectorReady(ready) => self.message_sink_connector_ready(ready),
                 Message::AdvanceSourceTimestamp(advance) => {
-                    self.message_advance_source_timestamp(advance).await
+                    self.message_advance_source_timestamp(advance)
                 }
-                Message::InsertBuiltinTableUpdates(update) => {
-                    self.send_builtin_table_updates_at_offset(
-                        update.timestamp_offset,
-                        update.updates,
-                    )
-                    .await
-                }
+                Message::InsertBuiltinTableUpdates(update) => self
+                    .send_builtin_table_updates_at_offset(update.timestamp_offset, update.updates),
                 Message::Shutdown => {
-                    self.message_shutdown().await;
+                    self.message_shutdown();
                     break;
                 }
             }
@@ -553,7 +544,7 @@ impl Coordinator {
         }
     }
 
-    async fn message_worker(
+    fn message_worker(
         &mut self,
         WorkerFeedbackWithMeta {
             worker_id: _,
@@ -565,7 +556,7 @@ impl Coordinator {
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
                 }
-                self.maintenance().await;
+                self.maintenance();
             }
             WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, changes }) => {
                 self.catalog
@@ -650,12 +641,12 @@ impl Coordinator {
             .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
             .await
         {
-            Ok(plan) => self.sequence_plan(tx, session, plan).await,
+            Ok(plan) => self.sequence_plan(tx, session, plan),
             Err(e) => tx.send(Err(e), session),
         }
     }
 
-    async fn message_sink_connector_ready(
+    fn message_sink_connector_ready(
         &mut self,
         SinkConnectorReady {
             session,
@@ -677,7 +668,6 @@ impl Coordinator {
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
                     self.handle_sink_connector_ready(id, oid, connector)
-                        .await
                         .expect("marking sink ready should never fail");
                 } else {
                     // Another session dropped the sink while we were
@@ -692,7 +682,6 @@ impl Coordinator {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_by_id(id).is_some() {
                     self.catalog_transact(vec![catalog::Op::DropItem(id)])
-                        .await
                         .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
@@ -704,7 +693,7 @@ impl Coordinator {
         }
     }
 
-    async fn message_shutdown(&mut self) {
+    fn message_shutdown(&mut self) {
         self.metric_scraper_tx
             .as_ref()
             .map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
@@ -712,14 +701,14 @@ impl Coordinator {
         self.broadcast(SequencedCommand::Shutdown);
     }
 
-    async fn message_advance_source_timestamp(
+    fn message_advance_source_timestamp(
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
         self.broadcast(SequencedCommand::AdvanceSourceTimestamp { id, update });
     }
 
-    async fn message_command(&mut self, cmd: Command) {
+    fn message_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
                 session,
@@ -947,7 +936,7 @@ impl Coordinator {
                 conn_id,
                 secret_key,
             } => {
-                self.handle_cancel(conn_id, secret_key).await;
+                self.handle_cancel(conn_id, secret_key);
             }
 
             Command::DumpCatalog { session, tx } => {
@@ -967,14 +956,12 @@ impl Coordinator {
                 mut session,
                 tx,
             } => {
-                let result = self
-                    .sequence_copy_rows(&mut session, id, columns, rows)
-                    .await;
+                let result = self.sequence_copy_rows(&mut session, id, columns, rows);
                 let _ = tx.send(Response { result, session });
             }
 
             Command::Terminate { mut session } => {
-                self.handle_terminate(&mut session).await;
+                self.handle_terminate(&mut session);
             }
 
             Command::StartTransaction {
@@ -998,7 +985,7 @@ impl Coordinator {
                 mut session,
                 tx,
             } => {
-                let result = self.sequence_end_transaction(&mut session, action).await;
+                let result = self.sequence_end_transaction(&mut session, action);
                 let _ = tx.send(Response { result, session });
             }
         }
@@ -1118,7 +1105,7 @@ impl Coordinator {
     ///
     /// Primarily, this involves sequencing compaction commands, which should be
     /// issued whenever available.
-    async fn maintenance(&mut self) {
+    fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
         // Don't try to compact to an empty frontier. There may be a good reason to do this
         // in principle, but not in any current Mz use case.
@@ -1240,7 +1227,7 @@ impl Coordinator {
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+    fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -1260,11 +1247,11 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    async fn handle_terminate(&mut self, session: &mut Session) {
+    fn handle_terminate(&mut self, session: &mut Session) {
         let (drop_sinks, _) = session.clear_transaction();
-        self.drop_sinks(drop_sinks).await;
+        self.drop_sinks(drop_sinks);
 
-        self.drop_temp_items(session.conn_id()).await;
+        self.drop_temp_items(session.conn_id());
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
@@ -1273,14 +1260,13 @@ impl Coordinator {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    async fn drop_temp_items(&mut self, conn_id: u32) {
+    fn drop_temp_items(&mut self, conn_id: u32) {
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
-            .await
             .expect("unable to drop temporary items for conn_id");
     }
 
-    async fn handle_sink_connector_ready(
+    fn handle_sink_connector_ready(
         &mut self,
         id: GlobalId,
         oid: u32,
@@ -1303,7 +1289,7 @@ impl Coordinator {
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         let as_of = SinkAsOf {
             frontier: self.determine_frontier(sink.from),
             strict: !sink.with_snapshot,
@@ -1335,10 +1321,10 @@ impl Coordinator {
             let sink_writes = SinkWrites::new(tokens);
             self.sink_writes.insert(id, sink_writes);
         }
-        Ok(self.ship_dataflow(df).await)
+        Ok(self.ship_dataflow(df))
     }
 
-    async fn sequence_plan(
+    fn sequence_plan(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
@@ -1346,70 +1332,58 @@ impl Coordinator {
     ) {
         match plan {
             Plan::CreateDatabase(plan) => {
-                tx.send(self.sequence_create_database(plan).await, session);
+                tx.send(self.sequence_create_database(plan), session);
             }
             Plan::CreateSchema(plan) => {
-                tx.send(self.sequence_create_schema(plan).await, session);
+                tx.send(self.sequence_create_schema(plan), session);
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(plan).await, session);
+                tx.send(self.sequence_create_role(plan), session);
             }
             Plan::CreateTable(plan) => {
-                tx.send(
-                    self.sequence_create_table(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_table(&mut session, plan), session);
             }
             Plan::CreateSource(plan) => {
-                tx.send(
-                    self.sequence_create_source(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_source(&mut session, plan), session);
             }
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, plan, tx).await;
+                self.sequence_create_sink(session, plan, tx);
             }
             Plan::CreateView(plan) => {
-                tx.send(self.sequence_create_view(&mut session, plan).await, session);
+                tx.send(self.sequence_create_view(&mut session, plan), session);
             }
             Plan::CreateViews(plan) => {
-                tx.send(
-                    self.sequence_create_views(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_create_views(&mut session, plan), session);
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan).await, session);
+                tx.send(self.sequence_create_index(plan), session);
             }
             Plan::CreateType(plan) => {
-                tx.send(self.sequence_create_type(plan).await, session);
+                tx.send(self.sequence_create_type(plan), session);
             }
             Plan::DropDatabase(plan) => {
-                tx.send(self.sequence_drop_database(plan).await, session);
+                tx.send(self.sequence_drop_database(plan), session);
             }
             Plan::DropSchema(plan) => {
-                tx.send(self.sequence_drop_schema(plan).await, session);
+                tx.send(self.sequence_drop_schema(plan), session);
             }
             Plan::DropRoles(plan) => {
-                tx.send(self.sequence_drop_roles(plan).await, session);
+                tx.send(self.sequence_drop_roles(plan), session);
             }
             Plan::DropItems(plan) => {
-                tx.send(self.sequence_drop_items(plan).await, session);
+                tx.send(self.sequence_drop_items(plan), session);
             }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
             }
             Plan::ShowAllVariables => {
-                tx.send(self.sequence_show_all_variables(&session).await, session);
+                tx.send(self.sequence_show_all_variables(&session), session);
             }
             Plan::ShowVariable(plan) => {
-                tx.send(self.sequence_show_variable(&session, plan).await, session);
+                tx.send(self.sequence_show_variable(&session, plan), session);
             }
             Plan::SetVariable(plan) => {
-                tx.send(
-                    self.sequence_set_variable(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_set_variable(&mut session, plan), session);
             }
             Plan::StartTransaction => {
                 let duplicated =
@@ -1427,16 +1401,13 @@ impl Coordinator {
                     Plan::AbortTransaction => EndTransactionAction::Rollback,
                     _ => unreachable!(),
                 };
-                tx.send(
-                    self.sequence_end_transaction(&mut session, action).await,
-                    session,
-                );
+                tx.send(self.sequence_end_transaction(&mut session, action), session);
             }
             Plan::Peek(plan) => {
-                tx.send(self.sequence_peek(&mut session, plan).await, session);
+                tx.send(self.sequence_peek(&mut session, plan), session);
             }
             Plan::Tail(plan) => {
-                tx.send(self.sequence_tail(&mut session, plan).await, session);
+                tx.send(self.sequence_tail(&mut session, plan), session);
             }
             Plan::SendRows(plan) => {
                 tx.send(Ok(send_immediate_rows(plan.rows)), session);
@@ -1456,10 +1427,10 @@ impl Coordinator {
                 tx.send(self.sequence_explain(&session, plan), session);
             }
             Plan::SendDiffs(plan) => {
-                tx.send(self.sequence_send_diffs(&mut session, plan).await, session);
+                tx.send(self.sequence_send_diffs(&mut session, plan), session);
             }
             Plan::Insert(plan) => {
-                tx.send(self.sequence_insert(&mut session, plan).await, session);
+                tx.send(self.sequence_insert(&mut session, plan), session);
             }
             Plan::AlterNoop(plan) => {
                 tx.send(
@@ -1468,7 +1439,7 @@ impl Coordinator {
                 );
             }
             Plan::AlterItemRename(plan) => {
-                tx.send(self.sequence_alter_item_rename(plan).await, session);
+                tx.send(self.sequence_alter_item_rename(plan), session);
             }
             Plan::AlterIndexSetOptions(plan) => {
                 tx.send(self.sequence_alter_index_set_options(plan), session);
@@ -1477,14 +1448,14 @@ impl Coordinator {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(session.conn_id()).await;
+                self.drop_temp_items(session.conn_id());
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(session.conn_id()).await;
+                    self.drop_temp_items(session.conn_id());
                     let drop_sinks = session.reset();
-                    self.drop_sinks(drop_sinks).await;
+                    self.drop_sinks(drop_sinks);
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(CoordError::OperationProhibitsTransaction(
@@ -1524,7 +1495,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_database(
+    fn sequence_create_database(
         &mut self,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1541,7 +1512,7 @@ impl Coordinator {
                 oid: schema_oid,
             },
         ];
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -1551,7 +1522,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_schema(
+    fn sequence_create_schema(
         &mut self,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1561,7 +1532,7 @@ impl Coordinator {
             schema_name: plan.schema_name,
             oid,
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -1571,7 +1542,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_role(
+    fn sequence_create_role(
         &mut self,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -1581,11 +1552,10 @@ impl Coordinator {
             oid,
         };
         self.catalog_transact(vec![op])
-            .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    async fn sequence_create_table(
+    fn sequence_create_table(
         &mut self,
         session: &Session,
         plan: CreateTablePlan,
@@ -1629,26 +1599,23 @@ impl Coordinator {
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
-        match self
-            .catalog_transact(vec![
-                catalog::Op::CreateItem {
-                    id: table_id,
-                    oid: table_oid,
-                    name,
-                    item: CatalogItem::Table(table),
-                },
-                catalog::Op::CreateItem {
-                    id: index_id,
-                    oid: index_oid,
-                    name: index_name,
-                    item: CatalogItem::Index(index),
-                },
-            ])
-            .await
-        {
+        match self.catalog_transact(vec![
+            catalog::Op::CreateItem {
+                id: table_id,
+                oid: table_oid,
+                name,
+                item: CatalogItem::Table(table),
+            },
+            catalog::Op::CreateItem {
+                id: index_id,
+                oid: index_oid,
+                name: index_name,
+                item: CatalogItem::Index(index),
+            },
+        ]) {
             Ok(_) => {
                 let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df).await;
+                self.ship_dataflow(df);
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -1659,7 +1626,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_source(
+    fn sequence_create_source(
         &mut self,
         session: &mut Session,
         plan: CreateSourcePlan,
@@ -1684,9 +1651,9 @@ impl Coordinator {
 
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(()) => {
-                self.ship_sources(metadata).await;
+                self.ship_sources(metadata);
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -1697,18 +1664,18 @@ impl Coordinator {
         }
     }
 
-    async fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>)>) {
+    fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>)>) {
         for (source_id, idx_id) in metadata {
             // Do everything to instantiate the source at the coordinator and
             // inform the timestamper and dataflow workers of its existence before
             // shipping any dataflows that depend on its existence.
-            self.update_timestamper(source_id, true).await;
+            self.update_timestamper(source_id, true);
             let frontiers =
                 self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
             self.sources.insert(source_id, frontiers);
             if let Some(index_id) = idx_id {
                 let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df).await;
+                self.ship_dataflow(df);
             }
         }
     }
@@ -1778,7 +1745,7 @@ impl Coordinator {
         Ok((metadata, ops))
     }
 
-    async fn sequence_create_sink(
+    fn sequence_create_sink(
         &mut self,
         session: Session,
         plan: CreateSinkPlan,
@@ -1827,7 +1794,7 @@ impl Coordinator {
                 depends_on,
             }),
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => (),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -1933,7 +1900,7 @@ impl Coordinator {
         Ok((ops, index_id))
     }
 
-    async fn sequence_create_view(
+    fn sequence_create_view(
         &mut self,
         session: &Session,
         plan: CreateViewPlan,
@@ -1941,11 +1908,11 @@ impl Coordinator {
         let if_not_exists = plan.if_not_exists;
         let (ops, index_id) = self.generate_view_ops(session, plan)?;
 
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     let df = self.dataflow_builder().build_index_dataflow(index_id);
-                    self.ship_dataflow(df).await;
+                    self.ship_dataflow(df);
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1957,7 +1924,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_views(
+    fn sequence_create_views(
         &mut self,
         session: &mut Session,
         plan: CreateViewsPlan,
@@ -1973,14 +1940,14 @@ impl Coordinator {
             }
         }
 
-        match self.catalog_transact(ops).await {
+        match self.catalog_transact(ops) {
             Ok(()) => {
                 let mut dfs = vec![];
                 for index_id in index_ids {
                     let df = self.dataflow_builder().build_index_dataflow(index_id);
                     dfs.push(df);
                 }
-                self.ship_dataflows(dfs).await;
+                self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             // TODO somehow check this or remove if not exists modifiers
@@ -1989,7 +1956,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_index(
+    fn sequence_create_index(
         &mut self,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2019,10 +1986,10 @@ impl Coordinator {
             name,
             item: CatalogItem::Index(index),
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => {
                 let df = self.dataflow_builder().build_index_dataflow(id);
-                self.ship_dataflow(df).await;
+                self.ship_dataflow(df);
                 self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
@@ -2034,7 +2001,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_type(
+    fn sequence_create_type(
         &mut self,
         plan: CreateTypePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2051,49 +2018,43 @@ impl Coordinator {
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
     }
 
-    async fn sequence_drop_database(
+    fn sequence_drop_database(
         &mut self,
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(plan.name);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
-    async fn sequence_drop_schema(
+    fn sequence_drop_schema(
         &mut self,
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.name);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
-    async fn sequence_drop_roles(
-        &mut self,
-        plan: DropRolesPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    fn sequence_drop_roles(&mut self, plan: DropRolesPlan) -> Result<ExecuteResponse, CoordError> {
         let ops = plan
             .names
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
-    async fn sequence_drop_items(
-        &mut self,
-        plan: DropItemsPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    fn sequence_drop_items(&mut self, plan: DropItemsPlan) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(ops).await?;
+        self.catalog_transact(ops)?;
         Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -2107,7 +2068,7 @@ impl Coordinator {
         })
     }
 
-    async fn sequence_show_all_variables(
+    fn sequence_show_all_variables(
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2126,7 +2087,7 @@ impl Coordinator {
         ))
     }
 
-    async fn sequence_show_variable(
+    fn sequence_show_variable(
         &self,
         session: &Session,
         plan: ShowVariablePlan,
@@ -2136,7 +2097,7 @@ impl Coordinator {
         Ok(send_immediate_rows(vec![row]))
     }
 
-    async fn sequence_set_variable(
+    fn sequence_set_variable(
         &self,
         session: &mut Session,
         plan: SetVariablePlan,
@@ -2145,7 +2106,7 @@ impl Coordinator {
         Ok(ExecuteResponse::SetVariable { name: plan.name })
     }
 
-    async fn sequence_end_transaction(
+    fn sequence_end_transaction(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
@@ -2156,7 +2117,7 @@ impl Coordinator {
         );
 
         let (drop_sinks, txn) = session.clear_transaction();
-        self.drop_sinks(drop_sinks).await;
+        self.drop_sinks(drop_sinks);
 
         // Allow compaction of sources from this transaction, regardless of the action.
         self.txn_reads.remove(&session.conn_id());
@@ -2240,7 +2201,7 @@ impl Coordinator {
         Ok(timedomain_ids)
     }
 
-    async fn sequence_peek(
+    fn sequence_peek(
         &mut self,
         session: &mut Session,
         plan: PeekPlan,
@@ -2418,7 +2379,7 @@ impl Coordinator {
                 self.dataflow_builder()
                     .import_view_into_dataflow(&view_id, &source, &mut dataflow);
                 dataflow.export_index(index_id, view_id, typ, key);
-                self.ship_dataflow(dataflow).await;
+                self.ship_dataflow(dataflow);
             }
 
             let mfp_plan = map_filter_project
@@ -2442,7 +2403,7 @@ impl Coordinator {
             });
 
             if !fast_path {
-                self.drop_indexes(vec![index_id]).await;
+                self.drop_indexes(vec![index_id]);
             }
 
             let rows_rx = UnboundedReceiverStream::new(rows_rx)
@@ -2479,7 +2440,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_tail(
+    fn sequence_tail(
         &mut self,
         session: &mut Session,
         plan: TailPlan,
@@ -2539,7 +2500,7 @@ impl Coordinator {
                 strict: !with_snapshot,
             },
         );
-        self.ship_dataflow(df).await;
+        self.ship_dataflow(df);
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -2797,7 +2758,7 @@ impl Coordinator {
         Ok(send_immediate_rows(rows))
     }
 
-    async fn sequence_send_diffs(
+    fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
         plan: SendDiffsPlan,
@@ -2813,7 +2774,7 @@ impl Coordinator {
         })
     }
 
-    async fn sequence_insert(
+    fn sequence_insert(
         &mut self,
         session: &mut Session,
         plan: InsertPlan,
@@ -2843,7 +2804,7 @@ impl Coordinator {
                     updates: rows,
                     kind: MutationKind::Insert,
                 };
-                self.sequence_send_diffs(session, diffs_plan).await
+                self.sequence_send_diffs(session, diffs_plan)
             }
             // If we couldn't optimize the INSERT statement to a constant, it
             // must depend on another relation. We're not yet sophisticated
@@ -2852,7 +2813,7 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_copy_rows(
+    fn sequence_copy_rows(
         &mut self,
         session: &mut Session,
         id: GlobalId,
@@ -2865,10 +2826,10 @@ impl Coordinator {
             id,
             values: values.lower(),
         };
-        self.sequence_insert(session, plan).await
+        self.sequence_insert(session, plan)
     }
 
-    async fn sequence_alter_item_rename(
+    fn sequence_alter_item_rename(
         &mut self,
         plan: AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2876,7 +2837,7 @@ impl Coordinator {
             id: plan.id,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(vec![op]).await {
+        match self.catalog_transact(vec![op]) {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -2907,7 +2868,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
+    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -2952,11 +2913,11 @@ impl Coordinator {
         }
 
         let builtin_table_updates = self.catalog.transact(ops)?;
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        self.send_builtin_table_updates(builtin_table_updates);
 
         if !sources_to_drop.is_empty() {
             for &id in &sources_to_drop {
-                self.update_timestamper(id, false).await;
+                self.update_timestamper(id, false);
                 self.catalog.delete_timestamp_bindings(id)?;
                 self.sources.remove(&id);
             }
@@ -2969,16 +2930,29 @@ impl Coordinator {
             self.broadcast(SequencedCommand::DropSinks(sinks_to_drop));
         }
         if !indexes_to_drop.is_empty() {
-            self.drop_indexes(indexes_to_drop).await;
+            self.drop_indexes(indexes_to_drop);
         }
-        for (conn, slot_names) in replication_slots_to_drop {
-            postgres_util::drop_replication_slots(&conn, &slot_names).await?;
+
+        // We don't want to block the coordinator on an external postgres server, so
+        // move the drop slots to a separate task. This does mean that a failed drop
+        // slot won't bubble up to the user as an error message. However, even if it
+        // did (and how the code previously worked), mz has already dropped it from our
+        // catalog, and so we wouldn't be able to retry anyway.
+        if !replication_slots_to_drop.is_empty() {
+            tokio::spawn(async move {
+                for (conn, slot_names) in replication_slots_to_drop {
+                    // Try to drop the replication slots, but give up after a while.
+                    let _ = Retry::default()
+                        .retry(|_state| postgres_util::drop_replication_slots(&conn, &slot_names))
+                        .await;
+                }
+            });
         }
 
         Ok(())
     }
 
-    async fn send_builtin_table_updates_at_offset(
+    fn send_builtin_table_updates_at_offset(
         &mut self,
         timestamp_offset: u64,
         mut updates: Vec<BuiltinTableUpdate>,
@@ -3000,17 +2974,17 @@ impl Coordinator {
         }
     }
 
-    async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        self.send_builtin_table_updates_at_offset(0, updates).await
+    fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+        self.send_builtin_table_updates_at_offset(0, updates)
     }
 
-    async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
+    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
             self.broadcast(SequencedCommand::DropSinks(dataflow_names));
         }
     }
 
-    async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
+    fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
         let mut trace_keys = Vec::new();
         for id in indexes {
             if self.indexes.remove(&id).is_some() {
@@ -3095,8 +3069,8 @@ impl Coordinator {
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
-        self.ship_dataflows(vec![dataflow]).await
+    fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
+        self.ship_dataflows(vec![dataflow])
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
@@ -3114,7 +3088,7 @@ impl Coordinator {
     /// Panics if as_of is < the `since` frontiers.
     ///
     /// Panics if the dataflow descriptions contain an invalid plan.
-    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+    fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
@@ -3200,7 +3174,7 @@ impl Coordinator {
     }
 
     // Notify the timestamper thread that a source has been created or dropped.
-    async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
+    fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
             let bindings = self
                 .catalog
