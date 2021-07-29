@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryInto;
+use std::convert::TryFrom;
 use std::env;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -214,13 +214,8 @@ pub struct MzTimestamp(pub u64);
 
 impl<'a> FromSql<'a> for MzTimestamp {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
-        let mut n = pgrepr::Numeric::from_sql(ty, raw)?;
-        if repr::adt::numeric::get_scale(&n.0 .0) != 0 {
-            return Err("scale of apd was not 0".into());
-        }
-        // Converting apd to int requires its exponent be zero.
-        repr::adt::numeric::rescale(&mut n.0 .0, 0).unwrap();
-        Ok(MzTimestamp(n.0 .0.try_into()?))
+        let n = pgrepr::Numeric::from_sql(ty, raw)?;
+        Ok(MzTimestamp(u64::try_from(n.0 .0)?))
     }
 
     fn accepts(ty: &Type) -> bool {
