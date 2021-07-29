@@ -694,7 +694,7 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 
 %1 =
 | Get materialize.public.t (u1)
-| Filter !(isnull(#0)), (#0 <= 195), (#0 >= 38)
+| Filter (#0 <= 195), (#0 >= 38)
 | ArrangeBy (#0)
 
 %2 =
