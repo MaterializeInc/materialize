@@ -486,7 +486,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
-    let ncpus_useful = cmp::min(num_cpus::get(), num_cpus::get_physical());
+    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
 
     // Print system information as the very first thing in the logs. The goal is
     // to increase the probability that we can reproduce a reported bug if all
