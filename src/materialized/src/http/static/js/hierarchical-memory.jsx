@@ -35,7 +35,6 @@ function Dataflows() {
     const [records, setRecords] = useState(null);
     const [opers, setOpers] = useState(null);
     const [chans, setChans] = useState(null);
-    const [elapsed, setElapsed] = useState(null);
     const [view, setView] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
@@ -50,7 +49,7 @@ function Dataflows() {
         const load = async () => {
 
             const {
-                results: [addr_table, oper_table, chan_table, records_table, elapsed_table],
+                results: [addr_table, oper_table, chan_table, records_table],
             } = await query(`
                 SELECT DISTINCT
                     id, address
@@ -76,15 +75,7 @@ function Dataflows() {
                     mz_catalog.mz_arrangement_sizes
                 GROUP BY
                     id;
-
-                SELECT
-                    id, sum(elapsed_ns)
-                FROM
-                    mz_catalog.mz_scheduling_elapsed
-                GROUP BY
-                    id;
             `);
-
 
             // Map from id to address (array). {320: [11], 321: [11, 1]}.
             const addrs = {};
@@ -106,8 +97,6 @@ function Dataflows() {
             setChans(chans);
 
             setRecords(Object.fromEntries(records_table.rows));
-
-            setElapsed(Object.fromEntries(elapsed_table.rows));
 
             try {
                 const view = await getCreateView(stats.name);
