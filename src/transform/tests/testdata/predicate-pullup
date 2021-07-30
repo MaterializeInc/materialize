@@ -140,3 +140,20 @@ build apply=PredicatePullup
 | Filter (#0 = #1), (#2 != #3)
 ----
 ----
+
+# TODO update this test once #7617 is fixed
+build apply=PredicatePullup
+(flat_map (filter (get x) [(call_binary eq #0 #1)]) generate_series_int32 [0 200])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1)
+| FlatMap generate_series(0, 200)
+
+build apply=(PredicatePullup,PredicatePushdown)
+(flat_map (filter (get x) [(call_binary eq #0 #1)]) generate_series_int32 [0 200])
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1)
+| FlatMap generate_series(0, 200)

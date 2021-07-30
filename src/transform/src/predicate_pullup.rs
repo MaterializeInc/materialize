@@ -229,7 +229,31 @@ impl PredicatePullup {
                 }
             }
 
+            // TODO We currently don't lift predicates from the input of FlatMaps since
+            // predicate pushdown won't push them back down. Enable when #7617 is fixed.
+            // MirRelationExpr::FlatMap {
+            //     input,
+            //     func: _,
+            //     exprs: _,
+            //     demand: _,
+            // } => {
+            //     self.action(input, get_predicates);
+
+            //     if let MirRelationExpr::Filter {
+            //         input: inner_input,
+            //         predicates,
+            //     } = &mut **input
+            //     {
+            //         if predicates.iter().all(|x| !x.is_literal_err()) {
+            //             let liftable_predictes = predicates.clone();
+            //             **input = inner_input.take_dangerous();
+            //             *relation = relation.take_dangerous().filter(liftable_predictes);
+            //         }
+            //     }
+            // }
             x => {
+                // Lifting predicates on top of the remaining non-covered operators
+                // is not correct, so we just process their content here
                 x.visit1_mut(|e| self.action(e, get_predicates));
             }
         }
