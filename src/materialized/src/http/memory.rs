@@ -27,3 +27,18 @@ pub fn handle_memory(
         version: BUILD_INFO.version,
     }))
 }
+
+#[derive(Template)]
+#[template(path = "http/templates/hierarchical-memory.html")]
+struct HierarchicalMemoryTemplate<'a> {
+    version: &'a str,
+}
+
+pub fn handle_hierarchical_memory(
+    _: Request<Body>,
+    _: &mut coord::SessionClient,
+) -> Result<Response<Body>, anyhow::Error> {
+    Ok(util::template_response(HierarchicalMemoryTemplate {
+        version: BUILD_INFO.version,
+    }))
+}
