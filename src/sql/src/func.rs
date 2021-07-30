@@ -2053,6 +2053,33 @@ fn array_to_string(
     })
 }
 
+fn eq(
+    ecx: &ExprContext,
+    expr1: HirScalarExpr,
+    expr2: HirScalarExpr,
+) -> Result<HirScalarExpr, anyhow::Error> {
+    use BinaryFunc::{Eq, Or};
+    use UnaryFunc::IsNull;
+    Ok(HirScalarExpr::If {
+        cond: Box::new(
+            expr1
+                .clone()
+                .call_unary(IsNull)
+                .call_binary(expr2.clone().call_unary(IsNull), Or),
+        ),
+        then: Box::new(HirScalarExpr::literal_null(ScalarType::Bool)),
+        els: Box::new(expr1.call_binary(expr2, Eq)),
+    })
+}
+
+fn not_eq(
+    ecx: &ExprContext,
+    expr1: HirScalarExpr,
+    expr2: HirScalarExpr,
+) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(eq(ecx, expr1, expr2)?.call_unary(UnaryFunc::Not))
+}
+
 lazy_static! {
     /// Correlates an operator with all of its implementations.
     static ref OP_IMPLS: HashMap<&'static str, Func> = {
@@ -2395,45 +2422,45 @@ lazy_static! {
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte, 1075;
             },
             "=" => Scalar {
-                params!(Numeric, Numeric) => BinaryFunc::Eq, 1752;
-                params!(Bool, Bool) => BinaryFunc::Eq, 91;
-                params!(Int16, Int16) => BinaryFunc::Eq, 94;
-                params!(Int32, Int32) => BinaryFunc::Eq, 96;
-                params!(Int64, Int64) => BinaryFunc::Eq, 410;
-                params!(Float32, Float32) => BinaryFunc::Eq, 620;
-                params!(Float64, Float64) => BinaryFunc::Eq, 670;
-                params!(Oid, Oid) => BinaryFunc::Eq, 607;
-                params!(Date, Date) => BinaryFunc::Eq, 1093;
-                params!(Time, Time) => BinaryFunc::Eq, 1108;
-                params!(Timestamp, Timestamp) => BinaryFunc::Eq, 2060;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::Eq, 1320;
-                params!(Uuid, Uuid) => BinaryFunc::Eq, 2972;
-                params!(Interval, Interval) => BinaryFunc::Eq, 1330;
-                params!(Bytes, Bytes) => BinaryFunc::Eq, 1955;
-                params!(String, String) => BinaryFunc::Eq, 98;
-                params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
-                params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
-                params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
+                params!(Numeric, Numeric) => Operation::binary(eq), 1752;
+                params!(Bool, Bool) => Operation::binary(eq), 91;
+                params!(Int16, Int16) => Operation::binary(eq), 94;
+                params!(Int32, Int32) => Operation::binary(eq), 96;
+                params!(Int64, Int64) => Operation::binary(eq), 410;
+                params!(Float32, Float32) => Operation::binary(eq), 620;
+                params!(Float64, Float64) => Operation::binary(eq), 670;
+                params!(Oid, Oid) => Operation::binary(eq), 607;
+                params!(Date, Date) => Operation::binary(eq), 1093;
+                params!(Time, Time) => Operation::binary(eq), 1108;
+                params!(Timestamp, Timestamp) => Operation::binary(eq), 2060;
+                params!(TimestampTz, TimestampTz) => Operation::binary(eq), 1320;
+                params!(Uuid, Uuid) => Operation::binary(eq), 2972;
+                params!(Interval, Interval) => Operation::binary(eq), 1330;
+                params!(Bytes, Bytes) => Operation::binary(eq), 1955;
+                params!(String, String) => Operation::binary(eq), 98;
+                params!(Jsonb, Jsonb) => Operation::binary(eq), 3240;
+                params!(ListAny, ListAny) => Operation::binary(eq), oid::FUNC_LIST_EQ_OID;
+                params!(ArrayAny, ArrayAny) => Operation::binary(eq), 1070;
             },
             "<>" => Scalar {
-                params!(Numeric, Numeric) => BinaryFunc::NotEq, 1753;
-                params!(Bool, Bool) => BinaryFunc::NotEq, 85;
-                params!(Int16, Int16) => BinaryFunc::NotEq, 519;
-                params!(Int32, Int32) => BinaryFunc::NotEq, 518;
-                params!(Int64, Int64) => BinaryFunc::NotEq, 411;
-                params!(Float32, Float32) => BinaryFunc::NotEq, 621;
-                params!(Float64, Float64) => BinaryFunc::NotEq, 671;
-                params!(Oid, Oid) => BinaryFunc::NotEq, 608;
-                params!(Date, Date) => BinaryFunc::NotEq, 1094;
-                params!(Time, Time) => BinaryFunc::NotEq, 1109;
-                params!(Timestamp, Timestamp) => BinaryFunc::NotEq, 2061;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::NotEq, 1321;
-                params!(Uuid, Uuid) => BinaryFunc::NotEq, 2973;
-                params!(Interval, Interval) => BinaryFunc::NotEq, 1331;
-                params!(Bytes, Bytes) => BinaryFunc::NotEq, 1956;
-                params!(String, String) => BinaryFunc::NotEq, 531;
-                params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
-                params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq, 1071;
+                params!(Numeric, Numeric) => Operation::binary(not_eq), 1753;
+                params!(Bool, Bool) => Operation::binary(not_eq), 85;
+                params!(Int16, Int16) => Operation::binary(not_eq), 519;
+                params!(Int32, Int32) => Operation::binary(not_eq), 518;
+                params!(Int64, Int64) => Operation::binary(not_eq), 411;
+                params!(Float32, Float32) => Operation::binary(not_eq), 621;
+                params!(Float64, Float64) => Operation::binary(not_eq), 671;
+                params!(Oid, Oid) => Operation::binary(not_eq), 608;
+                params!(Date, Date) => Operation::binary(not_eq), 1094;
+                params!(Time, Time) => Operation::binary(not_eq), 1109;
+                params!(Timestamp, Timestamp) => Operation::binary(not_eq), 2061;
+                params!(TimestampTz, TimestampTz) => Operation::binary(not_eq), 1321;
+                params!(Uuid, Uuid) => Operation::binary(not_eq), 2973;
+                params!(Interval, Interval) => Operation::binary(not_eq), 1331;
+                params!(Bytes, Bytes) => Operation::binary(not_eq), 1956;
+                params!(String, String) => Operation::binary(not_eq), 531;
+                params!(Jsonb, Jsonb) => Operation::binary(not_eq), 3241;
+                params!(ArrayAny, ArrayAny) => Operation::binary(not_eq), 1071;
             }
         }
     };
