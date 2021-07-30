@@ -17,6 +17,26 @@ Recursive types are not supported: .Self
   FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA '${testdrive.protobuf-descriptors}'
 Recursive types are not supported: .Mutual1
 
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.UInt32' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "uint32" is not supported
+
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.UInt64' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "uint64" is not supported
+
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Fixed32' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "fixed32" is not supported
+
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Fixed64' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "fixed64" is not supported
+
 > CREATE SOURCE protomessages FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA '${testdrive.protobuf-descriptors}'

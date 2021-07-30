@@ -48,6 +48,15 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.8.4 %}}
 
+- **Breaking change.** Reject [Protobuf sources] whose schemas contain
+  unsigned integer types (`uint32`, `uint64`, `fixed32`, and `fixed64`).
+  Materialize previously converted these types to
+  [`numeric`](/sql/types/numeric).
+
+  A future version of Materialize is likely to support unsigned integers
+  natively, at which point the aforementioned Protobuf types will be converted
+  to the appropriate Materialize types.
+
 - **Breaking change.** The `HTTP_PROXY` variable is no longer respected. Use
   `http_proxy` instead.
 
