@@ -141,6 +141,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         introspection_frequency: Duration::from_secs(1),
         metrics_registry: metrics_registry.clone(),
         persist: PersistConfig::disabled(),
+        third_party_metrics_listen_addr: None,
     }))?;
     let server = Server {
         inner,

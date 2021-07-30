@@ -109,6 +109,8 @@ pub struct Config {
     // === Connection options. ===
     /// The IP address and port to listen on.
     pub listen_addr: SocketAddr,
+    /// The IP address and port to serve the "third party" metrics registry from.
+    pub third_party_metrics_listen_addr: Option<SocketAddr>,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
 
