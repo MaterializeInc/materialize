@@ -154,7 +154,8 @@ extra_lints=(
     # Needless unsafe
     clippy::transmutes_expressible_as_ptr_casts
 
-
+    # Needless async
+    clippy::unused_async
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
