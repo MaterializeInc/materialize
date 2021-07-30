@@ -155,8 +155,6 @@ pub enum SequencedCommand {
         /// The timestamp to advance to.
         advance_to: Timestamp,
     },
-    // /// Request that feedback is streamed to the provided channel.
-    // EnableFeedback(mpsc::UnboundedSender<WorkerFeedbackWithMeta>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
