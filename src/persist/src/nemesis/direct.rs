@@ -9,7 +9,6 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::mpsc;
 
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
@@ -85,24 +84,18 @@ impl Direct {
 
     fn write(&mut self, req: WriteReq) -> Result<WriteRes, Error> {
         let (write, _) = self.stream(&req.stream)?;
-        let (tx, rx) = mpsc::channel();
-        write.write(&[req.update], tx.into());
-        let seqno = rx.recv().map_err(|_| Error::RuntimeShutdown)??.0;
+        let seqno = write.write(&[req.update]).recv()?.0;
         Ok(WriteRes { seqno })
     }
 
     fn seal(&mut self, req: SealReq) -> Result<(), Error> {
         let (write, _) = self.stream(&req.stream)?;
-        let (tx, rx) = mpsc::channel();
-        write.seal(req.ts, tx.into());
-        rx.recv().map_err(|_| Error::RuntimeShutdown)?
+        write.seal(req.ts).recv()
     }
 
     fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<(), Error> {
         let (_, meta) = self.stream(&req.stream)?;
-        let (tx, rx) = mpsc::channel();
-        meta.allow_compaction(req.ts, tx.into());
-        rx.recv().map_err(|_| Error::RuntimeShutdown)?
+        meta.allow_compaction(req.ts).recv()
     }
 
     fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), Error> {
