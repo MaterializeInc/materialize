@@ -13,6 +13,8 @@ use std::str::FromStr;
 use anyhow::{anyhow, Error};
 use serde::{Deserialize, Serialize};
 
+use timely::order::PartialOrder;
+
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`MirRelationExpr::Get`](crate::MirRelationExpr::Get).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
@@ -135,6 +137,15 @@ impl fmt::Display for SourceInstanceId {
 pub enum PartitionId {
     Kafka(i32),
     None,
+}
+
+impl PartialOrder for PartitionId {
+    fn less_equal(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PartitionId::Kafka(s), PartitionId::Kafka(o)) => s <= o,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for PartitionId {
