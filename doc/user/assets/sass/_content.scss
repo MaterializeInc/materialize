@@ -1,81 +1,77 @@
 a {
   text-decoration: none;
-
-  &:hover {
-    opacity: 0.75;
-  }
 }
 
-
 .content {
+  color: $black-v2;
   h1, h2, h3, h4, h5, h6 {
-    font-weight: 500;
-
+    font-weight: 300;
+    color: $dark-purple-v2;
+    position:relative;
+    margin: 2rem 0 1rem;
+    
     a {
-      color: $black;
+      color: $black-v2;
       font-weight: 500;
     }
-
+    
     + ul {
       padding-left: 20px;
     }
   }
-
+  
   h1 {
-    font-weight: bold;
-    font-size: 2.2rem;
-    margin: 16px 0;
-
+    font-size: 2.25rem;
+    
+    &:first-of-type{
+      padding: 0.5rem 0 1.25rem;
+      
+      &::after {
+        content: "";
+        position: absolute;
+        width: 47px;
+        bottom: 0;
+        left: 0;
+        height: 1px;
+        background: $grey-v2;
+      }
+    }
+    
     + h2 {
       margin-top: 0;
     }
   }
-
+  
   h2 {
-    font-size: 1.8rem;
-    margin: 32px 0 8px;
-
+    font-size: 1.875rem;
+    
     + h3 {
       margin-top: 16px;
     }
   }
-
+  
   h3 {
-    color: $off-black;
-    font-size: 1.6rem;
-    font-weight: lighter;
-    margin: 32px 0 8px;
-
+    font-size: 1.5rem;
+    
     + h4 {
       margin-top: 8px;
     }
-
-    a {
-      color: $off-black;
-    }
   }
-
+  
   h4 {
-    color: $grey-dark;
     font-size: 1.4rem;
-    margin: 32px 0 8px;
-
-    a {
-      color: $grey-dark;
-    }
   }
-
+  
   h5 {
     font-size: 1.2rem;
     font-style: italic;
     font-weight: lighter;
-    margin: 32px 0px 8px 0px;
   }
-
+  
   p, ul > li:first-child > p:first-child {
     margin: 0;
   }
-
+  
   p + p,
   p + ul,
   ul + p,
@@ -89,19 +85,26 @@ a {
   table + p {
     margin-top: 16px;
   }
-
+  
   p + table {
     margin-top: 8px;
   }
-
+  
   p, li, pre {
-    line-height: 1.5;
+    font-size: 0.9375rem;
+    font-weight: 400;
+    line-height: 1.40625rem;
   }
-
+  
   a {
-    color: $purple;
-    font-weight: 500;
-
+    color: $purple-v2;
+    font-weight: 600;
+    
+    &:hover {
+      color: $medium-purple-v2;
+      text-decoration: underline;
+    }
+    
     // Coloring of code overrides link coloring; instead insert border-bottom to
     // indicate hyperlink on code element. This is very prevalent in our docs,
     // especially among type references.
@@ -109,30 +112,39 @@ a {
       border-bottom: 1px dotted $purple-20;
     }
   }
-
+  
+  strong {
+    font-weight: 600;
+  }
+  
   img {
     max-width: 100%;
   }
-
+  
   table {
     border-collapse: collapse;
+    font-size: 0.875rem;
+    font-weight: 400;
+    line-height: 1.3125rem;
   }
-
+  
   tr {
-    border-bottom: 1px $grey solid;
+    border-bottom: 1px $medium-grey-v2 solid;
   }
-
+  
   th {
-    color: $purple;
-    border-bottom: 2px $purple solid;
+    color: $dark-black-v2;
+    border-bottom: 2px $purple-v2 solid;
     text-align: left;
     padding: 8px;
+    font-size: 0.8125rem;
+    padding-bottom: 1rem;
   }
-
+  
   td {
     padding: 10px;
     vertical-align: top;
-
+    
     pre {
       background-color: inherit;
       border: 0;
@@ -141,29 +153,37 @@ a {
       padding: 0;
     }
   }
-
+  
   pre {
     background-color: #f9f7fd;
     border-radius: 0;
     border: 1px solid $grey-light;
-    color: $off-black;
+    color: $black-v2;
     font-family: Courier, monospace;
     font-size: 15px;
     margin: 16px 0 8px;
     overflow: auto;
     padding: 8px 10px;
-
+    
     code {
-      color: $off-black;
+      color: $black-v2;
+      background: none;
+      border: none;
     }
   }
-
+  
   code {
-    color: #3f6e75;
-    font-family: Courier, monospace;
-    font-size: 0.9375em;
+    color: $orchid-v2;
+    font-family: 'Fira Code', Courier, monospace;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    background: #F9F9F9;
+    border: 1px solid #DDDDDD;
+    box-sizing: border-box;
+    border-radius: 2px;
+    padding: 0.1rem 0.25rem;
   }
-
+  
   // Merge a highlighted code block followed by a non-highlighted code block,
   // since this is a common pattern in our docs to indicate a (highlighted)
   // shell or SQL snippet followed by its (unhighlighted) output.
@@ -172,66 +192,73 @@ a {
     margin-top: -16px;
     padding-top: 0;
   }
-
+  
   ul {
     margin: 0;
+    
+    li {
+      margin-bottom: 1rem;
+    }
   }
-
+  
   ol.has-p {
     list-style-type: none;
     counter-reset: list-counter;
     margin: 0;
     padding: 0;
-
+    
     li {
       counter-increment: list-counter;
+      min-height: 5rem;
       position: relative;
-      padding: 0 0 16px 48px;
-      border-top: 2px dashed $grey-light;
-
+      padding: 0.25rem 0 1rem 3rem;
+      border-top: 1px solid $medium-grey-v2;
+      
       &:before {
         content: counter(list-counter);
-        color: $grey;
-        font-size: 32px;
+        color: $light-purple-v2;
+        font-size: 3.5rem;
+        font-family: 'Encode Sans';
+        font-weight: 100;
         position: absolute;
-        top: 4px;
-        left: 10px;
+        top: 1.75rem;
+        left: 0.25rem;
       }
-
+      
       &:last-child {
         padding-bottom: 0;
       }
     }
   }
-
+  
   hr {
     border: none;
-    border-top: 1px solid $grey-light;
+    border-top: 1px solid $medium-grey-v2;
     margin: 36px auto;
     width: 80%;
   }
-
+  
   .warning {
     background-color: rgba(255, 124, 26, 0.1);
     border: 1px dashed rgb(255, 124, 26);
     margin: 16px 0;
     padding: 16px;
   }
-
+  
   .note {
     background-color: rgba(255, 222, 11, 0.1);
     border: 1px dashed rgb(255, 222, 11);
     margin: 16px 0;
     padding: 16px;
   }
-
+  
   .beta {
     background-color: $purple-1;
     border: 1px dashed $purple-60;
     margin: 16px 0;
     padding: 16px;
   }
-
+  
   .promo {
     background-color: #d12fa7;
     color: #fff;
@@ -242,42 +269,62 @@ a {
       color: #fff;
     }
   }
-
+  
   .cta {
-    background-color: $purple;
+    background: $purple-gradient-v2;
+    border-radius: 4px;
     color: #fff;
     display: inline-block;
-    font-weight: bold;
+    font-weight: 600;
     margin: 16px 0 0 0;
-    padding: 16px;
+    padding: 0.8125rem 4rem;
+    opacity: 1.0;
+    transition: opacity 350ms ease;
+    
+    &:hover {
+      opacity:0.9;
+      color: #fff;
+      text-decoration: none;;
+    }
   }
-
+  
   .release-date {
     font-style: italic;
   }
-
+  
   .release-date + ul,
   .release-date + ol {
     margin-top: 10px;
     padding-left: 20px;
   }
-
+  
   .symbol {
     color: $purple;
   }
-
+  
   .breadcrumb {
-    margin-top: 1rem;
-    font-size: .9rem;
+    margin-top: 2.25rem;
+    font-size: .625rem;
+    font-weight: 700;
+    line-height: 11px;
+    letter-spacing: -0.015em;
+    text-transform: uppercase;
+    color: $grey-v2;
+    
     a {
-      color: $grey-dark;
-      font-weight: lighter;
-
+      color: $grey-v2;
+      margin: 0 0.5rem;
+      
       &:hover {
-        color: $black;
+        color: $black-v2;
         opacity: 1.0;
       }
+      
+      &:first-of-type {
+        margin-left: 0;
+      }
     }
+    
   }
 }
 
@@ -287,7 +334,7 @@ a {
   max-width: 40%;
   padding-top: .5rem;
   text-align: center;
-
+  
   table {
     table-layout: fixed;
     width: 100%;
