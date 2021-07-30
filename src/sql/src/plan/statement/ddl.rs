@@ -1245,7 +1245,7 @@ pub fn plan_create_views(
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
     format: Option<Format<Raw>>,
-    _consistency: Option<KafkaConsistency<Raw>>,
+    consistency: Option<KafkaConsistency<Raw>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
@@ -1255,6 +1255,9 @@ fn kafka_sink_builder(
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
+    if consistency.is_some() {
+        unsupported!("CONSISTENCY TOPIC and CONSISTENCY FORMAT");
+    }
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
         Some(Value::String(topic)) => Some(topic),
