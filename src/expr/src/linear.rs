@@ -1346,7 +1346,8 @@ pub mod plan {
                 }
             }
 
-            // Set the floor of bounds to `time`; ceiling will be u64::MAX.
+            // Lower and upper bounds. If set, the value indicates the respective
+            // bound. If not set, indicates "larger than `u64::MAX`".
             let mut lower_bound = Some(time);
             let mut upper_bound = None;
 
@@ -1357,86 +1358,29 @@ pub mod plan {
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
             for l in self.lower_bounds.iter() {
-                match l.eval(datums, &arena) {
-                    Err(e) => {
-                        return Some(Err((e, time, diff)))
-                            .into_iter()
-                            .chain(None.into_iter());
-                    }
-                    Ok(Datum::Numeric(d)) => {
-                        // Negative values will always be less than `time`, so
-                        // will never be chosen.
-                        if d.0.is_negative() {
-                            continue;
-                        }
-
-                        match u64::try_from(d.0) {
-                            Ok(v) => {
-                                let lb = lower_bound
-                                    .expect("lower bound is only none on exit from loop");
-                                if lb < v {
-                                    lower_bound = Some(v);
-                                }
-                            }
-                            // If conversion fails, value is greater than
-                            // u64::MAX, which isn't comparable to time, so set
-                            // lower bound to None. This would have the greatest
-                            // value we have seen, so do not continue looking
-                            // for a larger lower bound.
-                            Err(_) => {
-                                lower_bound = None;
-                                break;
-                            }
-                        }
-                    }
-                    Ok(Datum::Null) => {
-                        null_eval = true;
-                    }
-                    x => {
-                        panic!("Non-decimal value in temporal predicate: {:?}", x);
-                    }
-                }
-            }
-            // At this point, we are "certain" that `lower_bound_i128` is at
-            // least `time`, which means "non-negative" / not needing to be
-            // clamped from below, or its value exceeded `u64::MAX`.
-
-            // Upper bound must be at least lower bound. If we see that the
-            // lower bound is None, we know that it was greater than u64::MAX,
-            // so the upper bound should remain as None because it to would be
-            // forced to be a value greater than `u64::MAX`.
-            if lower_bound.is_some() {
-                // If there are any upper bounds, determine the minimum upper bound.
-                for u in self.upper_bounds.iter() {
-                    match u.eval(datums, &arena) {
+                // If the lower bound already exceeds a `u64`, we needn't check more.
+                if lower_bound.is_some() {
+                    match l.eval(datums, &arena) {
                         Err(e) => {
                             return Some(Err((e, time, diff)))
                                 .into_iter()
                                 .chain(None.into_iter());
                         }
                         Ok(Datum::Numeric(d)) => {
-                            // Upper bound must be at least lower bound, whose
-                            // minimum value is `time`. Negative values will
-                            // always be less than `time`, so will never be
-                            // chosen.
-                            if d.0.is_negative() {
-                                continue;
-                            }
-
-                            match u64::try_from(d.0) {
-                                Ok(v) => {
-                                    // Replace `upper_bound` if it is none or we
-                                    // find a smaller value.
-                                    if upper_bound.is_none() || upper_bound > Some(v) {
-                                        upper_bound = Some(v);
-                                    }
-                                }
-
-                                // If conversion fails, value is greater than
-                                // u64::MAX, which isn't comparable to time, so
-                                // leave existing upper_bound, even if it is
-                                // None.
-                                Err(_) => {}
+                            // If the number is negative, it cannot improve the initial
+                            // value of `Some(time)`.
+                            if !d.0.is_negative() {
+                                // An `Ok` conversion is a valid upper bound, and an `Err` error
+                                // indicates a value above `u64::MAX`. The `ok()` method does the
+                                // conversion we want to an `Option<u64>`.
+                                let v = u64::try_from(d.0).ok();
+                                // Update `lower_bound` to be the maximum with `v`, where a `None`
+                                // value is treated as larger than `Some(_)` values.
+                                lower_bound = match (lower_bound, v) {
+                                    (None, _) => None,
+                                    (_, None) => None,
+                                    (x, y) => x.max(y),
+                                };
                             }
                         }
                         Ok(Datum::Null) => {
@@ -1449,21 +1393,59 @@ pub mod plan {
                 }
             }
 
-            // Force the upper bound to be at least the lower bound, if the
-            // upper bound exists. This should have the effect downstream of
-            // making the two equal, which will result in no output. This also
-            // ensures that `upper_bound_u64` will be at least `time`, which
-            // means "non-negative" / not needing to be clamped from below.
-            //
-            // Note that the check for upper_bound_u64.is_some() is required
-            // because None values are always less than their Some counterparts,
-            // and if upper_bound_u64.is_none() it should not become Some.
-            if upper_bound.is_some() && upper_bound < lower_bound {
-                upper_bound = lower_bound;
+            // If the lower bound exceeds `u64::MAX` the update cannot appear in the output.
+            if lower_bound.is_none() {
+                return None.into_iter().chain(None.into_iter());
             }
 
-            // Only proceed if the new time is not greater or equal to upper,
-            // and if no null values were encountered in bound evaluation.
+            // If there are any upper bounds, determine the minimum upper bound.
+            for u in self.upper_bounds.iter() {
+                // We can cease as soon as the lower and upper bounds match,
+                // as the update will certainly not be produced in that case.
+                if upper_bound != lower_bound {
+                    match u.eval(datums, &arena) {
+                        Err(e) => {
+                            return Some(Err((e, time, diff)))
+                                .into_iter()
+                                .chain(None.into_iter());
+                        }
+                        Ok(Datum::Numeric(d)) => {
+                            // If the upper bound is negative, it is impossible to satisfy.
+                            // We set the upper bound to the lower bound to indicate this.
+                            if d.0.is_negative() {
+                                upper_bound = lower_bound;
+                            } else {
+                                // An `Ok` conversion is a valid upper bound, and an `Err` error
+                                // indicates a value above `u64::MAX`. The `ok()` method does the
+                                // conversion we want to an `Option<u64>`.
+                                let v = u64::try_from(d.0).ok();
+                                // Update `upper_bound` to be the minimum with `v`, where a `None`
+                                // value is treated as larger than `Some(_)` values.
+                                upper_bound = match (upper_bound, v) {
+                                    (None, x) => x,
+                                    (x, None) => x,
+                                    (x, y) => x.min(y),
+                                };
+                                // Force the upper bound to be at least the lower bound.
+                                // The `is_some()` test is required as `None < Some(_)`,
+                                // and we do not want to set `None` to `Some(_)`.
+                                if upper_bound.is_some() && upper_bound < lower_bound {
+                                    upper_bound = lower_bound;
+                                }
+                            }
+                        }
+                        Ok(Datum::Null) => {
+                            null_eval = true;
+                        }
+                        x => {
+                            panic!("Non-decimal value in temporal predicate: {:?}", x);
+                        }
+                    }
+                }
+            }
+
+            // Produce an output only if the upper bound exceeds the lower bound,
+            // and if we did not encounter a `null` in our evaluation.
             if lower_bound != upper_bound && !null_eval {
                 // Allocate a row to produce as output.
                 let capacity =
