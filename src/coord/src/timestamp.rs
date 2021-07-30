@@ -22,6 +22,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context};
+use dataflow_types::KafkaOffset;
 use dataflow_types::PartitionOffset;
 use dataflow_types::SourceFrontierDiscoverer;
 use dataflow_types::SourcePartitionDiscoverer;
@@ -340,6 +341,10 @@ fn generate_ts_updates_from_debezium(
                 let parsed_source_name = byo_consumer.source_name.split('.').skip(1).join(".");
                 if byo_consumer.source_name == topic.trim() || parsed_source_name == topic.trim() {
                     byo_consumer.last_offset.offset += count;
+                    let frontier = Antichain::from_elem(PartitionOffset::new(
+                        PartitionId::Kafka(0),
+                        byo_consumer.last_offset,
+                    ));
                     // Debezium consistency topic should only work for single-partition
                     // topics
                     tx.send(coord::Message::AdvanceSourceTimestamp(
@@ -347,11 +352,8 @@ fn generate_ts_updates_from_debezium(
                             id: *id,
                             partitions: vec![PartitionId::Kafka(0)],
                             timestamp_bindings: vec![TimestampSourceUpdate {
-                                pid: match byo_consumer.connector {
-                                    ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
-                                },
                                 timestamp: byo_consumer.last_ts,
-                                offset: byo_consumer.last_offset,
+                                frontier: frontier,
                             }],
                         },
                     ))
@@ -957,7 +959,10 @@ impl SourceFrontierDiscoverer for RtKafkaDiscoverer {
                                 // high is one past the highest offset, MzOffset is 1-based, and
                                 // the MzOffset we send here should be one past the highest offset
                                 // for which the binding is covering.
-                                Ok(PartitionOffset::new(pid, MzOffset { offset: high }))
+                                Ok(PartitionOffset::new(
+                                    pid,
+                                    KafkaOffset { offset: high }.into(),
+                                ))
                             }
                             Err(e) => Err(anyhow!(
                                 "Unable to fetch Kafka watermarks for topic {} [{}] ({}): {}",
@@ -1030,14 +1035,23 @@ fn rt_metadata_fetch_loop<D>(
             .map(|(pid, _timestamp, _offset)| pid.clone())
             .collect();
 
-        let timestamp_bindings = previous_bindings
+        let mut timestamp_bindings = Vec::new();
+
+        for (timestamp, bindings) in &previous_bindings
             .into_iter()
-            .map(|(pid, timestamp, offset)| TimestampSourceUpdate {
-                pid,
-                timestamp,
-                offset,
-            })
-            .collect();
+            .group_by(|(_pid, timestamp, _offset)| timestamp.clone())
+        {
+            let bindings =
+                bindings.map(|(pid, _timestamp, offset)| PartitionOffset::new(pid, offset));
+
+            let mut frontier = Antichain::new();
+            frontier.extend(bindings);
+
+            timestamp_bindings.push(TimestampSourceUpdate {
+                frontier,
+                timestamp: timestamp.clone(),
+            });
+        }
 
         println!("Restored earlier ts bindings: {:?}", timestamp_bindings);
 
@@ -1074,24 +1088,21 @@ fn rt_metadata_fetch_loop<D>(
             let frontier = discoverer.get_available_frontier()?;
 
             // map from source frontier to old-school binding format
-            let updates: Vec<(PartitionId, Timestamp, MzOffset)> = frontier
-                .into_iter()
-                .map(|PartitionOffset { partition, offset }| (partition, current_ts, offset))
-                .collect();
+            let updates = frontier
+                .iter()
+                .map(|PartitionOffset { partition, offset }| {
+                    (partition.clone(), current_ts.clone(), offset.clone())
+                });
 
             let storage = storage.lock().expect("lock poisoned");
 
-            insert_timestamp_bindings(storage, discoverer.id(), updates.clone())
+            insert_timestamp_bindings(storage, discoverer.id(), updates)
                 .expect("could not store timestamp bindings");
 
-            let timestamp_bindings = updates
-                .into_iter()
-                .map(|(pid, timestamp, offset)| TimestampSourceUpdate {
-                    pid,
-                    timestamp,
-                    offset,
-                })
-                .collect();
+            let timestamp_bindings = vec![TimestampSourceUpdate {
+                frontier: frontier,
+                timestamp: current_ts,
+            }];
 
             coordination_state
                 .coordinator_channel

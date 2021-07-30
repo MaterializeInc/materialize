@@ -24,7 +24,7 @@ use globset::Glob;
 use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
 use url::Url;
@@ -925,7 +925,7 @@ impl Add<i64> for MzOffset {
 ///
 /// Side note: it's evident that this is geared somwhat towards Kafka, and
 /// other things are shoehorned into this.
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PartitionOffset {
     /// Partition from which this message originates
     pub partition: PartitionId,
@@ -938,6 +938,12 @@ impl PartitionOffset {
     /// [`MzOffset`].
     pub fn new(partition: PartitionId, offset: MzOffset) -> PartitionOffset {
         Self { partition, offset }
+    }
+
+    /// Returns `true` iff this [`PartitionOffset`] is covered by the given
+    /// [`AntichainRef`]. It is covered if it is `less_than` the frontier.
+    pub fn is_covered(&self, frontier: AntichainRef<PartitionOffset>) -> bool {
+        frontier.iter().any(|x| self.less_than(x))
     }
 }
 
@@ -964,9 +970,8 @@ pub struct KafkaOffset {
 /// Offset on PartititionId will be timestamped with Timestamp.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampSourceUpdate {
-    pub pid: PartitionId,
+    pub frontier: Antichain<PartitionOffset>,
     pub timestamp: Timestamp,
-    pub offset: MzOffset,
 }
 
 /// Convert from KafkaOffset to MzOffset (1-indexed)

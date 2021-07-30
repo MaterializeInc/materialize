@@ -784,23 +784,14 @@ where
                     for timestamp_binding in timestamp_bindings {
                         match timestamp_binding {
                             TimestampSourceUpdate {
-                                pid,
+                                frontier,
                                 timestamp,
-                                offset,
                             } => {
-                                // TODO: change the interface between the dataflow server and the
-                                // timestamper. Specifically, we probably want to inform the timestamper
-                                // of the timestamps we already know about so that it doesn't send us
-                                // duplicate copies again.
-
-                                let mut upper = Antichain::new();
-                                history.read_upper(&mut upper);
-
                                 debug!(
-                                    "Adding binding from coordinator: {}, {}, {}",
-                                    pid, timestamp, offset
+                                    "Adding binding from coordinator: {:?}, {}",
+                                    frontier, timestamp
                                 );
-                                history.add_binding(pid, timestamp, offset + 1);
+                                history.add_binding((frontier, timestamp));
                             }
                         };
                     }

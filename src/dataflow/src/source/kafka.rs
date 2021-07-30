@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +23,8 @@ use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 
 use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, PartitionOffset, SourceDataEncoding,
+    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, PartitionOffset,
+    SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
@@ -219,8 +219,10 @@ pub struct KafkaSourceReader {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
-    /// The number of known partitions.
-    known_partitions: i32,
+    /// The partitions that we are responsible for
+    our_partitions: HashSet<PartitionId>,
+    /// All discovered partitions,
+    foreign_partitions: HashSet<PartitionId>,
     /// Worker ID
     worker_id: i32,
     /// Map from partition -> most recently read offset
@@ -264,6 +266,7 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         }
     }
+
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
@@ -280,7 +283,13 @@ impl SourceReader for KafkaSourceReader {
         let prev = self.last_offsets.insert(pid, start_offset);
 
         assert!(prev.is_none());
-        self.known_partitions = cmp::max(self.known_partitions, pid + 1);
+        self.our_partitions.insert(PartitionId::Kafka(pid.clone()));
+    }
+
+    /// Add a discovered partition that we are not responsible for reading.
+    fn add_foreign_partition(&mut self, pid: PartitionId) {
+        // TODO(aljoscha): this business about "responsible_for" should be handled in the source
+        self.foreign_partitions.insert(pid);
     }
 
     /// This function polls from the next consumer for which a message is available. This function polls the set
@@ -450,6 +459,14 @@ impl SourceReader for KafkaSourceReader {
 
         self.read_frontier.extend(mapped_source_timestamps);
 
+        // for partitions that we're not responsible for, pull to +Inf
+        let foreign_max_mappings = self
+            .foreign_partitions
+            .iter()
+            .map(|pid| PartitionOffset::new(pid.clone(), MzOffset { offset: i64::MAX }));
+
+        self.read_frontier.extend(foreign_max_mappings);
+
         self.read_frontier.borrow()
     }
 }
@@ -510,7 +527,8 @@ impl KafkaSourceReader {
             source_name,
             id: source_id,
             partition_consumers: VecDeque::new(),
-            known_partitions: 0,
+            our_partitions: HashSet::new(),
+            foreign_partitions: HashSet::new(),
             consumer: Arc::new(consumer),
             worker_id,
             last_offsets: HashMap::new(),

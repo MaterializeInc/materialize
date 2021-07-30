@@ -10,7 +10,6 @@
 //! Types related to the creation of dataflow sources.
 
 use dataflow_types::{DataflowError, PartitionOffset, SourceErrorDetails};
-use itertools::Itertools;
 use mz_avro::types::Value;
 use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
@@ -35,7 +34,7 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
-use log::error;
+use log::{debug, error};
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{
@@ -320,6 +319,14 @@ pub(crate) trait SourceReader {
         panic!("add partiton not supported for source!");
     }
 
+    /// Notify the source of a discovered sink that it doesn't need to read from.
+    ///
+    /// Note: this should clearly not be here and the source should be handling
+    /// it internally.
+    fn add_foreign_partition(&mut self, _pid: PartitionId) {
+        panic!("add partiton not supported for source!");
+    }
+
     /// Returns the next message available from the source.
     ///
     /// Note that implementers are required to present messages in strictly ascending\
@@ -549,80 +556,23 @@ impl ConsistencyInfo {
             }
 
             if !self.responsible_for(&pid) {
-                continue;
-            }
-            let cons_info = self
-                .partition_metadata
-                .get_mut(&pid)
-                .expect("partition known to exist");
-
-            if let Some((timestamp, max)) =
-                timestamp_bindings.get_binding(&pid, cons_info.offset() + 1)
-            {
-                cons_info.update_timestamp(timestamp, max);
+                source.add_foreign_partition(pid);
             }
         }
     }
 
-    fn downgrade_capability(
+    fn downgrade_capability<S>(
         &mut self,
         worker_index: usize,
         cap: &mut Capability<Timestamp>,
+        source_reader: &mut S,
         timestamp_bindings: &mut TimestampBindingRc,
-    ) {
-        //  We need to determine the maximum timestamp that is fully closed. This corresponds to the minimum of
-        //  * closed timestamps across all partitions we own
-        //  * maximum bound timestamps across all partitions we don't own (the `upper`)
-        let mut upper = Antichain::new();
-        timestamp_bindings.read_upper(&mut upper);
+    ) where
+        S: SourceReader<SourceTimestamp = PartitionOffset>,
+    {
+        timestamp_bindings.maybe_advance(source_reader.get_read_frontier());
 
-        let mut min: Option<Timestamp> = if let Some(time) = upper.elements().get(0) {
-            Some(*time)
-        } else {
-            None
-        };
-        // Determine which timestamps have been closed. A timestamp is closed once we have processed
-        // all messages that we are going to process for this timestamp across all partitions that the
-        // worker knows about (i.e. the ones the worker has been assigned to read from).
-        // In practice, the following happens:
-        // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
-        // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
-        // in next_partition_ts
-
-        let min_before_partitions = min.clone();
-
-        let mut open_ts_count = 0;
-        for (pid, cons_info) in self.partition_metadata.iter_mut() {
-            let open_ts = cons_info.get_open_timestamp();
-            if let Some(open_ts) = open_ts {
-                open_ts_count += 1;
-
-                let metrics = self
-                    .source_metrics
-                    .partition_metrics
-                    .get_mut(&pid)
-                    .expect("partition known to exist");
-
-                metrics.closed_ts.set(open_ts);
-
-                min = match min.as_mut() {
-                    Some(min) => Some(std::cmp::min(open_ts, *min)),
-                    None => Some(open_ts),
-                };
-            }
-
-            // See if there's any binding for right after the latest read data.
-            // We have to make sure to not downgrade beyond that.
-            let lowest_covering_binding_ts =
-                timestamp_bindings.get_binding(pid, cons_info.offset + 1);
-            if let Some((lowest_covering_binding_ts, _offset)) = lowest_covering_binding_ts {
-                min = match min.as_mut() {
-                    Some(min) => Some(std::cmp::min(lowest_covering_binding_ts, *min)),
-                    None => Some(lowest_covering_binding_ts),
-                };
-            }
-        }
-        let min = min.unwrap_or(0);
+        let min = timestamp_bindings.frontier().unwrap_or(0);
 
         // Downgrade capability to new minimum open timestamp
         if min > self.last_closed_ts {
@@ -630,25 +580,22 @@ impl ConsistencyInfo {
             cap.downgrade(&(&min));
             self.last_closed_ts = min;
 
-            let partition_cons_infos = self
-                .partition_metadata
-                .iter()
-                .map(|(pid, cons_info)| {
-                    let lowest_binding = timestamp_bindings.get_binding(pid, cons_info.offset);
-                    format!(
-                        "(pid: {}, current_ts: {}, current_upper_bound: {}, offset: {}, lowest_binding: {:?})",
-                        pid, cons_info.current_ts, cons_info.current_upper_bound, cons_info.offset, lowest_binding
-                    )
-                })
-                .join(",");
-
-            println!(
-                "{}  -  {:?}, {}, downgrading, open_ts: {}, partitions: {}",
-                worker_index, min_before_partitions, min, open_ts_count, partition_cons_infos
+            debug!(
+                "{}  -  {}, downgrading, read_frontier: {:?}",
+                worker_index,
+                min,
+                source_reader.get_read_frontier()
             );
 
             let new_compaction_frontier = Antichain::from_elem(min);
             timestamp_bindings.set_compaction_frontier(new_compaction_frontier.borrow());
+        } else {
+            debug!(
+                "{}  -  NOT downgrading, read_frontier: {:?}, bindings: {:?}",
+                worker_index,
+                source_reader.get_read_frontier(),
+                timestamp_bindings
+            );
         }
     }
 
@@ -660,36 +607,10 @@ impl ConsistencyInfo {
     /// for which offset>=x.
     fn find_matching_timestamp(
         &mut self,
-        partition: &PartitionId,
-        offset: MzOffset,
+        source_timestamp: &PartitionOffset,
         timestamp_bindings: &TimestampBindingRc,
     ) -> Option<Timestamp> {
-        // We either can take a fast path, where we simply re-use the currently
-        // available timestamp binding, or if one isn't available for `offset` in `partition`, we have to
-        // look it up from the set of timestamp histories
-
-        // We know we will only read from partitions already assigned to this
-        // worker.
-        let cons_info = self
-            .partition_metadata
-            .get_mut(partition)
-            .expect("known to exist");
-
-        if cons_info.is_valid(offset) {
-            // This is the fast path - we can reuse a timestamp binding
-            // we already know about.
-            cons_info.update_offset(offset);
-            Some(cons_info.current_ts)
-        } else {
-            if let Some((timestamp, max_offset)) = timestamp_bindings.get_binding(partition, offset)
-            {
-                cons_info.update_timestamp(timestamp, max_offset);
-                cons_info.update_offset(offset);
-                Some(timestamp)
-            } else {
-                None
-            }
-        }
+        timestamp_bindings.get_binding(source_timestamp)
     }
 }
 
@@ -1248,7 +1169,12 @@ where
             // Refresh any consistency info from the worker that we need to
             consistency_info.refresh(source_reader, &mut timestamp_histories);
             // Downgrade capability (if possible)
-            consistency_info.downgrade_capability(worker_index, cap, &mut timestamp_histories);
+            // consistency_info.downgrade_capability(
+            //     worker_index,
+            //     cap,
+            //     source_reader,
+            //     &mut timestamp_histories,
+            // );
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
@@ -1326,7 +1252,12 @@ where
                 .record_partition_offsets(metric_updates);
 
             // Downgrade capability (if possible) before exiting
-            consistency_info.downgrade_capability(worker_index, cap, &mut timestamp_histories);
+            consistency_info.downgrade_capability(
+                worker_index,
+                cap,
+                source_reader,
+                &mut timestamp_histories,
+            );
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
@@ -1393,10 +1324,13 @@ where
         .set(offset.offset);
 
     // Determine the timestamp to which we need to assign this message
-    let ts = consistency_info.find_matching_timestamp(&partition, offset, timestamp_bindings);
+    let ts = consistency_info.find_matching_timestamp(&source_timestamp, timestamp_bindings);
     match ts {
         None => {
-            // println!("{} - BUFFERING", offset.offset);
+            debug!(
+                "{:?} - BUFFERING, bindings: {:?}",
+                source_timestamp, timestamp_bindings
+            );
             // We have not yet decided on a timestamp for this message,
             // we need to buffer the message
             *buffer = Some(message);
@@ -1429,7 +1363,7 @@ where
                     partition,
                     ts,
                     cap.time(),
-                    timestamp_bindings.get_binding(&partition, offset),
+                    timestamp_bindings.get_binding(&source_timestamp),
                     open_ts
                 );
             }
