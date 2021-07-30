@@ -320,7 +320,6 @@ join_type ::=
 sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
-    ('CONSISTENCY' 'TOPIC' topic ('CONSISTENCY' 'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url)?)?
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
     'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url
 lit_cast ::=

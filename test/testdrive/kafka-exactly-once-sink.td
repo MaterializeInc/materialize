@@ -163,7 +163,6 @@ reuse_topic requires that sink input dependencies are sources, materialize.publi
   WITH (reuse_topic=true, consistency_topic='output14-custom-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-
 # ensure that the sink works with log compaction enabled on the consistency topic
 
 $ kafka-create-topic topic=compaction-test-input-consistency
@@ -228,3 +227,25 @@ $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_s
 $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium
 {"id": "<TIMESTAMP>", "status": "BEGIN", "event_count": null, "data_collections": null}
 {"id": "<TIMESTAMP>", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "rt-binding-consistency-test-output-${testdrive.seed}"}]}}
+
+# Test that we bail out if CONSISTENCY TOPIC or CONSISTENCY FORMAT are provided
+! CREATE SINK compaction_test_sink FROM compaction_test_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
+  CONSISTENCY TOPIC 'fail'
+  WITH (reuse_topic=true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+CONSISTENCY TOPIC and CONSISTENCY FORMAT not yet supported
+
+! CREATE SINK compaction_test_sink FROM compaction_test_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
+  CONSISTENCY FORMAT JSON
+  WITH (reuse_topic=true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+Expected end of statement, found CONSISTENCY
+
+! CREATE SINK compaction_test_sink FROM compaction_test_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
+  CONSISTENCY TOPIC 'fail' CONSISTENCY FORMAT JSON
+  WITH (reuse_topic=true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+CONSISTENCY TOPIC and CONSISTENCY FORMAT not yet supported
