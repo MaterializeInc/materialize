@@ -43,6 +43,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
 use ore::metric;
+use ore::metrics::ThirdPartyMetric;
 use ore::metrics::{IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
@@ -427,11 +428,12 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             // otherwise.
             .add_directive("panic=error".parse().unwrap());
 
-        let log_message_counter: IntCounterVec = metrics_registry.register(metric!(
-            name: "mz_log_message_total",
-            help: "The number of log messages produced by this materialized instance",
-            var_labels: ["severity"],
-        ));
+        let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
+            .register_third_party_visible(metric!(
+                name: "mz_log_message_total",
+                help: "The number of log messages produced by this materialized instance",
+                var_labels: ["severity"],
+            ));
 
         match args.log_file.as_deref() {
             Some("stderr") => {
