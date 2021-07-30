@@ -94,6 +94,12 @@ fn tail<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
+    // `active_worker` indicates the index of the worker that receives all data.
+    // This should line up with the exchange just below, but we test in the implementation
+    // just to be certain.
+    let scope = sinked_collection.scope();
+    use differential_dataflow::Hashable;
+    let active_worker = (sink_id.hashed() as usize) % scope.peers() == scope.index();
     // make sure all data is routed to one worker by keying on the sink id
     let batches = sinked_collection
         .map(move |(k, v)| {
@@ -105,14 +111,13 @@ fn tail<G>(
         .stream;
 
     let mut packer = Row::default();
-    let mut received_data = false;
 
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
     // An encapsulation of the Tail response protocol.
     // Used to send rows and eventually mark complete.
     // Set to `None` for instances that should not produce output.
-    let mut tail_protocol = if connector.emit_progress {
+    let mut tail_protocol = if active_worker {
         Some(TailProtocol {
             sink_id,
             tail_response_buffer: Some(tail_response_buffer),
@@ -123,7 +128,6 @@ fn tail<G>(
 
     batches.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
         input.for_each(|_, batches| {
-            received_data = true;
             let mut results = vec![];
             for batch in batches.iter() {
                 let mut cursor = batch.cursor();
@@ -177,7 +181,7 @@ fn tail<G>(
                     &mut packer,
                     connector.object_columns + 1,
                 );
-                if tail_protocol.is_some() {
+                if connector.emit_progress && tail_protocol.is_some() {
                     if let Some(progress_row) = progress_row {
                         results.push(progress_row);
                     }
@@ -203,15 +207,10 @@ fn tail<G>(
         );
 
         // Only emit updates if this operator/worker received actual data for emission.
-        if received_data {
+        if let Some(tail_protocol) = &mut tail_protocol {
             if let Some(progress_row) = progress_row {
                 let results = vec![progress_row];
-                // Emit data if configured, otherwise it is an error to have data to send.
-                if let Some(tail_protocol) = &mut tail_protocol {
-                    tail_protocol.send(results);
-                } else {
-                    panic!("Observed data at inactive TAIL instance");
-                }
+                tail_protocol.send(results);
             }
         }
 
