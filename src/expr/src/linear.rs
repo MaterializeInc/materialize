@@ -1247,7 +1247,7 @@ pub mod plan {
                         || *expr1 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
                     {
                         return Err(format!(
-                            "Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting it to numeric. Expression found: {:?}",
+                            "Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: {:?}",
                             MirScalarExpr::CallBinary { func, expr1, expr2 },
                             ));
                     }
@@ -1296,7 +1296,7 @@ pub mod plan {
                     }
                 } else {
                     return Err(format!(
-                        "Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting it to numeric. Expression found: {:?}",
+                        "Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: {:?}",
                         predicate,
                         ));
                 }
