@@ -1369,22 +1369,17 @@ pub mod plan {
                             // If the number is negative, it cannot improve the initial
                             // value of `Some(time)`.
                             if !d.0.is_negative() {
-                                match u64::try_from(d.0) {
-                                    Ok(v) => {
-                                        // This is always be true, as we test it each loop,
-                                        // but this gives us access to the member.
-                                        if let Some(lower_bound) = &mut lower_bound {
-                                            if *lower_bound < v {
-                                                *lower_bound = v;
-                                            }
-                                        }
-                                    }
-                                    // If conversion fails, value is greater than `u64::MAX`
-                                    // and we indicate this with a `None` value.
-                                    Err(_) => {
-                                        lower_bound = None;
-                                    }
-                                }
+                                // An `Ok` conversion is a valid upper bound, and an `Err` error
+                                // indicates a value above `u64::MAX`. The `ok()` method does the
+                                // conversion we want to an `Option<u64>`.
+                                let v = u64::try_from(d.0).ok();
+                                // Update `lower_bound` to be the maximum with `v`, where a `None`
+                                // value is treated as larger than `Some(_)` values.
+                                lower_bound = match (lower_bound, v) {
+                                    (None, _) => None,
+                                    (_, None) => None,
+                                    (x, y) => x.max(y),
+                                };
                             }
                         }
                         Ok(Datum::Null) => {
@@ -1424,12 +1419,13 @@ pub mod plan {
                             // indicates a value above `u64::MAX`. The `ok()` method does the
                             // conversion we want to an `Option<u64>`.
                             let v = u64::try_from(d.0).ok();
-                            // If no upper bound yet, or an improvement with a non-`None` value.
-                            // The logic is tortured only because `None < Some(_)`.
-                            if upper_bound.is_none() || (v.is_some() && upper_bound > v) {
-                                upper_bound = v;
-                            }
-
+                            // Update `upper_bound` to be the minimum with `v`, where a `None`
+                            // value is treated as larger than `Some(_)` values.
+                            upper_bound = match (upper_bound, v) {
+                                (None, x) => x,
+                                (x, None) => x,
+                                (x, y) => x.min(y),
+                            };
                         }
                         Ok(Datum::Null) => {
                             null_eval = true;
