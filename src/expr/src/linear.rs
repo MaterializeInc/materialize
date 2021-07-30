@@ -1411,7 +1411,7 @@ pub mod plan {
                         Ok(Datum::Numeric(d)) => {
                             // If the upper bound is negative, it is impossible to satisfy.
                             // We set the upper bound to the lower bound to indicate this.
-                            if !d.0.is_negative() {
+                            if d.0.is_negative() {
                                 upper_bound = lower_bound;
                             }
 
