@@ -270,11 +270,17 @@ impl SourceReader for KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
-    fn add_partition(&mut self, pid: PartitionId) {
+    fn add_partition(&mut self, pid: PartitionId) -> bool {
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),
         };
+
+        let is_added = self.our_partitions.insert(PartitionId::Kafka(pid.clone()));
+
+        if !is_added {
+            return false;
+        }
 
         self.create_partition_queue(pid);
         // Indicate a last offset of -1 if we have not been instructed to
@@ -283,7 +289,8 @@ impl SourceReader for KafkaSourceReader {
         let prev = self.last_offsets.insert(pid, start_offset);
 
         assert!(prev.is_none());
-        self.our_partitions.insert(PartitionId::Kafka(pid.clone()));
+
+        true
     }
 
     /// Add a discovered partition that we are not responsible for reading.

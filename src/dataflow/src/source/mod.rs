@@ -315,7 +315,7 @@ pub(crate) trait SourceReader {
     /// Many (most?) sources do not actually have partitions and for those kinds
     /// of sources the default implementation is a panic (to make sure we don't
     /// inadvertently call this at runtime).
-    fn add_partition(&mut self, _pid: PartitionId) {
+    fn add_partition(&mut self, _pid: PartitionId) -> bool {
         panic!("add partiton not supported for source!");
     }
 
@@ -372,70 +372,6 @@ impl<T: Debug> fmt::Debug for SourceMessage<T> {
     }
 }
 
-/// Per-partition consistency information. This effectively acts a cache of
-/// timestamp binding information that needs to be refreshed every time
-/// the source operator is invoked.
-#[derive(Copy, Clone, Debug)]
-struct ConsInfo {
-    /// The timestamp we are currently aware of. This timestamp is open iff
-    /// offset < current_upper_bound  - 1 (aka there are more offsets we need to find)
-    /// and closed otherwise.
-    current_ts: Timestamp,
-    /// Current upper bound for the current timestamp. All offsets < upper_bound
-    /// are assigned to current_ts.
-    current_upper_bound: MzOffset,
-    /// The last processed offset
-    offset: MzOffset,
-}
-
-impl ConsInfo {
-    fn new(timestamp: Timestamp) -> Self {
-        Self {
-            current_ts: timestamp,
-            current_upper_bound: MzOffset { offset: 0 },
-            offset: MzOffset { offset: 0 },
-        }
-    }
-
-    /// Checks if the current binding is sufficient for this offset.
-    ///
-    /// This code assumes we will be ingesting offsets in order.
-    fn is_valid(&self, offset: MzOffset) -> bool {
-        self.current_upper_bound > offset
-    }
-
-    fn update_timestamp(&mut self, timestamp: Timestamp, upper: MzOffset) {
-        assert!(timestamp >= self.current_ts);
-        assert!(upper >= self.current_upper_bound);
-
-        self.current_upper_bound = upper;
-        self.current_ts = timestamp;
-    }
-
-    /// Update the last read offset.
-    fn update_offset(&mut self, offset: MzOffset) {
-        assert!(offset >= self.offset);
-        assert!(offset < self.current_upper_bound);
-
-        self.offset = offset;
-    }
-
-    /// Returns `Some(Timestamp)` if the current timestamp is still open, `None`
-    /// otherwise.
-    fn get_open_timestamp(&self) -> Option<Timestamp> {
-        if self.current_ts == 0 || (self.current_upper_bound.offset - 1 == self.offset.offset) {
-            None
-        } else {
-            Some(self.current_ts)
-        }
-    }
-
-    /// The most recently read offset.
-    fn offset(&self) -> MzOffset {
-        self.offset
-    }
-}
-
 /// Contains all necessary information that relates to consistency and timestamping.
 /// This information is (and should remain) source independent. This covers consistency
 /// information for sources that follow RT consistency and BYO consistency.
@@ -444,11 +380,6 @@ pub struct ConsistencyInfo {
     last_closed_ts: u64,
     /// Frequency at which we should downgrade capability (in milliseconds)
     downgrade_capability_frequency: u64,
-    /// Per partition (a partition ID in Kafka is an i32), keep track of the last closed offset
-    /// and the last closed timestamp.
-    /// Note that we only keep track of partitions this worker is responsible for in this
-    /// hashmap.
-    partition_metadata: HashMap<PartitionId, ConsInfo>,
     /// Source Type (Real-time or BYO)
     source_type: Consistency,
     /// Per-source Prometheus metrics.
@@ -478,7 +409,6 @@ impl ConsistencyInfo {
             last_closed_ts: 0,
             // Safe conversion: statement.rs checks that value specified fits in u64
             downgrade_capability_frequency: timestamp_frequency.as_millis().try_into().unwrap(),
-            partition_metadata: HashMap::new(),
             source_type: consistency,
             source_metrics: SourceMetrics::new(
                 &metrics_name,
@@ -514,28 +444,12 @@ impl ConsistencyInfo {
         }
     }
 
-    /// Returns true if we currently know of particular partition. We know (and have updated the
-    /// metadata for this partition) if there is an entry for it
-    fn knows_of(&self, pid: &PartitionId) -> bool {
-        self.partition_metadata.contains_key(pid)
-    }
-
     /// Start tracking consistency information and metrics for `pid`.
     ///
     /// Need to call this together with `SourceReader::add_partition` before we
     /// ingest from `pid`.
     fn add_partition(&mut self, pid: &PartitionId) {
-        if self.partition_metadata.contains_key(pid) {
-            error!("Incorrectly attempting to add a partition twice for source: {} partition: {}. Ignoring",
-                   self.source_id,
-                   pid
-            );
-
-            return;
-        }
-
-        self.partition_metadata
-            .insert(pid.clone(), ConsInfo::new(self.last_closed_ts));
+        // TODO(aljoscha): make metrics work with new SourceTimestamp
         self.source_metrics.add_partition(pid);
     }
 
@@ -550,9 +464,10 @@ impl ConsistencyInfo {
     ) {
         // Pick up any new partitions that we don't know about but should.
         for pid in timestamp_bindings.partitions() {
-            if !self.knows_of(&pid) && self.responsible_for(&pid) {
-                source.add_partition(pid.clone());
-                self.add_partition(&pid);
+            if self.responsible_for(&pid) {
+                if source.add_partition(pid.clone()) {
+                    self.add_partition(&pid);
+                }
             }
 
             if !self.responsible_for(&pid) {
@@ -720,6 +635,7 @@ pub struct PartitionMetrics {
     /// Highest offset that has been received by the source
     offset_received: DeleteOnDropGauge<'static, AtomicI64>,
     /// Value of the highest timestamp that is closed (for which all messages have been ingested)
+    // TODO(aljoscha) fix this
     closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
@@ -1350,21 +1266,13 @@ where
                 MessagePayload::EOF => 0,
             };
             if !(*cap.time() <= ts) {
-                let partition_info = consistency_info
-                    .partition_metadata
-                    .get(&partition)
-                    .expect("must be there");
-
-                let open_ts = partition_info.get_open_timestamp();
-
                 panic!(
-                    "Cap is not <= ts, worker_index: {}, partition: {}, ts: {}, cap: {}, raw_binding: {:?}, open_ts: {:?}",
+                    "Cap is not <= ts, worker_index: {}, partition: {}, ts: {}, cap: {}, raw_binding: {:?}",
                     worker_index,
                     partition,
                     ts,
                     cap.time(),
                     timestamp_bindings.get_binding(&source_timestamp),
-                    open_ts
                 );
             }
             let ts_cap = cap.delayed(&ts);
