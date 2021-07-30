@@ -133,7 +133,7 @@ impl fmt::Display for SourceInstanceId {
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
 ///     None -> sources that have no notion of partitioning (e.g file sources)
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     None,

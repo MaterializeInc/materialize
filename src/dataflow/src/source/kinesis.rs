@@ -20,10 +20,11 @@ use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use repr::MessagePayload;
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    ExternalSourceConnector, KinesisSourceConnector, MzOffset, SourceDataEncoding,
+    ExternalSourceConnector, KinesisSourceConnector, MzOffset, PartitionOffset, SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
 
@@ -61,9 +62,12 @@ pub struct KinesisSourceReader {
     /// TODO(natacha): this should be moved to timestamper
     last_checked_shards: Instant,
     /// Storage for messages that have not yet been timestamped
-    buffered_messages: VecDeque<SourceMessage>,
+    buffered_messages: VecDeque<SourceMessage<PartitionOffset>>,
     /// Count of processed message
     processed_message_count: i64,
+    /// The current read frontier. Records emitted from this reader in the future
+    /// will have a timestamp that is beyond this frontier.
+    read_frontier: Antichain<PartitionOffset>,
 }
 
 impl KinesisSourceReader {
@@ -98,6 +102,8 @@ impl KinesisSourceReader {
 }
 
 impl SourceReader for KinesisSourceReader {
+    type SourceTimestamp = PartitionOffset;
+
     fn new(
         _source_name: String,
         _source_id: SourceInstanceId,
@@ -113,23 +119,30 @@ impl SourceReader for KinesisSourceReader {
         };
 
         let state = block_on(create_state(kc));
+
         match state {
-            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
-                KinesisSourceReader {
-                    kinesis_client,
-                    shard_queue,
-                    last_checked_shards: Instant::now(),
-                    buffered_messages: VecDeque::new(),
-                    shard_set,
-                    stream_name,
-                    processed_message_count: 0,
-                },
-                Some(PartitionId::None),
-            )),
+            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => {
+                let initial_source_timestamp =
+                    PartitionOffset::new(PartitionId::None, MzOffset { offset: 1 });
+
+                Ok((
+                    KinesisSourceReader {
+                        kinesis_client,
+                        shard_queue,
+                        last_checked_shards: Instant::now(),
+                        buffered_messages: VecDeque::new(),
+                        shard_set,
+                        stream_name,
+                        processed_message_count: 0,
+                        read_frontier: Antichain::from_elem(initial_source_timestamp),
+                    },
+                    Some(PartitionId::None),
+                ))
+            }
             Err(e) => Err(anyhow!("{}", e)),
         }
     }
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<PartitionOffset>, anyhow::Error> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
@@ -198,11 +211,13 @@ impl SourceReader for KinesisSourceReader {
                         let data = record.data.as_ref().to_vec();
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
-                            partition: PartitionId::None,
-                            offset: MzOffset {
-                                //TODO: should MzOffset be modified to be a string?
-                                offset: self.processed_message_count,
-                            },
+                            source_timestamp: PartitionOffset::new(
+                                PartitionId::None,
+                                MzOffset {
+                                    //TODO: should MzOffset be modified to be a string?
+                                    offset: self.processed_message_count,
+                                },
+                            ),
                             upstream_time_millis: None,
                             key: None,
                             payload: Some(MessagePayload::Data(data)),
@@ -217,6 +232,18 @@ impl SourceReader for KinesisSourceReader {
                 None => NextMessage::Pending,
             })
         }
+    }
+
+    fn get_read_frontier(&mut self) -> timely::progress::frontier::AntichainRef<PartitionOffset> {
+        self.read_frontier.clear();
+        self.read_frontier.insert(PartitionOffset::new(
+            PartitionId::None,
+            MzOffset {
+                // TODO(aljoscha): double-check this
+                offset: (self.processed_message_count + 2),
+            },
+        ));
+        self.read_frontier.borrow()
     }
 }
 

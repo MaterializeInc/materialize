@@ -14,7 +14,7 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Debug, Error, Formatter};
 use std::ops::Add;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,6 +25,7 @@ use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
+use timely::PartialOrder;
 use tokio::sync::mpsc;
 use url::Url;
 use uuid::Uuid;
@@ -872,6 +873,12 @@ pub struct MzOffset {
     pub offset: i64,
 }
 
+impl PartialOrder for MzOffset {
+    fn less_equal(&self, other: &Self) -> bool {
+        self.offset <= other.offset
+    }
+}
+
 impl fmt::Display for MzOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.offset)
@@ -885,6 +892,39 @@ impl Add<i64> for MzOffset {
         MzOffset {
             offset: self.offset + x,
         }
+    }
+}
+
+/// An offset in a partition. This can be used as a "source-agnostic" timestamp.
+///
+/// Side note: it's evident that this is geared somwhat towards Kafka, and
+/// other things are shoehorned into this.
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct PartitionOffset {
+    /// Partition from which this message originates
+    pub partition: PartitionId,
+    /// Materialize offset of the message (1-indexed)
+    pub offset: MzOffset,
+}
+
+impl PartitionOffset {
+    /// Creates a new [`PartitionOffset`] from the given [`PartitionId`] and
+    /// [`MzOffset`].
+    pub fn new(partition: PartitionId, offset: MzOffset) -> PartitionOffset {
+        Self { partition, offset }
+    }
+}
+
+impl Debug for PartitionOffset {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        f.write_str(&format!("({:?}, {:?})", self.partition, self.offset))
+    }
+}
+
+impl PartialOrder for PartitionOffset {
+    #[inline]
+    fn less_equal(&self, other: &Self) -> bool {
+        self.partition.eq(&other.partition) && self.offset.less_equal(&other.offset)
     }
 }
 

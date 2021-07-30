@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::io::{self, BufRead, Read};
+use std::ops::{Add, AddAssign};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -19,10 +20,11 @@ use flate2::read::MultiGzDecoder;
 use inotify::{EventMask, Inotify, WatchMask};
 use log::error;
 use repr::MessagePayload;
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
-    AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
+    AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset, PartitionOffset,
     SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
@@ -42,12 +44,31 @@ pub struct FileSourceReader {
     /// Current File Offset. This corresponds to the offset of last processed message
     /// (initially 0 if no records have been processed)
     current_file_offset: FileOffset,
+    /// The current read frontier. Records emitted from this reader in the future
+    /// will have a timestamp that is beyond this frontier.
+    read_frontier: Antichain<PartitionOffset>,
 }
 
 #[derive(Copy, Clone)]
 /// Represents an index into a file. Files are 1-indexed by Unix convention
 pub struct FileOffset {
     pub offset: i64,
+}
+
+impl AddAssign<i64> for FileOffset {
+    fn add_assign(&mut self, other: i64) {
+        self.offset += other;
+    }
+}
+
+impl Add<i64> for FileOffset {
+    type Output = FileOffset;
+
+    fn add(self, x: i64) -> FileOffset {
+        FileOffset {
+            offset: self.offset + x,
+        }
+    }
 }
 
 /// Convert from FileOffset to MzOffset (1-indexed)
@@ -60,6 +81,8 @@ impl From<FileOffset> for MzOffset {
 }
 
 impl SourceReader for FileSourceReader {
+    type SourceTimestamp = PartitionOffset;
+
     fn new(
         _name: String,
         source_id: SourceInstanceId,
@@ -150,23 +173,30 @@ impl SourceReader for FileSourceReader {
             _ => unreachable!(),
         };
 
+        let initial_offset = FileOffset { offset: 0 };
+        let initial_source_timestamp =
+            PartitionOffset::new(PartitionId::None, initial_offset.clone().into());
+
         Ok((
             FileSourceReader {
                 id: source_id,
                 receiver_stream: receiver,
-                current_file_offset: FileOffset { offset: 0 },
+                current_file_offset: initial_offset,
+                read_frontier: Antichain::from_elem(initial_source_timestamp),
             },
             Some(PartitionId::None),
         ))
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<PartitionOffset>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;
                 let message = SourceMessage {
-                    partition: PartitionId::None,
-                    offset: self.current_file_offset.into(),
+                    source_timestamp: PartitionOffset::new(
+                        PartitionId::None,
+                        self.current_file_offset.into(),
+                    ),
                     upstream_time_millis: None,
                     key: None,
                     payload: Some(record),
@@ -180,6 +210,15 @@ impl SourceReader for FileSourceReader {
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
             Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
         }
+    }
+
+    fn get_read_frontier(&mut self) -> timely::progress::frontier::AntichainRef<PartitionOffset> {
+        self.read_frontier.clear();
+        self.read_frontier.insert(PartitionOffset::new(
+            PartitionId::None,
+            (self.current_file_offset + 1).into(),
+        ));
+        self.read_frontier.borrow()
     }
 }
 

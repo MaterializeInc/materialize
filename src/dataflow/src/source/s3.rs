@@ -14,7 +14,7 @@ use std::convert::{From, TryInto};
 use std::default::Default;
 use std::fmt::Formatter;
 use std::io::Read;
-use std::ops::AddAssign;
+use std::ops::{Add, AddAssign};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::anyhow;
@@ -26,6 +26,7 @@ use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
     DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
 };
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -33,7 +34,8 @@ use tokio::time::{self, Duration};
 
 use aws_util::aws;
 use dataflow_types::{
-    Compression, ExternalSourceConnector, MzOffset, S3KeySource, SourceDataEncoding,
+    Compression, ExternalSourceConnector, MzOffset, PartitionOffset, S3KeySource,
+    SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
 use metrics::BucketMetrics;
@@ -67,6 +69,9 @@ pub struct S3SourceReader {
     receiver_stream: Receiver<S3Result<InternalMessage>>,
     /// Total number of records that this source has read
     offset: S3Offset,
+    /// The current read frontier. Records emitted from this reader in the future
+    /// will have a timestamp that is beyond this frontier.
+    read_frontier: Antichain<PartitionOffset>,
 }
 
 /// Number of records This source has downloaded
@@ -79,6 +84,14 @@ struct S3Offset(i64);
 impl AddAssign<i64> for S3Offset {
     fn add_assign(&mut self, other: i64) {
         self.0 += other;
+    }
+}
+
+impl Add<i64> for S3Offset {
+    type Output = S3Offset;
+
+    fn add(self, x: i64) -> S3Offset {
+        S3Offset(self.0 + x)
     }
 }
 
@@ -722,6 +735,8 @@ async fn download_object(
 }
 
 impl SourceReader for S3SourceReader {
+    type SourceTimestamp = PartitionOffset;
+
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
@@ -779,24 +794,29 @@ impl SourceReader for S3SourceReader {
             dataflow_rx
         };
 
+        let initial_offset = S3Offset(0);
+        let initial_source_timestamp =
+            PartitionOffset::new(PartitionId::None, initial_offset.clone().into());
+
         Ok((
             S3SourceReader {
                 source_name,
                 id: source_id,
                 receiver_stream: receiver,
-                offset: S3Offset(0),
+                offset: initial_offset,
+                read_frontier: Antichain::from_elem(initial_source_timestamp),
             },
             Some(PartitionId::None),
         ))
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<PartitionOffset>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(InternalMessage { record })) => {
+                // TODO(aljoscha): is increasing before emitting correct?
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::None,
-                    offset: self.offset.into(),
+                    source_timestamp: PartitionOffset::new(PartitionId::None, self.offset.into()),
                     upstream_time_millis: None,
                     key: None,
                     payload: Some(record),
@@ -824,6 +844,15 @@ impl SourceReader for S3SourceReader {
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
             Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
         }
+    }
+
+    fn get_read_frontier(&mut self) -> timely::progress::frontier::AntichainRef<PartitionOffset> {
+        self.read_frontier.clear();
+        self.read_frontier.insert(PartitionOffset::new(
+            PartitionId::None,
+            (self.offset + 1).into(),
+        ));
+        self.read_frontier.borrow()
     }
 }
 

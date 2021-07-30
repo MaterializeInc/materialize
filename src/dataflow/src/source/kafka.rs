@@ -20,10 +20,11 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use repr::MessagePayload;
+use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 
 use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, SourceDataEncoding,
+    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, PartitionOffset, SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
@@ -230,9 +231,14 @@ pub struct KafkaSourceReader {
     logger: Option<Logger>,
     /// Channel to receive Kafka statistics objects from the stats callback
     stats_rx: crossbeam_channel::Receiver<Statistics>,
+    /// The current read frontier. Records emitted from this reader in the future
+    /// will have a timestamp that is beyond this frontier.
+    read_frontier: Antichain<PartitionOffset>,
 }
 
 impl SourceReader for KafkaSourceReader {
+    type SourceTimestamp = PartitionOffset;
+
     /// Create a new instance of a Kafka reader.
     fn new(
         source_name: String,
@@ -282,7 +288,7 @@ impl SourceReader for KafkaSourceReader {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
     /// we skip this message, and seek to the appropriate offset
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<PartitionOffset>, anyhow::Error> {
         // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
         // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
         // event queue, such as statistics callbacks.
@@ -372,13 +378,13 @@ impl SourceReader for KafkaSourceReader {
             };
 
             if let Some(message) = message {
-                let partition = match message.partition {
+                let partition = match message.source_timestamp.partition {
                     PartitionId::Kafka(pid) => pid,
                     _ => unreachable!(),
                 };
 
                 // Convert the received offset back from a 1-indexed MzOffset to the correct offset.
-                let offset = message.offset.offset - 1;
+                let offset = message.source_timestamp.offset.offset - 1;
                 // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
                 // a network issue or a new partition added, at which point the consumer may
                 // start processing the topic from the beginning, or we may see duplicate offsets
@@ -431,6 +437,21 @@ impl SourceReader for KafkaSourceReader {
 
         Ok(next_message)
     }
+
+    fn get_read_frontier(&mut self) -> timely::progress::frontier::AntichainRef<PartitionOffset> {
+        self.read_frontier.clear();
+
+        let mapped_source_timestamps = self.last_offsets.iter().map(|(pid, offset)| {
+            PartitionOffset::new(
+                PartitionId::Kafka(pid.clone()),
+                KafkaOffset { offset: offset + 1 }.into(),
+            )
+        });
+
+        self.read_frontier.extend(mapped_source_timestamps);
+
+        self.read_frontier.borrow()
+    }
 }
 
 impl KafkaSourceReader {
@@ -467,7 +488,22 @@ impl KafkaSourceReader {
             })
             .expect("Failed to create Kafka Consumer");
 
-        let start_offsets = kc.start_offsets.iter().map(|(k, v)| (*k, v - 1)).collect();
+        let start_offsets: HashMap<i32, i64> =
+            kc.start_offsets.iter().map(|(k, v)| (*k, v - 1)).collect();
+
+        let mapped_source_timestamps = start_offsets.iter().map(|(pid, offset)| {
+            PartitionOffset::new(
+                PartitionId::Kafka(pid.clone()),
+                // TODO(aljoscha): check this one
+                KafkaOffset {
+                    offset: offset.clone(),
+                }
+                .into(),
+            )
+        });
+
+        let mut initial_read_frontier = Antichain::new();
+        initial_read_frontier.extend(mapped_source_timestamps);
 
         KafkaSourceReader {
             topic_name: topic,
@@ -481,6 +517,7 @@ impl KafkaSourceReader {
             start_offsets,
             logger,
             stats_rx,
+            read_frontier: initial_read_frontier,
         }
     }
 
@@ -676,15 +713,17 @@ fn create_kafka_config(
     kafka_config
 }
 
-impl<'a> From<&BorrowedMessage<'a>> for SourceMessage {
+impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<PartitionOffset> {
     fn from(msg: &BorrowedMessage<'a>) -> Self {
         let kafka_offset = KafkaOffset {
             offset: msg.offset(),
         };
         Self {
             payload: msg.payload().map(|p| MessagePayload::Data(p.to_vec())),
-            partition: PartitionId::Kafka(msg.partition()),
-            offset: kafka_offset.into(),
+            source_timestamp: PartitionOffset::new(
+                PartitionId::Kafka(msg.partition()),
+                kafka_offset.into(),
+            ),
             upstream_time_millis: msg.timestamp().to_millis(),
             key: msg.key().map(|k| k.to_vec()),
         }
@@ -715,11 +754,14 @@ impl PartitionConsumer {
     }
 
     /// Returns the next message to process for this partition (if any).
-    fn get_next_message(&mut self) -> Result<Option<SourceMessage>, KafkaError> {
+    fn get_next_message(&mut self) -> Result<Option<SourceMessage<PartitionOffset>>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
                 let result = SourceMessage::from(&msg);
-                assert_eq!(result.partition, PartitionId::Kafka(self.pid));
+                assert_eq!(
+                    result.source_timestamp.partition,
+                    PartitionId::Kafka(self.pid)
+                );
                 Ok(Some(result))
             }
             Some(Err(err)) => Err(err),

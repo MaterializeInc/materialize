@@ -9,7 +9,7 @@
 
 //! Types related to the creation of dataflow sources.
 
-use dataflow_types::{DataflowError, SourceErrorDetails};
+use dataflow_types::{DataflowError, PartitionOffset, SourceErrorDetails};
 use itertools::Itertools;
 use mz_avro::types::Value;
 use repr::MessagePayload;
@@ -26,6 +26,7 @@ use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
     operators::{Capability, Event},
 };
+use timely::progress::frontier::AntichainRef;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -48,7 +49,7 @@ use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::scheduling::activate::{Activator, SyncActivator};
-use timely::Data;
+use timely::{Data, PartialOrder};
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 
 use super::source::util::source;
@@ -291,6 +292,8 @@ impl MaybeLength for Value {
 /// a "partition" is baked into this trait and introduces some cognitive overhead as
 /// we are forced to treat things like file sources as "single-partition"
 pub(crate) trait SourceReader {
+    type SourceTimestamp: PartialOrder;
+
     /// Create a new source reader.
     ///
     /// This function returns the source reader and optionally, any "partition" it's
@@ -321,12 +324,16 @@ pub(crate) trait SourceReader {
     ///
     /// Note that implementers are required to present messages in strictly ascending\
     /// offset order within each partition.
-    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error>;
+    fn get_next_message(&mut self) -> Result<NextMessage<Self::SourceTimestamp>, anyhow::Error>;
+
+    /// Returns the current read frontier. Records emitted from this reader in
+    /// the future will have a timestamp that is beyond this frontier.
+    fn get_read_frontier(&mut self) -> AntichainRef<Self::SourceTimestamp>;
 }
 
 #[derive(Debug)]
-pub(crate) enum NextMessage {
-    Ready(SourceMessage),
+pub(crate) enum NextMessage<T> {
+    Ready(SourceMessage<T>),
     Pending,
     TransientDelay,
     Finished,
@@ -334,11 +341,9 @@ pub(crate) enum NextMessage {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage {
-    /// Partition from which this message originates
-    pub partition: PartitionId,
-    /// Materialize offset of the message (1-indexed)
-    pub offset: MzOffset,
+pub struct SourceMessage<T> {
+    /// Source timestamp
+    pub source_timestamp: T,
     /// The time that an external system first observed the message
     ///
     /// Milliseconds since the unix epoch
@@ -349,11 +354,10 @@ pub struct SourceMessage {
     pub payload: Option<MessagePayload>,
 }
 
-impl fmt::Debug for SourceMessage {
+impl<T: Debug> fmt::Debug for SourceMessage<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
-            .field("partition", &self.partition)
-            .field("offset", &self.offset)
+            .field("source_timestamp", &self.source_timestamp)
             .field("upstream_time_millis", &self.upstream_time_millis)
             .field("key[present]", &self.key.is_some())
             .field("payload[present]", &self.payload.is_some())
@@ -534,7 +538,7 @@ impl ConsistencyInfo {
     /// execution to ensure all source instances assign the same timestamps.
     fn refresh(
         &mut self,
-        source: &mut dyn SourceReader,
+        source: &mut dyn SourceReader<SourceTimestamp = PartitionOffset>,
         timestamp_bindings: &mut TimestampBindingRc,
     ) {
         // Pick up any new partitions that we don't know about but should.
@@ -1155,7 +1159,7 @@ pub(crate) fn create_source<G, S: 'static>(
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceReader,
+    S: SourceReader<SourceTimestamp = PartitionOffset>,
 {
     let worker_index = config.scope.index();
     let SourceConfig {
@@ -1356,7 +1360,7 @@ where
 /// TODO: This function is a bit of a mess rn but hopefully this function makes the
 /// existing mess more obvious and points towards ways to improve it.
 fn handle_message(
-    message: SourceMessage,
+    message: SourceMessage<PartitionOffset>,
     consistency_info: &mut ConsistencyInfo,
     bytes_read: &mut usize,
     cap: &Capability<Timestamp>,
@@ -1367,14 +1371,15 @@ fn handle_message(
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp)>,
     timer: &std::time::Instant,
-    buffer: &mut Option<SourceMessage>,
+    buffer: &mut Option<SourceMessage<PartitionOffset>>,
     timestamp_bindings: &TimestampBindingRc,
     worker_index: usize,
 ) -> (SourceStatus, MessageProcessing)
 where
 {
-    let partition = message.partition.clone();
-    let offset = message.offset;
+    let source_timestamp = message.source_timestamp;
+    let partition = source_timestamp.partition.clone();
+    let offset = source_timestamp.offset;
 
     // Update ingestion metrics. Guaranteed to exist as the appropriate
     // entry gets created in SourceReader or when a new partition
