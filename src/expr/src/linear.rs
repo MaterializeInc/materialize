@@ -1413,19 +1413,25 @@ pub mod plan {
                             // We set the upper bound to the lower bound to indicate this.
                             if d.0.is_negative() {
                                 upper_bound = lower_bound;
+                            } else {
+                                // An `Ok` conversion is a valid upper bound, and an `Err` error
+                                // indicates a value above `u64::MAX`. The `ok()` method does the
+                                // conversion we want to an `Option<u64>`.
+                                let v = u64::try_from(d.0).ok();
+                                // Update `upper_bound` to be the minimum with `v`, where a `None`
+                                // value is treated as larger than `Some(_)` values.
+                                upper_bound = match (upper_bound, v) {
+                                    (None, x) => x,
+                                    (x, None) => x,
+                                    (x, y) => x.min(y),
+                                };
+                                // Force the upper bound to be at least the lower bound.
+                                // The `is_some()` test is required as `None < Some(_)`,
+                                // and we do not want to set `None` to `Some(_)`.
+                                if upper_bound.is_some() && upper_bound < lower_bound {
+                                    upper_bound = lower_bound;
+                                }
                             }
-
-                            // An `Ok` conversion is a valid upper bound, and an `Err` error
-                            // indicates a value above `u64::MAX`. The `ok()` method does the
-                            // conversion we want to an `Option<u64>`.
-                            let v = u64::try_from(d.0).ok();
-                            // Update `upper_bound` to be the minimum with `v`, where a `None`
-                            // value is treated as larger than `Some(_)` values.
-                            upper_bound = match (upper_bound, v) {
-                                (None, x) => x,
-                                (x, None) => x,
-                                (x, y) => x.min(y),
-                            };
                         }
                         Ok(Datum::Null) => {
                             null_eval = true;
@@ -1437,21 +1443,8 @@ pub mod plan {
                 }
             }
 
-            // Force the upper bound to be at least the lower bound, if the
-            // upper bound exists. This should have the effect downstream of
-            // making the two equal, which will result in no output. This also
-            // ensures that `upper_bound_u64` will be at least `time`, which
-            // means "non-negative" / not needing to be clamped from below.
-            //
-            // Note that the check for upper_bound_u64.is_some() is required
-            // because None values are always less than their Some counterparts,
-            // and if upper_bound_u64.is_none() it should not become Some.
-            if upper_bound.is_some() && upper_bound < lower_bound {
-                upper_bound = lower_bound;
-            }
-
-            // Only proceed if the new time is not greater or equal to upper,
-            // and if no null values were encountered in bound evaluation.
+            // Produce an output only if the upper bound exceeds the lower bound,
+            // and if we did not encounter a `null` in our evaluation.
             if lower_bound != upper_bound && !null_eval {
                 // Allocate a row to produce as output.
                 let capacity =
