@@ -62,9 +62,8 @@ fn get_static_file(path: &str) -> Option<Body> {
 }
 
 #[cfg(feature = "dev-web")]
-async fn get_static_file(path: &str) -> Option<Body> {
-    use futures::future::TryFutureExt;
-    use tokio::fs;
+fn get_static_file(path: &str) -> Option<Body> {
+    use std::fs;
 
     #[cfg(not(debug_assertions))]
     compile_error!("cannot enable insecure `dev-web` feature in release mode");
@@ -76,7 +75,7 @@ async fn get_static_file(path: &str) -> Option<Body> {
         path
     );
     let prod_path = format!("{}/src/http/static/{}", env!("CARGO_MANIFEST_DIR"), path);
-    match fs::read(dev_path).or_else(|_| fs::read(prod_path)).await {
+    match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
         Ok(contents) => Some(Body::from(contents)),
         Err(e) => {
             log::debug!("dev-web failed to load static file: {}: {}", path, e);
