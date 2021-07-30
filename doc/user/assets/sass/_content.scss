@@ -5,6 +5,7 @@ a {
 .content {
   color: $black-v2;
   h1, h2, h3, h4, h5, h6 {
+    font-family: 'Encode Sans Expanded';
     font-weight: 300;
     color: $dark-purple-v2;
     position:relative;
@@ -218,7 +219,7 @@ a {
         content: counter(list-counter);
         color: $light-purple-v2;
         font-size: 3.5rem;
-        font-family: 'Encode Sans';
+        font-family: 'Encode Sans Expanded';
         font-weight: 100;
         position: absolute;
         top: 1.75rem;
