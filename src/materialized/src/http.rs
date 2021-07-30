@@ -190,6 +190,9 @@ impl Server {
                     ),
                     (&Method::GET, "/prof") => prof::handle_prof(req, &mut coord_client).await,
                     (&Method::GET, "/memory") => memory::handle_memory(req, &mut coord_client),
+                    (&Method::GET, "/hierarchical-memory") => {
+                        memory::handle_hierarchical_memory(req, &mut coord_client)
+                    }
                     (&Method::POST, "/prof") => prof::handle_prof(req, &mut coord_client).await,
                     (&Method::POST, "/sql") => sql::handle_sql(req, &mut coord_client).await,
                     (&Method::GET, "/internal/catalog") => {
