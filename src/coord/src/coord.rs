@@ -3668,7 +3668,6 @@ pub fn serve_debug(
     Client,
     tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     tokio::sync::mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
-    tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     Arc<Mutex<u64>>,
 ) {
     lazy_static! {
@@ -3792,7 +3791,6 @@ pub fn serve_debug(
         client,
         inner_feedback_tx,
         inner_feedback_rx,
-        feedback_tx,
         DEBUG_TIMESTAMP.clone(),
     )
 }
