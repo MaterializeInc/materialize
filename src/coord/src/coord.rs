@@ -76,7 +76,7 @@ use dataflow::{
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
-    SinkConnector, SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
+    SinkConnector, SourceConnector, TailResponse, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
@@ -247,6 +247,14 @@ pub struct Coordinator {
     txn_reads: HashMap<u32, TxnReads>,
     /// Tracks write frontiers for active exactly-once sinks.
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
+
+    /// A map from pending peeks to the queue into which responses are sent, and the
+    /// pending response count (initialized to the number of dataflow workers).
+    pending_peeks: HashMap<u32, (mpsc::UnboundedSender<PeekResponse>, usize)>,
+    /// A map from pending tails to the queue into which responses are sent.
+    ///
+    /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
+    pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
 }
 
 /// Metadata about an active connection.
@@ -572,6 +580,44 @@ impl Coordinator {
         }: WorkerFeedbackWithMeta,
     ) {
         match message {
+            WorkerFeedback::PeekResponse(conn_id, response) => {
+                // We use an `if let` here because the peek could have been cancelled already.
+                if let Some((channel, countdown)) = self.pending_peeks.get_mut(&conn_id) {
+                    channel
+                        .send(response)
+                        .expect("Peek endpoint terminated prematurely");
+                    *countdown -= 1;
+                    if *countdown == 0 {
+                        self.pending_peeks.remove(&conn_id);
+                    }
+                }
+            }
+            WorkerFeedback::TailResponse(sink_id, response) => {
+                // We use an `if let` here because the peek could have been cancelled already.
+                // We can also potentially receive multiple `Complete` responses, followed by
+                // a `Dropped` response.
+                if let Some(channel) = self.pending_tails.get_mut(&sink_id) {
+                    match response {
+                        TailResponse::Rows(rows) => {
+                            // TODO(benesch): the lack of backpressure here can result in
+                            // unbounded memory usage.
+                            let result = channel.send(rows);
+                            if result.is_err() {
+                                // TODO(benesch): we should actually drop the sink if the
+                                // receiver has gone away. E.g. form a DROP SINK command?
+                            }
+                        }
+                        TailResponse::Complete => {
+                            // TODO: Indicate this explicitly.
+                            self.pending_tails.remove(&sink_id);
+                        }
+                        TailResponse::Dropped => {
+                            // TODO: Could perhaps do this earlier, in response to DROP SINK.
+                            self.pending_tails.remove(&sink_id);
+                        }
+                    }
+                }
+            }
             WorkerFeedback::FrontierUppers(updates) => {
                 for (name, changes) in updates {
                     self.update_upper(&name, changes);
@@ -1256,7 +1302,16 @@ impl Coordinator {
                 return;
             }
 
-            // Tell dataflow to cancel any pending peeks.
+            // Cancel the peek. We use an `if let` because the peek could be completed
+            // and removed before the cancellation is received.
+            if let Some((channel, count)) = self.pending_peeks.get(&conn_id) {
+                for _ in 0..*count {
+                    channel
+                        .send(PeekResponse::Canceled)
+                        .expect("Peek channel closed prematurely");
+                }
+            }
+            // Allow dataflow to cancel any pending peeks.
             self.broadcast(SequencedCommand::CancelPeek { conn_id });
 
             // Inform the target session (if it asks) about the cancellation.
@@ -2505,11 +2560,13 @@ impl Coordinator {
                     ))
                 })?;
 
+            // Insert the pending peek, and initialize to expect the number of workers.
+            self.pending_peeks
+                .insert(session.conn_id(), (rows_tx, self.num_workers()));
             self.broadcast(SequencedCommand::Peek {
                 id: index_id,
                 key: literal_row,
                 conn_id: session.conn_id(),
-                tx: rows_tx,
                 timestamp,
                 finishing: finishing.clone(),
                 map_filter_project: mfp_plan,
@@ -2596,13 +2653,12 @@ impl Coordinator {
         let sink_id = self.catalog.allocate_id()?;
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
-
+        self.pending_tails.insert(sink_id, tx);
         let df = self.dataflow_builder().build_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
             SinkConnector::Tail(TailSinkConnector {
-                tx,
                 emit_progress,
                 object_columns,
                 value_desc: desc,
@@ -3464,6 +3520,7 @@ pub async fn serve(
         now: system_time,
         metrics_registry: metrics_registry.clone(),
         persist: persister,
+        feedback_tx,
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
@@ -3548,8 +3605,9 @@ pub async fn serve(
                 since_updates: Rc::new(RefCell::new(HashMap::new())),
                 sink_writes: HashMap::new(),
                 now,
+                pending_peeks: HashMap::new(),
+                pending_tails: HashMap::new(),
             };
-            coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
             if let Some(config) = &logging {
                 coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
                     granularity_ns: config.granularity.as_nanos(),
@@ -3605,7 +3663,6 @@ pub fn serve_debug(
     Client,
     tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     tokio::sync::mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
-    tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     Arc<Mutex<u64>>,
 ) {
     lazy_static! {
@@ -3628,6 +3685,12 @@ pub fn serve_debug(
         persist: persist.clone(),
     })
     .unwrap();
+
+    // We want to be able to control communication from dataflow to the
+    // coordinator, so setup an additional channel pair.
+    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
+    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
+
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
@@ -3638,13 +3701,9 @@ pub fn serve_debug(
         now: get_debug_timestamp,
         metrics_registry,
         persist: persist.persister,
+        feedback_tx,
     })
     .unwrap();
-
-    // We want to be able to control communication from dataflow to the
-    // coordinator, so setup an additional channel pair.
-    let (feedback_tx, inner_feedback_rx) = mpsc::unbounded_channel();
-    let (inner_feedback_tx, feedback_rx) = mpsc::unbounded_channel();
 
     let executor = TokioHandle::current();
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
@@ -3681,7 +3740,6 @@ pub fn serve_debug(
 
     let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
     let handle = TokioHandle::current();
-    let broadcast_feedback_tx = feedback_tx.clone();
     let thread = thread::spawn(move || {
         let mut coord = Coordinator {
             worker_guards,
@@ -3707,8 +3765,9 @@ pub fn serve_debug(
             since_updates: Rc::new(RefCell::new(HashMap::new())),
             sink_writes: HashMap::new(),
             now: get_debug_timestamp,
+            pending_peeks: HashMap::new(),
+            pending_tails: HashMap::new(),
         };
-        coord.broadcast(SequencedCommand::EnableFeedback(broadcast_feedback_tx));
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
         handle.block_on(coord.serve(
@@ -3727,7 +3786,6 @@ pub fn serve_debug(
         client,
         inner_feedback_tx,
         inner_feedback_rx,
-        feedback_tx,
         DEBUG_TIMESTAMP.clone(),
     )
 }

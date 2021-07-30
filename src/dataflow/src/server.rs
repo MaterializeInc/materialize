@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     Consistency, DataflowDescription, DataflowError, ExternalSourceConnector, MzOffset,
-    PeekResponse, SourceConnector, TimestampSourceUpdate, Update,
+    PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::{now::NowFn, result::ResultExt};
@@ -60,7 +60,7 @@ mod metrics;
 static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 
 /// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.
     ///
@@ -98,8 +98,6 @@ pub enum SequencedCommand {
         ///
         /// Used in responses and cancelation requests.
         conn_id: u32,
-        /// A communication link for sending a response.
-        tx: mpsc::UnboundedSender<PeekResponse>,
         /// The logical timestamp at which the arrangement is queried.
         timestamp: Timestamp,
         /// Actions to apply to the result set before returning them.
@@ -157,8 +155,6 @@ pub enum SequencedCommand {
         /// The timestamp to advance to.
         advance_to: Timestamp,
     },
-    /// Request that feedback is streamed to the provided channel.
-    EnableFeedback(mpsc::UnboundedSender<WorkerFeedbackWithMeta>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -192,6 +188,10 @@ pub enum WorkerFeedback {
     /// Timestamp bindings and prior and new frontiers for those bindings for all
     /// sources
     TimestampBindings(TimestampBindingFeedback),
+    /// The worker's response to a specified (by connection id) peek.
+    PeekResponse(u32, PeekResponse),
+    /// The worker's next response to a specified tail.
+    TailResponse(GlobalId, TailResponse),
 }
 
 /// Configures a dataflow server.
@@ -211,6 +211,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
+    /// Responses to commands should be sent into this channel.
+    pub feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -235,6 +237,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
     let metrics = Metrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let persist = config.persist;
+    let feedback_tx = config.feedback_tx.clone();
     timely::execute::execute(
         timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -261,11 +264,12 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     sink_write_frontiers: HashMap::new(),
                     metrics,
                     persist: persist.clone(),
+                    tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 },
                 materialized_logger: None,
                 command_rx,
                 pending_peeks: Vec::new(),
-                feedback_tx: None,
+                feedback_tx: feedback_tx.clone(),
                 reported_frontiers: HashMap::new(),
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
@@ -298,7 +302,7 @@ where
     /// Peek commands that are awaiting fulfillment.
     pending_peeks: Vec<PendingPeek>,
     /// The channel over which frontier information is reported.
-    feedback_tx: Option<mpsc::UnboundedSender<WorkerFeedbackWithMeta>>,
+    feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Tracks the timestamp binding durability information that has been sent over `feedback_tx`.
@@ -494,6 +498,7 @@ where
             self.metrics.observe_pending_peeks(&self.pending_peeks);
             self.metrics.observe_command_finish();
             self.process_peeks();
+            self.process_tails();
         }
     }
 
@@ -518,72 +523,70 @@ where
             }
         }
 
-        if let Some(feedback_tx) = &mut self.feedback_tx {
-            let mut new_frontier = Antichain::new();
-            let mut progress = Vec::new();
-            for (id, traces) in self.render_state.traces.traces.iter_mut() {
-                // Read the upper frontier and compare to what we've reported.
-                traces.oks_mut().read_upper(&mut new_frontier);
-                let prev_frontier = self
-                    .reported_frontiers
-                    .get_mut(&id)
-                    .expect("Index frontier missing!");
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
+        let mut new_frontier = Antichain::new();
+        let mut progress = Vec::new();
+        for (id, traces) in self.render_state.traces.traces.iter_mut() {
+            // Read the upper frontier and compare to what we've reported.
+            traces.oks_mut().read_upper(&mut new_frontier);
+            let prev_frontier = self
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Index frontier missing!");
+            if prev_frontier != &new_frontier {
+                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                prev_frontier.clone_from(&new_frontier);
+            }
+        }
+
+        // Log index frontier changes
+        if let Some(logger) = self.materialized_logger.as_mut() {
+            for (id, changes) in &mut progress {
+                for (time, diff) in changes.iter() {
+                    logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
                 }
             }
+        }
 
-            // Log index frontier changes
-            if let Some(logger) = self.materialized_logger.as_mut() {
-                for (id, changes) in &mut progress {
-                    for (time, diff) in changes.iter() {
-                        logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
-                    }
-                }
+        for (id, history) in self.render_state.ts_histories.iter() {
+            // Read the upper frontier and compare to what we've reported.
+            history.read_upper(&mut new_frontier);
+            let prev_frontier = self
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Source frontier missing!");
+            assert!(<_ as PartialOrder>::less_equal(
+                prev_frontier,
+                &new_frontier
+            ));
+            if prev_frontier != &new_frontier {
+                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                prev_frontier.clone_from(&new_frontier);
             }
+        }
 
-            for (id, history) in self.render_state.ts_histories.iter() {
-                // Read the upper frontier and compare to what we've reported.
-                history.read_upper(&mut new_frontier);
-                let prev_frontier = self
-                    .reported_frontiers
-                    .get_mut(&id)
-                    .expect("Source frontier missing!");
-                assert!(<_ as PartialOrder>::less_equal(
-                    prev_frontier,
-                    &new_frontier
-                ));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
+        for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+            new_frontier.clone_from(&frontier.borrow());
+            let prev_frontier = self
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Sink frontier missing!");
+            assert!(<_ as PartialOrder>::less_equal(
+                prev_frontier,
+                &new_frontier
+            ));
+            if prev_frontier != &new_frontier {
+                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                prev_frontier.clone_from(&new_frontier);
             }
+        }
 
-            for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
-                new_frontier.clone_from(&frontier.borrow());
-                let prev_frontier = self
-                    .reported_frontiers
-                    .get_mut(&id)
-                    .expect("Sink frontier missing!");
-                assert!(<_ as PartialOrder>::less_equal(
-                    prev_frontier,
-                    &new_frontier
-                ));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
-            }
-
-            if !progress.is_empty() {
-                feedback_tx
-                    .send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::FrontierUppers(progress),
-                    })
-                    .expect("feedback receiver should not drop first");
-            }
+        if !progress.is_empty() {
+            self.feedback_tx
+                .send(WorkerFeedbackWithMeta {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::FrontierUppers(progress),
+                })
+                .expect("feedback receiver should not drop first");
         }
     }
 
@@ -594,9 +597,7 @@ where
     fn report_timestamp_bindings(&mut self) {
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
-        if self.feedback_tx.is_none()
-            || self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS
-        {
+        if self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS {
             return;
         }
 
@@ -647,8 +648,6 @@ where
 
         if !changes.is_empty() || !bindings.is_empty() {
             self.feedback_tx
-                .as_mut()
-                .expect("known to exist")
                 .send(WorkerFeedbackWithMeta {
                     worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
@@ -738,7 +737,6 @@ where
                 key,
                 timestamp,
                 conn_id,
-                tx,
                 finishing,
                 map_filter_project,
             } => {
@@ -763,7 +761,6 @@ where
                     id,
                     key,
                     conn_id,
-                    tx,
                     timestamp,
                     finishing,
                     trace_bundle,
@@ -774,14 +771,21 @@ where
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), true));
                 }
                 // Attempt to fulfill the peek.
-                let fulfilled = peek.seek_fulfillment(&mut Antichain::new());
-                if !fulfilled {
-                    self.pending_peeks.push(peek);
-                } else {
+                if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
+                    // Respond with the response.
+                    self.feedback_tx
+                        .send(WorkerFeedbackWithMeta {
+                            worker_id: self.timely_worker.index(),
+                            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+                        })
+                        .expect("feedback receiver should not drop first");
+
                     // Log the fulfillment of the peek.
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                     }
+                } else {
+                    self.pending_peeks.push(peek);
                 }
                 self.metrics.observe_pending_peeks(&self.pending_peeks);
             }
@@ -790,14 +794,9 @@ where
                 let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
-                        peek.tx
-                            .send(PeekResponse::Canceled)
-                            .expect("peek receiver should not drop first");
-
                         if let Some(logger) = logger {
                             logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                         }
-
                         false // don't retain
                     } else {
                         true // retain
@@ -841,10 +840,6 @@ where
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
-            }
-
-            SequencedCommand::EnableFeedback(tx) => {
-                self.feedback_tx = Some(tx);
             }
             SequencedCommand::EnableLogging(config) => {
                 self.initialize_logging(&config);
@@ -1015,15 +1010,35 @@ where
             Vec::with_capacity(pending_peeks_len),
         );
         for mut peek in pending_peeks.drain(..) {
-            let success = peek.seek_fulfillment(&mut upper);
-            if !success {
-                self.pending_peeks.push(peek);
-            } else {
+            if let Some(response) = peek.seek_fulfillment(&mut upper) {
+                // Respond with the response.
+                self.feedback_tx
+                    .send(WorkerFeedbackWithMeta {
+                        worker_id: self.timely_worker.index(),
+                        message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+                    })
+                    .expect("feedback receiver should not drop first");
+
                 // Log the fulfillment of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                 }
+            } else {
+                self.pending_peeks.push(peek);
             }
+        }
+    }
+
+    /// Scan the shared tail response buffer, and forward results along.
+    fn process_tails(&mut self) {
+        let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
+        for (sink_id, response) in tail_responses.drain(..) {
+            self.feedback_tx
+                .send(WorkerFeedbackWithMeta {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::TailResponse(sink_id, response),
+                })
+                .expect("feedback receiver should not drop first");
         }
     }
 }
@@ -1042,8 +1057,6 @@ struct PendingPeek {
     key: Option<Row>,
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
-    /// A transmitter connected to the intended recipient of the peek.
-    tx: mpsc::UnboundedSender<PeekResponse>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -1073,23 +1086,20 @@ impl PendingPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
-    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> bool {
+    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.timestamp) {
-            return false;
+            return None;
         }
         self.trace_bundle.errs_mut().read_upper(upper);
         if upper.less_equal(&self.timestamp) {
-            return false;
+            return None;
         }
         let response = match self.collect_finished_data() {
             Ok(rows) => PeekResponse::Rows(rows),
             Err(text) => PeekResponse::Error(text),
         };
-        self.tx
-            .send(response)
-            .expect("peek receiver should not drop first");
-        true
+        Some(response)
     }
 
     /// Collects data for a known-complete peek.

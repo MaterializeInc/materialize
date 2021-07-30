@@ -18,6 +18,7 @@
 //! not create any new stateful operators.
 
 #![allow(clippy::op_ref)]
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use timely::dataflow::Scope;
 
@@ -38,7 +39,7 @@ use crate::render::join::{JoinBuildState, JoinClosure};
 /// in arrangements for other join inputs. These lookups require specific
 /// instructions about which expressions to use as keys. Along the way,
 /// various closures are applied to filter and project as early as possible.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaJoinPlan {
     /// The set of path plans.
     ///
@@ -48,7 +49,7 @@ pub struct DeltaJoinPlan {
 }
 
 /// A delta query path is implemented by a sequences of stages,
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     source_relation: usize,
@@ -65,7 +66,7 @@ pub struct DeltaPathPlan {
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaStagePlan {
     /// The relation index into which we will look up.
     lookup_relation: usize,

@@ -25,7 +25,6 @@ use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
-use tokio::sync::mpsc;
 use url::Url;
 use uuid::Uuid;
 
@@ -55,6 +54,17 @@ impl PeekResponse {
     }
 }
 
+/// Various responses that can be communicated about the progress of a TAIL command.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TailResponse {
+    /// Rows that should be returned in order to the client.
+    Rows(Vec<Row>),
+    /// Sent once the stream is complete. Indicates the end.
+    Complete,
+    /// The TAIL dataflow was dropped before completing. Indicates the end.
+    Dropped,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {
@@ -74,7 +84,7 @@ pub struct BuildDesc<View> {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DataflowDescription<View> {
     /// Sources made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, (SourceDesc, GlobalId)>,
@@ -618,7 +628,7 @@ pub struct SourceDesc {
 }
 
 /// A sink for updates to a relational collection.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SinkDesc {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
@@ -1003,7 +1013,7 @@ pub enum S3KeySource {
     SqsNotifications { queue: String },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
     Tail(TailSinkConnector),
@@ -1088,10 +1098,8 @@ impl SinkConnector {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TailSinkConnector {
-    #[serde(skip)]
-    pub tx: mpsc::UnboundedSender<Vec<Row>>,
     pub emit_progress: bool,
     pub object_columns: usize,
     pub value_desc: RelationDesc,

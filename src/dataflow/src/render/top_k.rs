@@ -24,6 +24,7 @@ use differential_dataflow::operators::Consolidate;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
+use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 
 use expr::ColumnOrder;
@@ -33,7 +34,7 @@ use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
 
 /// A plan encapsulating different variants to compute a TopK operation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TopKPlan {
     /// A plan for Top1 for monotonic inputs.
     MonotonicTop1(MonotonicTop1Plan),
@@ -109,7 +110,7 @@ impl TopKPlan {
 /// differential's semantics. (2) is especially interesting because Kafka is
 /// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
 /// Materialize and commonly used by users.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
     group_key: Vec<usize>,
@@ -118,7 +119,7 @@ pub struct MonotonicTop1Plan {
 }
 
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
     group_key: Vec<usize>,
@@ -132,7 +133,7 @@ pub struct MonotonicTopKPlan {
 }
 
 /// A plan for generic TopKs that don't fit any more specific category.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
     group_key: Vec<usize>,

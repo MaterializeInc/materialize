@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::trace::cursor::Cursor;
@@ -24,7 +26,7 @@ use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
-use dataflow_types::{SinkAsOf, SinkDesc, TailSinkConnector};
+use dataflow_types::{SinkAsOf, SinkDesc, TailResponse, TailSinkConnector};
 use expr::GlobalId;
 use ore::cast::CastFrom;
 use repr::adt::numeric::{self, Numeric};
@@ -61,7 +63,7 @@ where
 
     fn render_continuous_sink(
         &self,
-        _render_state: &mut RenderState,
+        render_state: &mut RenderState,
         sink: &SinkDesc,
         sink_id: GlobalId,
         sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
@@ -70,7 +72,13 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        tail(sinked_collection, sink_id, self.clone(), sink.as_of.clone());
+        tail(
+            sinked_collection,
+            sink_id,
+            self.clone(),
+            render_state.tail_response_buffer.clone(),
+            sink.as_of.clone(),
+        );
 
         // no sink token
         None
@@ -79,8 +87,9 @@ where
 
 fn tail<G>(
     sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
-    id: GlobalId,
+    sink_id: GlobalId,
     connector: TailSinkConnector,
+    tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
     as_of: SinkAsOf,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -90,25 +99,24 @@ fn tail<G>(
         .map(move |(k, v)| {
             assert!(k.is_none(), "tail does not support keys");
             let v = v.expect("tail must have values");
-            (id, v)
+            (sink_id, v)
         })
         .arrange_by_key()
         .stream;
 
-    let mut errored = false;
     let mut packer = Row::default();
     let mut received_data = false;
 
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
-
-    batches.sink(Pipeline, &format!("tail-{}", id), move |input| {
+    let tail_dropped = TailSendOnDrop {
+        sink_id,
+        tail_response_buffer: tail_response_buffer.clone(),
+    };
+    batches.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
         input.for_each(|_, batches| {
-            if errored {
-                // TODO(benesch): we should actually drop the sink if the
-                // receiver has gone away.
-                return;
-            }
+            // Does nothing, but should force a move into the closure.
+            tail_dropped.move_me();
             received_data = true;
             let mut results = vec![];
             for batch in batches.iter() {
@@ -172,10 +180,9 @@ fn tail<G>(
 
             // TODO(benesch): the lack of backpressure here can result in
             // unbounded memory usage.
-            if connector.tx.send(results).is_err() {
-                errored = true;
-                return;
-            }
+            tail_response_buffer
+                .borrow_mut()
+                .push((sink_id, TailResponse::Rows(results)));
         });
 
         let progress_row = update_progress(
@@ -196,13 +203,40 @@ fn tail<G>(
 
                 // TODO(benesch): the lack of backpressure here can result in
                 // unbounded memory usage.
-                if connector.tx.send(results).is_err() {
-                    errored = true;
-                    return;
-                }
+                tail_response_buffer
+                    .borrow_mut()
+                    .push((sink_id, TailResponse::Rows(results)));
             }
         }
+
+        // If the frontier is empty the tailing is complete. We should say so!
+        // We will be shut down promptly, so no worries about making sure to only
+        // send this exactly once.
+        if input.frontier().frontier().is_empty() {
+            tail_response_buffer
+                .borrow_mut()
+                .push((sink_id, TailResponse::Complete));
+        }
     })
+}
+
+/// A type that when dropped sends a `TailResponse::Dropped` response.
+struct TailSendOnDrop {
+    pub sink_id: GlobalId,
+    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+}
+
+impl TailSendOnDrop {
+    /// Does nothing, but allows us to move an instance into a closure.
+    fn move_me(&self) {}
+}
+
+impl Drop for TailSendOnDrop {
+    fn drop(&mut self) {
+        self.tail_response_buffer
+            .borrow_mut()
+            .push((self.sink_id, TailResponse::Dropped));
+    }
 }
 
 // Checks if there is progress between `current_input_frontier` and

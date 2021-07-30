@@ -16,6 +16,7 @@ use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
+use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
@@ -30,7 +31,7 @@ use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 
 // TODO(mcsherry): Identical to `DeltaPathPlan`; consider unifying.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     source_relation: usize,
@@ -47,7 +48,7 @@ pub struct LinearJoinPlan {
 }
 
 // TODO(mcsherry): Identical to `DeltaStagePlan`; consider unifying.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LinearStagePlan {
     /// The relation index into which we will look up.
     lookup_relation: usize,
