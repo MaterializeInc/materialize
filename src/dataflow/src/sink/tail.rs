@@ -208,9 +208,11 @@ fn tail<G>(
 
         // Only emit updates if this operator/worker received actual data for emission.
         if let Some(tail_protocol) = &mut tail_protocol {
-            if let Some(progress_row) = progress_row {
-                let results = vec![progress_row];
-                tail_protocol.send(results);
+            if connector.emit_progress {
+                if let Some(progress_row) = progress_row {
+                    let results = vec![progress_row];
+                    tail_protocol.send(results);
+                }
             }
         }
 
