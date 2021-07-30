@@ -1067,7 +1067,7 @@ pub mod plan {
 
     use std::convert::TryFrom;
 
-    use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc};
+    use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc, UnaryFunc};
     use repr::adt::numeric::Numeric;
     use repr::{Datum, Diff, Row, RowArena, ScalarType};
 
@@ -1254,27 +1254,34 @@ pub mod plan {
                         ScalarType::Numeric { scale: None },
                     );
 
+                    // TODO(#7611): Truncate any significant fractional digits
+                    // from positive values of `expr2`, while keeping the sign
+                    // of negative values intact. (Negative values are never
+                    // chosen as valid bounds, so their resultant values matter
+                    // little, but we do want to know they were negative.)
+                    let expr2_floor = expr2.call_unary(UnaryFunc::FloorNumeric);
+
                     // MzLogicalTimestamp <OP> <EXPR2> for several supported operators.
                     match func {
                         BinaryFunc::Eq => {
                             // Lower bound of expr, upper bound of expr+1
-                            lower_bounds.push((*expr2).clone());
+                            lower_bounds.push((expr2_floor).clone());
                             upper_bounds
-                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddNumeric));
+                                .push(expr2_floor.call_binary(decimal_one, BinaryFunc::AddNumeric));
                         }
                         BinaryFunc::Lt => {
-                            upper_bounds.push(*expr2);
+                            upper_bounds.push(expr2_floor);
                         }
                         BinaryFunc::Lte => {
                             upper_bounds
-                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddNumeric));
+                                .push(expr2_floor.call_binary(decimal_one, BinaryFunc::AddNumeric));
                         }
                         BinaryFunc::Gt => {
                             lower_bounds
-                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddNumeric));
+                                .push(expr2_floor.call_binary(decimal_one, BinaryFunc::AddNumeric));
                         }
                         BinaryFunc::Gte => {
-                            lower_bounds.push(*expr2);
+                            lower_bounds.push(expr2_floor);
                         }
                         _ => {
                             return Err(format!(
@@ -1338,11 +1345,9 @@ pub mod plan {
                 }
             }
 
-            // In order to work with times, it is easiest to convert it to an i128.
-            // This is because our decimal type uses that representation, and going
-            // from i128 to u64 is even more painful.
-            let mut lower_bound_i128 = i128::from(time);
-            let mut upper_bound_i128 = None;
+            // Set the floor of bounds to `time`; ceiling will be u64::MAX.
+            let mut lower_bound = Some(time);
+            let mut upper_bound = None;
 
             // Track whether we have seen a null in either bound, as this should
             // prevent the record from being produced at any time.
@@ -1350,7 +1355,6 @@ pub mod plan {
 
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
-            // TODO: This decimal stuff is brittle; let's hope the scale never changes.
             for l in self.lower_bounds.iter() {
                 match l.eval(datums, &arena) {
                     Err(e) => {
@@ -1359,9 +1363,29 @@ pub mod plan {
                             .chain(None.into_iter());
                     }
                     Ok(Datum::Numeric(d)) => {
-                        let v = i128::try_from(d.0).unwrap();
-                        if lower_bound_i128 < v {
-                            lower_bound_i128 = v;
+                        // Negative values will always be less than `time`, so
+                        // will never be chosen.
+                        if d.0.is_negative() {
+                            continue;
+                        }
+
+                        match u64::try_from(d.0) {
+                            Ok(v) => {
+                                let lb = lower_bound
+                                    .expect("lower bound is only none on exit from loop");
+                                if lb < v {
+                                    lower_bound = Some(v);
+                                }
+                            }
+                            // If conversion fails, value is greater than
+                            // u64::MAX, which isn't comparable to time, so set
+                            // lower bound to None. This would have the greatest
+                            // value we have seen, so do not continue looking
+                            // for a larger lower bound.
+                            Err(_) => {
+                                lower_bound = None;
+                                break;
+                            }
                         }
                     }
                     Ok(Datum::Null) => {
@@ -1372,78 +1396,82 @@ pub mod plan {
                     }
                 }
             }
+            // At this point, we are "certain" that `lower_bound_i128` is at
+            // least `time`, which means "non-negative" / not needing to be
+            // clamped from below, or its value exceeded `u64::MAX`.
 
-            // If there are any upper bounds, determine the minimum upper bound.
-            for u in self.upper_bounds.iter() {
-                match u.eval(datums, &arena) {
-                    Err(e) => {
-                        return Some(Err((e, time, diff)))
-                            .into_iter()
-                            .chain(None.into_iter());
-                    }
-                    Ok(Datum::Numeric(d)) => {
-                        // Replace `upper_bound` if it is none
-                        let v = i128::try_from(d.0).unwrap();
-                        if upper_bound_i128.is_none() || upper_bound_i128 > Some(v) {
-                            upper_bound_i128 = Some(v);
+            // Upper bound must be at least lower bound. If we see that the
+            // lower bound is None, we know that it was greater than u64::MAX,
+            // so the upper bound should remain as None because it to would be
+            // forced to be a value greater than `u64::MAX`.
+            if lower_bound.is_some() {
+                // If there are any upper bounds, determine the minimum upper bound.
+                for u in self.upper_bounds.iter() {
+                    match u.eval(datums, &arena) {
+                        Err(e) => {
+                            return Some(Err((e, time, diff)))
+                                .into_iter()
+                                .chain(None.into_iter());
+                        }
+                        Ok(Datum::Numeric(d)) => {
+                            // Upper bound must be at least lower bound, whose
+                            // minimum value is `time`. Negative values will
+                            // always be less than `time`, so will never be
+                            // chosen.
+                            if d.0.is_negative() {
+                                continue;
+                            }
+
+                            match u64::try_from(d.0) {
+                                Ok(v) => {
+                                    // Replace `upper_bound` if it is none or we
+                                    // find a smaller value.
+                                    if upper_bound.is_none() || upper_bound > Some(v) {
+                                        upper_bound = Some(v);
+                                    }
+                                }
+
+                                // If conversion fails, value is greater than
+                                // u64::MAX, which isn't comparable to time, so
+                                // leave existing upper_bound, even if it is
+                                // None.
+                                Err(_) => {}
+                            }
+                        }
+                        Ok(Datum::Null) => {
+                            null_eval = true;
+                        }
+                        x => {
+                            panic!("Non-decimal value in temporal predicate: {:?}", x);
                         }
                     }
-                    Ok(Datum::Null) => {
-                        null_eval = true;
-                    }
-                    x => {
-                        panic!("Non-decimal value in temporal predicate: {:?}", x);
-                    }
                 }
             }
 
-            // Force the upper bound to be at least the lower bound.
-            // This should have the effect downstream of making the two equal,
-            // which will result in no output.
-            // Doing it this way spares us some awkward option comparison logic.
-            // This also ensures that `upper_bound_u128` will be at least `time`,
-            // which means "non-negative" / not needing to be clamped from below.
-            if let Some(u) = upper_bound_i128.as_mut() {
-                if *u < lower_bound_i128 {
-                    *u = lower_bound_i128;
-                }
-            }
-
-            // Convert both of our bounds to `Option<u64>`, where negative numbers
-            // are advanced up to `Some(0)` and numbers larger than `u64::MAX` are
-            // set to `None`. These choices are believed correct to narrow intervals
-            // of `i128` values to potentially half-open `u64` values.
-
-            // We are "certain" that `lower_bound_i128` is at least `time`, which
+            // Force the upper bound to be at least the lower bound, if the
+            // upper bound exists. This should have the effect downstream of
+            // making the two equal, which will result in no output. This also
+            // ensures that `upper_bound_u64` will be at least `time`, which
             // means "non-negative" / not needing to be clamped from below.
-            let lower_bound_u64 = if lower_bound_i128 > u64::MAX.into() {
-                None
-            } else {
-                Some(u64::try_from(lower_bound_i128).unwrap())
-            };
-
-            // We ensured that `upper_bound_i128` is at least `lower_bound_i128`,
-            // and so it also does not need to be clamped from below.
-            let upper_bound_u64 = match upper_bound_i128 {
-                Some(u) if u < 0 => {
-                    panic!("upper bound was ensured at least `time`; should be non-negative");
-                }
-                Some(u) if u > u64::MAX.into() => None,
-                Some(u) => Some(u64::try_from(u).unwrap()),
-                None => None,
-            };
+            //
+            // Note that the check for upper_bound_u64.is_some() is required
+            // because None values are always less than their Some counterparts,
+            // and if upper_bound_u64.is_none() it should not become Some.
+            if upper_bound.is_some() && upper_bound < lower_bound {
+                upper_bound = lower_bound;
+            }
 
             // Only proceed if the new time is not greater or equal to upper,
             // and if no null values were encountered in bound evaluation.
-            if lower_bound_u64 != upper_bound_u64 && !null_eval {
+            if lower_bound != upper_bound && !null_eval {
                 // Allocate a row to produce as output.
                 let capacity =
                     repr::datums_size(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
                 let mut row = Row::with_capacity(capacity);
                 row.extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
                 // TODO: avoid the clone if `upper_opt` is `None`.
-                let lower_opt = lower_bound_u64.map(|time| Ok((row.clone(), time, diff)));
-                let upper_opt = upper_bound_u64.map(|time| Ok((row, time, -diff)));
+                let lower_opt = lower_bound.map(|time| Ok((row.clone(), time, diff)));
+                let upper_opt = upper_bound.map(|time| Ok((row, time, -diff)));
                 lower_opt.into_iter().chain(upper_opt.into_iter())
             } else {
                 None.into_iter().chain(None.into_iter())
