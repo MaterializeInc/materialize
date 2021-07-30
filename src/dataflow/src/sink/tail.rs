@@ -109,14 +109,20 @@ fn tail<G>(
 
     // Initialize to the minimal input frontier.
     let mut input_frontier = Antichain::from_elem(<G::Timestamp as TimelyTimestamp>::minimum());
-    let tail_dropped = TailSendOnDrop {
-        sink_id,
-        tail_response_buffer: tail_response_buffer.clone(),
+    // An encapsulation of the Tail response protocol.
+    // Used to send rows and eventually mark complete.
+    // Set to `None` for instances that should not produce output.
+    let mut tail_protocol = if connector.emit_progress {
+        Some(TailProtocol {
+            sink_id,
+            tail_response_buffer: Some(tail_response_buffer),
+        })
+    } else {
+        None
     };
+
     batches.sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
         input.for_each(|_, batches| {
-            // Does nothing, but should force a move into the closure.
-            tail_dropped.move_me();
             received_data = true;
             let mut results = vec![];
             for batch in batches.iter() {
@@ -158,9 +164,9 @@ fn tail<G>(
                 }
             }
 
-            // Sort results by time and convert to Vec<Row>. We use stable sort here even
-            // though it is slower because it will produce deterministic results since the
-            // cursor will always produce rows in the same order.
+            // Sort results by time and convert to Vec<Row>. We use stable sort here because
+            // it will produce deterministic results since the cursor will always produce
+            // rows in the same order.
             results.sort_by_key(|(time, _)| *time);
             let mut results: Vec<Row> = results.into_iter().map(|(_, row)| row).collect();
 
@@ -171,18 +177,22 @@ fn tail<G>(
                     &mut packer,
                     connector.object_columns + 1,
                 );
-                if connector.emit_progress {
+                if tail_protocol.is_some() {
                     if let Some(progress_row) = progress_row {
                         results.push(progress_row);
                     }
                 }
             }
 
-            // TODO(benesch): the lack of backpressure here can result in
-            // unbounded memory usage.
-            tail_response_buffer
-                .borrow_mut()
-                .push((sink_id, TailResponse::Rows(results)));
+            // Emit data if configured, otherwise it is an error to have data to send.
+            if let Some(tail_protocol) = &mut tail_protocol {
+                tail_protocol.send(results);
+            } else {
+                assert!(
+                    results.is_empty(),
+                    "Observed data at inactive TAIL instance"
+                );
+            }
         });
 
         let progress_row = update_progress(
@@ -192,50 +202,72 @@ fn tail<G>(
             connector.object_columns + 1,
         );
 
-        // Only emit updates if this operator/worker received actual
-        // data for emission. For TAIL, data is exchanged to one worker,
-        // which forwards all the data to the client process. If we
-        // blindly forwarded the frontier from all workers we would get
-        // multiple progress updates in the client.
-        if connector.emit_progress && received_data {
+        // Only emit updates if this operator/worker received actual data for emission.
+        if received_data {
             if let Some(progress_row) = progress_row {
                 let results = vec![progress_row];
-
-                // TODO(benesch): the lack of backpressure here can result in
-                // unbounded memory usage.
-                tail_response_buffer
-                    .borrow_mut()
-                    .push((sink_id, TailResponse::Rows(results)));
+                // Emit data if configured, otherwise it is an error to have data to send.
+                if let Some(tail_protocol) = &mut tail_protocol {
+                    tail_protocol.send(results);
+                } else {
+                    panic!("Observed data at inactive TAIL instance");
+                }
             }
         }
 
         // If the frontier is empty the tailing is complete. We should say so!
-        // We will be shut down promptly, so no worries about making sure to only
-        // send this exactly once.
         if input.frontier().frontier().is_empty() {
-            tail_response_buffer
-                .borrow_mut()
-                .push((sink_id, TailResponse::Complete));
+            if let Some(tail_protocol) = tail_protocol.take() {
+                tail_protocol.complete();
+            } else {
+                // Not an error to notice the end of the stream at non-emitters,
+                // or to notice it a second time at a previous emitter.
+            }
         }
     })
 }
 
-/// A type that when dropped sends a `TailResponse::Dropped` response.
-struct TailSendOnDrop {
+/// A type that guides the transmission of rows back to the coordinator.
+///
+/// A protocol instance may `send` rows indefinitely, and is consumed by `complete`,
+/// which is used only to indicate the end of a stream. The `Drop` implementation
+/// otherwise sends an indication that the protocol has finished without completion.
+struct TailProtocol {
     pub sink_id: GlobalId,
-    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+    pub tail_response_buffer: Option<Rc<RefCell<Vec<(GlobalId, TailResponse)>>>>,
 }
 
-impl TailSendOnDrop {
-    /// Does nothing, but allows us to move an instance into a closure.
-    fn move_me(&self) {}
+impl TailProtocol {
+    /// Send further rows as responses.
+    ///
+    /// Does nothing if `self.complete()` has been called.
+    fn send(&mut self, rows: Vec<Row>) {
+        if let Some(buffer) = &mut self.tail_response_buffer {
+            buffer
+                .borrow_mut()
+                .push((self.sink_id, TailResponse::Rows(rows)));
+        }
+    }
+    /// Completes the channel, preventing further transmissions.
+    fn complete(mut self) {
+        if let Some(buffer) = &mut self.tail_response_buffer {
+            buffer
+                .borrow_mut()
+                .push((self.sink_id, TailResponse::Complete));
+            // Set to `None` to avoid `TailResponse::Dropped`.
+            self.tail_response_buffer = None;
+        }
+    }
 }
 
-impl Drop for TailSendOnDrop {
+impl Drop for TailProtocol {
     fn drop(&mut self) {
-        self.tail_response_buffer
-            .borrow_mut()
-            .push((self.sink_id, TailResponse::Dropped));
+        if let Some(buffer) = &mut self.tail_response_buffer {
+            buffer
+                .borrow_mut()
+                .push((self.sink_id, TailResponse::Dropped));
+            self.tail_response_buffer = None;
+        }
     }
 }
 
