@@ -3706,7 +3706,7 @@ pub fn serve_debug(
         now: get_debug_timestamp,
         metrics_registry,
         persist: persist.persister,
-        feedback_tx: feedback_tx.clone(),
+        feedback_tx,
     })
     .unwrap();
 
