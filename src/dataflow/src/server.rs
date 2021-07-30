@@ -112,8 +112,10 @@ pub enum SequencedCommand {
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
         id: GlobalId,
-        /// The associated update (RT or BYO)
-        update: Vec<TimestampSourceUpdate>,
+        /// Currently available partitions for the source
+        partitions: Vec<PartitionId>,
+        /// New timestamp bindings for the source
+        timestamp_bindings: Vec<TimestampSourceUpdate>,
     },
     /// Drop all timestamping info for a source
     DropSourceTimestamping {
@@ -770,10 +772,17 @@ where
                     self.reported_frontiers.insert(id, Antichain::from_elem(0));
                 }
             }
-            SequencedCommand::AdvanceSourceTimestamp { id, update } => {
+            SequencedCommand::AdvanceSourceTimestamp {
+                id,
+                partitions,
+                timestamp_bindings,
+            } => {
                 if let Some(history) = self.render_state.ts_histories.get_mut(&id) {
-                    for update in update {
-                        match update {
+                    for pid in partitions {
+                        history.add_partition(pid);
+                    }
+                    for timestamp_binding in timestamp_bindings {
+                        match timestamp_binding {
                             TimestampSourceUpdate {
                                 pid,
                                 timestamp,
@@ -791,7 +800,6 @@ where
                                     "Adding binding from coordinator: {}, {}, {}",
                                     pid, timestamp, offset
                                 );
-                                history.add_partition(pid.clone());
                                 history.add_binding(pid, timestamp, offset + 1);
                             }
                         };

@@ -74,7 +74,7 @@ use dataflow_types::{
 use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr,
+    OptimizedMirRelationExpr, PartitionId,
 };
 use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
 use ore::str::StrExt;
@@ -124,7 +124,7 @@ mod prometheus;
 pub enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
-    AdvanceSourceTimestamp(AdvanceSourceTimestamp),
+    AdvanceSourceTimestamp(SourceUpdate),
     CompactTimestampBindings(GlobalId),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
@@ -133,9 +133,10 @@ pub enum Message {
 }
 
 #[derive(Debug)]
-pub struct AdvanceSourceTimestamp {
+pub struct SourceUpdate {
     pub id: GlobalId,
-    pub update: Vec<TimestampSourceUpdate>,
+    pub partitions: Vec<PartitionId>,
+    pub timestamp_bindings: Vec<TimestampSourceUpdate>,
 }
 
 #[derive(Derivative)]
@@ -661,9 +662,17 @@ impl Coordinator {
 
     async fn message_advance_source_timestamp(
         &mut self,
-        AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
+        SourceUpdate {
+            id,
+            partitions,
+            timestamp_bindings,
+        }: SourceUpdate,
     ) {
-        self.broadcast(SequencedCommand::AdvanceSourceTimestamp { id, update });
+        self.broadcast(SequencedCommand::AdvanceSourceTimestamp {
+            id,
+            partitions,
+            timestamp_bindings,
+        });
     }
 
     async fn message_command(&mut self, cmd: Command) {

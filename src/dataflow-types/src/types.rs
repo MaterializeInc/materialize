@@ -859,6 +859,32 @@ impl ExternalSourceConnector {
     }
 }
 
+/// This name is horrible and should maybe be `DiscoverSourceFrontier`, but `SourceReader` is also
+/// called `SourceReader` and not `ReadSource`...
+pub trait SourceFrontierDiscoverer {
+    type SourceTimestamp;
+
+    /// Returns the timestamp frontier of source data that is available for reading. Any data that
+    /// becomes newly available in the future will be beyond this frontier.
+    fn get_available_frontier(&self) -> Result<Antichain<Self::SourceTimestamp>, anyhow::Error>;
+
+    /// Returns the [`GlobalId`] of this source.
+    fn id(&self) -> GlobalId;
+
+    /// Returns the preferred refresh interval. It possible, [`get_available_frontier`] will be
+    /// called based on this.
+    fn update_interval(&self) -> Duration;
+}
+
+/// This name is horrible and should maybe be `DiscoverSourcePartitions`, but `SourceReader` is also
+/// called `SourceReader` anot not `ReadSource`...
+pub trait SourcePartitionDiscoverer {
+    type Partition;
+
+    /// Returns the partitions that are available for this source.
+    fn get_available_partitions(&self) -> Result<Vec<Self::Partition>, anyhow::Error>;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Consistency {
     BringYourOwn(BringYourOwn),
