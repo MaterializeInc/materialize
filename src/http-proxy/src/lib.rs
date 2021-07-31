@@ -1,18 +1,52 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![deny(missing_docs)]
+#![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
-//! HTTP utilities.
+//! [<img src="https://materialize.com/wp-content/uploads/2020/01/materialize_logo_primary.png" width=180 align=right>](https://materialize.com)
+//!
+//! HTTP proxy adapters.
 //!
 //! This crate constructs HTTP clients that respect the system's proxy
 //! configuration.
+//!
+//! # Maintainership
+//!
+//! This crate is developed as part of [Materialize], the streaming data
+//! warehouse. Contributions are encouraged:
+//!
+//! * [View source code](https://github.com/MaterializeInc/materialize/tree/main/src/http-proxy)
+//! * [Report an issue](https://github.com/MaterializeInc/materialize/issues/new/choose)
+//! * [Submit a pull request](https://github.com/MaterializeInc/materialize/compare)
+//!
+//! # Features
+//!
+//! All features are disabled by default. You will likely want to enable at
+//! least one of the following features depending on the HTTP client library you
+//! use:
+//!
+//! * The **`hyper`** feature enables the proxy adapters for use with the
+//!   [`hyper` crate](https://docs.rs/hyper).
+//!
+//! * The **`reqwest`** feature enables the proxy adapters for use with the
+//!   [`reqwest` crate](https://docs.rs/reqwest).
+//!
+//! Note that `reqwest` by default will perform its own determination of the
+//! system proxy configuration, but its support for `no_proxy` is not as
+//! complete as the implementation in this crate.
 //!
 //! # System proxy configuration
 //!
@@ -23,10 +57,10 @@
 //! many other HTTP clients.
 //!
 //! With the exception of `http_proxy`, environment variables may be specified
-//! in all lowercase, as written above, or in all uppercase (e.g, `HTTPS_PROXY`)
-//! (http_proxy` is accepted in lowercase only because the variable `HTTP_PROXY`
-//! can be controlled by attackers in CGI environments, as in
-//! [golang/go#16405].) If an environment variable is specified in both
+//! in all lowercase, as written above, or in all uppercase (e.g,
+//! `HTTPS_PROXY`). `http_proxy` is accepted in lowercase only because the
+//! variable `HTTP_PROXY` can be controlled by attackers in CGI environments, as
+//! in [golang/go#16405]. If an environment variable is specified in both
 //! lowercase and uppercase, the lowercase variable takes precedence.
 //!
 //! ## Proxy selection
@@ -80,8 +114,16 @@
 //!
 //! [golang/go#16405]: https://github.com/golang/go/issues/16405
 //! [gitlab-blog]: https://about.gitlab.com/blog/2021/01/27/we-need-to-talk-no-proxy/
+//! [Materialize]: https://materialize.com
+//! [repo]: https://github.com/MaterializeInc/materialize
 
+#[cfg(any(feature = "hyper", feature = "reqwest"))]
 mod proxy;
 
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "hyper")))]
+#[cfg(feature = "hyper")]
 pub mod hyper;
+
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "reqwest")))]
+#[cfg(feature = "reqwest")]
 pub mod reqwest;

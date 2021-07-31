@@ -16,7 +16,7 @@ members = [
     "src/dataflow",
     "src/expr",
     "src/expr-test-util",
-    "src/http-util",
+    "src/http-proxy",
     "src/interchange",
     "src/kafka-util",
     "src/lowertest",

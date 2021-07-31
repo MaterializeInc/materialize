@@ -7,8 +7,8 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.42"
-http-util = { path = "../http-util" }
 log = "0.4.13"
+mz-http-proxy = { path = "../http-proxy", features = ["hyper"] }
 rusoto_core = "0.47.0"
 rusoto_credential = "0.47.0"
 rusoto_kinesis = "0.47.0"

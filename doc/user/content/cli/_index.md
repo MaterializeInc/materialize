@@ -362,8 +362,8 @@ variables specify a proxy to use for outgoing HTTP and HTTPS traffic. There is
 no precise specification of how these variables behave, but Materialize's
 behavior generally matches the behavior of other HTTP clients.
 
-For precise details of Materialize's behavior, consult our
-[developer docs](https://dev.materialize.com/api/rust/http_util/index.html#System_proxy_configuration).
+For precise details of Materialize's behavior, consult the documentation of
+the [`mz_http_proxy`](https://docs.rs/mz_http_proxy) crate.
 
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view

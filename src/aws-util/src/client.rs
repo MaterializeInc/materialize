@@ -25,9 +25,9 @@ use rusoto_sqs::SqsClient;
 use crate::aws::ConnectInfo;
 
 /// Gets an [`HttpClient`] that respects the system proxy configuration.
-pub(crate) fn http() -> Result<HttpClient<http_util::hyper::Connector>, anyhow::Error> {
+pub(crate) fn http() -> Result<HttpClient<mz_http_proxy::hyper::Connector>, anyhow::Error> {
     Ok(HttpClient::from_connector(
-        http_util::hyper::connector().map_err(|e| anyhow!(e))?,
+        mz_http_proxy::hyper::connector().map_err(|e| anyhow!(e))?,
     ))
 }
 
