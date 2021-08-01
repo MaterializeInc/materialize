@@ -29,7 +29,7 @@ name = "materialized-unstable"
 [dependencies]
 anyhow = "1.0.42"
 askama = { version = "0.10.5", features = ["serde-json"] }
-async-trait = "0.1.50"
+async-trait = "0.1.51"
 atty = "0.2.14"
 backtrace = "0.3.60"
 build-info = { path = "../build-info" }

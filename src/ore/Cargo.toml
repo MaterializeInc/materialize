@@ -20,7 +20,7 @@ test = ["tracing-subscriber"]
 # The only exception to the above is the `either` crate, which itself has zero
 # dependencies and is widely considered to be basically part of the stdlib.
 [dependencies]
-async-trait = { version = "0.1.50", optional = true }
+async-trait = { version = "0.1.51", optional = true }
 bytes = { version = "1.0.1", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
 either = "1.6.1"
