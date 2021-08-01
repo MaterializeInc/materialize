@@ -32,13 +32,15 @@ pub struct Id(pub u64);
 ///
 /// Invariants:
 /// - The updates field is non-empty.
-#[derive(Debug, Abomonation)]
-pub struct BufferEntry<K, V> {
+#[derive(Clone, Debug, Abomonation)]
+pub enum BufferEntry<K, V> {
     /// Pairs of stream id and the updates themselves.
     //
     // We could require that each Id is included at most once, but at the
     // moment, there's no particular reason we'd need to.
-    pub updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+    Write(Vec<(Id, Vec<((K, V), u64, isize)>)>),
+    /// A set of stream ids, and the timestamp those ids should be sealed up to.
+    Seal(Vec<Id>, u64),
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -264,8 +266,14 @@ impl<K, V> BufferEntry<K, V> {
     pub fn validate(&self) -> Result<(), Error> {
         // TODO: It's unclear if this invariant is useful/harmful. Feel free to
         // remove it if it ends up not making sense.
-        if self.updates.is_empty() {
-            return Err("updates is empty".into());
+        match self {
+            BufferEntry::Write(updates) => {
+                if updates.is_empty() {
+                    return Err("updates is empty".into());
+                }
+            }
+            // WIP: TODO: Invariants for the other commands
+            BufferEntry::Seal(_, _) => (),
         }
         Ok(())
     }
@@ -723,13 +731,11 @@ mod tests {
     #[test]
     fn buffer_entry_validate() {
         // Normal case
-        let b = BufferEntry {
-            updates: vec![(Id(0), vec![update_with_key(0, "0")])],
-        };
+        let b = BufferEntry::Write(vec![(Id(0), vec![update_with_key(0, "0")])]);
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BufferEntry<String, String> = BufferEntry { updates: vec![] };
+        let b: BufferEntry<String, String> = BufferEntry::Write(vec![]);
         assert_eq!(b.validate(), Err("updates is empty".into()));
     }
 

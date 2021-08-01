@@ -275,15 +275,20 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             }
         }
 
-        let entry = BufferEntry { updates };
+        let entry = BufferEntry::Write(updates);
         let mut entry_bytes = Vec::new();
         unsafe { abomonation::encode(&entry, &mut entry_bytes) }
             .expect("write to Vec is infallible");
         let seqno = self.buf.write_sync(entry_bytes)?;
-        for (id, updates) in entry.updates.iter() {
-            if let Some(listen_fns) = self.listeners.get(id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
+
+        // WIP: TODO: this is very silly is there a better way to pull the list
+        // of updates out of the entry?
+        if let BufferEntry::Write(updates) = entry {
+            for (id, updates) in updates.iter() {
+                if let Some(listen_fns) = self.listeners.get(id) {
+                    for listen_fn in listen_fns.iter() {
+                        listen_fn(ListenEvent::Records(updates.clone()));
+                    }
                 }
             }
         }
@@ -300,14 +305,21 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             if !remaining.is_empty() {
                 return Err(format!("invalid buffer entry").into());
             }
-            for (id, updates) in entry.updates.iter() {
-                // iter and cloned instead of append because I don't have a mental
-                // model of what's safe with abomonation.
-                updates_by_id.entry(*id).or_default().extend(
-                    updates.iter().map(|((key, val), ts, diff)| {
-                        (seqno, (key.clone(), val.clone()), *ts, *diff)
-                    }),
-                );
+
+            match entry {
+                BufferEntry::Write(updates) => {
+                    for (id, updates) in updates.iter() {
+                        // iter and cloned instead of append because I don't have a mental
+                        // model of what's safe with abomonation.
+                        updates_by_id
+                            .entry(*id)
+                            .or_default()
+                            .extend(updates.iter().map(|((key, val), ts, diff)| {
+                                (seqno, (key.clone(), val.clone()), *ts, *diff)
+                            }));
+                    }
+                }
+                BufferEntry::Seal(_, _) => unimplemented!(),
             }
 
             Ok(())
@@ -587,11 +599,18 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                     let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
                         unsafe { Abomonated::new(buf.to_owned()) }
                             .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
-                    for (entry_id, updates) in entry.updates.iter() {
-                        if *entry_id != id || !buf_lower.less_equal(&seqno) {
-                            continue;
+                    // WIP: TODO: is this the right way to work with Abomonated?
+                    let entry: BufferEntry<K, V> = (*entry).clone();
+                    match entry {
+                        BufferEntry::Write(updates) => {
+                            for (entry_id, updates) in updates.into_iter() {
+                                if entry_id != id || !buf_lower.less_equal(&seqno) {
+                                    continue;
+                                }
+                                data.extend(updates.into_iter());
+                            }
                         }
-                        data.extend(updates.iter().cloned());
+                        BufferEntry::Seal(_, _) => (),
                     }
                     Ok(())
                 })?
