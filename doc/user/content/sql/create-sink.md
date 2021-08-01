@@ -314,7 +314,12 @@ FORMAT AVRO USING
 #### With topic reuse enabled after restart
 
 ```sql
-CREATE SINK my_sink FROM data_schema_inline INTO KAFKA BROKER 'localhost:9092' TOPIC 'my_one_and_only_sink_topic' WITH (reuse_topic=true, consistency_topic='my_consistency_topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+CREATE SINK quotes_sink
+FROM quotes
+INTO KAFKA BROKER 'localhost:9092' TOPIC 'quotes-eo-sink'
+WITH (reuse_topic=true, consistency_topic='quotes-eo-sink-consistency')
+FORMAT AVRO USING
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
 #### From materialized views
