@@ -322,7 +322,7 @@ impl MemRegistry {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, buffer_impl_test};
+    use crate::storage::tests::{blob_impl_test, buffer_impl_test, buffer_shared_test};
 
     use super::*;
 
@@ -330,6 +330,12 @@ mod tests {
     fn mem_buffer() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
         buffer_impl_test(move |path| registry.buffer(path, "buffer_impl_test"))
+    }
+
+    #[test]
+    fn mem_buffer_shared() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+        buffer_shared_test(move |path| registry.buffer(path, "buffer_shared_test"))
     }
 
     #[test]

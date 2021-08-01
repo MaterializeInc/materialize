@@ -361,7 +361,7 @@ impl Blob for FileBlob {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, buffer_impl_test};
+    use crate::storage::tests::{blob_impl_test, buffer_impl_test, buffer_shared_test};
 
     use super::*;
 
@@ -380,6 +380,15 @@ mod tests {
         buffer_impl_test(move |idx| {
             let instance_dir = temp_dir.path().join(idx);
             FileBuffer::new(instance_dir, &"file_buffer_test")
+        })
+    }
+
+    #[test]
+    fn file_buffer_shared() -> Result<(), Error> {
+        let temp_dir = tempfile::tempdir()?;
+        buffer_shared_test(move |idx| {
+            let instance_dir = temp_dir.path().join(idx);
+            FileBuffer::new(instance_dir, &"file_buffer_shared")
         })
     }
 }
