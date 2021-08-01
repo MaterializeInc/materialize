@@ -32,7 +32,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
-use crate::storage::{Blob, Buffer, SeqNo};
+use crate::storage::{Blob, Buffer, BufferRead, BufferWrite, SeqNo};
 use crate::Data;
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
@@ -62,13 +62,6 @@ use crate::Data;
 /// - Note that data is transferred from Buffer to BlobFuture in the order it
 ///   was written, but transferred from BlobFuture to Trace in order of its
 ///   *timestamp*.
-///
-/// TODO: We should probably pull the Buffer to be external to this. Then, when
-/// entries are written to the Buffer, also tee them here with the resulting
-/// SeqNo attached. Once the BlobFuture has persisted them, inform the Buffer
-/// that they are no longer needed. This would make them immediately available
-/// for indexed use, instead of the current situation, which is more complicated
-/// to reason about.
 pub struct Indexed<K, V, U: Buffer, L: Blob> {
     next_stream_id: Id,
     futures_seqno_upper: SeqNo,
@@ -82,6 +75,420 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
     futures: BTreeMap<Id, BlobFuture<K, V>>,
     traces: BTreeMap<Id, BlobTrace<K, V>>,
     listeners: BTreeMap<Id, Vec<ListenFn<K, V>>>,
+}
+
+struct StreamMeta {
+    id: Id,
+    seal_frontier: u64,
+    since_frontier: u64,
+}
+
+/// TODO documentation
+pub struct IndexedClient<K, V, W: BufferWrite, L: Blob> {
+    ids: BTreeMap<String, StreamMeta>,
+    graveyard: BTreeMap<String, Id>,
+    listeners: BTreeMap<Id, Vec<ListenFn<K, V>>>,
+    next_stream_id: Id,
+    buf_writer: W,
+    blob: BlobCache<K, V, L>,
+}
+
+struct IndexedCore<K, V, R: BufferRead, L: Blob> {
+    next_stream_id: Id,
+    futures_seqno_upper: SeqNo,
+    // This is conceptually a map from `String` -> `Id`, but lookups are rare
+    // and this representation is optimized for the metadata serialization path,
+    // which is less rare.
+    id_mapping: Vec<(String, Id)>,
+    graveyard: Vec<(String, Id)>,
+    buf_reader: R,
+    blob: BlobCache<K, V, L>,
+    futures: BTreeMap<Id, BlobFuture<K, V>>,
+    traces: BTreeMap<Id, BlobTrace<K, V>>,
+}
+
+impl<K: Data, V: Data, W: BufferWrite, L: Blob> IndexedClient<K, V, W, L> {
+    /// Returns a new IndexedClient, initializing IndexedCore with the appropriate data from
+    /// the blob store, and reading out the rest of the metadata from the buffer.
+    /// Spawns IndexedCore to run in a background thread.
+    pub fn new<U: Buffer>(mut buf: U, blob: L) -> Result<Self, Error> {
+        unimplemented!()
+    }
+
+    /// Releases exclusive-writer locks and causes all future commands to error.
+    ///
+    /// Needs to block and wait for IndexedCore to return as well.
+    /// This method is idempotent.
+    pub fn close(&mut self) -> Result<(), Error> {
+        unimplemented!()
+    }
+
+    /// Logically creates, if necessary, a new future and trace with the given external
+    /// stream name, returning the corresponding internal stream id.
+    ///
+    /// This method is idempotent: ids may be registered multiple times.
+    pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
+        unimplemented!()
+    }
+
+    /// Logically removes a stream from the index.
+    ///
+    /// This method is idempotent and may be called multiple times. It returns
+    /// true if the stream was destroyed from this call, and false if it was
+    /// already destroyed.
+    pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
+        unimplemented!()
+    }
+
+    /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
+    /// with the given id.
+    pub fn write_sync(
+        &mut self,
+        updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+    ) -> Result<SeqNo, Error> {
+        unimplemented!()
+    }
+
+    /// Sealing a time advances the "sealed" frontier for an id, which restricts
+    /// what times can later be sealed and written for that id. See
+    /// `sealed_frontier` for details.
+    pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
+        unimplemented!()
+    }
+}
+
+impl<K: Data, V: Data, R: BufferRead, L: Blob> IndexedCore<K, V, R, L> {
+    fn new(mut buf_reader: R, mut blob: BlobCache<K, V, L>) -> Result<Self, Error> {
+        let meta = blob
+            .get_meta()
+            .map_err(|err| {
+                // Indexed is expected to close the buffer and blob it's handed.
+                // Usually that happens when close is called on Indexed itself,
+                // but if there's an error constructing it, we never get to that
+                // point and have to clean up ourselves.
+                //
+                // TODO: Regression test for this.
+                if let Err(err) = buf_reader.close() {
+                    log::warn!("error closing buffer: {}", err);
+                }
+                if let Err(err) = blob.close() {
+                    log::warn!("error closing blob: {}", err);
+                }
+                err
+            })?
+            .unwrap_or_default();
+        let futures = meta
+            .futures
+            .into_iter()
+            .map(|meta| (meta.id, BlobFuture::new(meta)))
+            .collect();
+        let traces = meta
+            .traces
+            .into_iter()
+            .map(|meta| (meta.id, BlobTrace::new(meta)))
+            .collect();
+        let indexed = Self {
+            next_stream_id: meta.next_stream_id,
+            futures_seqno_upper: meta.futures_seqno_upper,
+            id_mapping: meta.id_mapping,
+            graveyard: meta.graveyard,
+            buf_reader,
+            blob,
+            futures,
+            traces,
+        };
+
+        indexed.check_invariants()?;
+        Ok(indexed)
+    }
+
+    /// Sanity check invariants at runtime.
+    fn check_invariants(&self) -> Result<(), Error> {
+        if cfg!(any(test, debug)) {
+            let stored_meta = self.blob.get_meta()?.unwrap_or_default();
+            let local_meta = self.serialize_meta();
+
+            assert_eq!(stored_meta, local_meta);
+            local_meta.validate()?;
+        }
+
+        Ok(())
+    }
+
+    fn serialize_meta(&self) -> BlobMeta {
+        BlobMeta {
+            next_stream_id: self.next_stream_id,
+            futures_seqno_upper: self.futures_seqno_upper,
+            id_mapping: self.id_mapping.clone(),
+            graveyard: self.graveyard.clone(),
+            futures: self
+                .futures
+                .iter()
+                .map(|(_, future)| future.meta())
+                .collect(),
+            traces: self.traces.iter().map(|(_, trace)| trace.meta()).collect(),
+        }
+    }
+
+    /// Drains writes from the buffer into the future and does any necessary
+    /// resulting compaction work.
+    ///
+    /// In production, step should just be called in a loop (probably with some
+    /// smarts about waiting to call it only after there have been some writes),
+    /// but it's exposed this way so we can write deterministic tests.
+    pub fn step(&mut self) -> Result<(), Error> {
+        self.check_invariants()?;
+        self.drain_buf()?;
+        self.drain_future()
+        // TODO: Incrementally compact future and trace.
+    }
+
+    /// Atomically moves all writes currently in the buffer into the future.
+    fn drain_buf(&mut self) -> Result<(), Error> {
+        let mut buffer_entries = vec![];
+        let desc = self.buf_reader.snapshot(|seqno, buf| {
+            if seqno < self.futures_seqno_upper {
+                return Ok(());
+            }
+            let mut buf = buf.to_vec();
+            let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry<K, V>>(&mut buf) }
+                .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
+            if !remaining.is_empty() {
+                return Err(format!("invalid buffer entry").into());
+            }
+            buffer_entries.push((seqno, entry.clone()));
+
+            Ok(())
+        })?;
+
+        let mut start = None;
+        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = HashMap::new();
+        for (seqno, entry) in buffer_entries {
+            match entry {
+                BufferEntry::Write(updates) => {
+                    if start.is_none() {
+                        start = Some(seqno);
+                    }
+
+                    for (id, updates) in updates.iter() {
+                        // iter and cloned instead of append because I don't have a mental
+                        // model of what's safe with abomonation.
+                        updates_by_id
+                            .entry(*id)
+                            .or_default()
+                            .extend(updates.iter().map(|((key, val), ts, diff)| {
+                                (seqno, (key.clone(), val.clone()), *ts, *diff)
+                            }));
+                    }
+                }
+                other => {
+                    if let Some(start_val) = &mut start {
+                        self.drain_updates(&mut updates_by_id, &(*start_val..SeqNo(seqno.0)))?;
+                        start = None;
+                    }
+
+                    self.handle_command(other, seqno)?;
+                }
+            }
+        }
+
+        if let Some(start) = start {
+            // Need to push down the final set of writes
+            self.drain_updates(&mut updates_by_id, &(start..desc.end))?;
+        }
+
+        Ok(())
+    }
+
+    fn drain_updates(
+        &mut self,
+        updates_by_id: &mut HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>>,
+        desc: &Range<SeqNo>,
+    ) -> Result<(), Error> {
+        for (id, updates) in updates_by_id.drain() {
+            let future = self
+                .futures
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            // We maintain the invariant that futures_seqno_upper is >= every
+            // future's seqno_upper and that there is nothing for that future in
+            // [future.seqno_upper, self.futures_seqno_upper). Use this to make the
+            // seqnos of all the future batches line up.
+            debug_assert_eq!(desc.start, self.futures_seqno_upper);
+            let new_start = future.seqno_upper()[0];
+            debug_assert!(new_start <= desc.start);
+            let mut desc = desc.clone();
+            desc.start = new_start;
+
+            self.drain_updates_inner(id, updates, &desc)?;
+        }
+        self.futures_seqno_upper = desc.end;
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())?;
+
+        self.buf_reader.allow_truncation(desc.end)
+    }
+
+    /// Construct a new [BlobFutureBatch] out of the provided `updates` and add
+    /// it to the future for `id`.
+    ///
+    /// The caller is responsible for updating META after they've finished
+    /// updating futures.
+    fn drain_updates_inner(
+        &mut self,
+        id: Id,
+        mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
+        desc: &Range<SeqNo>,
+    ) -> Result<(), Error> {
+        if cfg!(any(debug, test)) {
+            // Sanity check that all received sequence numbers fall within the stated
+            // [lower, upper) range
+            for (seqno, _, _, _) in &updates {
+                if seqno < &desc.start || seqno >= &desc.end {
+                    return Err(Error::from(format!(
+                            "invalid sequence number in snapshot {:?}, expected value greater than or equal to {:?} and less than {:?}",
+                                                   seqno, desc.start, desc.end)));
+                }
+            }
+        }
+
+        let mut updates: Vec<_> = updates
+            .drain(..)
+            .map(|(_, (k, v), t, d)| (t, (k, v), d))
+            .collect();
+        // Future batches are required to be sorted and consolidated by ((ts, (k, v)).
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        // Reshape updates back to the desired type.
+        let updates: Vec<_> = updates
+            .drain(..)
+            .map(|(t, (k, v), d)| ((k, v), t, d))
+            .collect();
+        let batch = BlobFutureBatch {
+            desc: Description::new(
+                Antichain::from_elem(desc.start),
+                Antichain::from_elem(desc.end),
+                // We never compact BlobFuture, so since is always the minimum.
+                Antichain::from_elem(SeqNo(0)),
+            ),
+            updates,
+        };
+        self.append_future(id, batch)?;
+
+        Ok(())
+    }
+
+    /// Appends the given `batch` to the future for `id`, writing the data into
+    /// blob storage.
+    ///
+    /// The caller is responsible for updating META after they've finished
+    /// updating futures.
+    fn append_future(&mut self, id: Id, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
+        let future = self
+            .futures
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        future.append(batch, &mut self.blob)
+    }
+
+    /// Move data at times that have been sealed from future to
+    /// trace.
+    fn drain_future(&mut self) -> Result<(), Error> {
+        for (id, trace) in self.traces.iter_mut() {
+            // If this future is already properly sealed then we don't need
+            // to do anything.
+            let seal = trace.seal();
+            let trace_upper = trace.ts_upper();
+            if seal == trace_upper {
+                continue;
+            }
+
+            let future = self
+                .futures
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            let desc = Description::new(trace_upper, seal, trace.since());
+            if PartialOrder::less_equal(desc.upper(), desc.lower()) {
+                return Err(format!("invalid batch bounds: {:?}", desc).into());
+            }
+
+            // Move a batch of data from future into trace by reading a
+            // snapshot from future...
+            let mut updates = Vec::new();
+            {
+                let mut snap =
+                    future.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
+                while snap.read(&mut updates) {}
+            }
+
+            // Trace batches are required to be sorted and consolidated by ((k, v), t)
+            differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+            // ...and atomically swapping that snapshot's data into trace.
+            let batch = BlobTraceBatch { desc, updates };
+            // TODO: lifetime issues
+            // I think this is all worth moving into drain_future_inner
+            //self.append_trace(*id, batch)?;
+            let new_future_ts_lower = batch.desc.upper().clone();
+            trace.append(batch, &mut self.blob)?;
+            future.truncate(new_future_ts_lower)?;
+        }
+
+        // TODO: This is a good point to compact future. The data that's been
+        // moved is still there but now irrelevant. It may also be a good time
+        // to compact trace.
+
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())?;
+        Ok(())
+    }
+
+    /// Handle the receipt of a command (e.g. seal / allow compaction) from the Buffer.
+    fn handle_command(&mut self, command: BufferEntry<K, V>, seqno: SeqNo) -> Result<(), Error> {
+        self.check_invariants()?;
+        match command {
+            BufferEntry::Register(id, name) => {
+                if self.graveyard.iter().any(|(s, _)| s == &name) {
+                    return Err(Error::from(format!(
+                        "invalid registration: stream {} already destroyed",
+                        name
+                    )));
+                }
+                let registered = self.id_mapping.iter().find(|(s, _)| s == &name);
+                if registered.is_none() {
+                    debug_assert_eq!(id, self.next_stream_id);
+                    self.id_mapping.push((name.to_owned(), id));
+                    self.next_stream_id = Id(id.0 + 1);
+                    self.futures
+                        .insert(id, BlobFuture::new(BlobFutureMeta::new(id)));
+                    self.traces
+                        .insert(id, BlobTrace::new(BlobTraceMeta::new(id)));
+                }
+            }
+            BufferEntry::Seal(ids, ts_upper) => {
+                for id in ids.into_iter() {
+                    let trace = self
+                        .traces
+                        .get_mut(&id)
+                        .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+                    trace.update_seal(ts_upper)?;
+                }
+            }
+            BufferEntry::Write(_) => unreachable!(),
+        }
+
+        self.futures_seqno_upper = seqno;
+        self.blob.set_meta(self.serialize_meta())
+    }
 }
 
 impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
@@ -319,7 +726,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                             }));
                     }
                 }
-                BufferEntry::Seal(_, _) => unimplemented!(),
+                BufferEntry::Seal(_, _) | BufferEntry::Register(_, _) => unimplemented!(),
             }
 
             Ok(())
@@ -610,7 +1017,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                                 data.extend(updates.into_iter());
                             }
                         }
-                        BufferEntry::Seal(_, _) => (),
+                        BufferEntry::Seal(_, _) | BufferEntry::Register(_, _) => (),
                     }
                     Ok(())
                 })?

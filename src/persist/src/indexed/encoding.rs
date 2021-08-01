@@ -41,6 +41,8 @@ pub enum BufferEntry<K, V> {
     Write(Vec<(Id, Vec<((K, V), u64, isize)>)>),
     /// A set of stream ids, and the timestamp those ids should be sealed up to.
     Seal(Vec<Id>, u64),
+    /// Register a new stream.
+    Register(Id, String),
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -273,7 +275,7 @@ impl<K, V> BufferEntry<K, V> {
                 }
             }
             // WIP: TODO: Invariants for the other commands
-            BufferEntry::Seal(_, _) => (),
+            BufferEntry::Seal(_, _) | BufferEntry::Register(_, _) => (),
         }
         Ok(())
     }
