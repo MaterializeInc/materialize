@@ -19,6 +19,7 @@ pub mod trace;
 
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
+use std::thread::{self, JoinHandle};
 
 use abomonation::abomonated::Abomonated;
 use differential_dataflow::trace::Description;
@@ -32,7 +33,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
-use crate::storage::{Blob, Buffer, BufferRead, BufferWrite, SeqNo};
+use crate::storage::{Blob, Buffer, BufferHandle, BufferRead, BufferShared, BufferWrite, SeqNo};
 use crate::Data;
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
@@ -77,20 +78,19 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
     listeners: BTreeMap<Id, Vec<ListenFn<K, V>>>,
 }
 
-struct StreamMeta {
-    id: Id,
-    seal_frontier: u64,
-    since_frontier: u64,
-}
-
 /// TODO documentation
-pub struct IndexedClient<K, V, W: BufferWrite, L: Blob> {
-    ids: BTreeMap<String, StreamMeta>,
+/// TODO: I absolutely do not understand why I can't express this in terms
+/// of BufferWrite.
+pub struct IndexedClient<K, V, U: Buffer, L: Blob> {
+    ids: BTreeMap<String, Id>,
     graveyard: BTreeMap<String, Id>,
+    seal_frontiers: BTreeMap<Id, u64>,
+    since_frontiers: BTreeMap<Id, u64>,
     listeners: BTreeMap<Id, Vec<ListenFn<K, V>>>,
     next_stream_id: Id,
-    buf_writer: W,
+    buf_writer: BufferHandle<U>,
     blob: BlobCache<K, V, L>,
+    handle: Option<JoinHandle<()>>,
 }
 
 struct IndexedCore<K, V, R: BufferRead, L: Blob> {
@@ -107,12 +107,53 @@ struct IndexedCore<K, V, R: BufferRead, L: Blob> {
     traces: BTreeMap<Id, BlobTrace<K, V>>,
 }
 
-impl<K: Data, V: Data, W: BufferWrite, L: Blob> IndexedClient<K, V, W, L> {
+impl<K, V, U, L> IndexedClient<K, V, U, L>
+where
+    K: Data + Send + Sync + 'static,
+    V: Data + Send + Sync + 'static,
+    U: Buffer + Send + 'static,
+    L: Blob + Send + 'static,
+{
     /// Returns a new IndexedClient, initializing IndexedCore with the appropriate data from
     /// the blob store, and reading out the rest of the metadata from the buffer.
     /// Spawns IndexedCore to run in a background thread.
-    pub fn new<U: Buffer>(mut buf: U, blob: L) -> Result<Self, Error> {
-        unimplemented!()
+    pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
+        let (buf_reader, buf_writer) = buf.read_write()?;
+        let blob = BlobCache::new(blob);
+
+        let mut core = IndexedCore::new(buf_reader, blob.clone())?;
+        // Hydrate the core with any remaining data from buffer left
+        // behind from last startup.
+        core.drain_buf()?;
+
+        let meta = core.serialize_meta();
+        let core_f = move || {
+            while core.work() {}
+        };
+
+        let handle = thread::Builder::new()
+            .name("persist-indexed-core".to_string())
+            .spawn(core_f)?;
+
+        Ok(IndexedClient {
+            ids: meta.id_mapping.iter().cloned().collect(),
+            graveyard: meta.graveyard.iter().cloned().collect(),
+            seal_frontiers: meta
+                .traces
+                .iter()
+                .map(|meta| (meta.id, meta.seal[0]))
+                .collect(),
+            since_frontiers: meta
+                .traces
+                .iter()
+                .map(|meta| (meta.id, meta.since[0]))
+                .collect(),
+            listeners: BTreeMap::new(),
+            next_stream_id: meta.next_stream_id,
+            buf_writer,
+            blob,
+            handle: Some(handle),
+        })
     }
 
     /// Releases exclusive-writer locks and causes all future commands to error.
@@ -128,7 +169,31 @@ impl<K: Data, V: Data, W: BufferWrite, L: Blob> IndexedClient<K, V, W, L> {
     ///
     /// This method is idempotent: ids may be registered multiple times.
     pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
-        unimplemented!()
+        if self.graveyard.contains_key(id_str) {
+            return Err(Error::from(format!(
+                "invalid registration: stream {} already destroyed",
+                id_str
+            )));
+        }
+
+        let id = match self.ids.get(id_str) {
+            Some(id) => *id,
+            None => {
+                let id = self.next_stream_id;
+                self.ids.insert(id_str.to_string(), id);
+                self.since_frontiers.insert(id, 0);
+                self.seal_frontiers.insert(id, 0);
+                self.next_stream_id = Id(id.0 + 1);
+                let entry: BufferEntry<K, V> = BufferEntry::Register(id, id_str.to_string());
+                let mut entry_bytes = Vec::new();
+                unsafe { abomonation::encode(&entry, &mut entry_bytes) }
+                    .expect("write to Vec is infallible");
+                self.buf_writer.write_sync(entry_bytes)?;
+                id
+            }
+        };
+
+        Ok(id)
     }
 
     /// Logically removes a stream from the index.
@@ -146,18 +211,91 @@ impl<K: Data, V: Data, W: BufferWrite, L: Blob> IndexedClient<K, V, W, L> {
         &mut self,
         updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
     ) -> Result<SeqNo, Error> {
-        unimplemented!()
+        for (id, updates) in updates.iter() {
+            match self.seal_frontiers.get(id) {
+                Some(seal_frontier) => {
+                    for update in updates.iter() {
+                        if update.1 <= *seal_frontier {
+                            return Err(format!(
+                                "update for {:?} with time {} before sealed frontier: {:?}",
+                                id, update.1, seal_frontier,
+                            )
+                            .into());
+                        }
+                    }
+                }
+                None => {
+                    return Err(format!("invalid write to id: {:?} that doesn't exist.", id).into())
+                }
+            }
+        }
+
+        let entry = BufferEntry::Write(updates);
+        let mut entry_bytes = Vec::new();
+        unsafe { abomonation::encode(&entry, &mut entry_bytes) }
+            .expect("write to Vec is infallible");
+        let seqno = self.buf_writer.write_sync(entry_bytes)?;
+
+        // WIP: TODO: this is very silly is there a better way to pull the list
+        // of updates out of the entry?
+        if let BufferEntry::Write(updates) = entry {
+            for (id, updates) in updates.iter() {
+                if let Some(listen_fns) = self.listeners.get(id) {
+                    for listen_fn in listen_fns.iter() {
+                        listen_fn(ListenEvent::Records(updates.clone()));
+                    }
+                }
+            }
+        }
+        Ok(seqno)
     }
 
     /// Sealing a time advances the "sealed" frontier for an id, which restricts
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
-        unimplemented!()
+        for id in ids.iter() {
+            match self.seal_frontiers.get(id) {
+                Some(frontier) => {
+                    if ts_upper <= *frontier {
+                        return Err(format!("invalid seal for id {:?} not in advance of existing seal frontier {:?}: {:?}",
+                                           id, frontier, ts_upper).into());
+                    }
+                }
+                None => return Err(format!("invalid seal: id {:?} does not exist", id).into()),
+            }
+        }
+
+        // Now that we've established all of the seal's are valid go ahead and write them.
+        for id in ids.iter() {
+            let ret = self.seal_frontiers.insert(*id, ts_upper);
+            debug_assert!(ret.is_some());
+
+            // TODO: does this belong here?
+            if let Some(listen_fns) = self.listeners.get(&id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Sealed(ts_upper));
+                }
+            }
+        }
+
+        let entry: BufferEntry<K, V> = BufferEntry::Seal(ids, ts_upper);
+        let mut entry_bytes = Vec::new();
+        unsafe { abomonation::encode(&entry, &mut entry_bytes) }
+            .expect("write to Vec is infallible");
+        self.buf_writer.write_sync(entry_bytes)?;
+
+        Ok(())
     }
 }
 
-impl<K: Data, V: Data, R: BufferRead, L: Blob> IndexedCore<K, V, R, L> {
+impl<K, V, R, L> IndexedCore<K, V, R, L>
+where
+    K: Data + Send + Sync + 'static,
+    V: Data + Send + Sync + 'static,
+    R: BufferRead + Send + 'static,
+    L: Blob + Send + 'static,
+{
     fn new(mut buf_reader: R, mut blob: BlobCache<K, V, L>) -> Result<Self, Error> {
         let meta = blob
             .get_meta()
@@ -169,7 +307,7 @@ impl<K: Data, V: Data, R: BufferRead, L: Blob> IndexedCore<K, V, R, L> {
                 //
                 // TODO: Regression test for this.
                 if let Err(err) = buf_reader.close() {
-                    log::warn!("error closing buffer: {}", err);
+                    log::warn!("error closing buffer reader: {}", err);
                 }
                 if let Err(err) = blob.close() {
                     log::warn!("error closing blob: {}", err);
@@ -236,11 +374,19 @@ impl<K: Data, V: Data, R: BufferRead, L: Blob> IndexedCore<K, V, R, L> {
     /// In production, step should just be called in a loop (probably with some
     /// smarts about waiting to call it only after there have been some writes),
     /// but it's exposed this way so we can write deterministic tests.
-    pub fn step(&mut self) -> Result<(), Error> {
+    pub fn work(&mut self) -> bool {
+        match self.step() {
+            Ok(ret) => ret,
+            Err(_) => false,
+        }
+    }
+
+    fn step(&mut self) -> Result<bool, Error> {
         self.check_invariants()?;
         self.drain_buf()?;
-        self.drain_future()
+        self.drain_future()?;
         // TODO: Incrementally compact future and trace.
+        Ok(true)
     }
 
     /// Atomically moves all writes currently in the buffer into the future.
@@ -456,22 +602,13 @@ impl<K: Data, V: Data, R: BufferRead, L: Blob> IndexedCore<K, V, R, L> {
         self.check_invariants()?;
         match command {
             BufferEntry::Register(id, name) => {
-                if self.graveyard.iter().any(|(s, _)| s == &name) {
-                    return Err(Error::from(format!(
-                        "invalid registration: stream {} already destroyed",
-                        name
-                    )));
-                }
-                let registered = self.id_mapping.iter().find(|(s, _)| s == &name);
-                if registered.is_none() {
-                    debug_assert_eq!(id, self.next_stream_id);
-                    self.id_mapping.push((name.to_owned(), id));
-                    self.next_stream_id = Id(id.0 + 1);
-                    self.futures
-                        .insert(id, BlobFuture::new(BlobFutureMeta::new(id)));
-                    self.traces
-                        .insert(id, BlobTrace::new(BlobTraceMeta::new(id)));
-                }
+                debug_assert_eq!(id, self.next_stream_id);
+                self.id_mapping.push((name.to_owned(), id));
+                self.next_stream_id = Id(id.0 + 1);
+                self.futures
+                    .insert(id, BlobFuture::new(BlobFutureMeta::new(id)));
+                self.traces
+                    .insert(id, BlobTrace::new(BlobTraceMeta::new(id)));
             }
             BufferEntry::Seal(ids, ts_upper) => {
                 for id in ids.into_iter() {
