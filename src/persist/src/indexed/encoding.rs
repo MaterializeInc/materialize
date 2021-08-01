@@ -126,11 +126,10 @@ pub struct BlobFutureBatchMeta {
 ///
 /// Invariants:
 /// - The batch Descriptions are sorted, non-overlapping, and contiguous.
-/// - The since frontier is either 0 or < the trace's upper (the largest upper
-///   amongst all of the batches).
 /// - Every batch's since frontier is <= the overall trace's since frontier.
 /// - The compaction level of batches is weakly decreasing when iterating from oldest
 ///   to most recent time intervals.
+/// - Every batch's upper is <= the overall trace's seal frontier.
 /// - TODO: key uniqueness invariants?
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobTraceMeta {
@@ -144,6 +143,8 @@ pub struct BlobTraceMeta {
     /// of this frontier. Readers are expected to advance any updates < since to
     /// since.
     pub since: Antichain<u64>,
+    /// Frontier this trace has been sealed up to.
+    pub seal: Antichain<u64>,
     /// The next id used to assign a Blob key for this trace.
     pub next_blob_id: u64,
 }
@@ -432,6 +433,7 @@ impl BlobTraceMeta {
             id,
             batches: Vec::new(),
             since: Antichain::from_elem(Timestamp::minimum()),
+            seal: Antichain::from_elem(Timestamp::minimum()),
             next_blob_id: 0,
         }
     }
@@ -447,23 +449,20 @@ impl BlobTraceMeta {
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
-        let upper = self.ts_upper();
-        let min = Antichain::from_elem(Timestamp::minimum());
-
-        if self.since != min && !PartialOrder::less_than(&self.since, &upper) {
-            return Err(format!(
-                "invalid trace since {:?} at or in advance of trace upper {:?}",
-                self.since, upper
-            )
-            .into());
-        }
-
         let mut prev: Option<&BlobTraceBatchMeta> = None;
         for meta in self.batches.iter() {
             if !PartialOrder::less_equal(meta.desc.since(), &self.since) {
                 return Err(format!(
                     "invalid batch since: {:?} in advance of trace since {:?}",
                     meta.desc, self.since
+                )
+                .into());
+            }
+
+            if !PartialOrder::less_equal(meta.desc.upper(), &self.seal) {
+                return Err(format!(
+                    "invalid batch upper: {:?} in advance of trace seal {:?}",
+                    meta.desc, self.seal,
                 )
                 .into());
             }
@@ -906,6 +905,7 @@ mod tests {
             id: Id(0),
             batches: vec![],
             since: Antichain::from_elem(0),
+            seal: Antichain::from_elem(0),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
@@ -915,6 +915,7 @@ mod tests {
             id: Id(0),
             batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(0),
+            seal: Antichain::from_elem(2),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
@@ -924,6 +925,7 @@ mod tests {
             id: Id(0),
             batches: vec![batch_meta(0, 1), batch_meta(2, 3)],
             since: Antichain::from_elem(0),
+            seal: Antichain::from_elem(3),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [1] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
@@ -933,6 +935,7 @@ mod tests {
             id: Id(0),
             batches: vec![batch_meta(0, 2), batch_meta(1, 3)],
             since: Antichain::from_elem(0),
+            seal: Antichain::from_elem(3),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch sequence: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } } followed by Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
@@ -942,33 +945,17 @@ mod tests {
             id: Id(0),
             batches: vec![batch_meta(0, 1), batch_meta(1, 2)],
             since: Antichain::from_elem(1),
+            seal: Antichain::from_elem(2),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
-
-        // Trace since at nonzero trace upper
-        let b = BlobTraceMeta {
-            id: Id(0),
-            batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
-            since: Antichain::from_elem(3),
-            next_blob_id: 0,
-        };
-        assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [3] } at or in advance of trace upper Antichain { elements: [3] }")));
-
-        // Trace since in advance of nonzero trace upper
-        let b = BlobTraceMeta {
-            id: Id(0),
-            batches: vec![batch_meta(0, 2), batch_meta(2, 3)],
-            since: Antichain::from_elem(4),
-            next_blob_id: 0,
-        };
-        assert_eq!(b.validate(), Err(Error::from("invalid trace since Antichain { elements: [4] } at or in advance of trace upper Antichain { elements: [3] }")));
 
         // Normal case: batch since at or before trace since
         let b = BlobTraceMeta {
             id: Id(0),
             batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 1, 1)],
             since: Antichain::from_elem(1),
+            seal: Antichain::from_elem(2),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
@@ -978,6 +965,7 @@ mod tests {
             id: Id(0),
             batches: vec![batch_meta(0, 1), batch_meta_full(1, 2, 2, 1)],
             since: Antichain::from_elem(1),
+            seal: Antichain::from_elem(2),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Err(Error::from("invalid batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [2] } } in advance of trace since Antichain { elements: [1] }")));
@@ -991,6 +979,7 @@ mod tests {
                 batch_meta_full(2, 3, 0, 1),
             ],
             since: Antichain::from_elem(0),
+            seal: Antichain::from_elem(3),
             next_blob_id: 0,
         };
         assert_eq!(b.validate(), Ok(()));
@@ -1000,6 +989,7 @@ mod tests {
             id: Id(0),
             batches: vec![batch_meta_full(0, 1, 0, 1), batch_meta_full(1, 2, 0, 2)],
             since: Antichain::from_elem(0),
+            seal: Antichain::from_elem(2),
             next_blob_id: 0,
         };
         assert_eq!(
@@ -1212,6 +1202,7 @@ mod tests {
                 id: Id(0),
                 batches: vec![batch_meta(0, 1)],
                 since: Antichain::from_elem(0),
+                seal: Antichain::from_elem(1),
                 next_blob_id: 0,
             }],
             ..Default::default()

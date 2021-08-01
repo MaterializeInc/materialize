@@ -143,12 +143,6 @@ impl Validator {
                     .since_frontier
                     .get(&req.stream)
                     .copied()
-                    .unwrap_or_default()
-            && req.ts
-                < self
-                    .seal_frontier
-                    .get(&req.stream)
-                    .copied()
                     .unwrap_or_default();
         self.check_success(req_id, &res, should_succeed);
         if let Ok(_) = res {

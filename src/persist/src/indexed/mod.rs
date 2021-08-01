@@ -223,7 +223,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// smarts about waiting to call it only after there have been some writes),
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<(), Error> {
-        self.drain_buf()
+        self.drain_buf()?;
+        self.drain_future()
         // TODO: Incrementally compact future.
     }
 
@@ -283,6 +284,14 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
             Ok(())
         })?;
+
+        // If there's nothing in the buffer we can exit early because there's
+        // nothing left to do.
+        if desc.start == desc.end {
+            debug_assert!(updates_by_id.is_empty());
+            debug_assert_eq!(self.futures_seqno_upper, desc.end);
+            return Ok(());
+        }
 
         for (id, updates) in updates_by_id.drain() {
             let future = self
@@ -364,48 +373,24 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         Ok(())
     }
 
-    /// Returns the current "sealed" frontier for an id.
-    ///
-    /// This frontier represents a contract of time such that all updates with a
-    /// time less than it have arrived. This frontier is advanced though the
-    /// `seal` method. Once a time has been sealed for an id, it becomes an
-    /// error to later seal it at an time less than or equal to the sealed
-    /// frontier. It is also an error to write new data with a time less than
-    /// the sealed frontier.
-    pub fn sealed_frontier(&mut self, id: Id) -> Result<Antichain<u64>, Error> {
-        let trace = self
-            .traces
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        Ok(trace.ts_upper())
-    }
+    /// Move data at times that have been sealed from future to
+    /// trace.
+    fn drain_future(&mut self) -> Result<(), Error> {
+        for (id, trace) in self.traces.iter_mut() {
+            // If this future is already properly sealed then we don't need
+            // to do anything.
+            let seal = trace.seal();
+            let trace_upper = trace.ts_upper();
+            if seal == trace_upper {
+                continue;
+            }
 
-    /// Atomically moves all writes in future not in advance of the given
-    /// timestamp into the trace and does any necessary resulting compaction
-    /// work.
-    ///
-    /// Sealing a time advances the "sealed" frontier for an id, which restricts
-    /// what times can later be sealed and written for that id. See
-    /// `sealed_frontier` for details.
-    pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
-        // TODO: Separate the logical work of seal which just disallows future
-        // updates and seals at times <= ts_upper from the physical work of
-        // moving things from the future to the trace. This could let us
-        // amortize the work of doing so across frequent seal calls? All the
-        // physical movement could live in `step`.
-
-        for id in ids.into_iter() {
             let future = self
                 .futures
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-            let trace = self
-                .traces
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
 
-            let batch_upper = Antichain::from_elem(ts_upper);
-            let desc = Description::new(trace.ts_upper(), batch_upper, trace.since());
+            let desc = Description::new(trace_upper, seal, trace.since());
             if PartialOrder::less_equal(desc.upper(), desc.lower()) {
                 return Err(format!("invalid batch bounds: {:?}", desc).into());
             }
@@ -424,8 +409,63 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
-            self.append_trace(id, batch)?;
+            // TODO: lifetime issues
+            // I think this is all worth moving into drain_future_inner
+            //self.append_trace(*id, batch)?;
+            let new_future_ts_lower = batch.desc.upper().clone();
+            trace.append(batch, &mut self.blob)?;
+            future.truncate(new_future_ts_lower)?;
+        }
 
+        // TODO: This is a good point to compact future. The data that's been
+        // moved is still there but now irrelevant. It may also be a good time
+        // to compact trace.
+
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())?;
+        Ok(())
+    }
+
+    /// Returns the current "sealed" frontier for an id.
+    ///
+    /// This frontier represents a contract of time such that all updates with a
+    /// time less than it have arrived. This frontier is advanced though the
+    /// `seal` method. Once a time has been sealed for an id, it becomes an
+    /// error to later seal it at an time less than or equal to the sealed
+    /// frontier. It is also an error to write new data with a time less than
+    /// the sealed frontier.
+    fn sealed_frontier(&mut self, id: Id) -> Result<Antichain<u64>, Error> {
+        let trace = self
+            .traces
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        Ok(trace.seal())
+    }
+
+    /// Atomically moves all writes in future not in advance of the given
+    /// timestamp into the trace and does any necessary resulting compaction
+    /// work.
+    ///
+    /// Sealing a time advances the "sealed" frontier for an id, which restricts
+    /// what times can later be sealed and written for that id. See
+    /// `sealed_frontier` for details.
+    pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
+        // TODO: Separate the logical work of seal which just disallows future
+        // updates and seals at times <= ts_upper from the physical work of
+        // moving things from the future to the trace. This could let us
+        // amortize the work of doing so across frequent seal calls? All the
+        // physical movement could live in `step`.
+
+        for id in ids.into_iter() {
+            let trace = self
+                .traces
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            trace.update_seal(ts_upper)?;
+
+            // TODO: does this belong here?
             if let Some(listen_fns) = self.listeners.get(&id) {
                 for listen_fn in listen_fns.iter() {
                     listen_fn(ListenEvent::Sealed(ts_upper));
@@ -433,10 +473,9 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             }
         }
 
-        // TODO: This is a good point to compact future. The data that's been
-        // moved is still there but now irrelevant. It may also be a good time
-        // to compact trace.
-        Ok(())
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        self.blob.set_meta(self.serialize_meta())
     }
 
     /// Permit compaction of updates at times < since to since.
@@ -475,28 +514,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         future.append(batch, &mut self.blob)
-    }
-
-    /// Appends the given `batch` to the trace for `id`, writing the data into
-    /// blob storage.
-    fn append_trace(&mut self, id: Id, batch: BlobTraceBatch<K, V>) -> Result<(), Error> {
-        let trace = self
-            .traces
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let future = self
-            .futures
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let new_future_ts_lower = batch.desc.upper().clone();
-        trace.append(batch, &mut self.blob)?;
-        future.truncate(new_future_ts_lower)?;
-
-        // Atomically update the meta with both the trace and future changes.
-        //
-        // TODO: Instead of fully overwriting META each time, this should be
-        // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())
     }
 
     fn serialize_meta(&self) -> BlobMeta {
@@ -710,10 +727,11 @@ mod tests {
         assert_eq!(future.read_to_end(), updates);
         assert_eq!(trace.read_to_end(), vec![]);
 
-        // After a seal, the relevant data has moved into the trace part of the
-        // index. Since we haven't sealed all the data, some of it is still in
-        // the future.
+        // After a seal and a step, the relevant data has moved into the trace
+        // part of the index. Since we haven't sealed all the data, some of it
+        // is still in the future.
         i.seal(vec![id], 2)?;
+        i.step()?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
         assert_eq!(buf.read_to_end(), vec![]);
@@ -722,6 +740,7 @@ mod tests {
 
         // All the data has been sealed, so it's now all in the trace.
         i.seal(vec![id], 3)?;
+        i.step()?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
         assert_eq!(buf.read_to_end(), vec![]);
@@ -758,6 +777,7 @@ mod tests {
         // given the data is not ordered by key, so again this should fire a
         // validations error if the sort code doesn't work.
         i.seal(vec![id], 3)?;
+        i.step()?;
         Ok(())
     }
 
@@ -791,6 +811,7 @@ mod tests {
         // within individual future batches this test will fail if trace batch
         // consolidation does not work.
         i.seal(vec![id], 2)?;
+        i.step()?;
 
         Ok(())
     }
