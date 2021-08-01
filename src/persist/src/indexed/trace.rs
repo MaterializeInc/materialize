@@ -79,6 +79,8 @@ pub struct BlobTrace<K, V> {
     since: Antichain<u64>,
     // NB: The Descriptions here are sorted and contiguous half-open intervals
     // `[lower, upper)`.
+    // The frontier the trace has been sealed up to.
+    seal: Antichain<u64>,
     batches: Vec<BlobTraceBatchMeta>,
     _phantom: PhantomData<(K, V)>,
 }
@@ -91,6 +93,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
             id: meta.id,
             next_blob_id: meta.next_blob_id,
             since: meta.since,
+            seal: meta.seal,
             batches: meta.batches,
             _phantom: PhantomData,
         }
@@ -108,17 +111,44 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
         BlobTraceMeta {
             id: self.id,
             since: self.since.clone(),
+            seal: self.seal.clone(),
             batches: self.batches.clone(),
             next_blob_id: self.next_blob_id,
         }
     }
 
-    /// An upper bound on the times of contained updates.
+    /// An upper bound on the times of contained updates in the seal.
+    ///
+    /// While `self.seal` tracks the frontier of times that have been logically been
+    /// closed and are eligible to be moved into the trace, `self.ts_upper()` tracks
+    /// the frontier of times that have actually been physically moved into the trace.
+    /// `self.seal()` is required to manage invariants between commands (e.g. a seal request
+    /// has to be at a time in advance of prior seal requests) whereas `self.ts_upper()`
+    /// is required to manage physical reads and writes to the trace (e.g. to determine
+    /// which times may be added that are not already present.
+    /// Invariant:
+    /// - self.ts_upper() <= self.seal()
     pub fn ts_upper(&self) -> Antichain<u64> {
         match self.batches.last() {
             Some(meta) => meta.desc.upper().clone(),
             None => Antichain::from_elem(Timestamp::minimum()),
         }
+    }
+
+    /// A logical upper bound on the times which may currently be added to the
+    /// trace.
+    pub fn get_seal(&self) -> Antichain<u64> {
+        self.seal.clone()
+    }
+
+    /// Update the seal frontier to `ts`.
+    ///
+    /// This function intentionally does not do any checking to see if ts is
+    /// in advance of the current seal frontier, because we sometimes need to
+    /// use this to revert a seal update in the event of a storage failure.
+    pub fn update_seal(&mut self, ts: u64) {
+        let seal = Antichain::from_elem(ts);
+        self.seal = seal;
     }
 
     /// A lower bound on the time at which updates may have been logically
@@ -256,11 +286,10 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
 
     /// Update the compaction frontier to `since`.
     pub fn allow_compaction(&mut self, since: Antichain<u64>) -> Result<(), Error> {
-        if PartialOrder::less_equal(&self.ts_upper(), &since) {
+        if PartialOrder::less_equal(&self.seal, &since) {
             return Err(Error::from(format!(
-                "invalid compaction at or in advance of trace upper {:?}: {:?}",
-                self.ts_upper(),
-                since,
+                "invalid compaction at or in advance of trace seal {:?}: {:?}",
+                self.seal, since,
             )));
         }
 
@@ -316,6 +345,7 @@ mod tests {
                 level: 1,
             }],
             since: Antichain::from_elem(5),
+            seal: Antichain::from_elem(10),
             next_blob_id: 0,
         });
 
@@ -330,13 +360,13 @@ mod tests {
         assert_eq!(t.allow_compaction(Antichain::from_elem(5)),
             Err(Error::from("invalid compaction less than or equal to trace since Antichain { elements: [6] }: Antichain { elements: [5] }")));
 
-        // Advance since frontier to upper
+        // Advance since frontier to seal
         assert_eq!(t.allow_compaction(Antichain::from_elem(10)),
-            Err(Error::from("invalid compaction at or in advance of trace upper Antichain { elements: [10] }: Antichain { elements: [10] }")));
+            Err(Error::from("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [10] }")));
 
-        // Advance since frontier beyond upper
+        // Advance since frontier beyond seal
         assert_eq!(t.allow_compaction(Antichain::from_elem(11)),
-            Err(Error::from("invalid compaction at or in advance of trace upper Antichain { elements: [10] }: Antichain { elements: [11] }")));
+            Err(Error::from("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [11] }")));
 
         Ok(())
     }
@@ -345,6 +375,7 @@ mod tests {
     fn trace_compact() -> Result<(), Error> {
         let mut blob = BlobCache::new(MemBlob::new("trace_compact"));
         let mut t = BlobTrace::new(BlobTraceMeta::new(Id(0)));
+        t.update_seal(10);
 
         let batch = BlobTraceBatch {
             desc: Description::new(
