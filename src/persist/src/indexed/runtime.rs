@@ -22,7 +22,7 @@ use log;
 
 use crate::error::Error;
 use crate::indexed::encoding::Id;
-use crate::indexed::{Indexed, IndexedSnapshot, ListenFn};
+use crate::indexed::{IndexedClient, IndexedSnapshot, ListenFn};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
 
@@ -52,7 +52,7 @@ where
     U: Buffer + Send + 'static,
     L: Blob + Send + 'static,
 {
-    let indexed = Indexed::new(buf, blob)?;
+    let indexed = IndexedClient::new(buf, blob)?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
     let runtime_f = move || {
@@ -509,11 +509,17 @@ impl<K: Clone, V: Clone> StreamReadHandle<K, V> {
 }
 
 struct RuntimeImpl<K, V, U: Buffer, L: Blob> {
-    indexed: Indexed<K, V, U, L>,
+    indexed: IndexedClient<K, V, U, L>,
     rx: crossbeam_channel::Receiver<Cmd<K, V>>,
 }
 
-impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
+impl<K, V, U, L> RuntimeImpl<K, V, U, L>
+where
+    K: Data + Send + Sync + 'static,
+    V: Data + Send + Sync + 'static,
+    U: Buffer + Send + 'static,
+    L: Blob + Send + 'static,
+{
     /// Synchronously waits for the next command, executes it, and responds.
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
@@ -540,10 +546,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
                 res.send(r);
             }
             Cmd::Write(updates, res) => {
-                let write_res = self.indexed.write_sync(updates);
-                // TODO: Move this to a Cmd::Tick or something.
-                let step_res = self.indexed.step();
-                res.send(step_res.and_then(|_| write_res));
+                let r = self.indexed.write_sync(updates);
+                res.send(r);
             }
             Cmd::Seal(ids, ts, res) => {
                 let r = self.indexed.seal(ids, ts);
