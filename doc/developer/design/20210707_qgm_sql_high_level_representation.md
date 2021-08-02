@@ -296,7 +296,7 @@ All the contexts in the `sibling_context` share the same parent context, ie. the
 
 `quantifiers` contains leaf quantifiers of the join, the ones that are used for name resolution.
 
-A new `NameResoltionContext` is created for each intermediate join within the join tree, which leaves quantifiers
+A new `NameResolutionContext` is created for each intermediate join within the join tree, which leaves quantifiers
 are merged into the context of the parent join when after processing the intermeidate join, unless it is a nested
 join with an alias. In that case, the quantifier that is added in the parent context is the one ranging over
 the sub-join. This distinction is needed to properly support this case:
@@ -393,12 +393,12 @@ the subquery, we go through the chain of parent contexts until we find a symbol 
 
 #### Name resolution of `GROUP BY` queries
 
-Symbols in the `GROUP BY` clause will be resolved as well against the `NameResoltionContext` representing
+Symbols in the `GROUP BY` clause will be resolved as well against the `NameResolutionContext` representing
 the scope exposed by the `FROM` clause, but then lifted through the projection of the `Select` box representing
 the join that feeds the `Grouping` box created for the `GROUP BY` clause.
 
 Symbols in the `HAVING` clause and in the projection of the `GROUP BY` are also resolved against the
-`NameResoltionContext` of the `FROM` clause, but then lifted twice: once through the `Select` box representing
+`NameResolutionContext` of the `FROM` clause, but then lifted twice: once through the `Select` box representing
 the join that feeds the `Grouping` box and then through the `Grouping` box itself (since the projection
 of a `GROUP BY` and the predicates in the `HAVING` clause belong in `Select` box on top of the `Grouping` box).
 
@@ -657,6 +657,7 @@ starting with the core `SelMerge` rule described in the paper.
 
 ## Open questions
 
+* `EXPLAIN RAW PLAN`
 * Duplication in `transform` crate
 
 <!--
