@@ -298,7 +298,9 @@ pub struct FutureSnapshot<K, V> {
     pub ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     pub ts_upper: Antichain<u64>,
-    updates: Vec<Arc<BlobFutureBatch<K, V>>>,
+    /// The updates themselves.
+    /// TODO: WIP: fix visibility.
+    pub updates: Vec<Arc<BlobFutureBatch<K, V>>>,
 }
 
 impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {

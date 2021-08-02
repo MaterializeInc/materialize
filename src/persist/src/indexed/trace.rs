@@ -299,7 +299,9 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
 pub struct TraceSnapshot<K, V> {
     /// An open upper bound on the times of contained updates.
     pub ts_upper: Antichain<u64>,
-    updates: Vec<Arc<BlobTraceBatch<K, V>>>,
+    /// The updates themselves.
+    /// TODO: clean up the visibility.
+    pub updates: Vec<Arc<BlobTraceBatch<K, V>>>,
 }
 
 impl<K: Clone, V: Clone> Snapshot<K, V> for TraceSnapshot<K, V> {

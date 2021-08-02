@@ -89,6 +89,7 @@ pub trait BufferRead {
 
 /// An abstraction over a writer of a shared (SPSC, within the same process)
 /// append-only bytes log that may be persisted to disk.
+/// TODO: perhaps its better to break this out as Buffer and BufferRead?
 pub trait BufferWrite {
     /// Synchronously appends an entry.
     ///
@@ -97,9 +98,18 @@ pub trait BufferWrite {
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error>;
 
     /// Removes all entries with a SeqNo strictly less than an upper bound provided
-    /// by the reader.
-    /// TODO: this may need to return the truncation bound.
-    fn truncate(&mut self) -> Result<(), Error>;
+    /// by the writer, as allowed by the reader.
+    fn truncate(&mut self, upper: SeqNo) -> Result<(), Error>;
+
+    /// Returns a consistent snapshot of all written but not yet truncated
+    /// entries.
+    ///
+    /// - Invariant: all returned entries must have a sequence number within
+    ///   the declared [lower, upper) range of sequence numbers.
+    /// - Invariant: all data needs to be shown in order.
+    fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
+    where
+        F: FnMut(SeqNo, &[u8]) -> Result<(), Error>;
 
     /// Synchronously closes the buffer, releasing exclusive-writer locks and
     /// causing all future commands to error.
@@ -192,12 +202,24 @@ impl<U: Buffer + Sized> BufferWrite for BufferHandle<U> {
         }
     }
 
-    fn truncate(&mut self) -> Result<(), Error> {
-        for upper in self.rx.try_iter() {
-            self.inner.truncate(upper)?;
+    fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
+        for allowed in self.rx.try_iter() {
+            if allowed <= upper {
+                self.inner.truncate(allowed)?;
+            } else {
+                // TODO: WIP: This is a lossy protocol that can drop a notification
+                break;
+            }
         }
 
         Ok(())
+    }
+
+    fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
+    where
+        F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
+    {
+        self.inner.snapshot(logic)
     }
 
     fn close(&mut self) -> Result<bool, Error> {
@@ -379,9 +401,9 @@ pub mod tests {
         // The reader observes the truncation immediately.
         assert_eq!(slurp_reader(&reader)?, sub_entries(1..=1));
         // The writer physically frees the data after a call to `truncate`.
-        writer.truncate()?;
+        writer.truncate(SeqNo(1))?;
         // Consecutive calls to truncate are a no-op
-        writer.truncate()?;
+        writer.truncate(SeqNo(1))?;
 
         // We are not allowed to truncate to places outside the current range.
         assert!(reader.allow_truncation(SeqNo(0)).is_err());
@@ -394,7 +416,7 @@ pub mod tests {
         // Truncate everything.
         reader.allow_truncation(SeqNo(3))?;
         assert!(slurp_reader(&reader)?.is_empty());
-        writer.truncate()?;
+        writer.truncate(SeqNo(3))?;
 
         // Perform one last write before close
         assert_eq!(writer.write_sync(entries[3].clone())?, SeqNo(3));
@@ -404,7 +426,7 @@ pub mod tests {
         assert_eq!(writer.close(), Ok(true));
         assert!(writer.write_sync(entries[1].clone()).is_err());
         reader.allow_truncation(SeqNo(4))?;
-        assert!(writer.truncate().is_err());
+        assert!(writer.truncate(SeqNo(4)).is_err());
         assert_eq!(reader.close(), Ok(true));
         assert!(slurp_reader(&reader).is_err());
         assert!(reader.allow_truncation(SeqNo(3)).is_err());

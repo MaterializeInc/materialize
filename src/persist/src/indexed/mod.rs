@@ -90,6 +90,8 @@ pub struct IndexedClient<K, V, U: Buffer, L: Blob> {
     next_stream_id: Id,
     buf_writer: BufferHandle<U>,
     blob: BlobCache<K, V, L>,
+    meta_rx: crossbeam_channel::Receiver<BlobMeta>,
+    meta: BlobMeta,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -105,6 +107,7 @@ struct IndexedCore<K, V, R: BufferRead, L: Blob> {
     blob: BlobCache<K, V, L>,
     futures: BTreeMap<Id, BlobFuture<K, V>>,
     traces: BTreeMap<Id, BlobTrace<K, V>>,
+    meta_tx: crossbeam_channel::Sender<BlobMeta>,
 }
 
 impl<K, V, U, L> IndexedClient<K, V, U, L>
@@ -121,7 +124,9 @@ where
         let (buf_reader, buf_writer) = buf.read_write()?;
         let blob = BlobCache::new(blob);
 
-        let mut core = IndexedCore::new(buf_reader, blob.clone())?;
+        let (meta_tx, meta_rx) = crossbeam_channel::bounded(1_000);
+
+        let mut core = IndexedCore::new(buf_reader, blob.clone(), meta_tx)?;
         // Hydrate the core with any remaining data from buffer left
         // behind from last startup.
         core.drain_buf()?;
@@ -152,6 +157,8 @@ where
             next_stream_id: meta.next_stream_id,
             buf_writer,
             blob,
+            meta_rx,
+            meta,
             handle: Some(handle),
         })
     }
@@ -164,11 +171,23 @@ where
         unimplemented!()
     }
 
+    // Perform truncation and update the meta received from IndexedCore
+    //
+    // TODO: I really want to do this on a timer instead of on every call.
+    fn maintenence(&mut self) -> Result<(), Error> {
+        for meta in self.meta_rx.try_iter() {
+            self.meta = meta;
+        }
+
+        self.buf_writer.truncate(self.meta.futures_seqno_upper)
+    }
+
     /// Logically creates, if necessary, a new future and trace with the given external
     /// stream name, returning the corresponding internal stream id.
     ///
     /// This method is idempotent: ids may be registered multiple times.
     pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
+        self.maintenence()?;
         if self.graveyard.contains_key(id_str) {
             return Err(Error::from(format!(
                 "invalid registration: stream {} already destroyed",
@@ -254,6 +273,7 @@ where
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
+        self.maintenence()?;
         for id in ids.iter() {
             match self.seal_frontiers.get(id) {
                 Some(frontier) => {
@@ -287,6 +307,89 @@ where
 
         Ok(())
     }
+
+    /// Returns a [Snapshot] for the given id.
+    pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot<K, V>, Error> {
+        // TODO this is kind of awkward maybe we should have forward and reverse
+        // indexes for this.
+        if !self.seal_frontiers.contains_key(&id) {
+            return Err(format!("invalid snapshot: id {:?} not found", id).into());
+        }
+        let trace_meta = self.meta.traces.iter().find(|meta| meta.id == id);
+
+        // TODO: we want to make these functions over the encoded representations
+        // so that they can be shared between the trace and indexedclient impls.
+        let trace = match trace_meta {
+            None => TraceSnapshot {
+                ts_upper: Antichain::from_elem(0),
+                updates: vec![],
+            },
+            Some(trace_meta) => {
+                let ts_upper = trace_meta.ts_upper();
+                let mut updates = Vec::with_capacity(trace_meta.batches.len());
+                for batch in trace_meta.batches.iter() {
+                    updates.push(self.blob.get_trace_batch(&batch.key)?);
+                }
+
+                TraceSnapshot { ts_upper, updates }
+            }
+        };
+
+        let future_meta = self.meta.futures.iter().find(|meta| meta.id == id);
+        let future = match future_meta {
+            None => FutureSnapshot {
+                seqno_upper: Antichain::from_elem(SeqNo(0)),
+                ts_lower: trace.ts_upper.clone(),
+                ts_upper: Antichain::new(),
+                updates: vec![],
+            },
+            Some(future_meta) => {
+                let mut updates = Vec::with_capacity(future_meta.batches.len());
+                for batch in future_meta.batches.iter() {
+                    // TODO: filter out excess
+                    updates.push(self.blob.get_future_batch(&batch.key)?);
+                }
+
+                FutureSnapshot {
+                    seqno_upper: future_meta.seqno_upper(),
+                    ts_lower: trace.ts_upper.clone(),
+                    ts_upper: Antichain::new(),
+                    updates,
+                }
+            }
+        };
+
+        // TODO: should this be meta.future_seqno_upper instead?
+        let buf_lower = &future.seqno_upper;
+        let buffer = {
+            let mut data = Vec::new();
+            let seqno = self
+                .buf_writer
+                .snapshot(|seqno, buf| {
+                    let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
+                        unsafe { Abomonated::new(buf.to_owned()) }
+                            .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
+                    // WIP: TODO: is this the right way to work with Abomonated?
+                    let entry: BufferEntry<K, V> = (*entry).clone();
+                    match entry {
+                        BufferEntry::Write(updates) => {
+                            for (entry_id, updates) in updates.into_iter() {
+                                if entry_id != id || !buf_lower.less_equal(&seqno) {
+                                    continue;
+                                }
+                                data.extend(updates.into_iter());
+                            }
+                        }
+                        _ => (),
+                    }
+                    Ok(())
+                })?
+                .end;
+            BufferSnapshot(seqno, data)
+        };
+
+        Ok(IndexedSnapshot(buffer, future, trace))
+    }
 }
 
 impl<K, V, R, L> IndexedCore<K, V, R, L>
@@ -296,7 +399,11 @@ where
     R: BufferRead + Send + 'static,
     L: Blob + Send + 'static,
 {
-    fn new(mut buf_reader: R, mut blob: BlobCache<K, V, L>) -> Result<Self, Error> {
+    fn new(
+        mut buf_reader: R,
+        mut blob: BlobCache<K, V, L>,
+        meta_tx: crossbeam_channel::Sender<BlobMeta>,
+    ) -> Result<Self, Error> {
         let meta = blob
             .get_meta()
             .map_err(|err| {
@@ -325,6 +432,8 @@ where
             .into_iter()
             .map(|meta| (meta.id, BlobTrace::new(meta)))
             .collect();
+
+        debug_assert!(meta_tx.capacity().unwrap_or(0) > 0);
         let indexed = Self {
             next_stream_id: meta.next_stream_id,
             futures_seqno_upper: meta.futures_seqno_upper,
@@ -334,6 +443,7 @@ where
             blob,
             futures,
             traces,
+            meta_tx,
         };
 
         indexed.check_invariants()?;
@@ -386,6 +496,15 @@ where
         self.drain_buf()?;
         self.drain_future()?;
         // TODO: Incrementally compact future and trace.
+        let meta = self.serialize_meta();
+        self.blob.set_meta(meta.clone())?;
+        // WIP: TODO: handle error better
+        // WIP: TODO: need to have a provision for overflow
+        if !self.meta_tx.is_full() {
+            self.meta_tx
+                .send(meta)
+                .expect("wip cannot fail unless receiver dropped");
+        }
         Ok(true)
     }
 
@@ -432,6 +551,12 @@ where
 
             Ok(())
         })?;
+
+        if desc.start == desc.end {
+            // No updates, can exit early.
+            // WIP: TODO: check some invariants
+            return Ok(());
+        }
 
         for (id, (name, is_create)) in creates_deletes_by_id.into_iter() {
             if is_create {
@@ -482,6 +607,8 @@ where
         self.futures_seqno_upper = desc.end;
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
+        // We need to fully persist our state here in case we end up needing
+        // to rehydrate from Buffer after restart.
         self.blob.set_meta(self.serialize_meta())?;
 
         self.buf_reader.allow_truncation(desc.end)
@@ -555,6 +682,8 @@ where
 
     /// Move data at times that have been sealed from future to
     /// trace.
+    /// The caller is responsible for updating META after they've finished
+    /// updating the traces.
     fn drain_future(&mut self) -> Result<(), Error> {
         for (id, trace) in self.traces.iter_mut() {
             // If this future is already properly sealed then we don't need
@@ -597,13 +726,6 @@ where
             future.truncate(new_future_ts_lower)?;
         }
 
-        // TODO: This is a good point to compact future. The data that's been
-        // moved is still there but now irrelevant. It may also be a good time
-        // to compact trace.
-
-        // TODO: Instead of fully overwriting META each time, this should be
-        // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())?;
         Ok(())
     }
 }
@@ -1343,7 +1465,10 @@ mod tests {
         let id = i.register("0")?;
         // After a write, all data is in the buffer.
         i.write_sync(vec![(id, updates.clone())])?;
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         i.seal(vec![id], 2)?;
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
+        assert_eq!(i.snapshot(id)?.read_to_end(), updates);
 
         Ok(())
     }
