@@ -167,8 +167,23 @@ where
     ///
     /// Needs to block and wait for IndexedCore to return as well.
     /// This method is idempotent.
+    /// TODO: want to have a more graceful shutdown protocol
+    /// for IndexedCore. Right now this relies on the BlobCache closing
+    /// as the side-channel by which it knows to stop.
     pub fn close(&mut self) -> Result<(), Error> {
-        unimplemented!()
+        let buf_res = self.buf_writer.close();
+        let blob_res = self.blob.close();
+
+        if let Some(handle) = self.handle.take() {
+            if let Err(_) = handle.join() {
+                log::error!("persister core panicked");
+            }
+        }
+
+        buf_res?;
+        blob_res?;
+
+        Ok(())
     }
 
     // Perform truncation and update the meta received from IndexedCore
@@ -1469,6 +1484,7 @@ mod tests {
         i.seal(vec![id], 2)?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
+        i.close()?;
 
         Ok(())
     }
