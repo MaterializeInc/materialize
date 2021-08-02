@@ -120,7 +120,7 @@ where
     /// Returns a new IndexedClient, initializing IndexedCore with the appropriate data from
     /// the blob store, and reading out the rest of the metadata from the buffer.
     /// Spawns IndexedCore to run in a background thread.
-    pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
+    pub fn new(buf: U, blob: L) -> Result<Self, Error> {
         let (buf_reader, buf_writer) = buf.read_write()?;
         let blob = BlobCache::new(blob);
 
@@ -236,7 +236,31 @@ where
     /// true if the stream was destroyed from this call, and false if it was
     /// already destroyed.
     pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
-        unimplemented!()
+        if self.graveyard.contains_key(id_str) {
+            return Ok(false);
+        }
+
+        let id = match self.ids.get(id_str) {
+            Some(id) => id.clone(),
+            None => {
+                return Err(Error::from(format!(
+                    "invalid destroy of stream {} that was never registered or destroyed",
+                    id_str
+                )));
+            }
+        };
+
+        self.ids.remove(id_str);
+        self.graveyard.insert(id_str.to_string(), id);
+        self.seal_frontiers.remove(&id);
+        self.since_frontiers.remove(&id);
+        let entry: BufferEntry<K, V> = BufferEntry::Destroy(id, id_str.to_string());
+        let mut entry_bytes = Vec::new();
+        unsafe { abomonation::encode(&entry, &mut entry_bytes) }
+            .expect("write to Vec is infallible");
+        self.buf_writer.write_sync(entry_bytes)?;
+
+        return Ok(true);
     }
 
     /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
@@ -557,6 +581,9 @@ where
                 BufferEntry::Register(id, name) => {
                     creates_deletes_by_id.insert(*id, (name.clone(), true));
                 }
+                BufferEntry::Destroy(id, name) => {
+                    creates_deletes_by_id.insert(*id, (name.clone(), false));
+                }
                 BufferEntry::Seal(ids, time) => {
                     for id in ids.iter() {
                         seals_by_id.insert(*id, *time);
@@ -584,11 +611,25 @@ where
                     .insert(id, BlobTrace::new(BlobTraceMeta::new(id)));
             } else {
                 debug_assert!(id <= self.next_stream_id);
+                updates_by_id.remove(&id);
+                seals_by_id.remove(&id);
+                sinces_by_id.remove(&id);
                 if id == self.next_stream_id {
                     // This stream was created and destroyed
                     continue;
                 }
-                // TODO Handle deletes here
+                let future = self.futures.remove(&id);
+                let trace = self.traces.remove(&id);
+
+                // Sanity check that we actually removed the future and trace for this
+                // stream.
+                debug_assert!(future.is_some());
+                debug_assert!(trace.is_some());
+
+                let mapping = (name, id);
+
+                self.id_mapping.retain(|id_mapping| id_mapping != &mapping);
+                self.graveyard.push(mapping);
             }
         }
 
@@ -980,7 +1021,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                             }));
                     }
                 }
-                BufferEntry::Seal(_, _) | BufferEntry::Register(_, _) => unimplemented!(),
+                _ => unimplemented!(),
             }
 
             Ok(())
@@ -1271,7 +1312,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                                 data.extend(updates.into_iter());
                             }
                         }
-                        BufferEntry::Seal(_, _) | BufferEntry::Register(_, _) => (),
+                        // WIP: go back and enumerate all variants.
+                        _ => (),
                     }
                     Ok(())
                 })?

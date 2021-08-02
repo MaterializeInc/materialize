@@ -43,6 +43,8 @@ pub enum BufferEntry<K, V> {
     Seal(Vec<Id>, u64),
     /// Register a new stream.
     Register(Id, String),
+    /// Destroy a stream.
+    Destroy(Id, String),
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -275,7 +277,7 @@ impl<K, V> BufferEntry<K, V> {
                 }
             }
             // WIP: TODO: Invariants for the other commands
-            BufferEntry::Seal(_, _) | BufferEntry::Register(_, _) => (),
+            _ => (),
         }
         Ok(())
     }
