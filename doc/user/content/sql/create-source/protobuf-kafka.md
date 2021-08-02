@@ -40,8 +40,8 @@ named `SCHEMA`:
 CREATE SOURCE batches
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 WITH (cache = true)
-KAFKA BROKER 'localhost:9092' TOPIC 'billing'
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
 ```
 
 This creates a source that...
@@ -63,7 +63,8 @@ FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing' WITH (
     ssl_ca_location = '/secrets/ca.crt',
     ssl_key_password = 'mzmzmz'
 )
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
 ```
 
 This creates a source that...
@@ -80,7 +81,8 @@ This creates a source that...
 CREATE SOURCE batches
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 WITH (start_offset=[0,10,100])
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
 ```
 
 This creates a source that...
