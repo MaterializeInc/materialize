@@ -113,7 +113,10 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
 
         let mut val = Vec::new();
         unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
-        self.blob.lock()?.set(&key, val, false)?;
+        // TODO: revisit this policy
+        // A better solution is to query the blob store on restart and see which blob
+        // keys have already been taken.
+        self.blob.lock()?.set(&key, val, true)?;
         self.future.lock()?.insert(key, Arc::new(batch));
         Ok(())
     }
@@ -160,7 +163,8 @@ impl<K: Data, V: Data, L: Blob> BlobCache<K, V, L> {
 
         let mut val = Vec::new();
         unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
-        self.blob.lock()?.set(&key, val, false)?;
+        // TODO: revisit this policy.
+        self.blob.lock()?.set(&key, val, true)?;
         self.trace.lock()?.insert(key, Arc::new(batch));
         Ok(())
     }
