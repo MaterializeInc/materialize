@@ -447,7 +447,8 @@ def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
         for k, v in val.items():
             val[k] = _substitute_env_vars(v, env)
     elif isinstance(val, list):
-        val = cast(T, [_substitute_env_vars(v, env) for v in val])
+        for i, v in enumerate(val):
+            val[i] = _substitute_env_vars(v, env)
     return val
 
 
