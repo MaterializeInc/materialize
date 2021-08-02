@@ -23,6 +23,7 @@ use compile_time_run::run_command_str;
 use coord::PersistConfig;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use ore::metrics::ThirdPartyMetric;
 use ore::{
     metric,
     metrics::{Gauge, MetricsRegistry, UIntGauge, UIntGaugeVec},
@@ -189,6 +190,12 @@ pub struct Metrics {
 
     /// The amount of time we spend encoding metrics in prometheus endpoints.
     request_metrics_encode: UIntGauge,
+
+    /// The amount of time we spend gathering metrics in prometheus endpoints.
+    third_party_request_metrics_gather: UIntGauge,
+
+    /// The amount of time we spend encoding metrics in prometheus endpoints.
+    third_party_request_metrics_encode: UIntGauge,
 }
 
 impl Metrics {
@@ -196,7 +203,7 @@ impl Metrics {
         let mut system = sysinfo::System::new();
         system.refresh_system();
 
-        let request_metrics: UIntGaugeVec = registry.register(metric!(
+        let request_metrics: ThirdPartyMetric<UIntGaugeVec> = registry.register_third_party_visible(metric!(
             name: "mz_server_scrape_metrics_times",
             help: "how long it took to gather metrics, used for very low frequency high accuracy measures",
             var_labels: ["action"],
@@ -226,8 +233,14 @@ impl Metrics {
                     "memory_total" => &system.total_memory().to_string()
                 },
             )),
-            request_metrics_gather: request_metrics.with_label_values(&["gather"]),
-            request_metrics_encode: request_metrics.with_label_values(&["encode"]),
+            request_metrics_gather: request_metrics
+                .third_party_metric_with_label_values(&["gather"]),
+            request_metrics_encode: request_metrics
+                .third_party_metric_with_label_values(&["encode"]),
+            third_party_request_metrics_encode: request_metrics
+                .third_party_metric_with_label_values(&["gather_third_party"]),
+            third_party_request_metrics_gather: request_metrics
+                .third_party_metric_with_label_values(&["encode_third_party"]),
         }
     }
 
@@ -311,6 +324,23 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         persist,
     })
     .await?;
+
+    // Listen on the third-party metrics port if we are configured for it.
+    if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
+        tokio::spawn({
+            let metrics_registry = metrics_registry.clone();
+            let metrics = metrics.clone();
+
+            let server = http::ThirdPartyServer::new(
+                coord_handle.start_instant(),
+                metrics_registry,
+                metrics,
+            );
+            async move {
+                server.serve(third_party_addr).await;
+            }
+        });
+    }
 
     // Launch task to serve connections.
     //

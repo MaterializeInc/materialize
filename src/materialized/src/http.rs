@@ -13,12 +13,14 @@
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
 
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::Instant;
 
 use futures::future::TryFutureExt;
-use hyper::{service, Method, StatusCode};
+use hyper::{service, Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use log::error;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use ore::metrics::MetricsRegistry;
@@ -235,4 +237,82 @@ impl Server {
     //
     // If you add a new handler, please add it to the most appropriate
     // submodule, or create a new submodule if necessary. Don't add it here!
+}
+
+#[derive(Clone)]
+pub struct ThirdPartyServer {
+    start_time: Instant,
+    metrics_registry: MetricsRegistry,
+    global_metrics: Metrics,
+}
+
+impl ThirdPartyServer {
+    pub fn new(
+        start_time: Instant,
+        metrics_registry: MetricsRegistry,
+        global_metrics: Metrics,
+    ) -> Self {
+        Self {
+            start_time,
+            metrics_registry,
+            global_metrics,
+        }
+    }
+
+    pub async fn serve(self, addr: SocketAddr) {
+        if let Err(err) = hyper::Server::bind(&addr)
+            .serve(hyper::service::make_service_fn(|_| {
+                let server = self.clone();
+                async { Ok::<_, hyper::Error>(server) }
+            }))
+            .await
+        {
+            error!("error serving metrics endpoint: {}", err);
+        }
+    }
+}
+
+impl hyper::service::Service<Request<Body>> for ThirdPartyServer {
+    type Response = Response<Body>;
+    type Error = hyper::http::Error;
+    type Future =
+        Pin<Box<dyn futures::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        match req.uri().path() {
+            "/metrics" => Box::pin({
+                let server = self.clone();
+                async move {
+                    match metrics::serve_prometheus_endpoint(
+                        server.start_time,
+                        &server.metrics_registry,
+                        &server.global_metrics,
+                        metrics::MetricsVariant::ThirdPartyVisible,
+                    ) {
+                        Ok(response) => Ok(response),
+                        Err(err) => {
+                            error!("could not retrieve third-party metrics: {}", err);
+                            Response::builder()
+                                .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::from("Error retrieving prometheus metrics"))
+                        }
+                    }
+                }
+            }),
+            _ => Box::pin(async move {
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::from(
+                        "The resource you have requested does not exist. Did you mean /metrics?",
+                    ))
+            }),
+        }
+    }
 }
