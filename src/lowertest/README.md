@@ -7,7 +7,8 @@ Rust is not only onerous but makes the tests hard to read.
 
 This crate supports converting a specification written in a readable syntax (see
 [#syntax]) into a Rust object that way you can directly test the lower layers of
-the stack.
+the stack. It also supports converting the Rust object back into the readable
+syntax.
 
 ## Syntax
 
@@ -37,6 +38,8 @@ not the outer struct.
 The syntax can be overridden and extended by creating an object that implements
 the trait `TestDeserializationContext`; see [#extending-the-syntax] for more
 details.
+
+Enum variants can be written as CamelCase in addition to snake_case.
 
 ## Creating an object
 
@@ -80,8 +83,8 @@ fields have default values.
 
 ### 1. Parsing the test syntax
 
-Parse the string `s` containing your specification by calling
-`let mut stream_iter = lowertest::parse_str(s)?.into_iter()`.
+Tokenize the string `s` containing your specification by calling
+`let mut stream_iter = lowertest::tokenize(s)?.into_iter()`.
 
 You now have an iterator over [`TokenTree`][proc_macro2] that you can pass
 into `deserialize`.
@@ -122,7 +125,7 @@ Otherwise, see [#extending-the-syntax].
 
 Create an object that implements the trait `TestDeserializationContext`.
 
-The trait has one method `override_syntax`.
+The trait has a method `override_syntax`.
 * Its first argument is `&mut self` this way the `TestDeserializationContext`
   can store state across multiple objects being created.
 * The return value should always be `Ok(None)` except in the specific cases when
@@ -158,6 +161,9 @@ Since a one-arg enum or struct can be specified as `(<the_arg>)` or
 `<the_arg>`, passing in the specification in the manner described above saves
 you from having to implement both syntaxes in `override_syntax`.
 
+The trait has a second method `reverse_syntax_override` to convert from JSON
+to the extended syntax. See [#roundtrip] for more details.
+
 ### Supported types
 
 * Enums
@@ -169,3 +175,10 @@ you from having to implement both syntaxes in `override_syntax`.
 * `Option<>`
 * `Vec<>`
 * Combinations of the above.
+
+## Roundtrip
+
+To convert a Rust object back into the readable syntax:
+1) Serialize the Rust object to a [serde_json::Value] object by calling
+   `let json = serde_json::to_value(obj)?;`.
+2) Feed the json into the method `from_json`.

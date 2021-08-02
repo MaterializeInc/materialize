@@ -64,6 +64,16 @@ build-datum
 String("hello")
 
 build-datum
+"hel\"lo" string
+----
+String("hel\"lo")
+
+build-datum
+"\"hello\"" string
+----
+String("\"hello\"")
+
+build-datum
 null string
 ----
 Null
@@ -82,6 +92,16 @@ build-datum
 5.2 numeric
 ----
 Numeric(OrderedDecimal(5.2))
+
+build-datum
+"2021-01-02 00:12:59" timestamp
+----
+Timestamp(2021-01-02T00:12:59)
+
+build-datum
+"1999-12-31 23:42:23.342" timestamp
+----
+Timestamp(1999-12-31T23:42:23.342)
 
 build-datum
 2 (list jsonb 100)

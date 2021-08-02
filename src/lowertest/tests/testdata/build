@@ -69,6 +69,8 @@ build
 ----
 Some(SingleUnnamedField(SingleUnnamedArg(-1.1)))
 
+# single field is a literal
+
 build
 (single_unnamed_field 2.2)
 ----
@@ -102,6 +104,18 @@ build
 (multi_unnamed_fields ([], "bar") ([false null true]) (single_named_field [0 10 11]))
 ----
 Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), MultiNamedArg { fizz: [Some(false), None, Some(true)], bizz: [] }, SingleNamedField { foo: [0, 10, 11] }))
+
+build
+(single_unnamed_field2 [-1 4 -2 0])
+----
+Some(SingleUnnamedField2([-1, 4, -2, 0]))
+
+#single field is a struct with named fields
+
+build
+(single_unnamed_field3 ([true false false null] [[[-1.25 true] [1.24 false]]]))
+----
+Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(true), Some(false), Some(false), None], bizz: [[(SingleUnnamedArg(-1.25), true), (SingleUnnamedArg(1.24), false)]] }))
 
 # Arguments are assumed to be part of an outer struct/enum
 # unless enclosed in parentheses.

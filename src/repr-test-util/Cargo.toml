@@ -6,8 +6,10 @@ edition = "2018"
 publish = false
 
 [dependencies]
+chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 lazy_static = "1.4.0"
 lowertest = {path = "../lowertest"}
+ore = {path = "../ore"}
 repr = {path = "../repr"}
 proc-macro2 = "1.0.28"
 

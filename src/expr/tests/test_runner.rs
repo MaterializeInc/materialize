@@ -11,12 +11,12 @@ mod test {
     use expr::canonicalize::canonicalize_predicates;
     use expr::MirScalarExpr;
     use expr_test_util::*;
-    use lowertest::{deserialize, parse_str};
+    use lowertest::{deserialize, tokenize};
     use ore::str::separated;
     use repr::RelationType;
 
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {
-        let mut input_stream = parse_str(&s)?.into_iter();
+        let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut scalar: MirScalarExpr =
             deserialize(&mut input_stream, "MirScalarExpr", &RTI, &mut ctx)?;
@@ -26,7 +26,7 @@ mod test {
     }
 
     fn test_canonicalize_pred(s: &str) -> Result<Vec<MirScalarExpr>, String> {
-        let mut input_stream = parse_str(&s)?.into_iter();
+        let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut predicates: Vec<MirScalarExpr> =
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &RTI, &mut ctx)?;

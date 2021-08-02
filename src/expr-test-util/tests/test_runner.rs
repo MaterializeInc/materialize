@@ -9,6 +9,44 @@
 
 mod test {
     use expr_test_util::*;
+    use lowertest::{from_json, GenericTestDeserializeContext, TestDeserializeContext};
+    use ore::result::ResultExt;
+    use ore::str::separated;
+    use serde::de::DeserializeOwned;
+    use serde::Serialize;
+
+    fn roundtrip<F, T, G, C>(
+        s: &str,
+        type_name: &str,
+        build_obj: F,
+        ctx_gen: G,
+    ) -> Result<T, String>
+    where
+        T: DeserializeOwned + Serialize + Eq + Clone,
+        F: Fn(&str) -> Result<T, String>,
+        C: TestDeserializeContext,
+        G: Fn() -> C,
+    {
+        let result: T = build_obj(s)?;
+        let json = serde_json::to_value(result.clone()).map_err_to_string()?;
+        let new_s = from_json(&json, type_name, &RTI, &mut ctx_gen());
+        let new_result = build_obj(&new_s)?;
+        if new_result.eq(&result) {
+            Ok(result)
+        } else {
+            Err(format!(
+                "Round trip failed. New spec:\n{}
+            Original {type_name}:\n{}
+            New {type_name}:\n{}
+            JSON for original {type_name}:\n{}",
+                new_s,
+                serde_json::to_string_pretty(&result).unwrap(),
+                serde_json::to_string_pretty(&new_result).unwrap(),
+                json.to_string(),
+                type_name = type_name
+            ))
+        }
+    }
 
     #[test]
     fn run() {
@@ -21,24 +59,68 @@ mod test {
                         Err(err) => format!("error: {}\n", err),
                     },
                     // tests that we can build `MirScalarExpr`s
-                    "build-scalar" => match build_scalar(&s.input) {
-                        Ok(scalar) => format!("{}\n", scalar.to_string()),
-                        Err(err) => format!("error: {}\n", err),
-                    },
-                    "build" => match build_rel(&s.input, &catalog) {
-                        // Generally, explanations for fully optimized queries
-                        // are not allowed to have whitespace at the end;
-                        // however, a partially optimized query can.
-                        // Since clippy rejects test results with trailing
-                        // whitespace, remove whitespace before comparing results.
-                        Ok(rel) => format!(
-                            "{}\n",
-                            catalog
-                                .generate_explanation(&rel, s.args.get("format"))
-                                .trim_end()
-                        ),
-                        Err(err) => format!("error: {}\n", err),
-                    },
+                    "build-scalar" => {
+                        match roundtrip(
+                            &s.input,
+                            "MirScalarExpr",
+                            |s| build_scalar(s),
+                            || MirScalarExprDeserializeContext::default(),
+                        ) {
+                            Ok(scalar) => format!("{}\n", scalar),
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
+                    "build" => {
+                        match roundtrip(
+                            &s.input,
+                            "MirRelationExpr",
+                            |s| build_rel(s, &catalog),
+                            || MirRelationExprDeserializeContext::new(&catalog),
+                        ) {
+                            // Generally, explanations for fully optimized queries
+                            // are not allowed to have whitespace at the end;
+                            // however, a partially optimized query can.
+                            // Since clippy rejects test results with trailing
+                            // whitespace, remove whitespace before comparing results.
+                            Ok(rel) => format!(
+                                "{}\n",
+                                catalog
+                                    .generate_explanation(&rel, s.args.get("format"))
+                                    .trim_end()
+                            ),
+                            Err(err) => format!("error: {}\n", err),
+                        }
+                    }
+                    "rel-to-test" => {
+                        let mut ctx = MirRelationExprDeserializeContext::new(&catalog);
+                        let spec = from_json(
+                            &serde_json::from_str(&s.input).unwrap(),
+                            "MirRelationExpr",
+                            &RTI,
+                            &mut ctx,
+                        );
+                        let mut source_defs = ctx
+                            .list_scope_references()
+                            .map(|(name, typ)| {
+                                format!(
+                                    "(defsource {} {})",
+                                    name,
+                                    from_json(
+                                        &serde_json::to_value(typ).unwrap(),
+                                        "RelationType",
+                                        &RTI,
+                                        &mut GenericTestDeserializeContext::default()
+                                    )
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        source_defs.sort();
+                        format!(
+                            "cat\n{}\n----\nok\n\n{}\n",
+                            separated("\n", source_defs),
+                            spec
+                        )
+                    }
                     _ => panic!("unknown directive: {}", s.directive),
                 }
             })
