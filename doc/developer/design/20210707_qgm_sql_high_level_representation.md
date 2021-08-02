@@ -393,6 +393,25 @@ the subquery, we go through the chain of parent contexts until we find a symbol 
 
 #### Name resolution of `GROUP BY` queries
 
+A `SELECT` query is a grouping query if any of the following conditions is met:
+
+* the query has a `GROUP BY` clause.
+* the query has a `HAVING` clause,
+* the projection of the query contains any aggregate which parameters are constant,
+* the projection of the query contains any aggregate where all columns referenced within it come from the tables
+  in the `FROM` clause, either directly in the projection or within a subquery
+  (see [#3720](https://github.com/MaterializeInc/materialize/issues/3720))
+
+That means that in order to determine whether a query is a grouping query or not, we must inspect the projection
+of the query first. For this reason, after having processed the `FROM` clause and the `WHERE` clause, we will
+process the projection of the query, resolving names agains the `NameResolutionContext` for the join of the
+query, and then will traverse the resulting expressions trying to find `Aggregate` expressions within
+non-`Grouping` boxes, which would make the current query being process a grouping one.
+
+If any `Aggregate` expression is found, we will put a `Grouping` box on top of the `Select` box containing
+the join in the `FROM` clause, and will try to lift all expressions in the projection through it, following
+the rules listed below.
+
 Symbols in the `GROUP BY` clause will be resolved as well against the `NameResolutionContext` representing
 the scope exposed by the `FROM` clause, but then lifted through the projection of the `Select` box representing
 the join that feeds the `Grouping` box created for the `GROUP BY` clause.
@@ -410,6 +429,9 @@ Lifting expressions through a grouping box is a bit special:
 * Aggregate expressions are lifted as column references.
 * Columns from the input quantifier that neither appear in the grouping nor functionally depend on any column in the
   grouping key, cannot be lifted and hence an error is returned.
+
+Expression planning will then be divided in two stages: name resolution against the scope of the `FROM` clause
+and expression lifting through the `Grouping` (only for grouping queries).
 
 #### Name resolution of CTEs
 
