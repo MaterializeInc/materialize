@@ -45,6 +45,8 @@ pub enum BufferEntry<K, V> {
     Register(Id, String),
     /// Destroy a stream.
     Destroy(Id, String),
+    /// The timestamp this ID can be compacted up to.
+    AllowCompaction(Id, u64),
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]

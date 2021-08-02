@@ -429,6 +429,30 @@ where
 
         Ok(IndexedSnapshot(buffer, future, trace))
     }
+
+    /// Permit compaction of updates at times < since to since.
+    ///
+    /// The compaction frontier can only monotonically increase and it is an error
+    /// to call this function with a since argument that is less than or equal to
+    /// the current compaction frontier. It is also an error to advance the
+    /// compaction frontier beyond the current sealed frontier.
+    ///
+    /// TODO: it's unclear whether this function needs to be so restrictive about
+    /// calls with a frontier <= current_compaction_frontier. We chose to mirror
+    /// the `seal` API here but if that doesn't make sense, remove the restrictions.
+    pub fn allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
+        if !self.since_frontiers.contains_key(&id) {
+            return Err(format!("invalid allow_compaction: id {:?} not found", id).into());
+        }
+        self.since_frontiers.insert(id, since);
+        let entry: BufferEntry<K, V> = BufferEntry::AllowCompaction(id, since);
+        let mut entry_bytes = Vec::new();
+        unsafe { abomonation::encode(&entry, &mut entry_bytes) }
+            .expect("write to Vec is infallible");
+        self.buf_writer.write_sync(entry_bytes)?;
+
+        Ok(())
+    }
 }
 
 impl<K, V, R, L> IndexedCore<K, V, R, L>
@@ -589,6 +613,9 @@ where
                         seals_by_id.insert(*id, *time);
                     }
                 }
+                BufferEntry::AllowCompaction(id, since) => {
+                    sinces_by_id.insert(*id, *since);
+                }
             }
 
             Ok(())
@@ -633,15 +660,6 @@ where
             }
         }
 
-        for (id, ts_upper) in seals_by_id.into_iter() {
-            let trace = self
-                .traces
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-
-            trace.update_seal(ts_upper)?;
-        }
-
         for (id, updates) in updates_by_id.into_iter() {
             let future = self
                 .futures
@@ -660,6 +678,25 @@ where
 
             self.drain_buf_inner(id, updates, &desc)?;
         }
+
+        for (id, ts_upper) in seals_by_id.into_iter() {
+            let trace = self
+                .traces
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            trace.update_seal(ts_upper)?;
+        }
+
+        for (id, since) in sinces_by_id.into_iter() {
+            let trace = self
+                .traces
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            let since = Antichain::from_elem(since);
+            trace.allow_compaction(since)?;
+        }
+
         self.futures_seqno_upper = desc.end;
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
