@@ -405,20 +405,40 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
         "COMMIT; BEGIN;
             DECLARE c2 CURSOR FOR TAIL t2 WITH (PROGRESS);",
     )?;
-    let data_row = client_reads.query_one("FETCH 1 c2", &[])?;
-    assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
-    assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
-    assert_eq!(data_row.get::<_, String>("data"), "data");
-    let progress_row = client_reads.query_one("FETCH 1 c2", &[])?;
-    assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
-    assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
-    assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
+
+    #[derive(PartialEq)]
+    enum State {
+        WaitingForData,
+        WaitingForProgress,
+        Done,
+    }
+
+    let mut state = State::WaitingForData;
+
+    // Wait for one progress statement after seeing the data update.
+    // Alternatively, we could just check any progress statement to make sure
+    // that columns are in fact `Options`
+
+    while state != State::Done {
+        let row = client_reads.query_one("FETCH 1 c2", &[])?;
+
+        if row.get::<_, bool>("mz_progressed") == false {
+            assert_eq!(row.get::<_, i64>("mz_diff"), 1);
+            assert_eq!(row.get::<_, String>("data"), "data");
+            state = State::WaitingForProgress;
+        } else if state == State::WaitingForProgress {
+            assert_eq!(row.get::<_, bool>("mz_progressed"), true);
+            assert_eq!(row.get::<_, Option<i64>>("mz_diff"), None);
+            assert_eq!(row.get::<_, Option<String>>("data"), None);
+            state = State::Done;
+        }
+    }
 
     Ok(())
 }
 
-/// Verifies that we get continuous progress messages as soon as at least one
-/// data message was produced.
+/// Verifies that we get continuous progress messages, regardless of if we
+/// receive data or not.
 #[test]
 fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
@@ -433,8 +453,6 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
         "COMMIT; BEGIN;
          DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
     )?;
-
-    client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&"hello".to_owned()])?;
 
     let mut last_ts = MzTimestamp(u64::MIN);
     let mut verify_rows = move |rows: Vec<Row>| -> (usize, usize) {
@@ -468,12 +486,27 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
         (num_data_rows, num_progress_rows)
     };
 
-    // this will fetch away the initial batch that contains our data message
-    // plus some progress messages
-    let rows = client_reads.query("FETCH ALL c1", &[])?;
-    let (num_data_rows, num_progress_rows) = verify_rows(rows);
-    assert_eq!(num_data_rows, 1);
-    assert!(num_progress_rows > 0);
+    // make sure we see progress without any data ever being produced
+    loop {
+        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        let (num_data_rows, num_progress_rows) = verify_rows(rows);
+        assert_eq!(num_data_rows, 0);
+        if num_progress_rows > 0 {
+            break;
+        }
+    }
+
+    client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&"hello".to_owned()])?;
+
+    // fetch away the data message, plus maybe some progress messages
+    loop {
+        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        let (num_data_rows, num_progress_rows) = verify_rows(rows);
+        assert!(num_progress_rows > 0);
+        if num_data_rows == 1 {
+            break;
+        }
+    }
 
     // Try and read some progress messages. The normal update interval is
     // 1s, so only wait for two updates. Otherwise this would run for too long.
