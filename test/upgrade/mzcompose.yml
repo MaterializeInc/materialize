@@ -188,6 +188,7 @@ services:
          --seed=1
          --no-reset
          --kafka-addr=kafka:9092
+         ${BUILDKITE:+--ci-output}
          --schema-registry-url=http://schema-registry:8081
          --temp-dir=/share/tmp/upgrade-from-${PREVIOUS_VERSION}
          $$*
