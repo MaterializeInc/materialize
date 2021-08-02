@@ -632,8 +632,6 @@ where
             Ok(())
         })?;
 
-        eprintln!("desc {:?}", desc);
-
         // TODO: WIP: flesh this out more
         // e.g. should we try to truncate?
         if desc.start == desc.end || desc.end == self.futures_seqno_upper {
