@@ -859,6 +859,75 @@ impl ExternalSourceConnector {
     }
 }
 
+impl ProtoSource for KafkaSourceConnector {
+    type SourceTimestamp = PartitionOffset;
+    type Partition = PartitionId;
+
+    type FrontierDiscoverer = RtKafkaDiscoverer;
+
+    type PartitionDiscoverer = RtKafkaDiscoverer;
+
+    fn create_frontier_discoverer(&self) -> Self::FrontierDiscoverer {
+        todo!()
+    }
+
+    fn create_partition_discoverer(&self) -> Self::PartitionDiscoverer {
+        todo!()
+    }
+}
+
+pub struct RtKafkaDiscoverer {}
+
+impl SourceFrontierDiscoverer for RtKafkaDiscoverer {
+    type SourceTimestamp = PartitionOffset;
+
+    fn get_available_frontier(&self) -> Result<Antichain<Self::SourceTimestamp>, anyhow::Error> {
+        todo!()
+    }
+
+    fn id(&self) -> GlobalId {
+        todo!()
+    }
+
+    fn update_interval(&self) -> Duration {
+        todo!()
+    }
+}
+
+impl SourcePartitionDiscoverer for RtKafkaDiscoverer {
+    type Partition = PartitionId;
+
+    fn get_available_partitions(&self) -> Result<Vec<Self::Partition>, anyhow::Error> {
+        todo!()
+    }
+}
+
+pub trait ProtoSource {
+    type SourceTimestamp;
+    type Partition;
+    type FrontierDiscoverer: SourceFrontierDiscoverer<SourceTimestamp = Self::SourceTimestamp>;
+    type PartitionDiscoverer: SourcePartitionDiscoverer<Partition = Self::Partition>;
+
+    // For this to work, SourceReader needs to be in dataflow-types, which is
+    // the common package that both dataflow and coord have as dependency.
+    //
+    // Actual source implementations would only depend on dataflow-types and
+    // live in their own sources package.
+
+    // type SourceReader: SourceReader<SourceTimestamp = Self::SourceTimestamp>;
+
+    /// Creates a [`SourceFrontierDiscoverer`] for this source.
+    fn create_frontier_discoverer(&self) -> Self::FrontierDiscoverer;
+
+    /// Creates a [`SourcePartitionDiscoverer`] for this source.
+    fn create_partition_discoverer(&self) -> Self::PartitionDiscoverer;
+
+    // Creates a [`SourceReader`] for this source.
+    //
+    // Doesn't work, see above.
+    // fn create_source_reader(&self) -> Self::SourceReader;
+}
+
 /// This name is horrible and should maybe be `DiscoverSourceFrontier`, but `SourceReader` is also
 /// called `SourceReader` and not `ReadSource`...
 pub trait SourceFrontierDiscoverer {
