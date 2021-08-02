@@ -704,8 +704,13 @@ mod tests {
         // We don't expose reading the seal directly, so hack it a bit here by
         // verifying that we can't re-seal at the same timestamp (which is
         // disallowed).
-        let expected_seal_err = Err(Error::from("invalid seal: Antichain { elements: [2] } not in advance of current seal frontier Antichain { elements: [2] }"));
+        let expected_seal_err = Err(Error::from(
+            "invalid seal for id Id(0) not in advance of existing seal frontier 2: 2",
+        ));
         assert_eq!(block_on(|res| c1s1.seal(2, res)), expected_seal_err);
+        let expected_seal_err = Err(Error::from(
+            "invalid seal for id Id(1) not in advance of existing seal frontier 2: 2",
+        ));
         assert_eq!(block_on(|res| c1s2.seal(2, res)), expected_seal_err);
 
         // Cannot write to streams not specified during construction.

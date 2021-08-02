@@ -13,9 +13,9 @@ use std::cell::RefCell;
 use std::ops::Range;
 
 use abomonation_derive::Abomonation;
+use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::mem::MemBuffer;
 
 /// A "sequence number", uniquely associated with an entry in a Buffer.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
@@ -142,27 +142,28 @@ impl<U: Buffer + Sized> BufferShared for U {
         // TODO: Is an unbounded channel the right thing to do here?
         let (data_tx, data_rx) = crossbeam_channel::unbounded();
         let (truncate_tx, truncate_rx) = crossbeam_channel::unbounded();
-        // WIP: TODO: is there a better name?
-        let mem = MemBuffer::new("buffer_read_handle");
 
         let buffer_handle = BufferHandle {
             inner: self,
             tx: data_tx,
             rx: truncate_rx,
         };
-        let buffer_read_handle = BufferReadHandle {
-            rx: data_rx,
-            inner: RefCell::new(mem),
-            tx: truncate_tx,
-        };
 
-        buffer_handle.inner.snapshot(|_, data| {
-            if let Err(crossbeam_channel::SendError(_)) = buffer_handle.tx.send(data.to_vec()) {
-                return Err(Error::from("initializing read handle failed"));
-            }
-
+        let mut dataz = vec![];
+        let desc = buffer_handle.inner.snapshot(|_, data| {
+            dataz.push(data.to_vec());
             Ok(())
         })?;
+
+        let buffer_read_handle = BufferReadHandle {
+            rx: data_rx,
+            inner: RefCell::new(BufferReadHandleCore {
+                seqno: desc,
+                dataz,
+                lock: Some(()),
+            }),
+            tx: truncate_tx,
+        };
         Ok((buffer_read_handle, buffer_handle))
     }
 }
@@ -179,6 +180,12 @@ pub struct BufferHandle<U: Buffer + Sized> {
     rx: crossbeam_channel::Receiver<SeqNo>,
 }
 
+struct BufferReadHandleCore {
+    seqno: Range<SeqNo>,
+    dataz: Vec<Vec<u8>>,
+    lock: Option<()>,
+}
+
 /// Reader of Buffer-ed data shared between two threads.
 /// This is the reader-half and it actually consumes the data and notifies the
 /// writer about truncations.
@@ -187,9 +194,19 @@ pub struct BufferReadHandle {
     rx: crossbeam_channel::Receiver<Vec<u8>>,
     // Store data in a MemBuffer so that users of this handle can continue to use the
     // Buffer API
-    inner: RefCell<MemBuffer>,
+    inner: RefCell<BufferReadHandleCore>,
     // Channel to send updates about what sequence numbers can be compacted up to.
     tx: crossbeam_channel::Sender<SeqNo>,
+}
+
+impl BufferReadHandle {
+    fn ensure_open(&self) -> Result<(), Error> {
+        if self.inner.borrow().lock.is_none() {
+            return Err("buffer unexpectedly closed".into());
+        }
+
+        Ok(())
+    }
 }
 
 impl<U: Buffer + Sized> BufferWrite for BufferHandle<U> {
@@ -229,19 +246,44 @@ impl<U: Buffer + Sized> BufferWrite for BufferHandle<U> {
 }
 
 impl BufferRead for BufferReadHandle {
-    fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
+    fn snapshot<F>(&self, mut logic: F) -> Result<Range<SeqNo>, Error>
     where
         F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
     {
+        self.ensure_open()?;
+        let mut inner = self.inner.borrow_mut();
         for buf in self.rx.try_iter() {
-            self.inner.borrow_mut().write_sync(buf)?;
+            inner.dataz.push(buf);
+            inner.seqno = inner.seqno.start..SeqNo(inner.seqno.end.0 + 1);
         }
 
-        self.inner.borrow().snapshot(logic)
+        inner
+            .dataz
+            .iter()
+            .enumerate()
+            .map(|(idx, x)| logic(SeqNo(inner.seqno.start.0 + u64::cast_from(idx)), &x[..]))
+            .collect::<Result<(), Error>>()?;
+        Ok(inner.seqno.clone())
     }
 
     fn allow_truncation(&mut self, upper: SeqNo) -> Result<(), Error> {
-        self.inner.borrow_mut().truncate(upper)?;
+        self.ensure_open()?;
+        let mut inner = self.inner.borrow_mut();
+        if upper <= inner.seqno.start || upper > inner.seqno.end {
+            return Err(format!(
+                "invalid truncation {:?} for buffer containing: {:?}",
+                upper, inner.seqno
+            )
+            .into());
+        }
+        let removed = upper.0 - inner.seqno.start.0;
+        inner.seqno = upper..inner.seqno.end;
+        inner.dataz.drain(0..usize::cast_from(removed));
+        debug_assert_eq!(
+            usize::cast_from(inner.seqno.end.0 - inner.seqno.start.0),
+            inner.dataz.len()
+        );
+
         if let Err(crossbeam_channel::SendError(_)) = self.tx.send(upper) {
             return Err(Error::from("truncate failed because receiver shut down"));
         }
@@ -251,7 +293,7 @@ impl BufferRead for BufferReadHandle {
 
     fn close(&mut self) -> Result<bool, Error> {
         // TODO: not sure if I need to do anything else with the channels.
-        self.inner.borrow_mut().close()
+        Ok(self.inner.borrow_mut().lock.take().is_some())
     }
 }
 

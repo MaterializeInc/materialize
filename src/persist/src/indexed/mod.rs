@@ -260,7 +260,8 @@ where
             match self.seal_frontiers.get(id) {
                 Some(seal_frontier) => {
                     for update in updates.iter() {
-                        if update.1 <= *seal_frontier {
+                        // TODO: whats the right invariant here again?
+                        if update.1 < *seal_frontier {
                             return Err(format!(
                                 "update for {:?} with time {} before sealed frontier: {:?}",
                                 id, update.1, seal_frontier,
@@ -431,6 +432,13 @@ where
         if !self.since_frontiers.contains_key(&id) {
             return Err(format!("invalid allow_compaction: id {:?} not found", id).into());
         }
+
+        let current = self.since_frontiers.get(&id).expect("known to exist");
+
+        if since <= *current {
+            return Err(format!("invalid allow_compaction of id {:?}: not in advance of current since frontier {}: {}", id, current, since).into());
+        }
+
         self.since_frontiers.insert(id, since);
         let entry: BufferEntry<K, V> = BufferEntry::AllowCompaction(id, since);
         let mut entry_bytes = Vec::new();
@@ -579,6 +587,9 @@ where
         let mut sinces_by_id: BTreeMap<Id, u64> = BTreeMap::new();
 
         let desc = self.buf_reader.snapshot(|seqno, buf| {
+            // We need to skip past updates we've already ingested because its not
+            // guaranteed that truncates will have happened especially across restarts.
+            // TODO: change the snapshot API to make this better.
             if seqno < self.futures_seqno_upper {
                 return Ok(());
             }
@@ -621,7 +632,11 @@ where
             Ok(())
         })?;
 
-        if desc.start == desc.end {
+        eprintln!("desc {:?}", desc);
+
+        // TODO: WIP: flesh this out more
+        // e.g. should we try to truncate?
+        if desc.start == desc.end || desc.end == self.futures_seqno_upper {
             // No updates, can exit early.
             // WIP: TODO: check some invariants
             return Ok(());
@@ -670,9 +685,13 @@ where
             // future's seqno_upper and that there is nothing for that future in
             // [future.seqno_upper, self.futures_seqno_upper). Use this to make the
             // seqnos of all the future batches line up.
-            debug_assert_eq!(desc.start, self.futures_seqno_upper);
+
+            // TODO: WIP: explain better why I had to weaken this invariant.
+            // The long and short of it is -- truncates are now happening
+            // asynchronously from this thread's POV.
+            debug_assert!(desc.start <= self.futures_seqno_upper);
             let new_start = future.seqno_upper()[0];
-            debug_assert!(new_start <= desc.start);
+            //debug_assert!(new_start <= desc.start);
             let mut desc = desc.clone();
             desc.start = new_start;
 
