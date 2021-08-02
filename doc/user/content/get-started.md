@@ -5,217 +5,269 @@ menu: "main"
 weight: 3
 ---
 
-To help you get started with Materialize, we'll:
+This guide walks you through getting started with Materialize, from installing it to creating your first materialized view on top of streaming data. We'll cover:
 
-- Install, run, and connect to Materialize
-- Explore its API
-- Set up a real-time stream to perform aggregations on Wikipedia user edits.
+* Installing, running, and connecting to Materialize
 
-{{< cta href="/katacoda/?intro-wikipedia" target="_blank" >}}
-Try the demo in your browser →
-{{</ cta >}}
+* Connecting to a streaming data source
 
-## Prerequisites
+* Creating a materialized view
 
-To complete this demo, you need:
-
-- Command line and network access.
-- A [Materialize-compatible CLI](/connect/cli/). If you have Materialize installed `psql` works.
-
-We also highly recommend checking out [What is Materialize?](/overview/what-is-materialize)
+* Exploring common patterns like joins and time-windowing
 
 ## Install, run, connect
 
-1. Install the `materialized` binary using [these instructions](/install).
+Select an environment and follow the instructions to get the latest stable release of Materialize ({{< version >}}).
 
-1. Run the `materialized` binary. For example, if you installed it in your `$PATH`:
+{{< tabs >}}
+{{< tab "Docker">}}
+
+1. Open a terminal and spin up a container running [`materialized`](https://hub.docker.com/r/materialize/materialized):
 
     ```shell
-    materialized -w 1
+    docker run -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
     ```
 
-    This starts the daemon listening on port 6875 using 1 worker.
+    This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
 
-1. Connect to `materialized` through your Materialize CLI, e.g.:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI]({{< ref "connect/cli" >}}), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
     ```
 
-## Explore Materialize's API
+    Otherwise, you can find the steps to install and use your CLI of choice under [Install]({{< ref "install#cli-connections" >}}).
 
-Materialize offers ANSI Standard SQL, but is not simply a relational database. Instead of tables of data, you typically connect Materialize to external sources of data (called **sources**), and then create materialized views of the data that Materialize sees from those sources.
+{{< /tab >}}
+{{< tab "macOS">}}
 
-To get started, though, we'll begin with a simple version that doesn't require connecting to an external data source.
+1. If you're using [Homebrew](https://brew.sh/), open a terminal and run:
 
-1. From your Materialize CLI, create a materialized view that contains actual data we can work with.
+    ```shell
+    brew install MaterializeInc/materialize/materialized
+    ```
+
+    **Note:** For a `curl`-based alternative, see [Install]({{< ref "install#curl" >}}).
+
+1. Once the installation is complete, you can start the `materialized` process:
+
+    ```shell
+    materialized -w 1
+    ```
+
+    This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
+
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI]({{< ref "connect/cli" >}}), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+
+    ```shell
+    psql -U materialize -h localhost -p 6875 materialize
+    ```
+
+    Otherwise, you can find the steps to install and use your CLI of choice under [Install]({{< ref "install#cli-connections" >}}).
+
+{{< /tab >}}
+
+{{< tab "Linux">}}
+
+1. If you're using [apt](https://linuxize.com/post/how-to-use-apt-command/), open a terminal and run (as _root_):
+
+    ```shell
+    # Add the signing key for the Materialize apt repository
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
+    # Add and update the repository
+    sh -c 'echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list'
+    apt update
+    # Install materialized
+    apt install materialized
+    ```
+
+    **Note:** For a `curl`-based alternative, see [Install]({{< ref "install#curl-1" >}}).
+
+1. Once the installation is complete, you can start the `materialized` process:
+
+    ```shell
+    materialized -w 1
+    ```
+
+    This starts a process using one [worker thread]({{< ref "cli#worker-threads" >}}) and listening on port 6875 by default.
+
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI]({{< ref "connect/cli" >}}), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+
+    ```shell
+    psql -U materialize -h localhost -p 6875 materialize
+    ```
+
+    Otherwise, you can find the steps to install and use your CLI of choice under [Install]({{< ref "install#cli-connections" >}}).
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+## Explore a streaming source
+
+Materialize allows you to work with streaming data from multiple external sources using nothing but standard SQL. You write arbitrarily complex queries; Materialize takes care of maintaining the results automatically up to date with very low latency.
+
+We'll start with some sample real-time data from a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) receiving the latest market orders for a given marketplace.
+
+1. Let's create a [PubNub source](/sql/create-source/json-pubnub/#pubnub-source-details) that connects to the market orders channel with a subscribe key:
 
     ```sql
-    CREATE MATERIALIZED VIEW pseudo_source (key, value) AS
-        VALUES ('a', 1), ('a', 2), ('a', 3), ('a', 4),
-        ('b', 5), ('c', 6), ('c', 7);
+    CREATE SOURCE market_orders_raw
+    FROM PUBNUB
+    SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+    CHANNEL 'pubnub-market-orders';
     ```
 
-    You'll notice that we end up entering data into Materialize by creating a materialized view from some other data, rather than the typical `INSERT` operation. This is how one interacts with Materialize. In most cases, this data would have come from an external source and get fed into Materialize from a file or a stream.
+    The `CREATE SOURCE` statement is a definition of where to find and how to connect to our data source — Materialize won't start ingesting data just yet.
 
-1. With data in a materialized view, we can perform arbitrary `SELECT` statements on the data.
-
-    Let's start by viewing all of the data:
+    To list the columns created:
 
     ```sql
-    SELECT * FROM pseudo_source;
-    ```
-    ```nofmt
-     key | value
-    -----+-------
-     a   |     1
-     a   |     2
-     a   |     3
-     a   |     4
-     b   |     5
-     c   |     6
-     c   |     7
+    SHOW COLUMNS FROM market_orders_raw;
     ```
 
-1. Determine the sum of the values for each key:
+
+1. The PubNub source produces data as a single text column containing JSON. To extract the JSON fields for each market order, you can use the built-in `jsonb` [operators](/sql/types/jsonb/#jsonb-functions--operators):
 
     ```sql
-    SELECT key, sum(value) FROM pseudo_source GROUP BY key;
-    ```
-    ```nofmt
-     key | sum
-    -----+-----
-     a   |  10
-     b   |   5
-     c   |  13
+    CREATE VIEW market_orders AS
+    SELECT
+        ((text::jsonb)->>'bid_price')::float AS bid_price,
+        (text::jsonb)->>'order_quantity' AS order_quantity,
+        (text::jsonb)->>'symbol' AS symbol,
+        (text::jsonb)->>'trade_type' AS trade_type,
+        to_timestamp(((text::jsonb)->'timestamp')::bigint) AS ts
+    FROM market_orders_raw;
     ```
 
-    We can actually then save this query as its own materialized view:
+    One thing to note here is that we created a [non-materialized view](/overview/api-components/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement.
+
+1. We can now use this view as a base to create a [materialized view](/overview/api-components/#materialized-views) that computes the average bid price:
 
     ```sql
-    CREATE MATERIALIZED VIEW key_sums AS
-        SELECT key, sum(value) FROM pseudo_source GROUP BY key;
+    CREATE MATERIALIZED VIEW avg_bid AS
+    SELECT symbol,
+           AVG(bid_price) AS avg
+    FROM market_orders
+    GROUP BY symbol;
     ```
 
-1. Determine the sum of all keys' sums:
+    The `avg_bid` view is incrementally updated as new data streams in, so you get fresh and correct results with millisecond latency. Behind the scenes, Materialize is indexing the results of the embedded query in memory (i.e. _materializing_ the view).
+
+1. Let's check the results:
 
     ```sql
-    SELECT sum(sum) FROM key_sums;
+    SELECT * FROM avg_bid;
     ```
 
-1. We can also perform complex operations like `JOIN`s. Given the simplicity of our data, the `JOIN` clauses themselves aren't very exciting, but Materialize offers support for a full range of arbitrarily complex `JOIN`s.
+    ```
+      symbol    |        avg
+    ------------+--------------------
+    Apple       | 199.3392717416626
+    Google      | 299.40371152970334
+    Elerium     | 155.04668809209852
+    Bespin Gas  | 202.0260593073953
+    Linen Cloth | 254.34273792647863
+    ```
+
+     If you re-run the `SELECT` statement at different points in time, you can see the updated results based on the latest data.
+
+1. To see the sequence of updates affecting the results over time, you can use `TAIL`:
 
     ```sql
-    CREATE MATERIALIZED VIEW lhs (key, value) AS
-        VALUES ('x', 'a'), ('y', 'b'), ('z', 'c');
-    ```
-    ```sql
-    SELECT lhs.key, sum(rhs.value)
-    FROM lhs
-    JOIN pseudo_source AS rhs
-    ON lhs.value = rhs.key
-    GROUP BY lhs.key;
+    COPY (TAIL avg_bid) TO stdout;
     ```
 
-Of course, these are trivial examples, but hopefully begin to illustrate some of Materialize's potential.
+    To cancel out of the stream, press **CTRL+C**.
 
-## Create a real-time stream
+### Joins
 
-Materialize is built to handle streams of data, and provide incredibly low-latency answers to queries over that data. To show off that capability, in this section we'll set up a real-time stream, and then see how Materialize lets you query it.
+Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) under all the conditions you would expect from a traditional relational database. Let's enrich the PubNub stream with some reference data as an example!
 
-1. We'll set up a stream of Wikipedia's recent changes, and simply write all data that we see to a file.
-
-    From your shell, run:
-    ```
-    while true; do
-      curl --max-time 9999999 -N https://stream.wikimedia.org/v2/stream/recentchange >> wikirecent
-    done
-    ```
-
-    Note the absolute path of the location where you write `wikirecent`, which we'll need in the next step.
-
-1. From within the CLI, create a source from the `wikirecent` file:
+1. Create and populate a table with static reference data:
 
     ```sql
-    CREATE SOURCE wikirecent
-    FROM FILE '[path to wikirecent]' WITH (tail = true)
-    FORMAT REGEX '^data: (?P<data>.*)';
+    CREATE TABLE symbols (
+        symbol text,
+        ticker text
+    );
+
+    INSERT INTO symbols
+    SELECT *
+    FROM (VALUES ('Apple','AAPL'),
+                 ('Google','GOOG'),
+                 ('Elerium','ELER'),
+                 ('Bespin Gas','BGAS'),
+                 ('Linen Cloth','LCLO')
+    );
+
     ```
 
-    This source takes the lines from the stream, finds those that begins with `data:`, and then captures the rest of the line in a column called `data`
+    **Note:** We are using a table for convenience to avoid adding complexity to the guide. It's [unlikely](/sql/create-table/#when-to-use-a-table) that you'll need to use tables in real-world scenarios.
 
-    You can see the columns that get generated for this source:
+1. Now, we can enrich our aggregated data with the ticker for each stock using a regular `JOIN`:
 
     ```sql
-    SHOW COLUMNS FROM wikirecent;
+    CREATE MATERIALIZED VIEW cnt_ticker AS
+    SELECT s.ticker AS ticker,
+           COUNT(*) AS cnt
+    FROM market_orders m
+    JOIN symbols s ON m.symbol = s.symbol
+    GROUP BY s.ticker;
     ```
 
-1. Because this stream comes in as JSON, we'll need to normalize the data to perform aggregations on it. Materialize offers the ability to do this easily using our built-in [`jsonb` functions](/sql/functions/#json).
+1. To see the results:
 
     ```sql
-    CREATE MATERIALIZED VIEW recentchanges AS
-        SELECT
-            val->>'$schema' AS r_schema,
-            (val->'bot')::bool AS bot,
-            val->>'comment' AS comment,
-            (val->'id')::float::int AS id,
-            (val->'length'->'new')::float::int AS length_new,
-            (val->'length'->'old')::float::int AS length_old,
-            val->'meta'->>'uri' AS meta_uri,
-            val->'meta'->>'id' as meta_id,
-            (val->'minor')::bool AS minor,
-            (val->'namespace')::float AS namespace,
-            val->>'parsedcomment' AS parsedcomment,
-            (val->'revision'->'new')::float::int AS revision_new,
-            (val->'revision'->'old')::float::int AS revision_old,
-            val->>'server_name' AS server_name,
-            (val->'server_script_path')::text AS server_script_path,
-            val->>'server_url' AS server_url,
-            (val->'timestamp')::float AS r_ts,
-            val->>'title' AS title,
-            val->>'type' AS type,
-            val->>'user' AS user,
-            val->>'wiki' AS wiki
-        FROM (SELECT data::jsonb AS val FROM wikirecent);
+    SELECT * FROM cnt_ticker;
+     ticker | cnt
+    --------+-----
+     AAPL   |  42
+     BGAS   |  49
+     ELER   |  68
+     GOOG   |  51
+     LCLO   |  70
     ```
 
-1. From here we can start building our aggregations. The simplest place to start is simply counting the number of items we've seen:
+    If you re-run the `SELECT` statement at different points in time, you can see the updated results based on the latest data.
+
+### Temporal Filters
+
+In Materialize, [temporal filters](/guides/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
+
+1. If, instead of computing and maintaining the _overall_ count, we want to get the _moving_ count over the past minute:
 
     ```sql
-    CREATE MATERIALIZED VIEW counter AS
-        SELECT COUNT(*) FROM recentchanges;
+    CREATE MATERIALIZED VIEW cnt_sliding AS
+    SELECT symbol,
+           COUNT(*) AS cnt
+    FROM market_orders m
+    WHERE EXTRACT(EPOCH FROM (ts + INTERVAL '1 minute'))::bigint * 1000 > mz_logical_timestamp()
+    GROUP BY symbol;
     ```
 
-1. However,  we can also see more interesting things from our stream. For instance, who are making the most changes to Wikipedia?
+    The `mz_logical_timestamp()` function is used to keep track of the logical time for your query (similar to `now()` in other systems, as explained more in-depth in ["now and mz_logical_timestamp functions"](/sql/functions/now_and_mz_logical_timestamp/)).
+
+1. To see the results:
 
     ```sql
-    CREATE MATERIALIZED VIEW useredits AS
-        SELECT user, count(*) FROM recentchanges GROUP BY user;
+    SELECT * FROM cnt_sliding;
+
+       symbol    | cnt
+    -------------+-----
+     Apple       |  31
+     Google      |  40
+     Elerium     |  46
+     Bespin Gas  |  35
+     Linen Cloth |  45
     ```
 
-    ```sql
-    SELECT * FROM useredits ORDER BY count DESC;
-    ```
+    As it advances, only the records that satisfy the time constraint are used in the materialized view and contribute to the in-memory footprint.
 
-1. If this is a factoid we often want to know, we could also create a view of just the top 10 editors we've seen.
+## Learn more
 
-    ```sql
-    CREATE MATERIALIZED VIEW top10 AS
-        SELECT * FROM useredits ORDER BY count DESC LIMIT 10;
-    ```
+That's it! You just created your first materialized view and tried out some common patterns enabled by SQL on streams. We encourage you to continue exploring the PubNub source using the supported [SQL commands](/sql/), and read through ["What is Materialize?"](/overview/what-is-materialize) for a more comprehensive overview.
 
-    We can then quickly get the answer to who the top 10 editors are:
+**Next steps**
 
-    ```sql
-    SELECT * FROM top10 ORDER BY count DESC;
-    ```
-
-Naturally, there are many interesting views of this data. If you're interested
-in continuing to explore it, you can check out the stream's documentation from
-Wikipedia.
-
-Once you're done, don't forget to stop `curl` and `rm wikirecent`.
-
-{{< cta href="/demos/microservice" >}}
-Next, see how Materialize can work as an entire microservices →
-{{</ cta >}}
+When you're done with this guide, you can move on to the [end-to-end demos](/demos/) to learn how to use Materialize with other external systems for different use cases.
