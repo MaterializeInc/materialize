@@ -75,12 +75,15 @@ Once you have configured S3 notifications to go to an SQS queue, you can point M
 queue with **DISCOVER OBJECTS USING SQS NOTIFICATIONS `'queue-name'`**.
 
 Materialize deletes SQS messages as soon as they are ingested. This means that the same SQS queue
-cannot be used for multiple sources. Since Materialize treats unmaterialized sources with multiple
-downstream views as separate sources, `SQS NOTIFICATIONS` should not be used with unmaterialized
-sources. If you would like to have multiple sources listening to notifications from the same bucket
-you must [configure an SNS topic][sns] as an intermediary, with multiple SQS queues subscribed to
-it. Note that SQS queues subscribed to SNS topics intended for Materialize must be configured to
-use [raw message delivery][raw-delivery].
+cannot be used for multiple sources. If you would like to have multiple sources listening to
+notifications from the same bucket you must [configure an SNS topic][sns] as an intermediary, with
+multiple SQS queues subscribed to it, one SQS queue per source. Note that SQS queues subscribed to
+SNS topics intended for Materialize must be configured to use [raw message delivery][raw-delivery].
+
+Since Materialize treats unmaterialized sources with multiple downstream views as separate sources,
+`SQS NOTIFICATIONS` should not be used with unmaterialized sources. This behavior of unmaterialized
+sources is considered a bug ([#7423](https://github.com/MaterializeInc/materialize/issues/7423)),
+and will be improved in a future release.
 
 [notification-aws]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
 [notification-tutorial]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ways-to-add-notification-config-to-bucket.html
