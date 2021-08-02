@@ -34,7 +34,7 @@ repr = { path = "../repr" }
 reqwest = "0.11.4"
 rusoto_core = "0.47.0"
 serde = { version = "1.0.126", features = ["derive"] }
-serde_json = "1.0.64"
+serde_json = "1.0.66"
 sql-parser = { path = "../sql-parser" }
 tokio = { version = "1.9.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
