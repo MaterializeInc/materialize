@@ -201,6 +201,9 @@ class Composition:
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
         for name, config in compose["services"].items():
+            compose["services"][name] = _substitute_env_vars(
+                config, {k: v for k, v in os.environ.items()}
+            )
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
 
