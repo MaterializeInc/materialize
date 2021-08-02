@@ -1,5 +1,11 @@
 # Utility to create arbitrary MIRs
 
+## Limitations
+
+`EvalError`s are not yet supported and thus scalar subqueries are not
+supported.
+https://github.com/MaterializeInc/materialize/issues/7657
+
 ## Syntax
 
 See the README for the [lowertest](../lowertest/README.md) crate for the
@@ -58,7 +64,7 @@ But if you want to convert the JSON string into the more readable test syntax, f
 
 1. Copy the JSON string to a file that looks like this:
    ```
-   rel-to-spec
+   rel-to-test
    <JSON version of your MIR>
    ----
    ```
@@ -68,7 +74,7 @@ But if you want to convert the JSON string into the more readable test syntax, f
 3. On the command line, run `cd <this directory>; REWRITE=1 cargo test`. Your
    file should be rewritten so it looks like this:
    ```
-   rel-to-spec
+   rel-to-test
    <JSON version of your MIR>
    ----
    ----
