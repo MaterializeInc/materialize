@@ -25,12 +25,11 @@ services:
       antithesis-net:
         ipv4_address: 10.0.0.12
     environment:
-      MZ_LOG: debug,librdkafka=debug
+      MZ_LOG_FILTER: debug,librdkafka=debug
     command:
       --data-directory=/share/mzdata
       --workers 1
       --experimental
-      --cache-max-pending-records 1
       --timestamp-frequency 100ms
       --disable-telemetry
       --retain-prometheus-metrics 1s

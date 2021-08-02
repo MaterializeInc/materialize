@@ -11,7 +11,6 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
@@ -313,15 +312,6 @@ You cannot disable experimental mode for a node. You can, however, extract your
 view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
 etc.), and then create a new node with those items.
 
-### Source cache
-
-The `--cache-max-pending-records` specifies the number of input messages
-Materialize buffers in memory before flushing them all to disk when using
-[cached sources][cache]. The default value is 1000000 messages. Note
-that Materialize will also flush buffered records every 10 minutes as well. See
-the [Deployment section][cache] for more guidance on how to tune this
-parameter.
-
 ### Telemetry
 
 Materialize periodically communicates with `telemetry.materialize.com` to report
@@ -360,7 +350,21 @@ Using these parameters correctly requires substantial knowledge about how
 the underlying Timely and Differential Dataflow engines work. Typically you
 should only set these parameters in consultation with Materialize engineers.
 
+## Special environment variables
+
+Materialize respects several environment variables that have conventional
+meanings in Unix systems.
+
+### HTTP proxies
+
+The `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` environment
+variables specify a proxy to use for outgoing HTTP and HTTPS traffic. There is
+no precise specification of how these variables behave, but Materialize's
+behavior generally matches the behavior of other HTTP clients.
+
+For precise details of Materialize's behavior, consult our
+[developer docs](https://dev.materialize.com/api/rust/http_util/index.html#System_proxy_configuration).
+
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
-[cache]: /ops/deployment/#source-caching

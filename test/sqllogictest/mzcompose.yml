@@ -41,6 +41,7 @@ services:
     - PGUSER=postgres
     - PGHOST=postgres
     - PGPASSWORD=postgres
+    - MZ_SOFT_ASSERTIONS=1
     depends_on: [postgres]
   postgres:
     image: postgres:11.4

@@ -40,7 +40,7 @@ pub struct ColumnType {
 /// default in unit tests. The default value of a bool is false, and the only
 /// way to make an object take on any other value by default is to pass it a
 /// function that returns the desired default value. See
-/// https://github.com/serde-rs/serde/issues/1030
+/// <https://github.com/serde-rs/serde/issues/1030>
 #[inline(always)]
 fn return_true() -> bool {
     true
@@ -49,7 +49,7 @@ fn return_true() -> bool {
 impl ColumnType {
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (self.scalar_type.clone(), other.scalar_type.clone()) {
-            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
+            (scalar_type, other_scalar_type) if scalar_type.base_eq(&other_scalar_type) => {
                 Ok(ColumnType {
                     scalar_type: scalar_type,
                     nullable: self.nullable || other.nullable,

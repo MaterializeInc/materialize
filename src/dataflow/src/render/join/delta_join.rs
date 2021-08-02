@@ -18,12 +18,13 @@
 //! not create any new stateful operators.
 
 #![allow(clippy::op_ref)]
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, MirScalarExpr};
-use repr::{Row, RowArena};
+use repr::{Diff, Row, RowArena};
 use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
@@ -38,7 +39,7 @@ use crate::render::join::{JoinBuildState, JoinClosure};
 /// in arrangements for other join inputs. These lookups require specific
 /// instructions about which expressions to use as keys. Along the way,
 /// various closures are applied to filter and project as early as possible.
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaJoinPlan {
     /// The set of path plans.
     ///
@@ -48,7 +49,7 @@ pub struct DeltaJoinPlan {
 }
 
 /// A delta query path is implemented by a sequences of stages,
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     source_relation: usize,
@@ -65,7 +66,7 @@ pub struct DeltaPathPlan {
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaStagePlan {
     /// The relation index into which we will look up.
     lookup_relation: usize,
@@ -506,7 +507,7 @@ fn build_halfjoin<G, Tr, CF>(
 )
 where
     G: Scope<Timestamp = repr::Timestamp>,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
@@ -577,7 +578,7 @@ fn build_update_stream<G, Tr>(
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope<Timestamp = repr::Timestamp>,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {

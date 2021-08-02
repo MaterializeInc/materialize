@@ -14,11 +14,11 @@ name = "strconv"
 harness = false
 
 [dependencies]
-anyhow = "1.0.41"
+anyhow = "1.0.42"
 byteorder = "1.4.3"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.5.0", features = ["serde"] }
-dec = "0.4.4"
+dec = "0.4.5"
 enum-kinds = "0.5.0"
 fast-float = "0.2.0"
 hex = "0.4.3"
@@ -26,17 +26,17 @@ itertools = "0.10.1"
 lazy_static = "1.4.0"
 lowertest = { path = "../lowertest"}
 num-traits = "0.2.14"
-ordered-float = { version = "2.5.1", features = ["serde"] }
+ordered-float = { version = "2.7.0", features = ["serde"] }
 ore = { path = "../ore", features = ["bytes"] }
 regex = "1.5.4"
 ryu = "1.0.5"
-serde = { version = "1.0.126", features = ["derive"] }
-serde_json = "1.0.64"
+serde = { version = "1.0.127", features = ["derive"] }
+serde_json = "1.0.66"
 serde_regex = "1.1.0"
 smallvec = { version = "1.5.1", features = ["serde", "union"] }
 uuid = "0.8.2"
 
 [dev-dependencies]
-criterion = "0.3.4"
+criterion = "0.3.5"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 rand = "0.8.4"

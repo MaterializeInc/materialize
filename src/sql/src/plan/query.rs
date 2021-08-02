@@ -22,7 +22,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::mem;
@@ -42,8 +42,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::apd::APD_DATUM_MAX_PRECISION;
-use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
+use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
     Timestamp,
@@ -764,10 +763,11 @@ pub fn eval_as_of<'a>(
     let evaled = ex.eval(&[], temp_storage)?;
 
     Ok(match ex.typ(desc.typ()).scalar_type {
-        ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
-        ScalarType::Decimal(_, _) => {
-            bail!("decimal with fractional component is not a valid timestamp")
+        ScalarType::Numeric { .. } => {
+            let n = evaled.unwrap_numeric().0;
+            u64::try_from(n)?.try_into()?
         }
+        ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
         ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
@@ -1000,7 +1000,9 @@ fn plan_set_expr(
             let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
             let (right_expr, _right_scope) = plan_set_expr(qcx, right)?;
 
-            // TODO(jamii) this type-checking is redundant with HirRelationExpr::typ, but currently it seems that we need both because HirRelationExpr::typ is not allowed to return errors
+            // TODO(jamii) this type-checking is redundant with
+            // HirRelationExpr::typ, but currently it seems that we need both
+            // because HirRelationExpr::typ is not allowed to return errors
             let left_types = qcx.relation_type(&left_expr).column_types;
             let right_types = qcx.relation_type(&right_expr).column_types;
             if left_types.len() != right_types.len() {
@@ -1219,7 +1221,7 @@ fn plan_view_select(
     let (mut relation_expr, from_scope) =
         from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
             let (left, left_scope) = l?;
-            plan_table_with_joins(qcx, left, left_scope, &JoinOperator::CrossJoin, twj)
+            plan_table_with_joins(qcx, left, left_scope, twj)
         })?;
 
     // Step 2. Handle WHERE clause.
@@ -1673,17 +1675,25 @@ fn plan_table_with_joins<'a>(
     qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
-    join_operator: &JoinOperator<Aug>,
     table_with_joins: &'a TableWithJoins<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
+    let pushed_left_was_join_identity = left.is_join_identity();
     let (mut left, mut left_scope) = plan_table_factor(
         qcx,
         left,
         left_scope,
-        join_operator,
+        &JoinOperator::CrossJoin,
         &table_with_joins.relation,
     )?;
     for join in &table_with_joins.joins {
+        if !pushed_left_was_join_identity
+            && matches!(
+                &join.join_operator,
+                JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
+            )
+        {
+            unsupported!(6875, "full/right outer joins in comma join");
+        }
         let (new_left, new_left_scope) =
             plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
         left = new_left;
@@ -1742,13 +1752,7 @@ fn plan_table_factor(
 
         TableFactor::NestedJoin { join, alias } => {
             let (identity, identity_scope) = plan_join_identity(&qcx);
-            let (expr, scope) = plan_table_with_joins(
-                &qcx,
-                identity,
-                identity_scope,
-                &JoinOperator::CrossJoin,
-                join,
-            )?;
+            let (expr, scope) = plan_table_with_joins(&qcx, identity, identity_scope, join)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
@@ -2599,7 +2603,7 @@ fn plan_list(
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
         if let Some(ScalarType::List { element_type, .. }) = type_hint {
-            ((**element_type).clone(), vec![])
+            (element_type.default_embedded_value(), vec![])
         } else {
             bail!("cannot determine type of empty list");
         }
@@ -2618,7 +2622,7 @@ fn plan_list(
             });
         }
         let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
-        (ecx.scalar_type(&out[0]), out)
+        (ecx.scalar_type(&out[0]).default_embedded_value(), out)
     };
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },
@@ -2967,24 +2971,18 @@ fn plan_case<'a>(
 fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
-            let d: Decimal = s.parse()?;
-            if d.scale() == 0 {
-                let significand = d.significand();
-                if let Ok(n) = significand.try_into() {
+            let d = strconv::parse_numeric(s.as_str())?;
+            if !s.contains(&['E', '.'][..]) {
+                // Maybe representable as an int?
+                if let Ok(n) = d.0.try_into() {
                     (Datum::Int32(n), ScalarType::Int32)
-                } else if let Ok(n) = significand.try_into() {
+                } else if let Ok(n) = d.0.try_into() {
                     (Datum::Int64(n), ScalarType::Int64)
                 } else {
-                    (
-                        Datum::from(significand),
-                        ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                    )
+                    (Datum::Numeric(d), ScalarType::Numeric { scale: None })
                 }
             } else {
-                (
-                    Datum::from(d.significand()),
-                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                )
+                (Datum::Numeric(d), ScalarType::Numeric { scale: None })
             }
         }
         Value::HexString(_) => unsupported!(3114, "hex string literals"),
@@ -3089,18 +3087,13 @@ pub fn scalar_type_from_sql(
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
-                    ScalarType::APD { .. } => {
-                        let (_, scale) =
-                            unwrap_numeric_typ_mod(typ_mod, APD_DATUM_MAX_PRECISION as u8, "apd")?;
-                        ScalarType::APD { scale }
-                    }
-                    ScalarType::Decimal(..) => {
-                        let (precision, scale) =
-                            unwrap_numeric_typ_mod(typ_mod, MAX_DECIMAL_PRECISION, "numeric")?;
-                        ScalarType::Decimal(
-                            precision.unwrap_or(MAX_DECIMAL_PRECISION),
-                            scale.unwrap_or(0),
-                        )
+                    ScalarType::Numeric { .. } => {
+                        let (_, scale) = unwrap_numeric_typ_mod(
+                            typ_mod,
+                            NUMERIC_DATUM_MAX_PRECISION as u8,
+                            "numeric",
+                        )?;
+                        ScalarType::Numeric { scale }
                     }
                     ScalarType::String => {
                         // TODO(justin): we should look up in the catalog to see
@@ -3129,11 +3122,11 @@ pub fn scalar_type_from_sql(
 }
 
 /// Returns the first two values provided as typ_mods as `u8`, which are
-/// appropriate values to associate with `ScalarType::Decimal`'s values,
+/// appropriate values to associate with `ScalarType::Numeric`'s values,
 /// precision and scale.
 ///
 /// Note that this function assumes you have already determined that
-/// `data_type.name` should resolve to `ScalarType::Decimal`.
+/// `data_type.name` should resolve to `ScalarType::Numeric`.
 pub fn unwrap_numeric_typ_mod(
     typ_mod: &[u64],
     max: u8,
@@ -3196,11 +3189,12 @@ fn validate_typ_mod(
 pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Error> {
     match ty {
         pgrepr::Type::Bool => Ok(ScalarType::Bool),
+        pgrepr::Type::Int2 => Ok(ScalarType::Int16),
         pgrepr::Type::Int4 => Ok(ScalarType::Int32),
         pgrepr::Type::Int8 => Ok(ScalarType::Int64),
         pgrepr::Type::Float4 => Ok(ScalarType::Float32),
         pgrepr::Type::Float8 => Ok(ScalarType::Float64),
-        pgrepr::Type::Numeric => Ok(ScalarType::Decimal(0, 0)),
+        pgrepr::Type::Numeric => Ok(ScalarType::Numeric { scale: None }),
         pgrepr::Type::Date => Ok(ScalarType::Date),
         pgrepr::Type::Time => Ok(ScalarType::Time),
         pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
@@ -3223,7 +3217,6 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),
-        pgrepr::Type::APD => Ok(ScalarType::APD { scale: None }),
     }
 }
 

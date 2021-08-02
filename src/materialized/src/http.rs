@@ -21,12 +21,15 @@ use hyper::{service, Method, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
+use ore::metrics::MetricsRegistry;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 
 use coord::session::Session;
 use ore::future::OreFutureExt;
 use ore::netio::SniffedStream;
+
+use crate::Metrics;
 
 mod catalog;
 mod memory;
@@ -53,6 +56,8 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     pub coord_client: coord::Client,
     pub start_time: Instant,
+    pub metrics_registry: MetricsRegistry,
+    pub global_metrics: Metrics,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +77,8 @@ pub struct Server {
     tls: Option<TlsConfig>,
     coord_client: coord::Client,
     start_time: Instant,
+    metrics_registry: MetricsRegistry,
+    global_metrics: Metrics,
 }
 
 impl Server {
@@ -80,6 +87,8 @@ impl Server {
             tls: config.tls,
             coord_client: config.coord_client,
             start_time: config.start_time,
+            metrics_registry: config.metrics_registry,
+            global_metrics: config.global_metrics,
         }
     }
 
@@ -143,6 +152,8 @@ impl Server {
             let user = user.clone();
             let coord_client = self.coord_client.clone();
             let start_time = self.start_time;
+            let metrics_registry = self.metrics_registry.clone();
+            let global_metrics = self.global_metrics.clone();
             let future = async move {
                 let user = match user {
                     Ok(user) => user,
@@ -163,22 +174,31 @@ impl Server {
 
                 let res = match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
-                    (&Method::GET, "/metrics") => {
-                        metrics::handle_prometheus(req, &mut coord_client, start_time).await
-                    }
-                    (&Method::GET, "/status") => {
-                        metrics::handle_status(req, &mut coord_client, start_time).await
-                    }
+                    (&Method::GET, "/metrics") => metrics::handle_prometheus(
+                        req,
+                        &mut coord_client,
+                        start_time,
+                        &metrics_registry,
+                        &global_metrics,
+                    ),
+                    (&Method::GET, "/status") => metrics::handle_status(
+                        req,
+                        &mut coord_client,
+                        start_time,
+                        &metrics_registry,
+                        &global_metrics,
+                    ),
                     (&Method::GET, "/prof") => prof::handle_prof(req, &mut coord_client).await,
-                    (&Method::GET, "/memory") => {
-                        memory::handle_memory(req, &mut coord_client).await
+                    (&Method::GET, "/memory") => memory::handle_memory(req, &mut coord_client),
+                    (&Method::GET, "/hierarchical-memory") => {
+                        memory::handle_hierarchical_memory(req, &mut coord_client)
                     }
                     (&Method::POST, "/prof") => prof::handle_prof(req, &mut coord_client).await,
                     (&Method::POST, "/sql") => sql::handle_sql(req, &mut coord_client).await,
                     (&Method::GET, "/internal/catalog") => {
                         catalog::handle_internal_catalog(req, &mut coord_client).await
                     }
-                    _ => root::handle_static(req, &mut coord_client).await,
+                    _ => root::handle_static(req, &mut coord_client),
                 };
                 coord_client.terminate().await;
                 res

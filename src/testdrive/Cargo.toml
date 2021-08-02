@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
-async-trait = "0.1.50"
+async-trait = "0.1.51"
 atty = "0.2.0"
 aws-util = { path = "../aws-util" }
 byteorder = "1.4.3"
@@ -16,7 +16,7 @@ ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
 flate2 = "1.0.20"
-futures = "0.3.15"
+futures = "0.3.16"
 interchange = { path = "../interchange" }
 itertools = "0.10.1"
 kafka-util = { path = "../kafka-util" }
@@ -39,22 +39,22 @@ rusoto_kinesis = "0.47.0"
 rusoto_s3 = "0.47.0"
 rusoto_sqs = "0.47.0"
 rusoto_sts = "0.47.0"
-serde = "1.0.126"
+serde = "1.0.127"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
-serde_json = "1.0.64"
+serde_json = "1.0.66"
 sql-parser = { path = "../sql-parser" }
 structopt = "0.3.22"
 tempfile = "3.2.0"
 termcolor = "1.1.2"
-tokio = "1.6.1"
+tokio = "1.9.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
-tokio-stream = "0.1.6"
+tokio-stream = "0.1.7"
 url = "2.2.2"
 uuid = "0.8.2"
 
 [dev-dependencies]
-assert_cmd = "1.0.7"
-predicates = "2.0.0"
+assert_cmd = "1.0.8"
+predicates = "2.0.1"
 
 [build-dependencies]
 protoc = { path = "../protoc" }

@@ -16,7 +16,10 @@ use std::sync::{Arc, Mutex};
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Blob, Buffer, Persister, SeqNo};
+use crate::indexed::runtime::{self, RuntimeClient};
+use crate::storage::{Blob, Buffer, SeqNo};
+use crate::unreliable::{UnreliableBlob, UnreliableBuffer, UnreliableHandle};
+use crate::Data;
 
 struct MemBufferCore {
     seqno: Range<SeqNo>,
@@ -25,11 +28,11 @@ struct MemBufferCore {
 }
 
 impl MemBufferCore {
-    fn new() -> Self {
+    fn new(lock_info: &str) -> Self {
         MemBufferCore {
             seqno: SeqNo(0)..SeqNo(0),
             dataz: Vec::new(),
-            lock: None,
+            lock: Some(lock_info.to_string()),
         }
     }
 
@@ -43,9 +46,8 @@ impl MemBufferCore {
         Ok(())
     }
 
-    fn close(&mut self) -> Result<(), Error> {
-        self.lock = None;
-        Ok(())
+    fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.lock.take().is_some())
     }
 
     fn ensure_open(&self) -> Result<(), Error> {
@@ -83,7 +85,6 @@ impl MemBufferCore {
 
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
         self.ensure_open()?;
-        // TODO: Test the edge cases here.
         if upper <= self.seqno.start || upper > self.seqno.end {
             return Err(format!(
                 "invalid truncation {:?} for buffer containing: {:?}",
@@ -109,12 +110,10 @@ pub struct MemBuffer {
 
 impl MemBuffer {
     /// Constructs a new, empty MemBuffer.
-    pub fn new(lock_info: &str) -> Result<Self, Error> {
-        let mut core = MemBufferCore::new();
-        core.open(lock_info)?;
-        Ok(Self {
-            core: Arc::new(Mutex::new(core)),
-        })
+    pub fn new(lock_info: &str) -> Self {
+        Self {
+            core: Arc::new(Mutex::new(MemBufferCore::new(lock_info))),
+        }
     }
 
     /// Open a pre-existing MemBuffer.
@@ -126,7 +125,12 @@ impl MemBuffer {
 
 impl Drop for MemBuffer {
     fn drop(&mut self) {
-        self.close().expect("closing MemBuffer cannot fail");
+        let did_work = self.close().expect("closing MemBuffer cannot fail");
+        // MemBuffer should have been closed gracefully; this drop is only here
+        // as a failsafe. If it actually did anything, that's surprising.
+        if did_work {
+            log::warn!("MemBuffer dropped without close");
+        }
     }
 }
 
@@ -146,7 +150,7 @@ impl Buffer for MemBuffer {
         self.core.lock()?.truncate(upper)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
         self.core.lock()?.close()
     }
 }
@@ -157,10 +161,10 @@ struct MemBlobCore {
 }
 
 impl MemBlobCore {
-    fn new() -> Self {
+    fn new(lock_info: &str) -> Self {
         MemBlobCore {
             dataz: HashMap::new(),
-            lock: None,
+            lock: Some(lock_info.to_string()),
         }
     }
 
@@ -174,9 +178,8 @@ impl MemBlobCore {
         Ok(())
     }
 
-    fn close(&mut self) -> Result<(), Error> {
-        self.lock = None;
-        Ok(())
+    fn close(&mut self) -> Result<bool, Error> {
+        Ok(self.lock.take().is_some())
     }
 
     fn ensure_open(&self) -> Result<(), Error> {
@@ -212,12 +215,10 @@ pub struct MemBlob {
 
 impl MemBlob {
     /// Constructs a new, empty MemBlob.
-    pub fn new(lock_info: &str) -> Result<Self, Error> {
-        let mut core = MemBlobCore::new();
-        core.open(lock_info)?;
-        Ok(MemBlob {
-            core: Arc::new(Mutex::new(core)),
-        })
+    pub fn new(lock_info: &str) -> Self {
+        MemBlob {
+            core: Arc::new(Mutex::new(MemBlobCore::new(lock_info))),
+        }
     }
 
     /// Open a pre-existing MemBlob.
@@ -229,7 +230,12 @@ impl MemBlob {
 
 impl Drop for MemBlob {
     fn drop(&mut self) {
-        self.close().expect("closing MemBlob cannot fail");
+        let did_work = self.close().expect("closing MemBlob cannot fail");
+        // MemBuffer should have been closed gracefully; this drop is only here
+        // as a failsafe. If it actually did anything, that's surprising.
+        if did_work {
+            log::warn!("MemBlob dropped without close");
+        }
     }
 }
 
@@ -242,7 +248,7 @@ impl Blob for MemBlob {
         self.core.lock()?.set(key, value, allow_overwrite)
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self) -> Result<bool, Error> {
         self.core.lock()?.close()
     }
 }
@@ -250,49 +256,67 @@ impl Blob for MemBlob {
 /// An in-memory representation of a set of [Buffer]s and [Blob]s that can be reused
 /// across dataflows
 pub struct MemRegistry {
-    by_path: HashMap<String, (Arc<Mutex<MemBufferCore>>, Arc<Mutex<MemBlobCore>>)>,
+    buf_by_path: HashMap<String, Arc<Mutex<MemBufferCore>>>,
+    blob_by_path: HashMap<String, Arc<Mutex<MemBlobCore>>>,
 }
 
 impl MemRegistry {
     /// Constructs a new, empty MemRegistry
     pub fn new() -> Self {
         MemRegistry {
-            by_path: HashMap::new(),
+            buf_by_path: HashMap::new(),
+            blob_by_path: HashMap::new(),
         }
     }
 
     fn buffer(&mut self, path: &str, lock_info: &str) -> Result<MemBuffer, Error> {
-        let buffer = if let Some((buffer, _)) = self.by_path.get(path) {
-            buffer.clone()
+        if let Some(buf) = self.buf_by_path.get(path) {
+            MemBuffer::open(buf.clone(), lock_info)
         } else {
-            let buffer = Arc::new(Mutex::new(MemBufferCore::new()));
-            let blob = Arc::new(Mutex::new(MemBlobCore::new()));
-            self.by_path
-                .insert(path.to_string(), (buffer.clone(), blob));
-            buffer
-        };
-        MemBuffer::open(buffer, lock_info)
+            let buf = MemBuffer::new(lock_info);
+            self.buf_by_path.insert(path.to_string(), buf.core.clone());
+            Ok(buf)
+        }
     }
 
     fn blob(&mut self, path: &str, lock_info: &str) -> Result<MemBlob, Error> {
-        let blob = if let Some((_, blob)) = self.by_path.get(path) {
-            blob.clone()
+        if let Some(blob) = self.blob_by_path.get(path) {
+            MemBlob::open(blob.clone(), lock_info)
         } else {
-            let buffer = Arc::new(Mutex::new(MemBufferCore::new()));
-            let blob = Arc::new(Mutex::new(MemBlobCore::new()));
-            self.by_path
-                .insert(path.to_string(), (buffer, blob.clone()));
-            blob
-        };
-        MemBlob::open(blob, lock_info)
+            let blob = MemBlob::new(lock_info);
+            self.blob_by_path
+                .insert(path.to_string(), blob.core.clone());
+            Ok(blob)
+        }
     }
 
-    /// Opens the in-memory [Persister] associated with `path` or creates one if
-    /// none exists.
-    pub fn open(&mut self, path: &str, lock_info: &str) -> Result<Persister, Error> {
+    /// Open a [RuntimeClient] associated with `path`.
+    pub fn open<K, V>(&mut self, path: &str, lock_info: &str) -> Result<RuntimeClient<K, V>, Error>
+    where
+        K: Data + Send + Sync + 'static,
+        V: Data + Send + Sync + 'static,
+    {
         let buffer = self.buffer(path, lock_info)?;
         let blob = self.blob(path, lock_info)?;
-        Persister::new(buffer, blob)
+        runtime::start(buffer, blob)
+    }
+
+    /// Open a [RuntimeClient] with unreliable storage associated with `path`.
+    pub fn open_unreliable<K, V>(
+        &mut self,
+        path: &str,
+        lock_info: &str,
+        unreliable: UnreliableHandle,
+    ) -> Result<RuntimeClient<K, V>, Error>
+    where
+        K: Data + Send + Sync + 'static,
+        V: Data + Send + Sync + 'static,
+    {
+        let buffer = self.buffer(path, lock_info)?;
+        let buffer = UnreliableBuffer::from_handle(buffer, unreliable.clone());
+        let blob = self.blob(path, lock_info)?;
+        let blob = UnreliableBlob::from_handle(blob, unreliable);
+        runtime::start(buffer, blob)
     }
 }
 

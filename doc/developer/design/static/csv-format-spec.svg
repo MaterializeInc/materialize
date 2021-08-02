@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="903" height="147">
+   <defs>
+      <style type="text/css">
+    @namespace "http://www.w3.org/2000/svg";
+    .line                 {fill: none; stroke: #332900; stroke-width: 1;}
+    .bold-line            {stroke: #141000; shape-rendering: crispEdges; stroke-width: 2;}
+    .thin-line            {stroke: #1F1800; shape-rendering: crispEdges}
+    .filled               {fill: #332900; stroke: none;}
+    text.terminal         {font-family: Verdana, Sans-serif;
+                            font-size: 12px;
+                            fill: #141000;
+                            font-weight: bold;
+                          }
+    text.nonterminal      {font-family: Verdana, Sans-serif;
+                            font-size: 12px;
+                            fill: #1A1400;
+                            font-weight: normal;
+                          }
+    text.regexp           {font-family: Verdana, Sans-serif;
+                            font-size: 12px;
+                            fill: #1F1800;
+                            font-weight: normal;
+                          }
+    rect, circle, polygon {fill: #332900; stroke: #332900;}
+    rect.terminal         {fill: #FFDB4D; stroke: #332900; stroke-width: 1;}
+    rect.nonterminal      {fill: #FFEC9E; stroke: #332900; stroke-width: 1;}
+    rect.text             {fill: none; stroke: none;}
+    polygon.regexp        {fill: #FFF4C7; stroke: #332900; stroke-width: 1;}
+  </style>
+   </defs>
+   <polygon points="9 61 1 57 1 65"/>
+   <polygon points="17 61 9 57 9 65"/>
+   <rect x="31" y="47" width="88" height="32" rx="10"/>
+   <rect x="29"
+         y="45"
+         width="88"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="65">CSV WITH</text>
+   <rect x="159" y="47" width="76" height="32" rx="10"/>
+   <rect x="157"
+         y="45"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="167" y="65">HEADER</text>
+   <rect x="275" y="47" width="90" height="32" rx="10"/>
+   <rect x="273"
+         y="45"
+         width="90"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="283" y="65">COLUMNS</text>
+   <rect x="385" y="47" width="24" height="32" rx="10"/>
+   <rect x="383"
+         y="45"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="393" y="65">(</text>
+   <rect x="449" y="47" width="80" height="32"/>
+   <rect x="447" y="45" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="457" y="65">col_name</text>
+   <rect x="449" y="3" width="24" height="32" rx="10"/>
+   <rect x="447"
+         y="1"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="457" y="21">,</text>
+   <rect x="569" y="47" width="24" height="32" rx="10"/>
+   <rect x="567"
+         y="45"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="577" y="65">)</text>
+   <rect x="159" y="113" width="28" height="32"/>
+   <rect x="157" y="111" width="28" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="167" y="131">n</text>
+   <rect x="207" y="113" width="90" height="32" rx="10"/>
+   <rect x="205"
+         y="111"
+         width="90"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="215" y="131">COLUMNS</text>
+   <rect x="673" y="79" width="116" height="32" rx="10"/>
+   <rect x="671"
+         y="77"
+         width="116"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="681" y="97">DELIMITED BY</text>
+   <rect x="809" y="79" width="46" height="32"/>
+   <rect x="807" y="77" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="817" y="97">char</text>
+   <path class="line"
+         d="m17 61 h2 m0 0 h10 m88 0 h10 m20 0 h10 m76 0 h10 m20 0 h10 m90 0 h10 m0 0 h10 m24 0 h10 m20 0 h10 m80 0 h10 m-120 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m100 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-100 0 h10 m24 0 h10 m0 0 h56 m20 44 h10 m24 0 h10 m-358 0 h20 m338 0 h20 m-378 0 q10 0 10 10 m358 0 q0 -10 10 -10 m-368 10 v14 m358 0 v-14 m-358 14 q0 10 10 10 m338 0 q10 0 10 -10 m-348 10 h10 m0 0 h328 m-474 -34 h20 m474 0 h20 m-514 0 q10 0 10 10 m494 0 q0 -10 10 -10 m-504 10 v46 m494 0 v-46 m-494 46 q0 10 10 10 m474 0 q10 0 10 -10 m-484 10 h10 m28 0 h10 m0 0 h10 m90 0 h10 m0 0 h316 m40 -66 h10 m0 0 h192 m-222 0 h20 m202 0 h20 m-242 0 q10 0 10 10 m222 0 q0 -10 10 -10 m-232 10 v12 m222 0 v-12 m-222 12 q0 10 10 10 m202 0 q10 0 10 -10 m-212 10 h10 m116 0 h10 m0 0 h10 m46 0 h10 m23 -32 h-3"/>
+   <polygon points="893 61 901 57 901 65"/>
+   <polygon points="893 61 885 57 885 65"/>
+</svg>

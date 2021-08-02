@@ -76,11 +76,11 @@ services:
       --data-directory=/share/mzdata
       -w1
       --disable-telemetry
-      --logical-compaction-window=off
+      --logical-compaction-window=1ms
       --experimental
     environment:
       - MZ_DEV=1
-      - MZ_LOG=${MZ_LOG:-dataflow::sink::kafka=debug,dataflow::source::kafka=debug,coord::timestamp=debug,dataflow::source=debug,info}
+      - MZ_LOG_FILTER=${MZ_LOG_FILTER:-dataflow::sink::kafka=debug,dataflow::source::kafka=debug,coord::timestamp=debug,dataflow::source=debug,info}
     ports:
       - 6875
     volumes:
@@ -89,7 +89,7 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:$KAFKA_VERSION
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      - ZOOKEEPER_CLIENT_PORT=2181
 
   kafka:
     image: confluentinc/cp-kafka:$KAFKA_VERSION

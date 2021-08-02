@@ -74,47 +74,20 @@ impl<'a> DataflowBuilder<'a> {
                     dataflow.import_source(
                         entry.name().to_string(),
                         *id,
-                        SourceConnector::Local(table.timeline()),
+                        SourceConnector::Local {
+                            timeline: table.timeline(),
+                            persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                        },
                         table.desc.clone(),
                         *id,
                     );
                 }
                 CatalogItem::Source(source) => {
-                    // If Materialize has caching enabled, check to see if the source has any
-                    // already cached data that can be reused, and if so, augment the source
-                    // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) =
-                        self.catalog.config().cache_directory.as_deref()
-                    {
-                        match crate::cache::augment_connector(
-                            source.connector.clone(),
-                            &path,
-                            self.catalog.config().cluster_id,
-                            *id,
-                        ) {
-                            Ok(Some(connector)) => Some(connector),
-                            Ok(None) => None,
-                            Err(e) => {
-                                log::error!("encountered error while trying to reuse cached data for source {}: {}", id.to_string(), e);
-                                log::trace!(
-                                    "continuing without cached data for source {}",
-                                    id.to_string()
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Default back to the regular connector if we didn't get a augmented one.
-                    let connector = connector.unwrap_or_else(|| source.connector.clone());
-
                     if source.optimized_expr.0.is_trivial_source() {
                         dataflow.import_source(
                             entry.name().to_string(),
                             *id,
-                            connector,
+                            source.connector.clone(),
                             source.bare_desc.clone(),
                             *id,
                         );
@@ -125,7 +98,7 @@ impl<'a> DataflowBuilder<'a> {
                         dataflow.import_source(
                             entry.name().to_string(),
                             bare_source_id,
-                            connector,
+                            source.connector.clone(),
                             source.bare_desc.clone(),
                             *id,
                         );
@@ -161,31 +134,21 @@ impl<'a> DataflowBuilder<'a> {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
         for get_id in view.global_uses() {
             self.import_into_dataflow(&get_id, dataflow);
-        }
-        // Collect sources, views, and indexes used.
-        view.visit(&mut |e| {
-            if let MirRelationExpr::ArrangeBy { input, keys } = e {
-                if let MirRelationExpr::Get {
-                    id: Id::Global(on_id),
-                    typ,
-                } = &**input
-                {
-                    for key_set in keys {
-                        let index_desc = IndexDesc {
-                            on_id: *on_id,
-                            keys: key_set.to_vec(),
-                        };
-                        // If the arrangement exists, import it. It may not exist, in which
-                        // case we should import the source to be sure that we have access
-                        // to the collection to arrange it ourselves.
-                        let indexes = &self.catalog.indexes()[on_id];
-                        if let Some((id, _)) = indexes.iter().find(|(_id, keys)| keys == key_set) {
-                            dataflow.import_index(*id, index_desc, typ.clone(), *view_id);
-                        }
-                    }
+
+            // TODO: indexes should be imported after the optimization process, and only those
+            // actually used by the optimized plan
+            if let Some(indexes) = self.catalog.indexes().get(&get_id) {
+                for (id, keys) in indexes.iter() {
+                    let on_entry = self.catalog.get_by_id(&get_id);
+                    let on_type = on_entry.desc().unwrap().typ().clone();
+                    let index_desc = IndexDesc {
+                        on_id: get_id,
+                        keys: keys.clone(),
+                    };
+                    dataflow.import_index(*id, index_desc, on_type, *view_id);
                 }
             }
-        });
+        }
         dataflow.insert_view(*view_id, view.clone());
     }
 
@@ -214,7 +177,7 @@ impl<'a> DataflowBuilder<'a> {
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
-        envelope: SinkEnvelope,
+        envelope: Option<SinkEnvelope>,
         as_of: SinkAsOf,
     ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);

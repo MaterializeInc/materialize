@@ -24,11 +24,11 @@
 //! directives are not in the same session). Output is formatted
 //! [`ExecuteResponse`](coord::ExecuteResponse). The input can contain the
 //! string `<TEMP>` which will be replaced with a temporary directory.
-//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout
-//! which will panic) until all datums returned (all columns in all
-//! rows in all statements) are `true`. Prior to each attempt, all
-//! pending feedback messages from the dataflow server are sent to the
-//! Coordinator. Messages for specified items can be skipped by specifying
+//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout which
+//! will panic) until all datums returned (all columns in all rows in all
+//! statements) are `true`. Prior to each attempt, all pending feedback
+//! messages from the dataflow server are sent to the Coordinator. Messages
+//! for specified items can be skipped (but requeued) by specifying
 //! `exclude-uppers=database.schema.item` as an argument. After each failed
 //! attempt, the timestamp is incremented by 1 to give any new data an
 //! opportunity to be observed.
@@ -53,6 +53,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::FutureExt;
+use ore::metrics::MetricsRegistry;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::mpsc;
 
@@ -81,18 +82,23 @@ pub struct CoordTest {
     client: Option<Client>,
     _handle: JoinOnDropHandle<()>,
     dataflow_feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
+    // Keep a queue of messages in the order received from dataflow_feedback_rx so
+    // we can safely modify or inject things and maintain original message order.
+    queued_feedback: Vec<WorkerFeedbackWithMeta>,
     _catalog_file: NamedTempFile,
     temp_dir: TempDir,
     uppers: HashMap<GlobalId, Timestamp>,
     timestamp: Arc<Mutex<u64>>,
     _verbose: bool,
+    _metrics_registry: MetricsRegistry,
 }
 
 impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
         let catalog_file = NamedTempFile::new()?;
+        let metrics_registry = MetricsRegistry::new();
         let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp) =
-            coord::serve_debug(catalog_file.path());
+            coord::serve_debug(catalog_file.path(), metrics_registry.clone());
         let coordtest = CoordTest {
             _handle: handle,
             client: Some(client),
@@ -103,6 +109,8 @@ impl CoordTest {
             uppers: HashMap::new(),
             _verbose: std::env::var_os("COORDTEST_VERBOSE").is_some(),
             timestamp,
+            _metrics_registry: metrics_registry,
+            queued_feedback: Vec::new(),
         };
         Ok(coordtest)
     }
@@ -132,18 +140,74 @@ impl CoordTest {
         r
     }
 
-    async fn drain_uppers(&mut self, exclude: &HashSet<GlobalId>) {
+    fn drain_feedback_msgs(&mut self) {
         loop {
-            if let Some(Some(mut msg)) = self.dataflow_feedback_rx.recv().now_or_never() {
-                // Filter out requested ids.
-                if let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message {
-                    uppers.retain(|(id, _data)| !exclude.contains(id));
-                }
-                self.coord_feedback_tx.send(msg).unwrap();
+            if let Some(Some(msg)) = self.dataflow_feedback_rx.recv().now_or_never() {
+                self.queued_feedback.push(msg);
             } else {
                 return;
             }
         }
+    }
+
+    // Drains messages from the queue into coord, extracting and requeueing
+    // excluded uppers.
+    async fn drain_skip_uppers(&mut self, exclude_uppers: &HashSet<GlobalId>) {
+        self.drain_feedback_msgs();
+        let mut to_send = vec![];
+        let mut to_queue = vec![];
+        for mut msg in self.queued_feedback.drain(..) {
+            // Filter out requested ids.
+            if let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message {
+                // Requeue excluded uppers so future wait-sql directives don't always have to
+                // specify the same exclude list forever.
+                let mut requeue = uppers.clone();
+                requeue.retain(|(id, _data)| exclude_uppers.contains(id));
+                if !requeue.is_empty() {
+                    to_queue.push(WorkerFeedbackWithMeta {
+                        worker_id: msg.worker_id,
+                        message: WorkerFeedback::FrontierUppers(requeue),
+                    });
+                }
+                uppers.retain(|(id, _data)| !exclude_uppers.contains(id));
+            }
+            to_send.push(msg);
+        }
+        for msg in to_send {
+            self.coord_feedback_tx.send(msg).unwrap();
+        }
+        self.queued_feedback = to_queue;
+    }
+
+    // Processes PeekResponse messages until rows has a response.
+    async fn wait_for_peek(
+        &mut self,
+        mut rows: std::pin::Pin<Box<dyn Future<Output = PeekResponse>>>,
+    ) -> PeekResponse {
+        loop {
+            if let futures::task::Poll::Ready(rows) = futures::poll!(rows.as_mut()) {
+                return rows;
+            }
+            self.drain_peek_response();
+        }
+    }
+
+    // Drains PeekResponse messages from the queue into coord.
+    fn drain_peek_response(&mut self) {
+        self.drain_feedback_msgs();
+        let mut to_send = vec![];
+        let mut to_queue = vec![];
+        for msg in self.queued_feedback.drain(..) {
+            if let WorkerFeedback::PeekResponse(..) = msg.message {
+                to_send.push(msg);
+            } else {
+                to_queue.push(msg);
+            }
+        }
+        for msg in to_send {
+            self.coord_feedback_tx.send(msg).unwrap();
+        }
+        self.queued_feedback = to_queue;
     }
 
     async fn make_catalog(&self) -> Catalog {
@@ -213,7 +277,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                     for r in results {
                         strs.push(match r {
                             ExecuteResponse::SendingRows(rows) => {
-                                format!("{:#?}", rows.await)
+                                format!("{:#?}", ct.wait_for_peek(rows).await)
                             }
                             r => format!("{:#?}", r),
                         });
@@ -233,7 +297,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
 
                     let start = Instant::now();
                     loop {
-                        ct.drain_uppers(&exclude_uppers).await;
+                        ct.drain_skip_uppers(&exclude_uppers).await;
                         let query = ct.rewrite_query(&tc.input);
                         let results = ct
                             .with_sc(|sc| Box::pin(async move { sql(sc, query).await }))
@@ -243,20 +307,23 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                             Ok(result) => {
                                 for r in result {
                                     match r {
-                                        ExecuteResponse::SendingRows(rows) => match rows.await {
-                                            PeekResponse::Rows(rows) => {
-                                                for row in rows {
-                                                    for col in row.iter() {
-                                                        if col != Datum::True {
-                                                            failed = Err(anyhow!("datum != true"));
+                                        ExecuteResponse::SendingRows(rows) => {
+                                            match ct.wait_for_peek(rows).await {
+                                                PeekResponse::Rows(rows) => {
+                                                    for row in rows {
+                                                        for col in row.iter() {
+                                                            if col != Datum::True {
+                                                                failed =
+                                                                    Err(anyhow!("datum != true"));
+                                                            }
                                                         }
                                                     }
                                                 }
+                                                r => {
+                                                    failed = Err(anyhow!("{:?}", r));
+                                                }
                                             }
-                                            r => {
-                                                failed = Err(anyhow!("{:?}", r));
-                                            }
-                                        },
+                                        }
                                         _ => panic!("expected SendingRows"),
                                     };
                                 }
@@ -329,7 +396,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                 }
                 "print-catalog" => {
                     let catalog = ct.make_catalog().await;
-                    format!("{:#?}", catalog)
+                    format!("{:#?}\n", catalog)
                 }
                 _ => panic!("unknown directive {}", tc.directive),
             };

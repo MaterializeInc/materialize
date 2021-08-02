@@ -281,29 +281,26 @@ SELECT '-10e-400'::float8
 
 # test edge-case coercions to integer
 
-# TODO(benesch): enable when we support `int2`.
-#
-# SELECT '32767.4'::float8::int2;
-#  int2
-# -------
-#  32767
-# (1 row)
-#
-# SELECT '32767.6'::float8::int2;
-# ERROR:  smallint out of range
-# SELECT '-32768.4'::float8::int2;
-#   int2
-# --------
-#  -32768
-# (1 row)
-#
-# SELECT '-32768.6'::float8::int2;
-# ERROR:  smallint out of range
-# SELECT '2147483647.4'::float8::int4;
-#     int4
-# ------------
-#  2147483647
-# (1 row)
+query I
+SELECT '32767.4'::float8::int2;
+----
+32767
+
+query error smallint out of range
+SELECT '32767.6'::float8::int2;
+
+query I
+SELECT '-32768.4'::float8::int2;
+----
+-32768
+
+query error smallint out of range
+SELECT '-32768.6'::float8::int2;
+
+query I
+SELECT '2147483647.4'::float8::int4;
+----
+2147483647
 
 query error integer out of range
 SELECT '2147483647.6'::float8::int4

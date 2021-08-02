@@ -37,7 +37,6 @@ any
 anyarray
 anyelement
 anynonarray
-apd
 bool
 bpchar
 bytea
@@ -87,7 +86,6 @@ any              system
 anyarray         system
 anyelement       system
 anynonarray      system
-apd              system
 bool             system
 bpchar           system
 bytea            system

@@ -21,7 +21,8 @@ use rdkafka::{Message, Offset, TopicPartitionList};
 
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, SinkConnector, SinkConnectorBuilder,
+    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkConnector,
+    SinkConnectorBuilder,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -64,7 +65,7 @@ fn get_next_message(
 }
 
 // Retrieves the latest committed timestamp from the consistency topic
-async fn get_latest_ts(
+fn get_latest_ts(
     consistency_topic: &str,
     consumer: &mut BaseConsumer,
     timeout: Duration,
@@ -182,17 +183,13 @@ fn decode_consistency_end_record(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn register_kafka_topic(
     client: &AdminClient<DefaultClientContext>,
     topic: &str,
     mut partition_count: i32,
     mut replication_factor: i32,
-    ccsr: &ccsr::Client,
-    value_schema: &str,
-    key_schema: Option<&str>,
     succeed_if_exists: bool,
-) -> Result<(Option<i32>, i32), CoordError> {
+) -> Result<(), CoordError> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
@@ -301,11 +298,19 @@ async fn register_kafka_topic(
             coord_bail!("error creating topic {} for sink: {}", topic, e)
         }
     }
+    Ok(())
+}
 
-    // Publish value schema for the topic.
-    //
-    // TODO(benesch): do we need to delete the Kafka topic if publishing the
-    // schema fails?
+/// Publish value and optional key schemas for a given topic.
+///
+/// TODO(benesch): do we need to delete the Kafka topic if publishing the
+// schema fails?
+async fn publish_kafka_schemas(
+    ccsr: &ccsr::Client,
+    topic: &str,
+    value_schema: &str,
+    key_schema: Option<&str>,
+) -> Result<(Option<i32>, i32), CoordError> {
     let value_schema_id = ccsr
         .publish_schema(&format!("{}-value", topic), value_schema)
         .await
@@ -329,10 +334,10 @@ async fn build_kafka(
     id: GlobalId,
 ) -> Result<SinkConnector, CoordError> {
     let maybe_append_nonce = {
-        let exactly_once = builder.exactly_once;
+        let reuse_topic = builder.reuse_topic;
         let topic_suffix_nonce = builder.topic_suffix_nonce;
         move |topic: &str| {
-            if exactly_once {
+            if reuse_topic {
                 topic.to_string()
             } else {
                 format!("{}-{}-{}", topic, id, topic_suffix_nonce)
@@ -355,20 +360,42 @@ async fn build_kafka(
     let client = config
         .create::<AdminClient<_>>()
         .context("creating admin client failed")?;
-    let ccsr = builder.ccsr_config.build()?;
+    let ccsr = match builder.format.ccsr_config() {
+        Some(config) => Some(config.clone().build()?),
+        None => None,
+    };
 
-    let (key_schema_id, value_schema_id) = register_kafka_topic(
+    register_kafka_topic(
         &client,
         &topic,
         builder.partition_count,
         builder.replication_factor,
-        &ccsr,
-        &builder.value_schema,
-        builder.key_schema.as_deref(),
-        builder.exactly_once,
+        builder.reuse_topic,
     )
     .await
     .context("error registering kafka topic for sink")?;
+    let published_schema_info = match &builder.format {
+        dataflow_types::KafkaSinkFormat::Avro {
+            key_schema,
+            value_schema,
+            ..
+        } => {
+            let (key_schema_id, value_schema_id) = publish_kafka_schemas(
+                ccsr.as_ref()
+                    .expect("confluent schema registry client must exist"),
+                &topic,
+                &value_schema,
+                key_schema.as_deref(),
+            )
+            .await
+            .context("error publishing kafka schemas for sink")?;
+            Some(PublishedSchemaInfo {
+                key_schema_id,
+                value_schema_id,
+            })
+        }
+        dataflow_types::KafkaSinkFormat::Json => None,
+    };
 
     let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
         let consistency_topic = maybe_append_nonce(
@@ -379,21 +406,37 @@ async fn build_kafka(
         );
 
         // create consistency topic/schema and retrieve schema id
-        let (_, consistency_schema_id) = register_kafka_topic(
+        register_kafka_topic(
             &client,
             &consistency_topic,
             1,
             builder.replication_factor,
-            &ccsr,
-            &consistency_value_schema,
-            None,
-            builder.exactly_once,
+            builder.reuse_topic,
         )
         .await
         .context("error registering kafka consistency topic for sink")?;
+        let consistency_schema_id = match &builder.format {
+            dataflow_types::KafkaSinkFormat::Avro { .. } => {
+                let (_, consistency_schema_id) = publish_kafka_schemas(
+                    ccsr.as_ref()
+                        .expect("confluent schema registry client must exist"),
+                    &consistency_topic,
+                    &consistency_value_schema,
+                    None,
+                )
+                .await
+                .context("error publishing kafka consistency schemas for sink")?;
+                consistency_schema_id
+            }
+            _ => {
+                // todo@jldlaughlin: fix this!
+                // https://github.com/MaterializeInc/materialize/pull/7505#discussion_r676597211
+                unreachable!("non-Avro consistency topics")
+            }
+        };
 
         // get latest committed timestamp from consistencty topic
-        let gate_ts = if builder.exactly_once {
+        let gate_ts = if builder.reuse_topic {
             let mut consumer_config = config.clone();
             consumer_config
                 .set("group.id", format!("materialize-bootstrap-{}", topic))
@@ -406,7 +449,6 @@ async fn build_kafka(
                 .context("creating consumer client failed")?;
 
             get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
-                .await
                 .context("error restarting from existing kafka consistency topic for sink")?
         } else {
             None
@@ -422,16 +464,15 @@ async fn build_kafka(
     };
 
     Ok(SinkConnector::Kafka(KafkaSinkConnector {
-        key_schema_id,
-        value_schema_id,
         topic,
         topic_prefix: builder.topic_prefix,
         addrs: builder.broker_addrs,
         relation_key_indices: builder.relation_key_indices,
         key_desc_and_indices: builder.key_desc_and_indices,
         value_desc: builder.value_desc,
+        published_schema_info,
         consistency,
-        exactly_once: builder.exactly_once,
+        exactly_once: builder.reuse_topic,
         transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
         config_options: builder.config_options,

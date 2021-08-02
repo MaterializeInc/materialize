@@ -6,15 +6,15 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.41"
-backtrace = "0.3.60"
-jemalloc-ctl = { version = "0.3.0", features = ["use_std"], optional = true }
+anyhow = "1.0.42"
+backtrace = "0.3.61"
+tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true, git = "https://github.com/MaterializeInc/jemallocator" }
 lazy_static = "1.4.0"
-pprof = "0.4.3"
-serde = { version = "1.0.126", features = ["derive"] }
+pprof = "0.5.0"
+serde = { version = "1.0.127", features = ["derive"] }
 tempfile = "3.2.0"
-tokio = { version = "1.6.1", features = ["time"] }
+tokio = { version = "1.9.0", features = ["time"] }
 
 [features]
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["jemalloc-ctl"]
+jemalloc = ["tikv-jemalloc-ctl"]

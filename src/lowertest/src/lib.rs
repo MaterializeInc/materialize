@@ -15,8 +15,9 @@ use std::collections::HashMap;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
-use ore::str::separated;
+use ore::{result::ResultExt, str::separated};
 
 pub use lowertest_derive::{gen_reflect_info_func, MzEnumReflect, MzStructReflect};
 
@@ -52,9 +53,23 @@ pub trait MzStructReflect {
     fn mz_struct_reflect() -> (Vec<&'static str>, Vec<&'static str>);
 }
 
-pub fn parse_str(s: &str) -> Result<TokenStream, String> {
-    s.parse::<TokenStream>().map_err(|e| e.to_string())
+/* #region Utilities */
+
+/// Converts `s` into a [proc_macro2::TokenStream]
+pub fn tokenize(s: &str) -> Result<TokenStream, String> {
+    s.parse::<TokenStream>().map_err_to_string()
 }
+
+/// Changes `"\"foo\""` to `"foo"`
+pub fn unquote(s: &str) -> String {
+    if s.starts_with('"') && s.ends_with('"') {
+        s[1..(s.len() - 1)].replace("\\\"", "\"")
+    } else {
+        s.to_string()
+    }
+}
+
+/* #endregion */
 
 /// If the `stream_iter` is not empty, deserialize the next `TokenTree` into a `D`.
 ///
@@ -135,18 +150,7 @@ where
     C: TestDeserializeContext,
     I: Iterator<Item = TokenTree>,
 {
-    // Normalize the type name by stripping whitespace.
-    let type_name = type_name.replace(" ", "");
-    // Eliminate outer `Option<>` and `Box<>` from type names because they are
-    // inconsequential when it comes to creating a correctly deserializable JSON
-    // string.
-    let type_name = if type_name.starts_with("Option<") && type_name.ends_with('>') {
-        &type_name[7..(type_name.len() - 1)]
-    } else if type_name.starts_with("Box<") && type_name.ends_with('>') {
-        &type_name[4..(type_name.len() - 1)]
-    } else {
-        &type_name
-    };
+    let type_name = &normalize_type_name(type_name);
     if let Some(first_arg) = stream_iter.next() {
         // If the type refers to an enum or struct defined by us, go to a
         // special branch that allows reuse of code paths for the
@@ -257,7 +261,7 @@ pub struct ReflectedTypeInfo {
 /// * strings and positive numeric values (like 1 or 1.1) to be `Literal`s.
 /// * negative numeric values to be a `Punct('-')` followed by a `Literal`.
 pub trait TestDeserializeContext {
-    /// Override the way that `first_arg` is resolved.
+    /// Override the way that `first_arg` is resolved to JSON.
     ///
     /// `first_arg` is the first `TokenTree` of the `TokenStream`.
     /// `rest_of_stream` contains a reference to the rest of the stream.
@@ -275,6 +279,18 @@ pub trait TestDeserializeContext {
     ) -> Result<Option<String>, String>
     where
         I: Iterator<Item = TokenTree>;
+
+    /// Converts `json` back to the extended syntax specified by
+    /// [TestDeserializeContext::override_syntax<I>].
+    ///
+    /// Returns `Some(value)` if `json` has been resolved.
+    /// Returns `None` is `json` should be resolved in the default manner.
+    fn reverse_syntax_override(
+        &mut self,
+        json: &Value,
+        type_name: &str,
+        rti: &ReflectedTypeInfo,
+    ) -> Option<String>;
 }
 
 /// Default `TestDeserializeContext`.
@@ -296,9 +312,18 @@ impl TestDeserializeContext for GenericTestDeserializeContext {
     {
         Ok(None)
     }
+
+    fn reverse_syntax_override(
+        &mut self,
+        _: &Value,
+        _: &str,
+        _: &ReflectedTypeInfo,
+    ) -> Option<String> {
+        None
+    }
 }
 
-/* #region helper functions */
+/* #region helper functions for `to_json` */
 
 /// Converts all `TokenTree`s into JSON deserializable to `type_name`.
 fn parse_as_vec<I, C>(
@@ -331,30 +356,11 @@ where
     C: TestDeserializeContext,
     I: Iterator<Item = TokenTree>,
 {
-    let mut next_elem_begin = 0;
+    let mut prev_elem_end = 0;
     let mut result = Vec::new();
-    loop {
-        // The elements of the tuple can be a plain type, a nested tuple, or a
-        // Box/Vec/Option with the argument being nested tuple.
-        // `type1, (type2, type3), Vec<(type4, type5)>`
-        // Thus, the type of the next element is whatever comes before the
-        // next comma. Unless... a '(' comes from before the next comma, which
-        // means it is a nested tuple, and the type of the next element is
-        // whatever comes before the comma after the last ')'.
-        let mut next_elem_end = type_name[next_elem_begin..]
-            .find(',')
-            .unwrap_or_else(|| type_name.len());
-        if let Some(l_paren_pos) = type_name[next_elem_begin..].find('(') {
-            if l_paren_pos < next_elem_end {
-                if let Some(r_paren_pos) = type_name[next_elem_begin..].rfind(')') {
-                    next_elem_end = next_elem_begin
-                        + r_paren_pos
-                        + type_name[(next_elem_begin + r_paren_pos)..]
-                            .find(',')
-                            .unwrap_or_else(|| type_name.len());
-                }
-            }
-        };
+    while let Some((next_elem_begin, next_elem_end)) =
+        find_next_type_in_tuple(type_name, prev_elem_end)
+    {
         match to_json(
             stream_iter,
             &type_name[next_elem_begin..next_elem_end],
@@ -366,13 +372,7 @@ where
             // elements of the tuple are optional.
             None => break,
         }
-        if next_elem_end < type_name.len() {
-            //skip over the comma
-            next_elem_begin = next_elem_end + 1;
-        } else {
-            // assume that that we have reached the end of the tuple.
-            break;
-        }
+        prev_elem_end = next_elem_end;
     }
     Ok(result)
 }
@@ -593,4 +593,184 @@ where
         }
     }
 }
+
+/* #endregion */
+
+/// Converts serialized JSON to the syntax that [to_json] handles.
+///
+/// `json` is assumed to have been produced by serializing an object of type
+/// `type_name`.
+/// `ctx` is responsible for converting serialized JSON to any syntax
+/// extensions or overrides.
+pub fn from_json<C>(json: &Value, type_name: &str, rti: &ReflectedTypeInfo, ctx: &mut C) -> String
+where
+    C: TestDeserializeContext,
+{
+    let type_name = normalize_type_name(type_name);
+    if let Some(result) = ctx.reverse_syntax_override(json, &type_name, rti) {
+        return result;
+    }
+    if let Some((names, types)) = rti.struct_dict.get(&type_name[..]) {
+        format!("({})", from_json_fields(json, names, types, rti, ctx))
+    } else if let Some(enum_dict) = rti.enum_dict.get(&type_name[..]) {
+        match json {
+            // A unit enum in JSON is `"variant"`. In the spec it is `variant`.
+            Value::String(s) => unquote(s),
+            // An enum with fields is `{"variant": <fields>}` in JSON. In the
+            // spec it is `(variant field1 .. fieldn).
+            Value::Object(map) => {
+                // Each enum instance only belongs to one variant.
+                assert_eq!(
+                    map.len(),
+                    1,
+                    "Multivariant instance {:?} found for enum {}",
+                    map,
+                    type_name
+                );
+                for (variant, data) in map.iter() {
+                    if let Some((names, types)) = enum_dict.get(&variant[..]) {
+                        return format!(
+                            "({} {})",
+                            variant.to_string(),
+                            from_json_fields(data, names, types, rti, ctx)
+                        );
+                    }
+                }
+                unreachable!()
+            }
+            _ => unreachable!("Invalid json {:?} for enum type {}", json, type_name),
+        }
+    } else {
+        match json {
+            Value::Array(members) => {
+                let result = if type_name.starts_with("Vec<") && type_name.ends_with('>') {
+                    // This is a Vec<something>.
+                    members
+                        .iter()
+                        .map(|v| from_json(v, &type_name[4..(type_name.len() - 1)], rti, ctx))
+                        .collect::<Vec<_>>()
+                } else {
+                    // This is a tuple.
+                    let mut result = Vec::new();
+                    let type_name = &type_name[1..(type_name.len() - 1)];
+                    let mut prev_elem_end = 0;
+                    let mut members_iter = members.into_iter();
+                    while let Some((next_elem_begin, next_elem_end)) =
+                        find_next_type_in_tuple(type_name, prev_elem_end)
+                    {
+                        match members_iter.next() {
+                            Some(elem) => result.push(from_json(
+                                elem,
+                                &type_name[next_elem_begin..next_elem_end],
+                                rti,
+                                ctx,
+                            )),
+                            // we have reached the end of the tuple.
+                            None => break,
+                        }
+                        prev_elem_end = next_elem_end;
+                    }
+                    result
+                };
+                // The spec for both is `[elem1 .. elemn]`
+                format!("[{}]", separated(" ", result))
+            }
+            Value::Object(map) => {
+                unreachable!("Invalid map {:?} found for type {}", map, type_name)
+            }
+            other => other.to_string(),
+        }
+    }
+}
+
+fn from_json_fields<C>(
+    v: &Value,
+    f_names: &[&'static str],
+    f_types: &[&'static str],
+    rti: &ReflectedTypeInfo,
+    ctx: &mut C,
+) -> String
+where
+    C: TestDeserializeContext,
+{
+    match v {
+        // Named fields are specified as
+        // `{"field1_name": field1, .. "fieldn_name": fieldn}`
+        // not necessarily in that order because maps are unordered.
+        // Thus, when converting named fields to the test spec, it is necessary
+        // to retrieve values from the map in the order given by `f_names`.
+        Value::Object(map) if !f_names.is_empty() => {
+            let mut fields = Vec::with_capacity(f_types.len());
+            for (name, typ) in f_names.iter().zip(f_types.iter()) {
+                fields.push(from_json(&map[*name], typ, rti, ctx))
+            }
+            separated(" ", fields).to_string()
+        }
+        // Multiple unnamed fields are specified as `[field1 .. fieldn]` in
+        // JSON.
+        Value::Array(inner) if f_types.len() > 1 => {
+            let mut fields = Vec::with_capacity(f_types.len());
+            for (v, typ) in inner.iter().zip(f_types.iter()) {
+                fields.push(from_json(v, typ, rti, ctx))
+            }
+            separated(" ", fields).to_string()
+        }
+        // A single unnamed field is specified as `field` in JSON.
+        other => from_json(other, f_types.first().unwrap(), rti, ctx),
+    }
+}
+
+/* #region Helper functions common to both spec-to-JSON and the JSON-to-spec
+transformations. */
+
+fn normalize_type_name(type_name: &str) -> String {
+    // Normalize the type name by stripping whitespace.
+    let type_name = type_name.replace(" ", "");
+    // Eliminate outer `Option<>` and `Box<>` from type names because they are
+    // inconsequential when it comes to creating a correctly deserializable JSON
+    // string.
+    let type_name = if type_name.starts_with("Option<") && type_name.ends_with('>') {
+        &type_name[7..(type_name.len() - 1)]
+    } else if type_name.starts_with("Box<") && type_name.ends_with('>') {
+        &type_name[4..(type_name.len() - 1)]
+    } else {
+        &type_name
+    };
+    type_name.to_string()
+}
+
+fn find_next_type_in_tuple(type_name: &str, prev_elem_end: usize) -> Option<(usize, usize)> {
+    let current_elem_begin = if prev_elem_end > 0 {
+        //skip over the comma
+        prev_elem_end + 1
+    } else {
+        prev_elem_end
+    };
+    if current_elem_begin >= type_name.len() {
+        return None;
+    }
+    // The elements of the tuple can be a plain type, a nested tuple, or a
+    // Box/Vec/Option with the argument being nested tuple.
+    // `type1, (type2, type3), Vec<(type4, type5)>`
+    // Thus, the type of the next element is whatever comes before the
+    // next comma. Unless... a '(' comes from before the next comma, which
+    // means it is a nested tuple, and the type of the next element is
+    // whatever comes before the comma after the last ')'.
+    let mut current_elem_end = type_name[current_elem_begin..]
+        .find(',')
+        .unwrap_or_else(|| type_name.len());
+    if let Some(l_paren_pos) = type_name[current_elem_begin..].find('(') {
+        if l_paren_pos < current_elem_end {
+            if let Some(r_paren_pos) = type_name[current_elem_begin..].rfind(')') {
+                current_elem_end = current_elem_begin
+                    + r_paren_pos
+                    + type_name[(current_elem_begin + r_paren_pos)..]
+                        .find(',')
+                        .unwrap_or_else(|| type_name.len());
+            }
+        }
+    };
+    return Some((current_elem_begin, current_elem_end));
+}
+
 /* #endregion */

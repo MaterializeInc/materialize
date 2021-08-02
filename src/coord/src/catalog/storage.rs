@@ -552,22 +552,30 @@ impl Transaction<'_> {
         source_id: GlobalId,
         frontier: Timestamp,
     ) -> Result<(), Error> {
-        let ahead_of_compaction: i32 = self
+        // we need to keep one binding that is not beyond the frontier, so that
+        // on restart we don't emit timestamps that are beyond the previously
+        // written consistency frontier. Otherwise, data with those timestamps
+        // would get written again.
+        let latest_not_beyond_compaction: Option<Timestamp> = self
             .inner
-            .prepare_cached("SELECT count(*) FROM timestamps WHERE sid = ? AND timestamp >= ?")?
+            .prepare_cached(
+                "SELECT max(timestamp) FROM timestamps WHERE sid = ? AND timestamp <= ?",
+            )?
             .query_row(params![SqlVal(&source_id), frontier], |row| row.get(0))?;
 
-        if ahead_of_compaction == 0 {
-            return Ok(());
-        }
+        if let Some(latest_not_beyond_compaction) = latest_not_beyond_compaction {
+            let result = match self
+                .inner
+                .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND timestamp < ?")?
+                .execute(params![SqlVal(&source_id), latest_not_beyond_compaction])
+            {
+                Ok(_) => Ok(()),
+                Err(err) => Err(err.into()),
+            };
 
-        match self
-            .inner
-            .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND timestamp < ?")?
-            .execute(params![SqlVal(&source_id), frontier])
-        {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err.into()),
+            result
+        } else {
+            Ok(())
         }
     }
 

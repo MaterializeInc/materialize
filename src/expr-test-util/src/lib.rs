@@ -11,12 +11,15 @@ use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
+use serde_json::Value;
 
 use expr::explain::ViewExplanation;
 use expr::*;
 use lowertest::*;
+use ore::result::ResultExt;
+use ore::str::separated;
 use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
-use repr_test_util::{get_datum_from_str, get_scalar_type_or_default};
+use repr_test_util::*;
 
 gen_reflect_info_func!(
     produce_rti,
@@ -32,7 +35,7 @@ gen_reflect_info_func!(
         MirRelationExpr,
         JoinImplementation
     ],
-    [ColumnType, RelationType]
+    [AggregateExpr, ColumnOrder, ColumnType, RelationType]
 );
 
 lazy_static! {
@@ -44,7 +47,7 @@ lazy_static! {
 /// See [lowertest::to_json] for the syntax.
 pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
     deserialize(
-        &mut parse_str(s)?.into_iter(),
+        &mut tokenize(s)?.into_iter(),
         "MirScalarExpr",
         &RTI,
         &mut MirScalarExprDeserializeContext::default(),
@@ -56,7 +59,7 @@ pub fn build_scalar(s: &str) -> Result<MirScalarExpr, String> {
 /// See [lowertest::to_json] for the syntax.
 pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, String> {
     deserialize(
-        &mut parse_str(s)?.into_iter(),
+        &mut tokenize(s)?.into_iter(),
         "MirRelationExpr",
         &RTI,
         &mut MirRelationExprDeserializeContext::new(catalog),
@@ -85,6 +88,10 @@ impl<'a> TestCatalog {
         self.objects.get(name)
     }
 
+    fn get_source_name(&'a self, id: &GlobalId) -> Option<&'a String> {
+        self.names.get(id)
+    }
+
     /// Pretty-print the MirRelationExpr.
     ///
     /// If format contains "types", then add types to the pretty-printed
@@ -109,31 +116,33 @@ impl<'a> TestCatalog {
     /// * `(defsource [types_of_cols] [[optional_sets_of_key_cols]])`
     ///   insert a source into the catalog.
     pub fn handle_test_command(&mut self, spec: &str) -> Result<(), String> {
-        let mut stream_iter = parse_str(spec)?.into_iter();
-        match stream_iter.next() {
-            Some(TokenTree::Group(group)) => {
-                let mut inner_iter = group.stream().into_iter().peekable();
-                match inner_iter.next() {
-                    Some(TokenTree::Ident(ident)) if &ident.to_string()[..] == "defsource" => {
-                        let name = match inner_iter.next() {
-                            Some(TokenTree::Ident(ident)) => Ok(ident.to_string()),
-                            invalid_token => {
-                                Err(format!("invalid source name: {:?}", invalid_token))
-                            }
-                        }?;
+        let mut stream_iter = tokenize(spec)?.into_iter();
+        while let Some(token) = stream_iter.next() {
+            match token {
+                TokenTree::Group(group) => {
+                    let mut inner_iter = group.stream().into_iter();
+                    match inner_iter.next() {
+                        Some(TokenTree::Ident(ident)) if &ident.to_string()[..] == "defsource" => {
+                            let name = match inner_iter.next() {
+                                Some(TokenTree::Ident(ident)) => Ok(ident.to_string()),
+                                invalid_token => {
+                                    Err(format!("invalid source name: {:?}", invalid_token))
+                                }
+                            }?;
 
-                        let mut ctx = GenericTestDeserializeContext::default();
-                        let typ: RelationType =
-                            deserialize(&mut inner_iter, "RelationType", &RTI, &mut ctx)?;
+                            let mut ctx = GenericTestDeserializeContext::default();
+                            let typ: RelationType =
+                                deserialize(&mut inner_iter, "RelationType", &RTI, &mut ctx)?;
 
-                        self.insert(&name, typ);
-                        Ok(())
+                            self.insert(&name, typ);
+                        }
+                        s => return Err(format!("not a valid catalog command: {:?}", s)),
                     }
-                    s => Err(format!("not a valid catalog command: {:?}", s)),
                 }
+                s => return Err(format!("not a valid catalog command spec: {:?}", s)),
             }
-            s => Err(format!("not a valid catalog command spec: {:?}", s)),
         }
+        Ok(())
     }
 }
 
@@ -164,10 +173,7 @@ impl MirScalarExprDeserializeContext {
     fn build_column(&mut self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
         if let Some(TokenTree::Literal(literal)) = token {
             return Ok(MirScalarExpr::Column(
-                literal
-                    .to_string()
-                    .parse::<usize>()
-                    .map_err(|s| s.to_string())?,
+                literal.to_string().parse::<usize>().map_err_to_string()?,
             ));
         }
         Err(format!("Invalid column specification {:?}", token))
@@ -184,8 +190,9 @@ impl MirScalarExprDeserializeContext {
         match extract_literal_string(&first_arg, rest_of_stream)? {
             Some(litval) => {
                 let littyp = get_scalar_type_or_default(&litval[..], rest_of_stream)?;
+                let unquoted = unquote_string(&litval[..], &littyp);
                 Ok(Some(MirScalarExpr::literal_ok(
-                    get_datum_from_str(&litval[..], &littyp)?,
+                    get_datum_from_str(&unquoted[..], &littyp)?,
                     littyp,
                 )))
             }
@@ -217,11 +224,50 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
             None
         };
         match result {
-            Some(result) => Ok(Some(
-                serde_json::to_string(&result).map_err(|e| e.to_string())?,
-            )),
+            Some(result) => Ok(Some(serde_json::to_string(&result).map_err_to_string()?)),
             None => Ok(None),
         }
+    }
+
+    fn reverse_syntax_override(
+        &mut self,
+        json: &Value,
+        type_name: &str,
+        rti: &ReflectedTypeInfo,
+    ) -> Option<String> {
+        if type_name == "MirScalarExpr" {
+            let map = json.as_object().unwrap();
+            // Each enum instance only belows to one variant.
+            assert_eq!(map.len(), 1);
+            for (variant, data) in map.iter() {
+                match &variant[..] {
+                    "Column" => return Some(format!("#{}", data.as_u64().unwrap())),
+                    "Literal" => {
+                        let column_type: ColumnType =
+                            serde_json::from_value(data.as_array().unwrap()[1].clone()).unwrap();
+                        match data.as_array().unwrap()[0].as_object().unwrap().get("Ok") {
+                            Some(inner_data) => {
+                                let row: Row = serde_json::from_value(inner_data.clone()).unwrap();
+                                let result = format!(
+                                    "({} {})",
+                                    datum_to_test_spec(row.unpack_first()),
+                                    from_json(
+                                        &serde_json::to_value(&column_type.scalar_type).unwrap(),
+                                        "ScalarType",
+                                        rti,
+                                        self
+                                    )
+                                );
+                                return Some(result);
+                            }
+                            None => unreachable!("Literal errors are not supported"),
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
     }
 }
 
@@ -245,7 +291,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
 /// ```ignore
 /// (constant
 ///    [[<row1literal1>..<row1literaln>]..[<rowiliteral1>..<rowiliteraln>]]
-///    [<scalartype1> .. <scalartypen>]
+///    <RelationType>
 /// )
 /// ```
 ///
@@ -255,6 +301,9 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
 pub struct MirRelationExprDeserializeContext<'a> {
     inner_ctx: MirScalarExprDeserializeContext,
     catalog: &'a TestCatalog,
+    /// Tracks local references when converting spec to JSON.
+    /// Tracks global references not found in the catalog when converting from
+    /// JSON to spec.
     scope: Scope,
 }
 
@@ -267,6 +316,10 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         }
     }
 
+    pub fn list_scope_references(&self) -> impl Iterator<Item = (&String, &RelationType)> {
+        self.scope.iter()
+    }
+
     fn build_constant<I>(&mut self, stream_iter: &mut I) -> Result<MirRelationExpr, String>
     where
         I: Iterator<Item = TokenTree>,
@@ -277,8 +330,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         // Deserialize the types of each column first
         // in order to refer to column types when constructing the `Datum`
         // objects in each row.
-        let scalar_types: Vec<ScalarType> =
-            deserialize(stream_iter, "Vec<ScalarType>", &RTI, self)?;
+        let typ: RelationType = deserialize(stream_iter, "RelationType", &RTI, self)?;
 
         let mut rows = Vec::new();
         match raw_rows {
@@ -302,8 +354,10 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                             }
                             let row = parsed_data
                                 .iter()
-                                .zip(scalar_types.iter())
-                                .map(|(dat, typ)| get_datum_from_str(&dat[..], typ))
+                                .zip(&typ.column_types)
+                                .map(|(dat, col_typ)| {
+                                    get_datum_from_str(&dat[..], &col_typ.scalar_type)
+                                })
                                 .collect::<Result<Vec<Datum>, String>>()?;
                             rows.push((Row::pack_slice(&row), 1));
                         }
@@ -317,12 +371,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         };
         Ok(MirRelationExpr::Constant {
             rows: Ok(rows),
-            typ: RelationType::new(
-                scalar_types
-                    .into_iter()
-                    .map(|t| t.nullable(true))
-                    .collect::<Vec<_>>(),
-            ),
+            typ,
         })
     }
 
@@ -394,7 +443,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         I: Iterator<Item = TokenTree>,
     {
         if let TokenTree::Ident(ident) = first_arg {
-            return Ok(match &ident.to_string()[..] {
+            return Ok(match &ident.to_string().to_lowercase()[..] {
                 "constant" => Some(self.build_constant(rest_of_stream)?),
                 "get" => Some(self.build_get(rest_of_stream.next())?),
                 "let" => Some(self.build_let(rest_of_stream)?),
@@ -427,9 +476,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                     if let Some(result) =
                         self.build_special_mir_if_able(first_arg, rest_of_stream)?
                     {
-                        return Ok(Some(
-                            serde_json::to_string(&result).map_err(|e| e.to_string())?,
-                        ));
+                        return Ok(Some(serde_json::to_string(&result).map_err_to_string()?));
                     }
                 } else if type_name == "usize" {
                     if let TokenTree::Punct(punct) = first_arg {
@@ -449,6 +496,111 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
             }
         }
     }
+
+    fn reverse_syntax_override(
+        &mut self,
+        json: &Value,
+        type_name: &str,
+        rti: &ReflectedTypeInfo,
+    ) -> Option<String> {
+        match self.inner_ctx.reverse_syntax_override(json, type_name, rti) {
+            Some(result) => Some(result),
+            None => {
+                if type_name == "MirRelationExpr" {
+                    let map = json.as_object().unwrap();
+                    // Each enum instance only belows to one variant.
+                    assert_eq!(
+                        map.len(),
+                        1,
+                        "Multivariant instance {:?} found for MirRelationExpr",
+                        map
+                    );
+                    for (variant, data) in map.iter() {
+                        let inner_map = data.as_object().unwrap();
+                        match &variant[..] {
+                            "Let" => {
+                                let id: LocalId =
+                                    serde_json::from_value(inner_map["id"].clone()).unwrap();
+                                return Some(format!(
+                                    "(let {} {} {})",
+                                    id,
+                                    from_json(&inner_map["value"], "MirRelationExpr", rti, self),
+                                    from_json(&inner_map["body"], "MirRelationExpr", rti, self),
+                                ));
+                            }
+                            "Get" => {
+                                let id: Id =
+                                    serde_json::from_value(inner_map["id"].clone()).unwrap();
+                                return Some(match id {
+                                    Id::Global(global) => {
+                                        match self.catalog.get_source_name(&global) {
+                                            // Replace the GlobalId with the
+                                            // name of the source.
+                                            Some(source) => format!("(get {})", source),
+                                            // Treat the GlobalId
+                                            None => {
+                                                let typ: RelationType = serde_json::from_value(
+                                                    inner_map["typ"].clone(),
+                                                )
+                                                .unwrap();
+                                                self.scope.insert(&id.to_string(), typ);
+                                                format!("(get {})", id)
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        format!("(get {})", id)
+                                    }
+                                });
+                            }
+                            "Constant" => {
+                                if let Some(row_vec) = inner_map["rows"].get("Ok") {
+                                    let mut rows = Vec::new();
+                                    for inner_array in row_vec.as_array().unwrap() {
+                                        let row: Row =
+                                            serde_json::from_value(inner_array[0].clone()).unwrap();
+                                        let diff = inner_array[1].as_u64().unwrap();
+                                        for _ in 0..diff {
+                                            rows.push(format!(
+                                                "[{}]",
+                                                separated(
+                                                    " ",
+                                                    row.unpack()
+                                                        .into_iter()
+                                                        .map(|d| datum_to_test_spec(d))
+                                                )
+                                            ))
+                                        }
+                                    }
+                                    return Some(format!(
+                                        "(constant [{}] {})",
+                                        separated(" ", rows),
+                                        from_json(&inner_map["typ"], "RelationType", rti, self)
+                                    ));
+                                }
+                                unreachable!("Constant errors are not yet supported")
+                            }
+                            "Union" => {
+                                let mut inputs = inner_map["inputs"].as_array().unwrap().to_owned();
+                                inputs.insert(0, inner_map["base"].clone());
+                                return Some(format!(
+                                    "(union {})",
+                                    from_json(
+                                        &Value::Array(inputs),
+                                        "Vec<MirRelationExpr>",
+                                        rti,
+                                        self
+                                    )
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                None
+            }
+        }
+    }
 }
 
 /// Stores the values of `let` statements that way they can be accessed
@@ -459,7 +611,7 @@ struct Scope {
     names: HashMap<Id, String>,
 }
 
-impl<'a> Scope {
+impl Scope {
     fn insert(&mut self, name: &str, typ: RelationType) -> (LocalId, Option<(Id, RelationType)>) {
         let old_val = self.get(name);
         let id = LocalId::new(self.objects.len() as u64);
@@ -478,6 +630,10 @@ impl<'a> Scope {
 
     fn get(&self, name: &str) -> Option<(Id, RelationType)> {
         self.objects.get(name).cloned()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&String, &RelationType)> {
+        self.objects.iter().map(|(s, (_, typ))| (s, typ))
     }
 }
 

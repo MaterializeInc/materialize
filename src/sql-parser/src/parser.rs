@@ -1628,6 +1628,7 @@ impl<'a> Parser<'a> {
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
             None => CreateSourceFormat::None,
         };
+        let key_envelope = self.parse_include_key()?;
         let envelope = if self.parse_keyword(ENVELOPE) {
             let envelope = self.parse_envelope()?;
             if matches!(envelope, Envelope::Upsert) {
@@ -1656,6 +1657,7 @@ impl<'a> Parser<'a> {
             connector,
             with_options,
             format,
+            key_envelope,
             envelope,
             if_not_exists,
             materialized,
@@ -1756,7 +1758,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
+    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -1811,7 +1813,13 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Ok(Connector::Kafka { broker, topic, key })
+                let consistency = self.parse_kafka_consistency()?;
+                Ok(Connector::Kafka {
+                    broker,
+                    topic,
+                    key,
+                    consistency,
+                })
             }
             KINESIS => {
                 self.expect_keyword(ARN)?;
@@ -1869,6 +1877,23 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {
+        if self.parse_keywords(&[CONSISTENCY, TOPIC]) {
+            let topic = self.parse_literal_string()?;
+            let topic_format = if self.parse_keywords(&[CONSISTENCY, FORMAT]) {
+                Some(self.parse_format()?)
+            } else {
+                None
+            };
+            Ok(Some(KafkaConsistency {
+                topic,
+                topic_format,
+            }))
+        } else {
+            Ok(None)
         }
     }
 
@@ -2081,6 +2106,18 @@ impl<'a> Parser<'a> {
         } else {
             Ok(false)
         }
+    }
+
+    fn parse_include_key(&mut self) -> Result<CreateSourceKeyEnvelope, ParserError> {
+        Ok(if self.parse_keywords(&[INCLUDE, KEY]) {
+            if self.parse_keyword(AS) {
+                CreateSourceKeyEnvelope::Named(self.parse_identifier()?)
+            } else {
+                CreateSourceKeyEnvelope::Included
+            }
+        } else {
+            CreateSourceKeyEnvelope::None
+        })
     }
 
     fn parse_discard(&mut self) -> Result<Statement<Raw>, ParserError> {

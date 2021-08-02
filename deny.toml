@@ -9,9 +9,6 @@ skip = [
     # Waiting for clap to upgrade to v0.10.
     { name = "strsim", version = "0.8.0" },
 
-    # Waiting on https://github.com/bheisler/criterion.rs/pull/464.
-    { name = "itertools", version = "0.9.0" },
-
     # Waiting on https://github.com/hyperium/headers/pull/83.
     { name = "time", version = "0.1.44" },
 ]
@@ -29,6 +26,7 @@ deny = [
 allow = [
     "Apache-2.0",
     "CC0-1.0",
+    "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ICU",
@@ -47,6 +45,7 @@ allow-git = [
     "https://github.com/MaterializeInc/rust-postgres-array.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
     "https://github.com/MaterializeInc/serde-protobuf.git",
+    "https://github.com/MaterializeInc/jemallocator.git",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",

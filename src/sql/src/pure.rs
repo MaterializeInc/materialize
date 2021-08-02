@@ -77,8 +77,8 @@ pub fn purify(
             col_names,
             connector,
             format,
-            with_options,
             envelope,
+            with_options,
             ..
         }) = &mut stmt
         {
@@ -94,8 +94,14 @@ pub fn purify(
 
                     // Verify that the provided security options are valid and then test them.
                     config_options = kafka_util::extract_config(&mut with_options_map)?;
-                    let consumer =
-                        kafka_util::create_consumer(&broker, &topic, &config_options).await?;
+                    let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
+                        .await
+                        .map_err(|e| {
+                            anyhow!(
+                                "Cannot create Kafka Consumer for determining start offsets: {}",
+                                e
+                            )
+                        })?;
 
                     // Translate `kafka_time_offset` to `start_offset`.
                     match kafka_util::lookup_start_offsets(
@@ -339,7 +345,9 @@ pub fn purify(
                     SourceConnector::External { connector, .. } => {
                         bail!("cannot generate views from {} sources", connector.name())
                     }
-                    SourceConnector::Local(_) => bail!("cannot generate views from local sources"),
+                    SourceConnector::Local { .. } => {
+                        bail!("cannot generate views from local sources")
+                    }
                 }
             }
         }
@@ -349,7 +357,7 @@ pub fn purify(
 
 async fn purify_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut Connector,
+    connector: &mut Connector<Raw>,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
@@ -412,7 +420,7 @@ async fn purify_format(
 
 async fn purify_format_single(
     format: &mut Format<Raw>,
-    connector: &mut Connector,
+    connector: &mut Connector<Raw>,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,

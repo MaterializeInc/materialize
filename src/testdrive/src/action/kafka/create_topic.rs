@@ -12,6 +12,7 @@ use std::convert::TryFrom;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use ore::result::ResultExt;
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::error::RDKafkaErrorCode;
 use rdkafka::producer::Producer;
@@ -24,6 +25,7 @@ pub struct CreateTopicAction {
     partitions: usize,
     replication_factor: i32,
     compression: String,
+    compaction: bool,
 }
 
 pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, String> {
@@ -34,6 +36,7 @@ pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, 
         .args
         .opt_string("compression")
         .unwrap_or_else(|| "producer".into());
+    let compaction = cmd.args.opt_parse("compaction")?.unwrap_or(false);
     cmd.args.done()?;
 
     Ok(CreateTopicAction {
@@ -41,6 +44,7 @@ pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, 
         partitions,
         replication_factor,
         compression,
+        compaction,
     })
 }
 
@@ -54,7 +58,7 @@ impl Action for CreateTopicAction {
                 None,
                 Some(cmp::max(Duration::from_secs(1), state.default_timeout)),
             )
-            .map_err(|e| e.to_string())?;
+            .map_err_to_string()?;
 
         let stale_kafka_topics: Vec<_> = metadata
             .topics()
@@ -169,9 +173,22 @@ impl Action for CreateTopicAction {
         // breaches the default 7-day retention policy.
         .set("retention.ms", "-1")
         .set("compression.type", &self.compression);
+
+        // agressive compaction, when it is enabled
+        let new_topic = if self.compaction {
+            new_topic
+                .set("cleanup.policy", "compact")
+                // eagerly roll over segments
+                .set("segment.ms", "100")
+                // make sure we get compaction even with low throughput
+                .set("min.cleanable.dirty.ratio", "0.01")
+        } else {
+            new_topic
+        };
+
         kafka_util::admin::create_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err_to_string()?;
         state.kafka_topics.insert(topic_name, self.partitions);
         Ok(())
     }

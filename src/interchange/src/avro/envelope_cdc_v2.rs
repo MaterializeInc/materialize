@@ -25,6 +25,8 @@ use mz_avro::{
 };
 use std::{cell::RefCell, rc::Rc};
 
+use crate::encode::column_names_and_types;
+
 use super::RowWrapper;
 
 pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode<'a>> {
@@ -50,7 +52,7 @@ pub struct Encoder {
 impl Encoder {
     /// Creates a new CDCv2 encoder from a relation description.
     pub fn new(desc: RelationDesc) -> Self {
-        let columns = super::column_names_and_types(desc);
+        let columns = column_names_and_types(desc);
         let row_schema = super::build_row_schema_json(&columns, "data");
         let schema = build_schema(row_schema);
         Self { columns, schema }
@@ -270,7 +272,8 @@ mod tests {
             .with_named_column("price", ScalarType::Float64.nullable(true));
 
         let encoder = Encoder::new(desc.clone());
-        let row_schema = build_row_schema_json(&crate::avro::column_names_and_types(desc), "data");
+        let row_schema =
+            build_row_schema_json(&crate::encode::column_names_and_types(desc), "data");
         let schema = build_schema(row_schema);
 
         let values = vec![

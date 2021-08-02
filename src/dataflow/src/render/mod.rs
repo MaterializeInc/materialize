@@ -107,13 +107,13 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 use differential_dataflow::AsCollection;
+use persist::indexed::runtime::RuntimeClient;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id};
@@ -123,9 +123,12 @@ use ore::now::NowFn;
 use repr::{Row, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::metrics::Metrics;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{CacheMessage, LocalInput};
+use crate::server::LocalInput;
+use crate::sink::SinkBaseMetrics;
+use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
 
@@ -133,7 +136,7 @@ mod context;
 mod flat_map;
 mod join;
 mod reduce;
-mod sinks;
+pub mod sinks;
 mod sources;
 mod threshold;
 mod top_k;
@@ -152,11 +155,18 @@ pub struct RenderState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
-    /// Sender to give data to be cached.
-    pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Metrics reported by all dataflows.
+    pub metrics: Metrics,
+    /// Handle to the persistence runtime. None if disabled.
+    pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
+    /// Shared buffer with TAIL operator instances by which they can respond.
+    ///
+    /// The entries are pairs of sink identifier (to identify the tail instance)
+    /// and the response itself.
+    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.
@@ -178,8 +188,10 @@ pub struct RelevantTokens {
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     render_state: &mut RenderState,
-    dataflow: DataflowDesc,
+    dataflow: DataflowDescription<plan::Plan>,
     now: NowFn,
+    source_metrics: &SourceBaseMetrics,
+    sink_metrics: &SinkBaseMetrics,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -190,7 +202,7 @@ pub fn build_dataflow<A: Allocate>(
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
-        scope.clone().region(|region| {
+        scope.clone().region_named(&name, |region| {
             let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
             let mut tokens = RelevantTokens::default();
 
@@ -216,6 +228,7 @@ pub fn build_dataflow<A: Allocate>(
                     src,
                     orig_id,
                     now,
+                    source_metrics,
                 );
             }
 
@@ -226,7 +239,10 @@ pub fn build_dataflow<A: Allocate>(
 
             // Build declared objects.
             for object in &dataflow.objects_to_build {
-                context.build_object(region, object);
+                // We clone because we cannot deconstruct `object` for its members due
+                // to subsequent use of `dataflow.get_imports`.
+                // TODO: fix that and avoid the clones.
+                context.build_object(region, object.clone());
             }
 
             // Export declared indexes.
@@ -244,8 +260,7 @@ pub fn build_dataflow<A: Allocate>(
                     imports,
                     *sink_id,
                     sink,
-                    region.index(),
-                    region.peers(),
+                    sink_metrics,
                 );
             }
         });
@@ -303,12 +318,13 @@ where
         }
     }
 
-    fn build_object(&mut self, scope: &mut Child<'g, G, G::Timestamp>, object: &BuildDesc) {
+    fn build_object(
+        &mut self,
+        scope: &mut Child<'g, G, G::Timestamp>,
+        object: BuildDesc<plan::Plan>,
+    ) {
         // First, transform the relation expression into a render plan.
-        let render_plan = plan::Plan::from_mir(&object.relation_expr)
-            .expect("Could not produce plan for expression");
-
-        let bundle = self.render_plan(render_plan, scope, scope.index());
+        let bundle = self.render_plan(object.view, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
     }
 
@@ -387,37 +403,48 @@ where
                 // Determine what this worker will contribute.
                 let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
-                let (rows, errs) = match locally {
+                let (mut rows, errs) = match locally {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
+
+                // We should advance times in constant collections to start from `as_of`.
+                use differential_dataflow::lattice::Lattice;
+                for (_, time, _) in rows.iter_mut() {
+                    time.advance_by(self.as_of_frontier.borrow());
+                }
+                let mut error_time: G::Timestamp = timely::progress::Timestamp::minimum();
+                error_time.advance_by(self.as_of_frontier.borrow());
 
                 let ok_collection = rows.into_iter().to_stream(scope).as_collection();
 
                 let err_collection = errs
                     .into_iter()
-                    .map(|e| {
-                        (
-                            DataflowError::from(e),
-                            timely::progress::Timestamp::minimum(),
-                            1,
-                        )
-                    })
+                    .map(move |e| (DataflowError::from(e), error_time, 1))
                     .to_stream(scope)
                     .as_collection();
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get { id, mfp } => {
+            Plan::Get {
+                id,
+                keys,
+                mfp,
+                key_val,
+            } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
-                let collection = self
+                let mut collection = self
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
                 if mfp.is_identity() {
+                    // Assert that each of `keys` are present in `collection`.
+                    assert!(keys.iter().all(|key| collection.arranged.contains_key(key)));
+                    // Retain only those keys we want to import.
+                    collection.arranged.retain(|key, _value| keys.contains(key));
                     collection
                 } else {
-                    let (oks, errs) = collection.as_collection_core(mfp);
+                    let (oks, errs) = collection.as_collection_core(mfp, key_val);
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -431,13 +458,17 @@ where
                 self.remove_id(Id::Local(id));
                 body
             }
-            Plan::Mfp { input, mfp } => {
+            Plan::Mfp {
+                input,
+                mfp,
+                key_val,
+            } => {
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 let input = self.render_plan(*input, scope, worker_index);
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(mfp);
+                    let (oks, errs) = input.as_collection_core(mfp, key_val);
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -472,26 +503,21 @@ where
                 let input = self.render_plan(*input, scope, worker_index);
                 self.render_reduce(input, key_val_plan, plan)
             }
-            Plan::TopK {
-                input,
-                group_key,
-                order_key,
-                limit,
-                offset,
-                monotonic,
-                arity,
-            } => {
+            Plan::TopK { input, top_k_plan } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_topk(input, group_key, order_key, limit, offset, monotonic, arity)
+                self.render_topk(input, top_k_plan)
             }
             Plan::Negate { input } => {
                 let input = self.render_plan(*input, scope, worker_index);
                 let (oks, errs) = input.as_collection();
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
-            Plan::Threshold { input, arity } => {
+            Plan::Threshold {
+                input,
+                threshold_plan,
+            } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                self.render_threshold(input, arity)
+                self.render_threshold(input, threshold_plan)
             }
             Plan::Union { inputs } => {
                 let mut oks = Vec::new();
@@ -582,16 +608,20 @@ pub mod datum_vec {
     }
 }
 
-/// An explicit represenation of a rendering plan for provided dataflows.
+/// An explicit representation of a rendering plan for provided dataflows.
 pub mod plan {
-
     use crate::render::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
     use crate::render::reduce::{KeyValPlan, ReducePlan};
+    use crate::render::threshold::ThresholdPlan;
+    use crate::render::top_k::TopKPlan;
+    use dataflow_types::DataflowDescription;
     use expr::{
         EvalError, Id, JoinInputMapper, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
-        TableFunc,
+        OptimizedMirRelationExpr, TableFunc,
     };
-    use repr::{Datum, Row};
+
+    use repr::{Datum, Diff, Row};
+    use std::collections::BTreeMap;
 
     /// A rendering plan with all conditional logic removed.
     ///
@@ -600,12 +630,12 @@ pub mod plan {
     /// compelling ways to represent renderable plans. Several stages have already
     /// encapsulated much of their logic in their own stage-specific plans, and we
     /// expect more of the plans to do the same in the future, without consultation.
-    #[derive(Debug)]
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub enum Plan {
         /// A collection containing a pre-determined collection.
         Constant {
             /// Explicit update triples for the collection.
-            rows: Result<Vec<(Row, repr::Timestamp, isize)>, EvalError>,
+            rows: Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>,
         },
         /// A reference to a bound collection.
         ///
@@ -614,12 +644,28 @@ pub mod plan {
         Get {
             /// A global or local identifier naming the collection.
             id: Id,
+            /// Arrangements that will be available.
+            ///
+            /// The collection will also be loaded if available, which it will
+            /// not be for imported data, but which it may be for locally defined
+            /// data.
+            // TODO: Be more explicit about whether a collection is available,
+            // although one can always produce it from an arrangement, and it
+            // seems generally advantageous to do that instead (to avoid cloning
+            // rows, by using `mfp` first on borrowed data).
+            keys: Vec<Vec<MirScalarExpr>>,
             /// Any linear operator work to apply as part of producing the data.
             ///
             /// This logic allows us to efficiently extract collections from data
             /// that have been pre-arranged, avoiding copying rows that are not
             /// used and columns that are projected away.
             mfp: MapFilterProject,
+            /// Optionally, a pair of arrangement key and row value to search for.
+            ///
+            /// When this is present, it means that the implementation can search
+            /// the arrangement keyed by the first argument for the value that is
+            /// the second argument, and process only those elements.
+            key_val: Option<(Vec<MirScalarExpr>, Row)>,
         },
         /// Binds `value` to `id`, and then results in `body` with that binding.
         ///
@@ -647,6 +693,12 @@ pub mod plan {
             input: Box<Plan>,
             /// Linear operator to apply to each record.
             mfp: MapFilterProject,
+            /// Optionally, a pair of arrangement key and row value to search for.
+            ///
+            /// When this is present, it means that the implementation can search
+            /// the arrangement keyed by the first argument for the value that is
+            /// the second argument, and process only those elements.
+            key_val: Option<(Vec<MirScalarExpr>, Row)>,
         },
         /// A variable number of output records for each input record.
         ///
@@ -702,24 +754,14 @@ pub mod plan {
         TopK {
             /// The input collection.
             input: Box<Plan>,
-            /// The columns that form the key for each group.
-            group_key: Vec<usize>,
-            /// Ordering that is used within each group.
-            order_key: Vec<expr::ColumnOrder>,
-            /// Optionally, an upper bound on the per-group ordinal position of the
-            /// records to produce from each group.
-            limit: Option<usize>,
-            /// A lower bound on the per-group ordinal position of the records to
-            /// produce from each group.
+            /// A plan for performing the Top-K.
             ///
-            /// This can be set to zero to have no effect.
-            offset: usize,
-            /// True if the input collection contains no retractions.
-            monotonic: bool,
-            /// The number of columns in the input and output.
-            arity: usize,
+            /// The implementation of reduction has several different strategies based
+            /// on the properties of the reduction, and the input itself. Please check
+            /// out the documentation for this type for more detail.
+            top_k_plan: TopKPlan,
         },
-        /// Inverts the sign of each update..
+        /// Inverts the sign of each update.
         Negate {
             /// The input collection.
             input: Box<Plan>,
@@ -731,8 +773,12 @@ pub mod plan {
         Threshold {
             /// The input collection.
             input: Box<Plan>,
-            /// The number of columns in the input and output.
-            arity: usize,
+            /// A plan for performing the threshold.
+            ///
+            /// The implementation of reduction has several different strategies based
+            /// on the properties of the reduction, and the input itself. Please check
+            /// out the documentation for this type for more detail.
+            threshold_plan: ThresholdPlan,
         },
         /// Adds the contents of the input collections.
         ///
@@ -766,7 +812,19 @@ pub mod plan {
         /// The rough structure is that we repeatedly extract map/filter/project operators
         /// from each expression we see, bundle them up as a `MapFilterProject` object, and
         /// then produce a plan for the combination of that with the next operator.
-        pub fn from_mir(expr: &MirRelationExpr) -> Result<Self, ()> {
+        ///
+        /// The method takes as an argument the existing arrangements for each bound identifier,
+        /// which it will locally add to and remove from for `Let` bindings (by the end of the
+        /// call it should contain the same bindings as when it started).
+        ///
+        /// The result of the method is both a `Plan`, but also a list of arrangements that
+        /// are certain to be produced, which can be relied on by the next steps in the plan.
+        /// An empty list of arrangement keys indicates that only a `Collection` stream can
+        /// be assumed to exist.
+        pub fn from_mir(
+            expr: &MirRelationExpr,
+            arrangements: &mut BTreeMap<Id, Vec<Vec<MirScalarExpr>>>,
+        ) -> Result<(Self, Vec<Vec<MirScalarExpr>>), ()> {
             // Extract a maximally large MapFilterProject from `expr`.
             // We will then try and push this in to the resulting expression.
             //
@@ -776,7 +834,7 @@ pub mod plan {
             let (mut mfp, expr) = MapFilterProject::extract_from_expression(expr);
             // We attempt to plan what we have remaining, in the context of `mfp`.
             // We may not be able to do this, and must wrap some operators with a `Mfp` stage.
-            let plan = match expr {
+            let (mut plan, mut keys) = match expr {
                 // These operators should have been extracted from the expression.
                 MirRelationExpr::Map { .. } => {
                     panic!("This operator should have been extracted");
@@ -797,27 +855,67 @@ pub mod plan {
                                 .collect()
                         }),
                     };
-                    plan
+                    // The plan, not arranged in any way.
+                    (plan, Vec::new())
                 }
                 MirRelationExpr::Get { id, typ: _ } => {
                     // This stage can absorb arbitrary MFP operators.
                     let mfp = mfp.take();
-                    Plan::Get {
-                        id: id.clone(),
-                        mfp,
+                    // If `mfp` is the identity, we can surface all imported arrangements.
+                    // Otherwise, we apply `mfp` and promise no arrangements.
+                    let mut in_keys = arrangements.get(id).cloned().unwrap_or_else(Vec::new);
+                    let out_keys = if mfp.is_identity() {
+                        in_keys.clone()
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Seek out an arrangement key that might be constrained to a literal.
+                    // TODO: Improve key selection heuristic.
+                    let key_val = in_keys
+                        .iter()
+                        .filter_map(|key| {
+                            mfp.literal_constraints(key).map(|val| (key.clone(), val))
+                        })
+                        .next();
+                    // If we discover a literal constraint, we can discard other arrangements.
+                    if let Some((key, _)) = &key_val {
+                        in_keys = vec![key.clone()];
                     }
+                    // Return the plan, and any keys if an identity `mfp`.
+                    (
+                        Plan::Get {
+                            id: id.clone(),
+                            keys: in_keys,
+                            mfp,
+                            key_val,
+                        },
+                        out_keys,
+                    )
                 }
                 MirRelationExpr::Let { id, value, body } => {
                     // It would be unfortunate to have a non-trivial `mfp` here, as we hope
                     // that they would be pushed down. I am not sure if we should take the
                     // initiative to push down the `mfp` ourselves.
-                    let value = Box::new(Plan::from_mir(value)?);
-                    let body = Box::new(Plan::from_mir(body)?);
-                    Plan::Let {
-                        id: id.clone(),
-                        value,
-                        body,
-                    }
+
+                    // Plan the value using only the initial arrangements, but
+                    // introduce any resulting arrangements bound to `id`.
+                    let (value, v_keys) = Plan::from_mir(value, arrangements)?;
+                    let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
+                    assert!(pre_existing.is_none());
+                    // Plan the body using initial and `value` arrangements,
+                    // and then remove reference to the value arrangements.
+                    let (body, b_keys) = Plan::from_mir(body, arrangements)?;
+                    arrangements.remove(&Id::Local(*id));
+                    // Return the plan, and any `body` arrangements.
+                    (
+                        Plan::Let {
+                            id: id.clone(),
+                            value: Box::new(value),
+                            body: Box::new(body),
+                        },
+                        b_keys,
+                    )
                 }
                 MirRelationExpr::FlatMap {
                     input,
@@ -830,15 +928,19 @@ pub mod plan {
                     if let Some(demand) = demand {
                         prepend_mfp_demand(&mut mfp, expr, demand);
                     }
-                    let input = Box::new(Plan::from_mir(input)?);
+                    let (input, _keys) = Plan::from_mir(input, arrangements)?;
                     // This stage can absorb arbitrary MFP instances.
                     let mfp = mfp.take();
-                    Plan::FlatMap {
-                        input,
-                        func: func.clone(),
-                        exprs: exprs.clone(),
-                        mfp,
-                    }
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::FlatMap {
+                            input: Box::new(input),
+                            func: func.clone(),
+                            exprs: exprs.clone(),
+                            mfp,
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Join {
                     inputs,
@@ -855,9 +957,15 @@ pub mod plan {
                     let input_mapper = JoinInputMapper::new(inputs);
 
                     // Plan each of the join inputs independently.
+                    // The `plans` get surfaced upwards, and the `input_keys` should
+                    // be used as part of join planning / to validate the existing
+                    // plans / to aid in indexed seeding of update streams.
                     let mut plans = Vec::new();
+                    let mut input_keys = Vec::new();
                     for input in inputs.iter() {
-                        plans.push(Plan::from_mir(input)?);
+                        let (plan, keys) = Plan::from_mir(input, arrangements)?;
+                        plans.push(plan);
+                        input_keys.push(keys);
                     }
                     // Extract temporal predicates as joins cannot currently absorb them.
                     let plan = match implementation {
@@ -881,10 +989,14 @@ pub mod plan {
                         // Other plans are errors, and should be reported as such.
                         _ => return Err(()),
                     };
-                    Plan::Join {
-                        inputs: plans,
-                        plan,
-                    }
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::Join {
+                            inputs: plans,
+                            plan,
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Reduce {
                     input,
@@ -894,18 +1006,23 @@ pub mod plan {
                     expected_group_size,
                 } => {
                     let input_arity = input.arity();
-                    let input = Box::new(Self::from_mir(input)?);
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
                     let key_val_plan = KeyValPlan::new(input_arity, group_key, aggregates);
                     let reduce_plan = ReducePlan::create_from(
                         aggregates.clone(),
                         *monotonic,
                         *expected_group_size,
                     );
-                    Plan::Reduce {
-                        input,
-                        key_val_plan,
-                        plan: reduce_plan,
-                    }
+                    let output_keys = reduce_plan.keys(group_key.len());
+                    // Return the plan, and the keys it produces.
+                    (
+                        Plan::Reduce {
+                            input: Box::new(input),
+                            key_val_plan,
+                            plan: reduce_plan,
+                        },
+                        output_keys,
+                    )
                 }
                 MirRelationExpr::TopK {
                     input,
@@ -916,53 +1033,132 @@ pub mod plan {
                     monotonic,
                 } => {
                     let arity = input.arity();
-                    let input = Box::new(Self::from_mir(input)?);
-                    Plan::TopK {
-                        input,
-                        group_key: group_key.clone(),
-                        order_key: order_key.clone(),
-                        limit: *limit,
-                        offset: *offset,
-                        monotonic: *monotonic,
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
+                    let top_k_plan = TopKPlan::create_from(
+                        group_key.clone(),
+                        order_key.clone(),
+                        *offset,
+                        *limit,
                         arity,
-                    }
+                        *monotonic,
+                    );
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::TopK {
+                            input: Box::new(input),
+                            top_k_plan,
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Negate { input } => {
-                    let input = Box::new(Self::from_mir(input)?);
-                    Plan::Negate { input }
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::Negate {
+                            input: Box::new(input),
+                        },
+                        Vec::new(),
+                    )
                 }
                 MirRelationExpr::Threshold { input } => {
                     let arity = input.arity();
-                    let input = Box::new(Self::from_mir(input)?);
-                    Plan::Threshold { input, arity }
+                    let (input, _keys) = Self::from_mir(input, arrangements)?;
+                    let threshold_plan = ThresholdPlan::create_from(arity, false);
+                    let output_keys = threshold_plan.keys();
+                    // Return the plan, and any produced keys.
+                    (
+                        Plan::Threshold {
+                            input: Box::new(input),
+                            threshold_plan,
+                        },
+                        output_keys,
+                    )
                 }
                 MirRelationExpr::Union { base, inputs } => {
                     let mut plans = Vec::with_capacity(1 + inputs.len());
-                    plans.push(Self::from_mir(base)?);
+                    let (plan, _keys) = Self::from_mir(base, arrangements)?;
+                    plans.push(plan);
                     for input in inputs.iter() {
-                        plans.push(Self::from_mir(input)?)
+                        let (plan, _keys) = Self::from_mir(input, arrangements)?;
+                        plans.push(plan)
                     }
-                    Plan::Union { inputs: plans }
+                    // Return the plan and no arrangements.
+                    (Plan::Union { inputs: plans }, Vec::new())
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
-                    let input = Box::new(Self::from_mir(input)?);
-                    Plan::ArrangeBy {
-                        input,
-                        keys: keys.clone(),
-                    }
+                    let (input, mut input_keys) = Self::from_mir(input, arrangements)?;
+                    input_keys.extend(keys.iter().cloned());
+                    input_keys.sort();
+                    input_keys.dedup();
+                    // Return the plan and extended keys.
+                    (
+                        Plan::ArrangeBy {
+                            input: Box::new(input),
+                            keys: keys.clone(),
+                        },
+                        input_keys,
+                    )
                 }
-                MirRelationExpr::DeclareKeys { input, keys: _ } => Self::from_mir(input)?,
+                MirRelationExpr::DeclareKeys { input, keys: _ } => {
+                    Self::from_mir(input, arrangements)?
+                }
             };
 
             // If the plan stage did not absorb all linear operators, introduce a new stage to implement them.
             if !mfp.is_identity() {
-                Ok(Plan::Mfp {
+                // Seek out an arrangement key that might be constrained to a literal.
+                // TODO: Improve key selection heuristic.
+                let key_val = keys
+                    .iter()
+                    .filter_map(|key| mfp.literal_constraints(key).map(|val| (key.clone(), val)))
+                    .next();
+                plan = Plan::Mfp {
                     input: Box::new(plan),
                     mfp,
-                })
-            } else {
-                Ok(plan)
+                    key_val,
+                };
+                keys = Vec::new();
             }
+
+            Ok((plan, keys))
+        }
+
+        /// Convert the dataflow description into one that uses render plans.
+        pub fn finalize_dataflow(
+            desc: DataflowDescription<OptimizedMirRelationExpr>,
+        ) -> Result<DataflowDescription<Self>, ()> {
+            // Collect available arrangements by identifier.
+            let mut arrangements = BTreeMap::new();
+            // Sources might provide arranged forms of their data, in the future.
+            // Indexes provide arranged forms of their data.
+            for (index_desc, _type) in desc.index_imports.values() {
+                arrangements
+                    .entry(Id::Global(index_desc.on_id))
+                    .or_insert_with(Vec::new)
+                    .push(index_desc.keys.clone());
+            }
+            // Build each object in order, registering the arrangements it forms.
+            let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
+            for build in desc.objects_to_build.into_iter() {
+                let (plan, keys) = Self::from_mir(&build.view, &mut arrangements)?;
+                arrangements.insert(Id::Global(build.id), keys);
+                objects_to_build.push(dataflow_types::BuildDesc {
+                    id: build.id,
+                    view: plan,
+                });
+            }
+
+            Ok(DataflowDescription {
+                source_imports: desc.source_imports,
+                index_imports: desc.index_imports,
+                objects_to_build,
+                index_exports: desc.index_exports,
+                sink_exports: desc.sink_exports,
+                dependent_objects: desc.dependent_objects,
+                as_of: desc.as_of,
+                debug_name: desc.debug_name,
+            })
         }
     }
 

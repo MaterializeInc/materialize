@@ -44,6 +44,7 @@ pub enum ErrorKind {
         depender_name: String,
     },
     Storage(rusqlite::Error),
+    Persistence(persist::error::Error),
     AmbiguousRename {
         depender: String,
         dependee: String,
@@ -97,6 +98,12 @@ impl From<SqlCatalogError> for Error {
     }
 }
 
+impl From<persist::error::Error> for Error {
+    fn from(e: persist::error::Error) -> Error {
+        Error::new(ErrorKind::Persistence(e))
+    }
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.kind {
@@ -123,6 +130,7 @@ impl std::error::Error for Error {
             | ErrorKind::FailedMigration { .. } => None,
             ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
+            ErrorKind::Persistence(e) => Some(e),
         }
     }
 }
@@ -174,6 +182,7 @@ impl fmt::Display for Error {
                 depender_name
             ),
             ErrorKind::Storage(e) => write!(f, "sqlite error: {}", e),
+            ErrorKind::Persistence(e) => write!(f, "persistence error: {}", e),
             ErrorKind::AmbiguousRename {
                 depender,
                 dependee,

@@ -19,11 +19,13 @@ use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Response, Server};
-use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
+use ore::{
+    metric,
+    metrics::{HistogramVec, IntCounterVec, MetricsRegistry},
+};
 use postgres::Client;
-use prometheus::{register_histogram_vec, register_int_counter_vec};
-use prometheus::{Encoder, HistogramVec, IntCounterVec};
+use prometheus::Encoder;
 
 use crate::args::{Args, Config, QueryGroup, Source};
 
@@ -38,11 +40,12 @@ type Result<T> = std::result::Result<T, Error>;
 fn main() -> Result<()> {
     ore::panic::set_abort_on_panic();
 
-    LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
+    LogBuilder::from_env(Env::new().filter_or("MZ_LOG_FILTER", "info"))
         .target(Target::Stdout)
         .init();
-
-    mz_process_collector::register_default_process_collector()?;
+    let metrics_registry = MetricsRegistry::new();
+    mz_process_collector::register_default_process_collector(&metrics_registry);
+    let metrics = Metrics::register_with(&metrics_registry);
 
     let args: Args = ore::cli::parse_args();
 
@@ -62,7 +65,7 @@ fn main() -> Result<()> {
 
     // Launch metrics server.
     let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
-    runtime.spawn(serve_metrics());
+    runtime.spawn(serve_metrics(metrics_registry));
 
     info!(
         "Allowing chbench to warm up for {} seconds at {}",
@@ -85,12 +88,12 @@ fn main() -> Result<()> {
         }
     } else {
         let _ = init_result;
-        measure_peek_times(&args, &config);
+        measure_peek_times(&args, &config, metrics);
         Ok(())
     }
 }
 
-fn measure_peek_times(args: &Args, config: &Config) {
+fn measure_peek_times(args: &Args, config: &Config, metrics: Metrics) {
     let mut peek_threads = vec![];
     let run_dur = chrono::Duration::seconds(args.run_seconds as i64);
     for (group_id, group) in config.groups.iter().enumerate() {
@@ -99,6 +102,7 @@ fn measure_peek_times(args: &Args, config: &Config) {
             group.clone(),
             group_id,
             run_dur.clone(),
+            &metrics,
         ));
     }
 
@@ -117,12 +121,14 @@ fn spawn_query_thread(
     query_group: QueryGroup,
     group_id: usize,
     run_dur: chrono::Duration,
+    metrics: &Metrics,
 ) -> Vec<JoinHandle<()>> {
     let qg = query_group;
     let mut qs = vec![];
     for thread_id in 0..qg.thread_count {
         let group = qg.clone();
         let mz_url = mz_url.clone();
+        let metrics = metrics.clone();
         qs.push(thread::spawn(move || {
             let mut postgres_client = create_postgres_client(&mz_url);
             let selects = group
@@ -132,8 +138,8 @@ fn spawn_query_thread(
                     let stmt = postgres_client
                         .prepare(&format!("SELECT * FROM {}", q.name))
                         .expect("should be able to prepare a query");
-                    let hist = HISTOGRAM_UNLABELED.with_label_values(&[&q.name]);
-                    let rows_counter = ROWS_UNLABELED.with_label_values(&[&q.name]);
+                    let hist = metrics.histogram_unlabeled.with_label_values(&[&q.name]);
+                    let rows_counter = metrics.rows_unlabeled.with_label_values(&[&q.name]);
                     (stmt, q.name.clone(), hist, rows_counter)
                 })
                 .collect::<Vec<_>>();
@@ -165,7 +171,7 @@ fn spawn_query_thread(
                         Err(err) => {
                             timer.stop_and_discard();
                             err_count += 1;
-                            prom_error(&q_name);
+                            metrics.error(&q_name);
                             last_was_failure = true;
                             print_error_and_backoff(&mut backoff, &q_name, err.to_string());
                             try_initialize(&mut postgres_client, &group);
@@ -347,57 +353,65 @@ fn try_initialize(client: &mut Client, query_group: &QueryGroup) -> bool {
 }
 
 // prometheus items
-
-lazy_static! {
-    static ref HISTOGRAM_UNLABELED: HistogramVec = register_histogram_vec!(
-        "mz_client_peek_seconds",
-        "how long peeks took",
-        &["query"],
-        vec![
-            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
-            0.500, 1.0
-        ]
-    )
-    .expect("can create histogram");
-    static ref ERRORS_UNLABELED: IntCounterVec = register_int_counter_vec!(
-        "mz_client_error_count",
-        "number of errors encountered",
-        &["query"]
-    )
-    .expect("can create histogram");
-    static ref ROWS_UNLABELED: IntCounterVec = register_int_counter_vec!(
-        "mz_client_pg_rows_total",
-        "number of rows received",
-        &["query"]
-    )
-    .unwrap();
+#[derive(Clone)]
+struct Metrics {
+    histogram_unlabeled: HistogramVec,
+    errors_unlabeled: IntCounterVec,
+    rows_unlabeled: IntCounterVec,
 }
 
-async fn serve_metrics() -> Result<()> {
+impl Metrics {
+    fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            histogram_unlabeled: registry.register(metric!(
+                name: "mz_client_peek_seconds",
+                help: "how long peeks took",
+                var_labels: ["query"],
+            )),
+            errors_unlabeled: registry.register(metric!(
+                name: "mz_client_error_count",
+                help: "number of errors encountered",
+                var_labels: ["query"],
+            )),
+            rows_unlabeled: registry.register(metric!(
+                name: "mz_client_pg_rows_total",
+                help: "number of rows received",
+                var_labels: ["query"],
+            )),
+        }
+    }
+
+    fn error(&self, query_name: &str) {
+        self.errors_unlabeled
+            .with_label_values(&[&query_name])
+            .inc();
+    }
+}
+
+async fn serve_metrics(registry: MetricsRegistry) -> Result<()> {
     info!("serving prometheus metrics on port {}", METRICS_PORT);
     let addr = ([0, 0, 0, 0], METRICS_PORT).into();
 
-    let make_service = make_service_fn(|_conn| async {
-        Ok::<_, Infallible>(service_fn(|_req| async {
-            let metrics = prometheus::gather();
-            let encoder = prometheus::TextEncoder::new();
-            let mut buffer = Vec::new();
+    let make_service = make_service_fn(move |_conn| {
+        let registry = registry.clone();
+        async {
+            Ok::<_, Infallible>(service_fn(move |_req| {
+                let metrics = registry.gather();
+                let encoder = prometheus::TextEncoder::new();
+                let mut buffer = Vec::new();
 
-            encoder
-                .encode(&metrics, &mut buffer)
-                .unwrap_or_else(|e| error!("error gathering metrics: {}", e));
-            Ok::<_, Infallible>(Response::new(Body::from(buffer)))
-        }))
+                encoder
+                    .encode(&metrics, &mut buffer)
+                    .unwrap_or_else(|e| error!("error gathering metrics: {}", e));
+                async { Ok::<_, Infallible>(Response::new(Body::from(buffer))) }
+            }))
+        }
     });
     Server::bind(&addr).serve(make_service).await?;
     Ok(())
 }
 
 // error helpers
-
-fn prom_error(query_name: &str) {
-    ERRORS_UNLABELED.with_label_values(&[&query_name]).inc()
-}
 
 fn get_baseline_backoff() -> Duration {
     Duration::from_millis(250)

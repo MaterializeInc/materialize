@@ -1,0 +1,2179 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# numeric is for refactoring decimal/numeric in parallel development to the main
+# branch
+
+mode cockroach
+
+query T
+SELECT pg_typeof(0.2)
+----
+numeric
+
+# Parsing
+
+query R
+SELECT '0.2'::numeric
+----
+0.2
+
+query R
+SELECT '-0.2'::numeric
+----
+-0.2
+
+query R
+SELECT -'0.2'::numeric
+----
+-0.2
+
+query R
+SELECT '2'::numeric
+----
+2
+
+query R
+SELECT '-2'::numeric
+----
+-2
+
+query R
+SELECT -'2'::numeric
+----
+-2
+
+query R
+SELECT '20'::numeric
+----
+20
+
+query R
+SELECT '-20'::numeric
+----
+-20
+
+query R
+SELECT '-1.2e20'::numeric
+----
+-120000000000000000000
+
+query R
+SELECT '1.2e-20'::numeric
+----
+0.000000000000000000012
+
+query R
+SELECT '-0.0000001'::numeric(10,2)
+----
+0
+
+query R
+SELECT '    1.2'::numeric
+----
+1.2
+
+query R
+SELECT '1.2    '::numeric
+----
+1.2
+
+query error invalid input syntax for type numeric: "1.   2"
+SELECT '1.   2'::numeric
+
+query error invalid input syntax for type numeric: "-123abc456"
+SELECT '-123abc456'::numeric;
+
+query error invalid input syntax for type numeric: "1.   2"
+SELECT '1.   2'::numeric
+
+query error invalid input syntax for type numeric: "-123abc456"
+SELECT '-123abc456'::numeric
+
+query error invalid input syntax for type numeric: "e25"
+SELECT 'e25'::numeric
+
+query error invalid input syntax for type numeric: "1e"
+SELECT '1e'::numeric
+
+query error invalid input syntax for type numeric: "1x25"
+SELECT '1x25'::numeric
+
+query error invalid input syntax for type numeric: "!1"
+SELECT '!1'::numeric
+
+query error invalid input syntax for type numeric: "--1"
+SELECT '--1'::numeric
+
+query error invalid input syntax for type numeric: "-1-"
+SELECT '-1-'::numeric
+
+query error invalid input syntax for type numeric: "1-"
+SELECT '1-'::numeric
+
+query error invalid input syntax for type numeric: "1..1"
+SELECT '1..1'::numeric
+
+query error invalid input syntax for type numeric: "..1"
+SELECT '..1'::numeric
+
+query error invalid input syntax for type numeric: "1.1.1"
+SELECT '1.1.1'::numeric
+
+query R
+SELECT '-0.0'::numeric
+----
+0
+
+# Max precision is 39
+query R
+SELECT '-123456789012345678.901234567890123456789'::numeric
+----
+-123456789012345678.901234567890123456789
+
+query R
+SELECT '-0.000000000000000000000000000000000000001'::numeric
+----
+-0.000000000000000000000000000000000000001
+
+# However, we'll round fractional component to not exceed 39 digits of precision
+query R
+SELECT '-123456789012345678.901234567890123456789123'::numeric
+----
+-123456789012345678.901234567890123456789
+
+# We won't round non-decimal places, i.e. overflow
+query error "-123456789012345678901234567890123456789123" is out of range for type numeric: exceeds maximum precision 39
+SELECT '-123456789012345678901234567890123456789123'::numeric
+
+query error "-1.2e40" is out of range for type numeric: exceeds maximum precision 39
+SELECT '-1.2e40'::numeric
+
+# If most significant digit is outside of precision bounds, error, i.e. underflow
+query error "1.2e-40" is out of range for type numeric: exceeds maximum precision 39
+SELECT '1.2e-40'::numeric
+
+# Literals
+
+query R
+SELECT 98754321098754321098754321098754321
+----
+98754321098754321098754321098754321
+
+query RRRR
+SELECT 9.1e10, -9.1e10, 9.1e-10, -9.1e-10
+----
+91000000000  -91000000000  0.00000000091  -0.00000000091
+
+query RRRRR
+SELECT 0.0, 0.00, 0.000, 0.0000, 0.00000
+----
+0 0 0 0 0
+
+query T
+SELECT pg_typeof(1e38)
+----
+numeric
+
+query error "1E39" is out of range for type numeric: exceeds maximum precision 39
+SELECT pg_typeof(1e39)
+
+query error "-1E39" is out of range for type numeric: exceeds maximum precision 39
+SELECT pg_typeof(-1e39)
+
+query error "1E-40" is out of range for type numeric: exceeds maximum precision 39
+SELECT pg_typeof(1e-40)
+
+query error "-1E-40" is out of range for type numeric: exceeds maximum precision 39
+SELECT pg_typeof(-1e-40)
+
+query error "9876543210987654321098765432109876543210" is out of range for type numeric: exceeds maximum precision 39
+SELECT 9876543210987654321098765432109876543210
+
+# Special values
+
+query R
+SELECT 'NaN'::numeric
+----
+NaN
+
+query error invalid input syntax for type numeric: "-NaN"
+SELECT '-NaN'::numeric
+
+query error invalid input syntax for type numeric: "Infinity"
+SELECT 'Infinity'::numeric
+
+query error invalid input syntax for type numeric: "-Infinity"
+SELECT '-Infinity'::numeric
+
+# Casts
+
+## int4 to numeric
+query RRR
+SELECT 7::numeric, -7::numeric, 0::numeric
+----
+7  -7  0
+
+query RRR
+SELECT 7::numeric(39,3), -7::numeric(39,3), 0::numeric(39,3)
+----
+7  -7  0
+
+query RR
+SELECT 2147483647::numeric, -2147483648::numeric
+----
+2147483647  -2147483648
+
+query error numeric field overflow
+SELECT 12::numeric(39,38)
+
+## numeric to int4
+query III
+SELECT 7::numeric::int, 7.3::int, 7.5::int
+----
+7  7  8
+
+query III
+SELECT -7::numeric::int, -7.3::int, -7.5::int
+----
+-7  -7  -8
+
+query II
+SELECT 0::numeric::int, '-0'::numeric::int
+----
+0  0
+
+query error integer out of range
+SELECT '2147483648'::numeric::int4
+
+query error integer out of range
+SELECT '-2147483649'::numeric::int4
+
+## int8 to numeric
+query RRR
+SELECT 7::int8::numeric, -7::int8::numeric, 0::int8::numeric
+----
+7  -7  0
+
+query RRR
+SELECT 7::int8::numeric(39,3), -7::int8::numeric(39,3), 0::int8::numeric(39,3)
+----
+7  -7  0
+
+query RR
+SELECT 9223372036854775807::numeric, -9223372036854775808::numeric
+----
+9223372036854775807  -9223372036854775808
+
+query error numeric field overflow
+SELECT 12::int8::numeric(39,38)
+
+## numeric to int8
+query III
+SELECT 7::numeric::int8, 7.3::int8, 7.5::int8
+----
+7  7  8
+
+query III
+SELECT -7::numeric::int8, -7.3::int8, -7.5::int8
+----
+-7  -7  -8
+
+query II
+SELECT 0::numeric::int8, -0::numeric::int8
+----
+0  0
+
+query error integer out of range
+SELECT '9223372036854775808'::numeric::int4
+
+query error integer out of range
+SELECT '-9223372036854775809'::numeric::int4
+
+# numeric to float4
+query RRRR
+SELECT 1.234::float4, 1234.567891234567::float4, 0.000000000000000123456789123456789012345::float4, -0.000000000000000123456789123456789012345::float4
+----
+1.234  1234.5679  0.00000000000000012345679  -0.00000000000000012345679
+
+query RRR
+SELECT 0.000::float4, 3.40282347E+38::float4, -3.40282347E+38::float4
+----
+0  340282350000000000000000000000000000000  -340282350000000000000000000000000000000
+
+query R
+SELECT 'NaN'::numeric::float4
+----
+NaN
+
+query R
+SELECT 9E-39::float4;
+----
+0.000000000000000000000000000000000000009
+
+query error real out of range
+SELECT 9E+38::float4
+
+# float4 to numeric
+query RRR
+SELECT 1.23::float4::numeric, -1.23::float4::numeric, 1.23::float4::numeric(38,1)
+----
+1.23  -1.23  1.2
+
+query RR
+SELECT 'NaN'::float4::numeric, '-NaN'::float4::numeric;
+----
+NaN NaN
+
+query RR
+SELECT '3.40282347E+38'::float4::numeric, '-3.40282347E+38'::float4::numeric
+----
+340282350000000000000000000000000000000  -340282350000000000000000000000000000000
+
+query error function casting real to numeric is only defined for finite arguments
+SELECT 'infinity'::float4::numeric
+
+query error numeric field overflow
+SELECT '12.34'::float4::numeric(39,38);
+
+# numeric to float8
+query RRRR
+SELECT 1.234::float8, 1234.567891234567::float8, 0.000000000000000123456789123456789012345::float8, -0.000000000000000123456789123456789012345::float8
+----
+1.234  1234.567891234567  0.00000000000000012345678912345679  -0.00000000000000012345678912345679
+
+query RRR
+SELECT 0.000::float8, 3.40282347E+38::float8, -3.40282347E+38::float8
+----
+0  340282347000000000000000000000000000000  -340282347000000000000000000000000000000
+
+query R
+SELECT 'NaN'::numeric::float8
+----
+NaN
+
+query RR
+SELECT 9E-39::float8, 9E+38::float8;
+----
+0.000000000000000000000000000000000000009  900000000000000000000000000000000000000
+
+# float8 to numeric
+query RRR
+SELECT 1.23::float8::numeric, -1.23::float8::numeric, 1.23::float8::numeric(38,1)
+----
+1.23  -1.23  1.2
+
+query RR
+SELECT 'NaN'::float8::numeric, '-NaN'::float8::numeric;
+----
+NaN NaN
+
+query RR
+SELECT '3.40282347E+38'::float8::numeric, '-3.40282347E+38'::float8::numeric
+----
+340282347000000000000000000000000000000  -340282347000000000000000000000000000000
+
+query error numeric field overflow
+SELECT '1.7976931348623157E+308'::float8::numeric
+
+query error numeric field overflow
+SELECT '-1.7976931348623157E+308'::float8::numeric
+
+query error function casting double precision to numeric is only defined for finite arguments
+SELECT 'infinity'::float8::numeric
+
+query error numeric field overflow
+SELECT '12.34'::float8::numeric(39,38);
+
+# jsonb to numeric
+# - note that these just defer to other casts, so don't need as-extensive of testing
+
+query R
+SELECT ('1'::jsonb)::numeric;
+----
+1
+
+query R
+SELECT ('1.2'::jsonb)::numeric;
+----
+1.2
+
+query error cannot cast jsonb string to type numeric
+SELECT ('"Infinity"'::jsonb)::numeric;
+
+query error cannot cast jsonb string to type numeric
+SELECT ('"-Infinity"'::jsonb)::numeric;
+
+query error cannot cast jsonb string to type numeric
+SELECT ('"NaN"'::jsonb)::numeric;
+
+# not a number
+query error cannot cast jsonb array to type numeric
+SELECT ('[1]'::jsonb)::numeric;
+
+# not a number
+query error cannot cast jsonb string to type numeric
+SELECT ('"1"'::jsonb)::numeric;
+
+# Addition
+query R
+SELECT 1::numeric + 2::numeric
+----
+3
+
+query R
+SELECT 1.23 + 2.34
+----
+3.57
+
+query R
+SELECT 1.23 + -2.34
+----
+-1.11
+
+query R
+SELECT 1.23 + -2.34
+----
+-1.11
+
+query R
+SELECT 1.23 + -1.23
+----
+0
+
+query R
+SELECT 3402823669209384634633746074317682 + 3402823669209384634633746074317682::numeric
+----
+6805647338418769269267492148635364
+
+query R
+SELECT 3402823669209384.634633746074317682 + 3402823669209384.634633746074317682::numeric
+----
+6805647338418769.269267492148635364
+
+# Values rounded to fit precision
+query R
+SELECT 1e38 + 1e-39
+----
+100000000000000000000000000000000000000
+
+# Limited precision means losing commutativity
+query R
+SELECT 1e38 + 1e-39 + -1e38
+----
+0
+
+query R
+SELECT 1e38 + -1e38 + 1e-39
+----
+0.000000000000000000000000000000000000001
+
+query error value out of range: overflow
+SELECT 999999999999999999999999999999999999999 + 1::numeric
+
+query error value out of range: overflow
+SELECT 790123449679012344967901234496790123392 + 790123449679012344967901234496790123392::numeric
+
+query R
+SELECT 'NaN'::numeric + 2::numeric
+----
+NaN
+
+# Subtraction
+query R
+SELECT 1::numeric - 2::numeric
+----
+-1
+
+query R
+SELECT 1.23 - 2.34
+----
+-1.11
+
+query R
+SELECT 1.23 - -2.34
+----
+3.57
+
+query R
+SELECT -1.23 - -2.34
+----
+1.11
+
+query R
+SELECT -(1.23 - 2.34)
+----
+1.11
+
+query R
+SELECT 1.23 - 1.23
+----
+0
+
+query R
+SELECT -3402823669209384634633746074317682 - 3402823669209384634633746074317682::numeric
+----
+-6805647338418769269267492148635364
+
+query error value out of range: overflow
+SELECT -790123449679012344967901234496790123392 - 790123449679012344967901234496790123392::numeric
+
+query R
+SELECT 'NaN'::numeric - 2::numeric
+----
+NaN
+
+# Limited precision means losing commutativity
+query R
+SELECT 1e38 - 1e-39 - 1e38
+----
+0
+
+query R
+SELECT 1e38 - 1e38 - 1e-39
+----
+-0.000000000000000000000000000000000000001
+
+# Multiplication
+query R
+SELECT 1.1 * 2.2
+----
+2.42
+
+query R
+SELECT 1.1 * -2.2
+----
+-2.42
+
+query R
+SELECT -1.1 * 2.2
+----
+-2.42
+
+query R
+SELECT -1.1 * -2.2
+----
+2.42
+
+query R
+SELECT -1.1 * .2
+----
+-0.22
+
+query R
+SELECT .1 * -2.2
+----
+-0.22
+
+query R
+SELECT -(.1 * 2.2)
+----
+-0.22
+
+query error value out of range: overflow
+SELECT 123456789012345678901234567890123456789 * 10::numeric
+
+query error value out of range: underflow
+SELECT 1E-39 * .1
+
+# Results are rounded to 39 digits of precision
+query R
+SELECT .123456789012345678901234567890123456789 * .1
+----
+0.012345678901234567890123456789012345679
+
+query R
+SELECT 3402823669209384.634633746074317682 * 3402823669209384.634633746074317682
+----
+11579208923731619542357098500868.7900057
+
+# known bad behavior in old i128 implementation
+query R
+SELECT 1.50000000 * 1.50000000
+----
+2.25
+
+query R
+SELECT 'NaN'::numeric * 2::numeric
+----
+NaN
+
+query R
+SELECT 0::numeric * -1::numeric
+----
+0
+
+# Division
+query R
+SELECT 1::numeric / 2::numeric;
+----
+0.5
+
+query R
+SELECT 2.0 / 1;
+----
+2
+
+query R
+SELECT 1 / 0.5;
+----
+2
+
+query R
+SELECT 2.0 / 1.1;
+----
+1.81818181818181818181818181818181818182
+
+query R
+SELECT 1::numeric / 11;
+----
+0.090909090909090909090909090909090909091
+
+query error value out of range: overflow
+SELECT 1::numeric / 0.000000000000000000000000000000000000001;
+
+query error value out of range: overflow
+SELECT 123456789012345678901234567890123456789 / .1
+
+query error value out of range: underflow
+SELECT 1E-39 / 10::numeric
+
+# Round results to 39 digits of precision
+query R
+SELECT .123456789012345678901234567890123456789 / 10::numeric
+----
+0.012345678901234567890123456789012345679
+
+query R
+SELECT 11579208923731619542357098500868.7900057 / 3402823669209384.634633746074317682
+----
+3402823669209384.63463374607431768200001
+
+query error division by zero
+SELECT 1::numeric / 0::numeric
+
+query error division by zero
+SELECT 1::numeric / 0.0;
+
+query error division by zero
+SELECT 1::numeric / (-1::numeric + 1.0);
+
+query error division by zero
+SELECT 0::numeric / 0::numeric;
+
+query R
+SELECT 1 / 1.21035
+----
+0.826207295410418473995125376957078531003
+
+query R
+SELECT 'NaN'::numeric / 2::numeric
+----
+NaN
+
+query R
+SELECT 2::numeric / 'NaN'::numeric
+----
+NaN
+
+query R
+SELECT 0::numeric / -1::numeric
+----
+0
+
+# mod
+
+query R
+SELECT 3::numeric % 2::numeric
+----
+1
+
+query R
+SELECT 23 % 4::numeric
+----
+3
+
+query R
+SELECT 4::numeric % 2::numeric
+----
+0
+
+query R
+SELECT 17.8 % 4::numeric
+----
+1.8
+
+query R
+SELECT 20.1 % 4.1
+----
+3.7
+
+query R
+SELECT -16.3 % 4.1
+----
+-4
+
+query R
+SELECT 20.1 % -4.1
+----
+3.7
+
+query R
+SELECT -20.1 % -4.1
+----
+-3.7
+
+query R
+SELECT 'NaN'::numeric % -4.1
+----
+NaN
+
+query R
+SELECT -20.1 % 'NaN'::numeric
+----
+NaN
+
+query error division by zero
+SELECT 2::numeric % 0::numeric
+
+# Specify scale
+query R
+SELECT 0.2::numeric(39,1);
+----
+0.2
+
+query R
+SELECT 0.2::numeric(39,3);
+----
+0.2
+
+query R
+SELECT 0.002::numeric(39,1);
+----
+0
+
+query R
+SELECT 0.12::numeric(39,2) + 0.2::numeric(39,1);
+----
+0.32
+
+query R
+SELECT 0.12::numeric(39,1) + 0.2::numeric(39,2);
+----
+0.3
+
+query R
+SELECT (0.12 + 0.2)::numeric(39,3);
+----
+0.32
+
+query R
+SELECT (0.12 + 0.2)::numeric(39,1);
+----
+0.3
+
+query R
+SELECT 0.12::numeric(39,2) * 0.2::numeric(39,1);
+----
+0.024
+
+query R
+SELECT 0.12::numeric(39,1) * 0.2::numeric(39,2);
+----
+0.02
+
+query R
+SELECT (0.12 * 0.2)::numeric(39,3);
+----
+0.024
+
+query R
+SELECT (0.14 * 0.2)::numeric(39,2);
+----
+0.03
+
+query R
+SELECT (0.12 * 0.2)::numeric(39,1);
+----
+0
+
+query R
+SELECT 'NaN'::numeric(39,1);
+----
+NaN
+
+query error precision for type numeric must be within \[1-39\], have 40
+SELECT 0.2::numeric(40,1);
+
+query error scale for type numeric must be within \[0-39\], have 40
+SELECT 0.2::numeric(39,40);
+
+query error numeric scale 39 must be between 0 and precision 1
+SELECT 0.2::numeric(1,39);
+
+query error numeric field overflow
+SELECT (12345678901234567890::numeric(39,3) * 12345678901234567890::numeric(39,3))::numeric(39,3);
+
+# Adding a scale "prevents" rounding
+## This value is within range, but requires 37 digits of precision left of the decimal
+query R
+SELECT 98765432109876543210987654321098765432.109
+----
+98765432109876543210987654321098765432.1
+
+## When expressly requesting scale of 3, only have 36 digits of precision left of the decimal
+query error numeric field overflow
+SELECT 98765432109876543210987654321098765432.109::numeric(39,3)
+
+query error numeric field overflow
+SELECT 1::numeric(39,39)
+
+## Multiplication w/ numeric field overflow
+query R
+SELECT 1234567890123456789.012345 * 1234567890123456789.012345;
+----
+1524157875323883675049533479957338669.12
+
+query error numeric field overflow
+SELECT (1234567890123456789.012345 * 1234567890123456789.012345)::numeric(39,3);
+
+## Addition w/ numeric field overflow
+query R
+SELECT 999999999999999999999999999999999999.123 + 1::numeric
+----
+1000000000000000000000000000000000000.12
+
+query error numeric field overflow
+SELECT (999999999999999999999999999999999999.123 + 1::numeric)::numeric(39,3);
+
+# Successive operations
+
+## regression test for #6858
+query R
+SELECT -0.0 - 1::numeric  * '-0.0 '::numeric;
+----
+0
+
+# Negate is nop on NaN and 0
+query R
+SELECT -'NaN'::numeric;
+----
+NaN
+
+query R
+SELECT -0::numeric;
+----
+0
+
+query R
+SELECT -0.00;
+----
+0
+
+query R
+SELECT -(0.1 - 0.10);
+----
+0
+
+# Abs
+query R
+SELECT abs(-1::numeric);
+----
+1
+
+query R
+SELECT abs(-1::numeric);
+----
+1
+
+query R
+SELECT abs(-7e-38);
+----
+0.00000000000000000000000000000000000007
+
+query R
+SELECT abs(1::numeric - 1e38);
+----
+99999999999999999999999999999999999999
+
+query R
+SELECT abs(-0.00);
+----
+0
+
+query R
+SELECT abs('NaN'::numeric);
+----
+NaN
+
+# round
+
+query RR
+SELECT round(1.4), round(1.5)
+----
+1  2
+
+query RR
+SELECT round(-1.4), round(-1.5)
+----
+-1  -2
+
+query R
+SELECT round('NaN'::numeric)
+----
+NaN
+
+query R
+SELECT round(1.29, 1)
+----
+1.3
+
+query R
+SELECT round(1.23, 4)
+----
+1.23
+
+query R
+SELECT round(.1234567890123456789012345678901234567890, 1)
+----
+0.1
+
+query R
+SELECT round(.1234567890123456789012345678901234567890, 39)
+----
+0.123456789012345678901234567890123456789
+
+query R
+SELECT round(.1234567890123456789012345678901234567890, 41)
+----
+0.123456789012345678901234567890123456789
+
+query R
+SELECT round(.1234567890123456789012345678901234567, 37)
+----
+0.1234567890123456789012345678901234567
+
+query R
+SELECT round(.1234567890123456789012345678901234567, 39)
+----
+0.1234567890123456789012345678901234567
+
+query R
+SELECT round(6e38, 39)
+----
+600000000000000000000000000000000000000
+
+query R
+SELECT round(19.87, -1)
+----
+20
+
+query R
+SELECT round(99.9, -1)
+----
+100
+
+query R
+SELECT round(123456789012345.6789012345678901234567890, -7)
+----
+123456790000000
+
+query R
+SELECT round(123456789012345.6789012345678901234567890, -16)
+----
+0
+
+query R
+SELECT round('5.6e10'::numeric, -10);
+----
+60000000000
+
+query R
+SELECT round('5.6e10'::numeric, 10);
+----
+56000000000
+
+query R
+SELECT round('9.876e38'::numeric, -37);
+----
+990000000000000000000000000000000000000
+
+# properly rounded value exceeds max precision
+query error value out of range: overflow
+SELECT round('9.876e38'::numeric, -38);
+
+query error value out of range: overflow
+SELECT round(9e38, -39);
+
+# however, if the "place" argument exceeds the number of digits, the result is
+# zero
+query R
+SELECT round(9e38, -40);
+----
+0
+
+query R
+SELECT round (-0.10212864, -900)
+----
+0
+
+# ceil
+
+query RRR
+SELECT ceil(1.234), ceil(-1.234), ceil('NaN'::numeric)
+----
+2  -1  NaN
+
+query R
+SELECT ceil(-0.6);
+----
+0
+
+# floor
+
+query RRR
+SELECT floor(1.234), floor(-1.234), floor('NaN'::numeric)
+----
+1  -2  NaN
+
+# Exponential calculations
+
+## Pow
+query RR
+SELECT pow(2::numeric, 3::numeric), pow(2.5, -3.5)
+----
+8 0.040477154050155255449585837368738797232
+
+query RR
+SELECT pow(1::numeric, 9e38), pow(9e38, 1::numeric)
+----
+1  900000000000000000000000000000000000000
+
+query RR
+SELECT pow(0::numeric, 0::numeric), pow(0.00, -0.000)
+----
+1  1
+
+query RR
+SELECT pow(1::numeric, 9e-39), pow(9e-39, 1::numeric)
+----
+1  0.000000000000000000000000000000000000009
+
+query RR
+SELECT pow('NaN'::numeric, -2.5), pow(-2.5, 'NaN'::numeric);
+----
+NaN NaN
+
+query error value out of range: overflow
+SELECT pow(999::numeric, 9999::numeric);
+
+query error value out of range: overflow
+SELECT pow(-2::numeric, 2111176704::numeric)::text;
+
+query error value out of range: underflow
+SELECT pow(999::numeric, -9999::numeric);
+
+query error value out of range: underflow
+SELECT pow(-2::numeric, -2111176704::numeric)::text;
+
+query error zero raised to a negative power is undefined
+SELECT pow(0::numeric, -1::numeric)
+
+query error function pow cannot return complex numbers
+SELECT pow(-1::numeric, '-.1'::numeric)
+
+# Square root
+query RRR
+SELECT sqrt(2::numeric), sqrt(3::numeric), sqrt(0::numeric)
+----
+1.41421356237309504880168872420969807857  1.73205080756887729352744634150587236694  0
+
+query R
+SELECT sqrt('.98765432109876543210'::numeric)
+----
+0.993807990055808231173954156543476014651
+
+query RR
+SELECT sqrt(9e38), sqrt(9e-39)
+----
+30000000000000000000  0.00000000000000000009486832980505137996
+
+query error cannot take square root of a negative number
+SELECT sqrt(-2::numeric)
+
+## Exp, i.e. e^x
+query R
+SELECT exp(1::numeric)
+----
+2.71828182845904523536028747135266249776
+
+query R
+SELECT exp(2::numeric)
+----
+7.38905609893065022723042746057500781318
+
+query R
+SELECT exp(2.0)
+----
+7.38905609893065022723042746057500781318
+
+query R
+SELECT exp(-1::numeric)
+----
+0.367879441171442321595523770161460867446
+
+query R
+SELECT exp(-1.0)
+----
+0.367879441171442321595523770161460867446
+
+query R
+SELECT exp(1.5)
+----
+4.48168907033806482260205546011927581901
+
+query R
+SELECT exp('.5'::numeric)
+----
+1.64872127070012814684865078781416357165
+
+query R
+SELECT exp('NaN'::numeric)
+----
+NaN
+
+query error value out of range: overflow
+SELECT exp(50000::numeric)
+
+query error value out of range: underflow
+SELECT exp(-50000::numeric)
+
+# Logarithmic calculations
+
+query RRR
+SELECT ln(2.0), ln(2.5), ln(5000::numeric)
+----
+0.693147180559945309417232121458176568076  0.91629073187415506518352721176801107145  8.51719319141623742665473369727928026233
+
+query error function ln is not defined for negative numbers
+SELECT ln(-100.000)
+
+query error function ln is not defined for zero
+SELECT ln(0::numeric)
+
+query RRR
+SELECT log(10.0), log(100.000), log(5000::numeric)
+----
+1  2  3.69897000433601880478626110527550697323
+
+query R
+SELECT ln(exp(2::numeric))
+----
+2
+
+query error function log10 is not defined for negative numbers
+SELECT log(-100.000)
+
+query error function log10 is not defined for zero
+SELECT log(0::numeric)
+
+# This documented behavior of the library:
+# > Inexact results will almost always be correctly rounded, but may be up to 1
+# > ulp (unit in last place) in error in rare cases.
+# See decNumberLog10 at http://speleotrove.com/decimal/dnnumb.html
+query R
+SELECT log(2::numeric, 64)
+----
+5.99999999999999999999999999999999999999
+
+# However, doesn't happen everywhere
+query R
+SELECT log(2::numeric, 128)
+----
+7
+
+query R
+SELECT log(128, 2::numeric)
+----
+0.142857142857142857142857142857142857143
+
+query R
+SELECT log(9e38, 1e-39)
+----
+-1.00117464716582763094927800807557636035
+
+query R
+SELECT log(1e-39, 9e38)
+----
+-0.99882673101126474037410399503872386201
+
+query error function log is not defined for zero
+SELECT log(0::numeric, 2::numeric)
+
+query error function log is not defined for negative numbers
+SELECT log(-1::numeric, 2::numeric)
+
+query error function log is not defined for zero
+SELECT log(128, 0::numeric)
+
+query error function log is not defined for negative numbers
+SELECT log(128, -1::numeric)
+
+query error division by zero
+select log(1::numeric, 2::numeric);
+
+# Equality
+# Tests binary combination of values from set {0, 0.00, 1, 1.00, 1.2, -1.00, NaN}
+# including self-combinations using each equality operator
+
+query T
+SELECT 0::numeric = 0::numeric;
+----
+true
+
+query T
+SELECT 0::numeric < 0::numeric;
+----
+false
+
+query T
+SELECT 0::numeric <= 0::numeric;
+----
+true
+
+query T
+SELECT 0::numeric > 0::numeric;
+----
+false
+
+query T
+SELECT 0::numeric >= 0::numeric;
+----
+true
+
+query T
+SELECT 0::numeric <> 0::numeric;
+----
+false
+
+query T
+SELECT 0::numeric = 0.00;
+----
+true
+
+query T
+SELECT 0::numeric < 0.00;
+----
+false
+
+query T
+SELECT 0::numeric <= 0.00;
+----
+true
+
+query T
+SELECT 0::numeric > 0.00;
+----
+false
+
+query T
+SELECT 0::numeric >= 0.00;
+----
+true
+
+query T
+SELECT 0::numeric <> 0.00;
+----
+false
+
+query T
+SELECT 0::numeric = 1::numeric;
+----
+false
+
+query T
+SELECT 0::numeric < 1::numeric;
+----
+true
+
+query T
+SELECT 0::numeric <= 1::numeric;
+----
+true
+
+query T
+SELECT 0::numeric > 1::numeric;
+----
+false
+
+query T
+SELECT 0::numeric >= 1::numeric;
+----
+false
+
+query T
+SELECT 0::numeric <> 1::numeric;
+----
+true
+
+query T
+SELECT 0::numeric = 1.00;
+----
+false
+
+query T
+SELECT 0::numeric < 1.00;
+----
+true
+
+query T
+SELECT 0::numeric <= 1.00;
+----
+true
+
+query T
+SELECT 0::numeric > 1.00;
+----
+false
+
+query T
+SELECT 0::numeric >= 1.00;
+----
+false
+
+query T
+SELECT 0::numeric <> 1.00;
+----
+true
+
+query T
+SELECT 0::numeric = 1.2;
+----
+false
+
+query T
+SELECT 0::numeric < 1.2;
+----
+true
+
+query T
+SELECT 0::numeric <= 1.2;
+----
+true
+
+query T
+SELECT 0::numeric > 1.2;
+----
+false
+
+query T
+SELECT 0::numeric >= 1.2;
+----
+false
+
+query T
+SELECT 0::numeric <> 1.2;
+----
+true
+
+query T
+SELECT 0::numeric = -1.00;
+----
+false
+
+query T
+SELECT 0::numeric < -1.00;
+----
+false
+
+query T
+SELECT 0::numeric <= -1.00;
+----
+false
+
+query T
+SELECT 0::numeric > -1.00;
+----
+true
+
+query T
+SELECT 0::numeric >= -1.00;
+----
+true
+
+query T
+SELECT 0::numeric <> -1.00;
+----
+true
+
+query T
+SELECT 0::numeric = 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 0::numeric < 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 0::numeric <= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 0::numeric > 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 0::numeric >= 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 0::numeric <> 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 0.00 = 0.00;
+----
+true
+
+query T
+SELECT 0.00 < 0.00;
+----
+false
+
+query T
+SELECT 0.00 <= 0.00;
+----
+true
+
+query T
+SELECT 0.00 > 0.00;
+----
+false
+
+query T
+SELECT 0.00 >= 0.00;
+----
+true
+
+query T
+SELECT 0.00 <> 0.00;
+----
+false
+
+query T
+SELECT 0.00 = 1::numeric;
+----
+false
+
+query T
+SELECT 0.00 < 1::numeric;
+----
+true
+
+query T
+SELECT 0.00 <= 1::numeric;
+----
+true
+
+query T
+SELECT 0.00 > 1::numeric;
+----
+false
+
+query T
+SELECT 0.00 >= 1::numeric;
+----
+false
+
+query T
+SELECT 0.00 <> 1::numeric;
+----
+true
+
+query T
+SELECT 0.00 = 1.00;
+----
+false
+
+query T
+SELECT 0.00 < 1.00;
+----
+true
+
+query T
+SELECT 0.00 <= 1.00;
+----
+true
+
+query T
+SELECT 0.00 > 1.00;
+----
+false
+
+query T
+SELECT 0.00 >= 1.00;
+----
+false
+
+query T
+SELECT 0.00 <> 1.00;
+----
+true
+
+query T
+SELECT 0.00 = 1.2;
+----
+false
+
+query T
+SELECT 0.00 < 1.2;
+----
+true
+
+query T
+SELECT 0.00 <= 1.2;
+----
+true
+
+query T
+SELECT 0.00 > 1.2;
+----
+false
+
+query T
+SELECT 0.00 >= 1.2;
+----
+false
+
+query T
+SELECT 0.00 <> 1.2;
+----
+true
+
+query T
+SELECT 0.00 = -1.00;
+----
+false
+
+query T
+SELECT 0.00 < -1.00;
+----
+false
+
+query T
+SELECT 0.00 <= -1.00;
+----
+false
+
+query T
+SELECT 0.00 > -1.00;
+----
+true
+
+query T
+SELECT 0.00 >= -1.00;
+----
+true
+
+query T
+SELECT 0.00 <> -1.00;
+----
+true
+
+query T
+SELECT 0.00 = 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 0.00 < 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 0.00 <= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 0.00 > 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 0.00 >= 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 0.00 <> 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1::numeric = 1::numeric;
+----
+true
+
+query T
+SELECT 1::numeric < 1::numeric;
+----
+false
+
+query T
+SELECT 1::numeric <= 1::numeric;
+----
+true
+
+query T
+SELECT 1::numeric > 1::numeric;
+----
+false
+
+query T
+SELECT 1::numeric >= 1::numeric;
+----
+true
+
+query T
+SELECT 1::numeric <> 1::numeric;
+----
+false
+
+query T
+SELECT 1::numeric = 1.00;
+----
+true
+
+query T
+SELECT 1::numeric < 1.00;
+----
+false
+
+query T
+SELECT 1::numeric <= 1.00;
+----
+true
+
+query T
+SELECT 1::numeric > 1.00;
+----
+false
+
+query T
+SELECT 1::numeric >= 1.00;
+----
+true
+
+query T
+SELECT 1::numeric <> 1.00;
+----
+false
+
+query T
+SELECT 1::numeric = 1.2;
+----
+false
+
+query T
+SELECT 1::numeric < 1.2;
+----
+true
+
+query T
+SELECT 1::numeric <= 1.2;
+----
+true
+
+query T
+SELECT 1::numeric > 1.2;
+----
+false
+
+query T
+SELECT 1::numeric >= 1.2;
+----
+false
+
+query T
+SELECT 1::numeric <> 1.2;
+----
+true
+
+query T
+SELECT 1::numeric = -1.00;
+----
+false
+
+query T
+SELECT 1::numeric < -1.00;
+----
+false
+
+query T
+SELECT 1::numeric <= -1.00;
+----
+false
+
+query T
+SELECT 1::numeric > -1.00;
+----
+true
+
+query T
+SELECT 1::numeric >= -1.00;
+----
+true
+
+query T
+SELECT 1::numeric <> -1.00;
+----
+true
+
+query T
+SELECT 1::numeric = 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1::numeric < 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1::numeric <= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1::numeric > 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1::numeric >= 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1::numeric <> 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1.00 = 1.00;
+----
+true
+
+query T
+SELECT 1.00 < 1.00;
+----
+false
+
+query T
+SELECT 1.00 <= 1.00;
+----
+true
+
+query T
+SELECT 1.00 > 1.00;
+----
+false
+
+query T
+SELECT 1.00 >= 1.00;
+----
+true
+
+query T
+SELECT 1.00 <> 1.00;
+----
+false
+
+query T
+SELECT 1.00 = 1.2;
+----
+false
+
+query T
+SELECT 1.00 < 1.2;
+----
+true
+
+query T
+SELECT 1.00 <= 1.2;
+----
+true
+
+query T
+SELECT 1.00 > 1.2;
+----
+false
+
+query T
+SELECT 1.00 >= 1.2;
+----
+false
+
+query T
+SELECT 1.00 <> 1.2;
+----
+true
+
+query T
+SELECT 1.00 = -1.00;
+----
+false
+
+query T
+SELECT 1.00 < -1.00;
+----
+false
+
+query T
+SELECT 1.00 <= -1.00;
+----
+false
+
+query T
+SELECT 1.00 > -1.00;
+----
+true
+
+query T
+SELECT 1.00 >= -1.00;
+----
+true
+
+query T
+SELECT 1.00 <> -1.00;
+----
+true
+
+query T
+SELECT 1.00 = 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1.00 < 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1.00 <= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1.00 > 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1.00 >= 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1.00 <> 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1.2 = 1.2;
+----
+true
+
+query T
+SELECT 1.2 < 1.2;
+----
+false
+
+query T
+SELECT 1.2 <= 1.2;
+----
+true
+
+query T
+SELECT 1.2 > 1.2;
+----
+false
+
+query T
+SELECT 1.2 >= 1.2;
+----
+true
+
+query T
+SELECT 1.2 <> 1.2;
+----
+false
+
+query T
+SELECT 1.2 = -1.00;
+----
+false
+
+query T
+SELECT 1.2 < -1.00;
+----
+false
+
+query T
+SELECT 1.2 <= -1.00;
+----
+false
+
+query T
+SELECT 1.2 > -1.00;
+----
+true
+
+query T
+SELECT 1.2 >= -1.00;
+----
+true
+
+query T
+SELECT 1.2 <> -1.00;
+----
+true
+
+query T
+SELECT 1.2 = 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1.2 < 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1.2 <= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 1.2 > 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1.2 >= 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 1.2 <> 'NaN'::numeric;
+----
+true
+
+query T
+SELECT -1.00 = -1.00;
+----
+true
+
+query T
+SELECT -1.00 < -1.00;
+----
+false
+
+query T
+SELECT -1.00 <= -1.00;
+----
+true
+
+query T
+SELECT -1.00 > -1.00;
+----
+false
+
+query T
+SELECT -1.00 >= -1.00;
+----
+true
+
+query T
+SELECT -1.00 <> -1.00;
+----
+false
+
+query T
+SELECT -1.00 = 'NaN'::numeric;
+----
+false
+
+query T
+SELECT -1.00 < 'NaN'::numeric;
+----
+true
+
+query T
+SELECT -1.00 <= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT -1.00 > 'NaN'::numeric;
+----
+false
+
+query T
+SELECT -1.00 >= 'NaN'::numeric;
+----
+false
+
+query T
+SELECT -1.00 <> 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 'NaN'::numeric = 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 'NaN'::numeric < 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 'NaN'::numeric <= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 'NaN'::numeric > 'NaN'::numeric;
+----
+false
+
+query T
+SELECT 'NaN'::numeric >= 'NaN'::numeric;
+----
+true
+
+query T
+SELECT 'NaN'::numeric <> 'NaN'::numeric;
+----
+false
+
+# NaN is larger than large numbers
+query T
+SELECT 'NaN'::numeric > 9e38;
+----
+true
+
+# Scale doesn't affect equality
+query T
+SELECT 9::numeric(39,5) = 9::numeric;
+----
+true
+
+query T
+SELECT 9::numeric(39,5) = 9::numeric(39,10);
+----
+true
+
+# Values are rounded before comparison
+query T
+SELECT 123456789012345678901234567890123456789.0 = 123456789012345678901234567890123456789.4999;
+----
+true
+
+query T
+SELECT 1.00123::numeric(39,2) = 1::numeric;
+----
+true
+
+query T
+SELECT 1.23456789::numeric(39,2) < 1.23456789::numeric(39,3);
+----
+true
+
+query T
+SELECT 1.23456789::numeric(39,5) < 1.23456789::numeric(39,4);
+----
+true
+
+query R
+select max(a) from (select a from unnest(ARRAY[1.4::numeric(39,5), 1.8::numeric(39,4)]) a);
+----
+1.8
+
+query R
+select min(a) from (select a from unnest(ARRAY[1.4::numeric(39,5), 1.8::numeric(39,4)]) a);
+----
+1.4
+
+query R
+select max(a) from (select a from unnest(ARRAY['NaN'::numeric(39,5), 1.4::numeric(39,5), 1.8::numeric(39,4)]) a);
+----
+NaN
+
+query R
+select min(a) from (select a from unnest(ARRAY['NaN'::numeric(39,5), 1.4::numeric(39,5), 1.8::numeric(39,4)]) a);
+----
+1.4
+
+query R
+select max(a) from (select a from unnest(ARRAY[]::numeric[]) a);
+----
+NULL
+
+query R
+select min(a) from (select a from unnest(ARRAY[]::numeric[]) a);
+----
+NULL
+
+# Distinct, except
+# regression tests for #6877 #6912
+
+query R
+SELECT DISTINCT column1 FROM (
+    VALUES
+        (0.1),
+        (0.10),
+        (0.100),
+        (0.1000),
+        (0.10000)
+);
+----
+0.1
+
+query R
+SELECT column1 FROM (
+    SELECT * FROM (
+        VALUES (0.1)
+    ) EXCEPT ALL
+        SELECT * FROM (
+            VALUES (0.1000)
+        )
+)
+----
+
+# regression test for https://github.com/MaterializeInc/materialize/issues/7361
+statement ok
+CREATE TABLE A (f1 DECIMAL);
+
+statement ok
+INSERT INTO A VALUES ('-999999999999999999999999999999999999999'), ('-999999999999999999999999999999999999999');
+
+query R
+SELECT sum(f1) FROM A;
+----
+-Infinity

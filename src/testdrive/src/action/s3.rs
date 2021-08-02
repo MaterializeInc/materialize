@@ -15,11 +15,12 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
+use ore::result::ResultExt;
 use rusoto_core::{ByteStream, RusotoError};
 use rusoto_s3::{
-    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest,
-    GetBucketNotificationConfigurationRequest, PutBucketNotificationConfigurationRequest,
-    PutObjectRequest, QueueConfiguration, S3,
+    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest, Delete,
+    DeleteObjectsRequest, GetBucketNotificationConfigurationRequest, ObjectIdentifier,
+    PutBucketNotificationConfigurationRequest, PutObjectRequest, QueueConfiguration, S3,
 };
 use rusoto_sqs::{
     CreateQueueError, CreateQueueRequest, DeleteMessageBatchRequest,
@@ -138,6 +139,54 @@ impl Action for PutObjectAction {
     }
 }
 
+pub struct DeleteObjectAction {
+    bucket_prefix: String,
+    keys: Vec<String>,
+}
+
+pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction, String> {
+    let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
+    cmd.args.done()?;
+    Ok(DeleteObjectAction {
+        bucket_prefix,
+        keys: cmd.input,
+    })
+}
+
+#[async_trait]
+impl Action for DeleteObjectAction {
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
+        println!("Deleting S3 objects {}: {}", bucket, self.keys.join(", "));
+        let result = state
+            .s3_client
+            .delete_objects(DeleteObjectsRequest {
+                bucket,
+                delete: Delete {
+                    objects: self
+                        .keys
+                        .iter()
+                        .cloned()
+                        .map(|key| ObjectIdentifier {
+                            key,
+                            version_id: None,
+                        })
+                        .collect(),
+                    quiet: None,
+                },
+                ..Default::default()
+            })
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("deleting s3 objects: {}", e));
+        result
+    }
+}
+
 pub struct AddBucketNotifications {
     bucket_prefix: String,
     queue_prefix: String,
@@ -156,7 +205,7 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
     let sqs_validation_timeout = cmd
         .args
         .opt_string("sqs-validation-timeout")
-        .map(|t| repr::util::parse_duration(&t).map_err(|e| e.to_string()))
+        .map(|t| repr::util::parse_duration(&t).map_err_to_string())
         .transpose()?;
     cmd.args.done()?;
     Ok(AddBucketNotifications {

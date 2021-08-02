@@ -402,7 +402,6 @@ explain select distinct 123 from (select distinct a from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=(#0)
 | Distinct group=()
 | Map 123
 
@@ -478,8 +477,7 @@ explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal fr
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=((#0 + 1))
-| Distinct group=((#0 + 2))
+| Distinct group=(((#0 + 1) + 2))
 
 EOF
 
@@ -498,8 +496,7 @@ explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 a
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=((#0 + 1))
-| Distinct group=((#0 + 2))
+| Distinct group=(((#0 + 1) + 2))
 | Map 123
 
 EOF
@@ -640,40 +637,51 @@ EOF
 query T multiline
 explain select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
 ----
-%0 =
+%0 = Let l0 =
+| Get materialize.public.t (u1)
+| Filter (#0 = 1308)
+
+%1 =
 | Get materialize.public.t_pk (u3)
 | ArrangeBy (#0)
 
-%1 =
-| Get materialize.public.t (u1)
-| Filter (#0 = 1308)
+%2 =
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get %0 (l0)
 | Reduce group=()
 | | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Filter (#0 > 1)
 | Map (err: more than one record produced in subquery)
+| Project (#1)
 
-%2 = Let l0 =
-| Join %0 %1 (= #0 #3)
-| | implementation = Differential %1 %0.(#0)
+%4 =
+| Union %2 %3
+
+%5 = Let l1 =
+| Join %1 %4 (= #0 #2)
+| | implementation = Differential %4 %1.(#0)
 | | demand = (#0)
 | Filter (#0 <= 195), (#0 >= 38)
 | Reduce group=()
 | | agg min(#0)
 
-%3 =
-| Get %2 (l0)
+%6 =
+| Get %5 (l1)
 | Negate
 | Project ()
 
-%4 =
+%7 =
 | Constant ()
 
-%5 =
-| Union %3 %4
+%8 =
+| Union %6 %7
 | Map null
 
-%6 =
-| Union %2 %5
+%9 =
+| Union %5 %8
 
 EOF
 
@@ -686,7 +694,7 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 
 %1 =
 | Get materialize.public.t (u1)
-| Filter !(isnull(#0)), (#0 <= 195), (#0 >= 38)
+| Filter (#0 <= 195), (#0 >= 38)
 | ArrangeBy (#0)
 
 %2 =
@@ -697,7 +705,7 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 | Get %0 (l0)
 | Reduce group=()
 | | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Filter (#0 > 1)
 | Map (err: more than one record produced in subquery)
 | Project (#1)
 

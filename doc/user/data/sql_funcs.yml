@@ -109,7 +109,7 @@
     description: The cube root of `x`.
 
   - signature: 'ceil(x: N) -> N'
-    description: The largest integer >= `x`
+    description: The smallest integer >= `x`
 
   - signature: 'exp(x: N) -> N'
     description: Exponential of `x` (e raised to the given power)
@@ -223,6 +223,9 @@
   - signature: 'encode(b: bytea, format: text) -> text'
     description: Encode `b` using the specified textual representation.
     url: encode
+
+  - signature: 'left(s: str, n: int) -> str'
+    description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 
   - signature: 'length(s: str) -> int'
     description: Number of code points in `s`

@@ -76,7 +76,7 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 
 
 LINT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
-LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5"]
+LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 
 class LintError:
@@ -97,6 +97,13 @@ def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> N
             lint_materialized_service(path, name, service, errors)
         elif "mzbuild" not in service and "image" in service:
             lint_image_name(path, service["image"], errors)
+
+        if isinstance(service.get("environment"), dict):
+            errors.append(
+                LintError(
+                    path, f"environment for service {name} uses dict instead of list"
+                )
+            )
 
 
 def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
@@ -193,7 +200,10 @@ class Composition:
 
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
-        for config in compose["services"].values():
+        for name, config in compose["services"].items():
+            compose["services"][name] = _substitute_env_vars(
+                config, {k: v for k, v in os.environ.items()}
+            )
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
 
@@ -217,6 +227,17 @@ class Composition:
                 if "propagate-uid-gid" in config:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
                     del config["propagate-uid-gid"]
+
+            if self.repo.rd.coverage:
+                # Emit coverage information to a file in a directory that is
+                # bind-mounted to the "coverage" directory on the host. We
+                # inject the configuration to all services for simplicity, but
+                # this only have an effect if the service runs instrumented Rust
+                # binaries.
+                config.setdefault("environment", []).append(
+                    f"LLVM_PROFILE_FILE=/coverage/{name}-%m.profraw"
+                )
+                config.setdefault("volumes", []).append("./coverage:/coverage")
 
         deps = self.repo.resolve_dependencies(self.images)
         for config in compose["services"].values():
@@ -429,7 +450,8 @@ def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
         for k, v in val.items():
             val[k] = _substitute_env_vars(v, env)
     elif isinstance(val, list):
-        val = cast(T, [_substitute_env_vars(v, env) for v in val])
+        for i, v in enumerate(val):
+            val[i] = _substitute_env_vars(v, env)
     return val
 
 
@@ -1254,6 +1276,11 @@ class RunStep(WorkflowStep):
       - command: the command to run. These are the arguments to the entrypoint
       - daemon: run as a daemon (default: False)
       - service_ports: expose and use service ports. (Default: True)
+      - force_service_name: ensure that this container has exactly the name of
+        its service. Only one container can exist with a given name at the same
+        time, so this should only be used when a start_services step cannot be used --e.g.
+        because it is not desired for it to be restarted on completion, or
+        because it needs to be passed command-line arguments.
     """
 
     def __init__(
@@ -1264,6 +1291,7 @@ class RunStep(WorkflowStep):
         daemon: bool = False,
         entrypoint: Optional[str] = None,
         service_ports: bool = True,
+        force_service_name: bool = False,
     ) -> None:
         cmd = []
         if daemon:
@@ -1275,6 +1303,8 @@ class RunStep(WorkflowStep):
             cmd.extend(shlex.split(command))
         elif isinstance(command, list):
             cmd.extend(command)
+        self._service = service
+        self._force_service_name = force_service_name
         self._service_ports = service_ports
         self._command = cmd
 
@@ -1284,6 +1314,7 @@ class RunStep(WorkflowStep):
                 [
                     "run",
                     *(["--service-ports"] if self._service_ports else []),
+                    *(["--name", self._service] if self._force_service_name else []),
                     *self._command,
                 ]
             )
@@ -1310,7 +1341,7 @@ class EnsureStaysUpStep(WorkflowStep):
                 raise errors.Failed(f"{e.stdout}")
             found = False
             for line in stdout.splitlines():
-                if line.startswith(pattern):
+                if line.startswith(pattern) or line.strip() == self._container:
                     found = True
                     break
             if not found:

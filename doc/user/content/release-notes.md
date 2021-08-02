@@ -46,6 +46,37 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.8.4 %}}
+
+- **Breaking change.** The `HTTP_PROXY` variable is no longer respected. Use
+  `http_proxy` instead.
+
+- Respect the [`no_proxy` environment variable](/cli/#http-proxies) to exclude
+  certain hosts from the configured HTTP/HTTPS proxy, if any.
+
+- Add [`reuse_topic`](/sql/create-sink/#enabling-topic-reuse-after-restart) as
+  a beta feature for Kafka Sinks. This allows re-using the output topic across
+  restarts of Materialize.
+
+{{% version-header v0.8.3 %}}
+- The `MZ_LOG` environment variable is no longer recognized. Setting the log
+  level can be done using the `--log-filter` command line parameter or the
+  `MZ_LOG_FILTER` environment variable.
+
+- Refactor the [`numeric`](/sql/types/numeric) type's backing implementation.
+  With this change comes more PostgreSQL-like semantics for unscaled values, as
+  well as bug fixes. {{% gh 7312 %}}
+
+- Add support for including Kafka keys in dataflows via new `INCLUDE KEY`
+  syntax. {{% gh 6661 %}}
+
+- The `FORMAT` argument to `UPSERT` to specify Kafka key formats has been
+  deprecated, use the new `KEY FORMAT .. VALUE FORMAT ..` syntax
+  ([documentation](/sql/create-source/avro-kafka)). The `UPSERT FORMAT ..`
+  syntax will be removed in a future release.
+
+{{% version-header v0.8.2 %}}
+
 - Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
   `--experimental`)
 
@@ -57,6 +88,8 @@ Wrap your release notes at the 80 character mark.
   enables clients to observe the progress of initial data loading. The table
   `mz_kafka_consumer_partitions` has an additional column `initial_high_offset`
   containing the first reported `hi_offset` from the broker for each partition.
+
+- Add `left` to the [string function](/sql/functions#string-func) suite.
 
 {{% version-header v0.8.1 %}}
 

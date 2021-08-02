@@ -16,9 +16,9 @@ use std::fmt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use lowertest::MzEnumReflect;
+use lowertest::{MzEnumReflect, MzStructReflect};
 use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, RelationType, Row};
+use repr::{ColumnType, Datum, Diff, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
@@ -41,7 +41,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Constant {
         /// Rows of the constant collection and their multiplicities.
-        rows: Result<Vec<(Row, isize)>, EvalError>,
+        rows: Result<Vec<(Row, Diff)>, EvalError>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -639,7 +639,7 @@ impl MirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row can have an arbitrary multiplicity.
-    pub fn constant_diff(rows: Vec<(Vec<Datum>, isize)>, typ: RelationType) -> Self {
+    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: RelationType) -> Self {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
@@ -1223,6 +1223,11 @@ impl MirRelationExpr {
         ViewExplanation::new(self, &DummyHumanizer).to_string()
     }
 
+    /// Print this MirRelationExpr to a JSON-formatted string.
+    pub fn json(&self) -> String {
+        serde_json::to_string(self).unwrap()
+    }
+
     /// Pretty-print this MirRelationExpr to a string with type information.
     pub fn pretty_typed(&self) -> String {
         let mut explanation = ViewExplanation::new(self, &DummyHumanizer);
@@ -1328,7 +1333,9 @@ impl MirRelationExpr {
     /// Return:
     /// * every row in keys_and_values
     /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
-    /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
+    /// (This is LEFT OUTER JOIN if:
+    /// 1) `default` is a row of null
+    /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
     pub fn lookup(
         self,
         id_gen: &mut IdGen,
@@ -1365,11 +1372,12 @@ impl MirRelationExpr {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzStructReflect)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
     /// Whether to sort in descending order.
+    #[serde(default)]
     pub desc: bool,
 }
 
@@ -1400,13 +1408,14 @@ impl IdGen {
 }
 
 /// Describes an aggregation expression.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
     /// An expression which extracts from each row the input to `func`.
     pub expr: MirScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
+    #[serde(default)]
     pub distinct: bool,
 }
 
@@ -1419,21 +1428,21 @@ impl AggregateExpr {
     /// Returns whether the expression has a constant result.
     pub fn is_constant(&self) -> bool {
         match self.func {
-            AggregateFunc::MaxInt32
+            AggregateFunc::MaxInt16
+            | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
-            | AggregateFunc::MaxDecimal
             | AggregateFunc::MaxBool
             | AggregateFunc::MaxString
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
-            | AggregateFunc::MinDecimal
             | AggregateFunc::MinBool
             | AggregateFunc::MinString
             | AggregateFunc::MinDate

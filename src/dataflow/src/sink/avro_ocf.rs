@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::fs::OpenOptions;
 
 use differential_dataflow::{Collection, Hashable};
@@ -17,12 +18,65 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::Scope;
 
-use dataflow_types::AvroOcfSinkConnector;
+use dataflow_types::{AvroOcfSinkConnector, SinkDesc};
 use expr::GlobalId;
-use interchange::avro::{encode_datums_as_avro, Encoder};
-use repr::{RelationDesc, Row, Timestamp};
+use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
+use repr::{Diff, RelationDesc, Row, Timestamp};
+use timely::dataflow::scopes::Child;
 
-pub fn avro_ocf<G>(
+use crate::render::sinks::SinkRender;
+use crate::render::RenderState;
+
+use super::SinkBaseMetrics;
+
+impl<G> SinkRender<G> for AvroOcfSinkConnector
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn uses_keys(&self) -> bool {
+        false
+    }
+
+    fn get_key_desc(&self) -> Option<&RelationDesc> {
+        None
+    }
+
+    fn get_key_indices(&self) -> Option<&[usize]> {
+        None
+    }
+
+    fn get_relation_key_indices(&self) -> Option<&[usize]> {
+        None
+    }
+
+    fn get_value_desc(&self) -> &RelationDesc {
+        &self.value_desc
+    }
+
+    fn render_continuous_sink(
+        &self,
+        _render_state: &mut RenderState,
+        _sink: &SinkDesc,
+        sink_id: GlobalId,
+        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+        _metrics: &SinkBaseMetrics,
+    ) -> Option<Box<dyn Any>>
+    where
+        G: Scope<Timestamp = Timestamp>,
+    {
+        avro_ocf(
+            sinked_collection,
+            sink_id,
+            self.clone(),
+            self.value_desc.clone(),
+        );
+
+        // no sink token
+        None
+    }
+}
+
+fn avro_ocf<G>(
     collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
     connector: AvroOcfSinkConnector,
@@ -36,9 +90,9 @@ pub fn avro_ocf<G>(
         v
     });
     let (schema, columns) = {
-        let encoder = Encoder::new(None, desc, false);
-        let schema = encoder.value_writer_schema().clone();
-        let columns = encoder.value_columns().to_vec();
+        let schema_generator = AvroSchemaGenerator::new(None, desc, false);
+        let schema = schema_generator.value_writer_schema().clone();
+        let columns = schema_generator.value_columns().to_vec();
         (schema, columns)
     };
 

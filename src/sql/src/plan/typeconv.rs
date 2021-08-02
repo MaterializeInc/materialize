@@ -11,7 +11,6 @@
 //! other cast-related functions.
 
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
@@ -23,7 +22,7 @@ use lazy_static::lazy_static;
 use expr::VariadicFunc;
 use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
-use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
+use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
 
@@ -117,32 +116,37 @@ lazy_static! {
             (Bool, Int32) => Explicit: CastBoolToInt32,
             (Bool, String) => Assignment: CastBoolToString,
 
+            //INT16
+            (Int16, Int32) => Implicit: CastInt16ToInt32,
+            (Int16, Int64) => Implicit: CastInt16ToInt64,
+            (Int16, Float32) => Implicit: CastInt16ToFloat32,
+            (Int16, Float64) => Implicit: CastInt16ToFloat64,
+            (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(s)))
+            }),
+            (Int16, String) => Assignment: CastInt16ToString,
+
             //INT32
             (Int32, Bool) => Explicit: CastInt32ToBool,
             (Int32, Oid) => Implicit: CastInt32ToOid,
+            (Int32, Int16) => Assignment: CastInt32ToInt16,
             (Int32, Int64) => Implicit: CastInt32ToInt64,
             (Int32, Float32) => Implicit: CastInt32ToFloat32,
             (Int32, Float64) => Implicit: CastInt32ToFloat64,
-            (Int32, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
-            }),
-            (Int32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToAPD(s)))
+            (Int32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToNumeric(s)))
             }),
             (Int32, String) => Assignment: CastInt32ToString,
 
             // INT64
             (Int64, Bool) => Explicit: CastInt64ToBool,
+            (Int64, Int16) => Assignment: CastInt64ToInt16,
             (Int64, Int32) => Assignment: CastInt64ToInt32,
-            (Int64, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
-            }),
-            (Int64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToAPD(s)))
+            (Int64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToNumeric(s)))
             }),
             (Int64, Float32) => Implicit: CastInt64ToFloat32,
             (Int64, Float64) => Implicit: CastInt64ToFloat64,
@@ -153,66 +157,26 @@ lazy_static! {
             (Oid, String) => Explicit: CastInt32ToString,
 
             // FLOAT32
+            (Float32, Int16) => Assignment: CastFloat32ToInt16,
             (Float32, Int32) => Assignment: CastFloat32ToInt32,
             (Float32, Int64) => Assignment: CastFloat32ToInt64,
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
-            (Float32, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToDecimal(s)))
-            }),
-            (Float32, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToAPD(s)))
+            (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(s)))
             }),
             (Float32, String) => Assignment: CastFloat32ToString,
 
             // FLOAT64
+            (Float64, Int16) => Assignment: CastFloat64ToInt16,
             (Float64, Int32) => Assignment: CastFloat64ToInt32,
             (Float64, Int64) => Assignment: CastFloat64ToInt64,
             (Float64, Float32) => Assignment: CastFloat64ToFloat32,
-            (Float64, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToDecimal(s)))
-            }),
-            (Float64, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToAPD(s)))
+            (Float64, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(s)))
             }),
             (Float64, String) => Assignment: CastFloat64ToString,
-
-            // DECIMAL
-            (Decimal, Int32) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToInt32(s)))
-            }),
-            (Decimal, Int64) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToInt64(s)))
-            }),
-            (Decimal, Float32) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                let factor = 10_f32.powi(i32::from(s));
-                let factor =
-                    HirScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
-                Some(|e: HirScalarExpr| e.call_unary(CastSignificandToFloat32)
-                    .call_binary(factor, BinaryFunc::DivFloat32))
-            }),
-            (Decimal, Float64) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                let factor = 10_f64.powi(i32::from(s));
-                let factor = HirScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
-                Some(|e: HirScalarExpr| e.call_unary(CastSignificandToFloat64)
-                    .call_binary(factor, BinaryFunc::DivFloat64))
-            }),
-            (Decimal, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
-                let (_, f) = from_type.unwrap_decimal_parts();
-                let (_, t) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| rescale_decimal(e, f, t))
-            }),
-            (Decimal, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
-                let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToString(s)))
-            }),
 
             // DATE
             (Date, Timestamp) => Implicit: CastDateToTimestamp,
@@ -242,18 +206,15 @@ lazy_static! {
 
             // STRING
             (String, Bool) => Explicit: CastStringToBool,
+            (String, Int16) => Explicit: CastStringToInt16,
             (String, Int32) => Explicit: CastStringToInt32,
             (String, Int64) => Explicit: CastStringToInt64,
             (String, Oid) => Explicit: CastStringToInt32,
             (String, Float32) => Explicit: CastStringToFloat32,
             (String, Float64) => Explicit: CastStringToFloat64,
-            (String, Decimal) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToDecimal(s)))
-            }),
-            (String, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToAPD(s)))
+            (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
             }),
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
@@ -327,34 +288,32 @@ lazy_static! {
 
             // JSONB
             (Jsonb, Bool) => Explicit: CastJsonbToBool,
+            (Jsonb, Int16) => Explicit: CastJsonbToInt16,
             (Jsonb, Int32) => Explicit: CastJsonbToInt32,
             (Jsonb, Int64) => Explicit: CastJsonbToInt64,
             (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
-            (Jsonb, Decimal) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToDecimal(s)))
-            }),
-            (Jsonb, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_apd_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToAPD(s)))
+            (Jsonb, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(s)))
             }),
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
             (Uuid, String) => Assignment: CastUuidToString,
 
-            // APD
-            // APD to APD casts are not necessary in implicit contexts
-            (APD, APD) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let scale = to_type.unwrap_apd_scale().unwrap();
-                Some(move |e: HirScalarExpr|e.call_unary(UnaryFunc::RescaleAPD(scale)))
+            // Numeric
+            // Numeric to Numeric casts are not necessary in implicit contexts
+            (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let scale = to_type.unwrap_numeric_scale().unwrap();
+                Some(move |e: HirScalarExpr|e.call_unary(UnaryFunc::RescaleNumeric(scale)))
             }),
-            (APD, Float32) => Assignment: CastAPDToFloat32,
-            (APD, Float64) => Assignment: CastAPDToFloat64,
-            (APD, Int32) => Assignment: CastAPDToInt32,
-            (APD, Int64) => Assignment: CastAPDToInt64,
-            (APD, String) => Assignment: CastAPDToString
+            (Numeric, Float32) => Implicit: CastNumericToFloat32,
+            (Numeric, Float64) => Implicit: CastNumericToFloat64,
+            (Numeric, Int16) => Assignment: CastNumericToInt16,
+            (Numeric, Int32) => Assignment: CastNumericToInt32,
+            (Numeric, Int64) => Assignment: CastNumericToInt64,
+            (Numeric, String) => Assignment: CastNumericToString
         }
     };
 }
@@ -369,18 +328,44 @@ fn get_cast(
 ) -> Option<Cast> {
     use CastContext::*;
 
-    if match (from, to) {
-        // APD values are only rescaled if:
-        // - CastContext is either Assignment or Explicit
-        // - `to` has a specified scale that differs from `from`'s
-        (
-            ScalarType::APD { scale: from_scale },
-            ScalarType::APD {
-                scale: to_scale @ Some(..),
-            },
-        ) if ccx != Implicit => from_scale == to_scale,
-        _ => from == to,
-    } {
+    // Determines if types are equal in a way that does not require casting.
+    //
+    // Note that these checks are necessary to avoid unnecessary nop rescales of numeric types.
+    fn embedded_value_equality(ccx: &CastContext, l: &ScalarType, r: &ScalarType) -> bool {
+        use ScalarType::*;
+        match (l, r) {
+            (
+                ScalarType::Numeric { scale: from_scale },
+                ScalarType::Numeric {
+                    scale: to_scale @ Some(..),
+                },
+            ) if ccx != &Implicit => from_scale == to_scale,
+            (Array(l), Array(r))
+            | (
+                List {
+                    element_type: l,
+                    custom_oid: None,
+                },
+                List {
+                    element_type: r,
+                    custom_oid: None,
+                },
+            )
+            | (
+                Map {
+                    value_type: l,
+                    custom_oid: None,
+                },
+                Map {
+                    value_type: r,
+                    custom_oid: None,
+                },
+            ) => embedded_value_equality(&ccx, &l, &r),
+            (l, r) => l.base_eq(r),
+        }
+    }
+
+    if embedded_value_equality(&ccx, &from, &to) {
         return Some(Box::new(|expr| expr));
     }
 
@@ -423,24 +408,6 @@ fn get_cast(
     template.and_then(|template| (template.0)(ecx, ccx, from, to))
 }
 
-pub fn rescale_decimal(expr: HirScalarExpr, s1: u8, s2: u8) -> HirScalarExpr {
-    match s1.cmp(&s2) {
-        Ordering::Less => {
-            let factor = 10_i128.pow(u32::from(s2 - s1));
-            let factor =
-                HirScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s2 - s1));
-            expr.call_binary(factor, BinaryFunc::MulDecimal)
-        }
-        Ordering::Equal => expr,
-        Ordering::Greater => {
-            let factor = 10_i128.pow(u32::from(s1 - s2));
-            let factor =
-                HirScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s1 - s2));
-            expr.call_binary(factor, BinaryFunc::DivDecimal)
-        }
-    }
-}
-
 /// Converts an expression to `ScalarType::String`.
 ///
 /// All types are convertible to string, so this never fails.
@@ -471,12 +438,14 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
     match ecx.scalar_type(&expr) {
         Bool | Jsonb | Int64 | Float64 => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
+        Int16 | Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
             .expect("cast known to exist")
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Float32 | Decimal(..) => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
-            .expect("cast known to exist")
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Float32 | Numeric { .. } => {
+            plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
+                .expect("cast known to exist")
+                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
+        }
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
@@ -498,34 +467,12 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     }
 }
 
-// Tracks order of preferences for implicit casts for each [`TypeCategory`] that
-// contains multiple types, but does so irrespective of [`TypeCategory`].
-//
-// We could make this deterministic, but it offers no real benefit because the
-// information it provides is used in fallible functions anyway, so a bad guess
-// just gets caught elsewhere.
-fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
-    types.iter().max_by_key(|scalar_type| match scalar_type {
-        // [`TypeCategory::Numeric`]
-        ScalarType::Int32 => 0,
-        ScalarType::Int64 => 1,
-        ScalarType::Decimal(_, _) => 2,
-        ScalarType::Float32 => 3,
-        ScalarType::Float64 => 4,
-        // [`TypeCategory::DateTime`]
-        ScalarType::Date => 5,
-        ScalarType::Timestamp => 6,
-        ScalarType::TimestampTz => 7,
-        _ => 8,
-    })
-}
-
 /// Guesses the most-common type among a set of [`ScalarType`]s that all members
 /// can be cast to. Returns `None` if a common type cannot be deduced.
 ///
 /// The returned type is not guaranteed to be accurate because we ignore type
-/// categories, e.g. on input `[ScalarType::Date, ScalarType::Int32]`, will guess
-/// that `Date` is the common type.
+/// categories, e.g. on input `[ScalarType::Date, ScalarType::Int32]`, will
+/// guess that `Date` is the common type.
 ///
 /// However, if there _is_ a common type among the input, it will correctly
 /// determine it, i.e. returns false positives but never false negatives.
@@ -538,43 +485,61 @@ fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
 /// Postgres' ["`UNION`, `CASE`, and Related Constructs"][union-type-conv] type
 /// conversion.
 ///
+/// ## Type hints
+/// Some types contain embedded values, e.g. [`ScalarType::Numeric`] contains
+/// the values' scales. When choosing a common type, and the `type_hint` is of
+/// the type chosen, you should guess _it_ because the given type hint can
+/// contain a distinct embedded value necessary to retain type invariants.
+///
 /// [union-type-conv]:
 /// https://www.postgresql.org/docs/12/typeconv-union-case.html
 pub fn guess_best_common_type(
     types: &[Option<ScalarType>],
     type_hint: Option<&ScalarType>,
 ) -> Option<ScalarType> {
-    // Remove unknown types.
-    let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).cloned().collect();
+    // Remove unknown types and chain type_hint
+    let known_types: Vec<_> = types
+        .into_iter()
+        .filter_map(|v| match v {
+            None => type_hint.cloned(),
+            v => v.clone(),
+        })
+        .collect();
 
     if known_types.is_empty() {
-        if type_hint.is_some() {
-            return type_hint.cloned();
-        }
         return Some(ScalarType::String);
     }
 
-    if known_types.iter().all(|t| *t == known_types[0]) {
-        return Some(known_types[0].clone());
-    }
+    // Tracks order of preferences for implicit casts for each [`TypeCategory`] that
+    // contains multiple types, but does so irrespective of [`TypeCategory`].
+    //
+    // We could make this deterministic, but it offers no real benefit because the
+    // information it provides is used in fallible functions anyway, so a bad guess
+    // just gets caught elsewhere.
+    let r = known_types
+        .iter()
+        .max_by_key(|scalar_type| match scalar_type {
+            // Strings can be cast to any type, so should be given lowest priority.
+            ScalarType::String => 0,
+            // TypeCategory::Numeric
+            ScalarType::Int16 => 1,
+            ScalarType::Int32 => 2,
+            ScalarType::Int64 => 3,
+            ScalarType::Numeric { .. } => 4,
+            ScalarType::Float32 => 5,
+            ScalarType::Float64 => 6,
+            // TypeCategory::DateTime
+            ScalarType::Date => 7,
+            ScalarType::Timestamp => 8,
+            ScalarType::TimestampTz => 9,
+            _ => 10,
+        })
+        .unwrap();
 
-    // Determine best cast type among known types.
-    if let Some(btt) = guess_compatible_cast_type(&known_types) {
-        if let ScalarType::Decimal(_, _) = btt {
-            // Determine best decimal scale (i.e. largest).
-            let mut max_s = 0;
-            for t in known_types {
-                if let ScalarType::Decimal(_, s) = t {
-                    max_s = std::cmp::max(s, max_s);
-                }
-            }
-            return Some(ScalarType::Decimal(38, max_s));
-        } else {
-            return Some(btt.clone());
-        }
+    match type_hint {
+        Some(th) if r.base_eq(th) => type_hint.cloned(),
+        _ => Some(r.default_embedded_value()),
     }
-
-    None
 }
 
 pub fn plan_coerce<'a>(
@@ -683,7 +648,7 @@ pub fn plan_hypothetical_cast(
 /// # Errors
 ///
 /// If a cast between the `ScalarExpr`'s base type and the specified type is:
-/// - Not possible, e.g. `Bytes` to `Decimal`
+/// - Not possible, e.g. `Bytes` to `Interval`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
 /// - Not implemented yet
 pub fn plan_cast<D>(
@@ -696,10 +661,6 @@ pub fn plan_cast<D>(
 where
     D: fmt::Display,
 {
-    if let ScalarType::APD { .. } = cast_to {
-        ecx.require_experimental_mode("APD")?;
-    }
-
     let from_typ = ecx.scalar_type(&expr);
     match get_cast(ecx, ccx, &from_typ, cast_to) {
         Some(cast) => Ok(cast(expr)),

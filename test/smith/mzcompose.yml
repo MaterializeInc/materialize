@@ -15,7 +15,7 @@ services:
      - 6875
     command: --workers 1 --differential-idle-merge-effort=1000 --disable-telemetry
     environment:
-      - MZ_LOG=dataflow=error,info
+      - MZ_LOG_FILTER=dataflow=error,info
       - MZ_DEV=1
   smith-fuzz:
     mzbuild: smith-fuzz

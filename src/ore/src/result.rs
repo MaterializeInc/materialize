@@ -15,6 +15,8 @@
 
 //! Result utilities.
 
+use crate::display::DisplayExt;
+
 /// Extension methods for [`std::result::Result`].
 pub trait ResultExt<T, E> {
     /// Applies [`Into::into`] to a contained [`Err`] value, leaving an [`Ok`]
@@ -22,6 +24,19 @@ pub trait ResultExt<T, E> {
     fn err_into<E2>(self) -> Result<T, E2>
     where
         E: Into<E2>;
+
+    /// Formats an [`Err`] value as a detailed error message, preserving any context information.
+    ///
+    /// This is equivalent to `format!("{:#}", err)`, except that it's easier to type.
+    fn err_to_string(&self) -> Option<String>
+    where
+        E: std::fmt::Display;
+
+    /// Maps a `Result<T, E>` to `Result<T, String>` by converting the [`Err`] result into a string
+    /// using the "alternate" formatting.
+    fn map_err_to_string(self) -> Result<T, String>
+    where
+        E: std::fmt::Display;
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
@@ -30,5 +45,46 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         E: Into<E2>,
     {
         self.map_err(|e| e.into())
+    }
+
+    fn err_to_string(&self) -> Option<String>
+    where
+        E: std::fmt::Display,
+    {
+        self.as_ref().err().map(DisplayExt::to_string_alt)
+    }
+
+    fn map_err_to_string(self) -> Result<T, String>
+    where
+        E: std::fmt::Display,
+    {
+        self.map_err(|e| DisplayExt::to_string_alt(&e))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::fmt::Display;
+
+    use super::*;
+
+    #[test]
+    fn prints_err_alternate_repr() {
+        struct Foo;
+        impl Display for Foo {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                if f.alternate() {
+                    write!(f, "success")
+                } else {
+                    write!(f, "fail")
+                }
+            }
+        }
+
+        let res: Result<(), Foo> = Err(Foo);
+        assert_eq!(Some("success".to_string()), res.err_to_string());
+
+        let res: Result<(), Foo> = Err(Foo);
+        assert_eq!(Err("success".to_string()), res.map_err_to_string());
     }
 }

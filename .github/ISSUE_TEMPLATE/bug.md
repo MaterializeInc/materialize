@@ -28,6 +28,7 @@ $ materialized -v
 * [ ] macOS release tarball
 * [ ] Homebrew tap
 * [ ] Built from source
+* [ ] Materialize Cloud
 
 ### What was the issue?
 

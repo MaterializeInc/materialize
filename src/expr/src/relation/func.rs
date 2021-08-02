@@ -10,41 +10,48 @@
 #![allow(missing_docs)]
 
 use std::fmt;
-use std::fs;
 use std::iter;
-use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use regex::Regex;
-use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 
 use lowertest::MzEnumReflect;
 use ore::cast::CastFrom;
-use repr::adt::apd;
-use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
+use repr::adt::numeric;
 use repr::adt::regex::Regex as ReprRegex;
-use repr::{CachedRecordIter, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
-use crate::id::GlobalId;
 use crate::scalar::func::jsonb_stringify;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
-fn max_apd<'a, I>(datums: I) -> Datum<'a>
+fn max_numeric<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<OrderedDecimal<apd::Apd>> = datums
+    let x: Option<OrderedDecimal<numeric::Numeric>> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_apd())
+        .map(|d| d.unwrap_numeric())
         .max();
-    x.map(Datum::APD).unwrap_or(Datum::Null)
+    x.map(Datum::Numeric).unwrap_or(Datum::Null)
+}
+
+fn max_int16<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<i16> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int16())
+        .max();
+    Datum::from(x)
 }
 
 fn max_int32<'a, I>(datums: I) -> Datum<'a>
@@ -91,18 +98,6 @@ where
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_ordered_float64())
-        .max();
-    Datum::from(x)
-}
-
-fn max_decimal<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<Significand> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_decimal())
         .max();
     Datum::from(x)
 }
@@ -169,16 +164,28 @@ where
     Datum::from(x)
 }
 
-fn min_apd<'a, I>(datums: I) -> Datum<'a>
+fn min_numeric<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<OrderedDecimal<apd::Apd>> = datums
+    let x: Option<OrderedDecimal<numeric::Numeric>> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_apd())
+        .map(|d| d.unwrap_numeric())
         .min();
-    x.map(Datum::APD).unwrap_or(Datum::Null)
+    x.map(Datum::Numeric).unwrap_or(Datum::Null)
+}
+
+fn min_int16<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<i16> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int16())
+        .min();
+    Datum::from(x)
 }
 
 fn min_int32<'a, I>(datums: I) -> Datum<'a>
@@ -225,18 +232,6 @@ where
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_ordered_float64())
-        .min();
-    Datum::from(x)
-}
-
-fn min_decimal<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: Option<Significand> = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_decimal())
         .min();
     Datum::from(x)
 }
@@ -303,6 +298,19 @@ where
     Datum::from(x)
 }
 
+fn sum_int16<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
+    if datums.peek().is_none() {
+        Datum::Null
+    } else {
+        let x: i64 = datums.map(|d| i64::from(d.unwrap_int16())).sum();
+        Datum::from(x)
+    }
+}
+
 fn sum_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -355,34 +363,21 @@ where
     }
 }
 
-fn sum_decimal<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
-        Datum::Null
-    } else {
-        let sum: Significand = datums.map(|d| d.unwrap_decimal()).sum();
-        Datum::from(sum)
-    }
-}
-
-fn sum_apd<'a, I>(datums: I) -> Datum<'a>
+fn sum_numeric<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let datums = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_apd().0)
+        .map(|d| d.unwrap_numeric().0)
         .collect::<Vec<_>>();
     if datums.is_empty() {
         Datum::Null
     } else {
-        let mut cx = apd::cx_datum();
+        let mut cx = numeric::cx_datum();
         let sum = cx.sum(datums.iter());
-        Datum::APD(OrderedDecimal(sum))
+        Datum::from(sum)
     }
 }
 
@@ -460,34 +455,34 @@ where
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum AggregateFunc {
-    MaxApd,
+    MaxNumeric,
+    MaxInt16,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
     MaxFloat64,
-    MaxDecimal,
     MaxBool,
     MaxString,
     MaxDate,
     MaxTimestamp,
     MaxTimestampTz,
-    MinApd,
+    MinNumeric,
+    MinInt16,
     MinInt32,
     MinInt64,
     MinFloat32,
     MinFloat64,
-    MinDecimal,
     MinBool,
     MinString,
     MinDate,
     MinTimestamp,
     MinTimestampTz,
+    SumInt16,
     SumInt32,
     SumInt64,
     SumFloat32,
     SumFloat64,
-    SumDecimal,
-    SumAPD,
+    SumNumeric,
     Count,
     Any,
     All,
@@ -516,34 +511,34 @@ impl AggregateFunc {
         I: IntoIterator<Item = Datum<'a>>,
     {
         match self {
-            AggregateFunc::MaxApd => max_apd(datums),
+            AggregateFunc::MaxNumeric => max_numeric(datums),
+            AggregateFunc::MaxInt16 => max_int16(datums),
             AggregateFunc::MaxInt32 => max_int32(datums),
             AggregateFunc::MaxInt64 => max_int64(datums),
             AggregateFunc::MaxFloat32 => max_float32(datums),
             AggregateFunc::MaxFloat64 => max_float64(datums),
-            AggregateFunc::MaxDecimal => max_decimal(datums),
             AggregateFunc::MaxBool => max_bool(datums),
             AggregateFunc::MaxString => max_string(datums),
             AggregateFunc::MaxDate => max_date(datums),
             AggregateFunc::MaxTimestamp => max_timestamp(datums),
             AggregateFunc::MaxTimestampTz => max_timestamptz(datums),
-            AggregateFunc::MinApd => min_apd(datums),
+            AggregateFunc::MinNumeric => min_numeric(datums),
+            AggregateFunc::MinInt16 => min_int16(datums),
             AggregateFunc::MinInt32 => min_int32(datums),
             AggregateFunc::MinInt64 => min_int64(datums),
             AggregateFunc::MinFloat32 => min_float32(datums),
             AggregateFunc::MinFloat64 => min_float64(datums),
-            AggregateFunc::MinDecimal => min_decimal(datums),
             AggregateFunc::MinBool => min_bool(datums),
             AggregateFunc::MinString => min_string(datums),
             AggregateFunc::MinDate => min_date(datums),
             AggregateFunc::MinTimestamp => min_timestamp(datums),
             AggregateFunc::MinTimestampTz => min_timestamptz(datums),
+            AggregateFunc::SumInt16 => sum_int16(datums),
             AggregateFunc::SumInt32 => sum_int32(datums),
             AggregateFunc::SumInt64 => sum_int64(datums),
             AggregateFunc::SumFloat32 => sum_float32(datums),
             AggregateFunc::SumFloat64 => sum_float64(datums),
-            AggregateFunc::SumDecimal => sum_decimal(datums),
-            AggregateFunc::SumAPD => sum_apd(datums),
+            AggregateFunc::SumNumeric => sum_numeric(datums),
             AggregateFunc::Count => count(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
@@ -588,8 +583,9 @@ impl AggregateFunc {
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
+            AggregateFunc::SumInt16 => ScalarType::Int64,
             AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
+            AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
             _ => input_type.scalar_type,
         };
         // Count never produces null, and other aggregations only produce
@@ -600,50 +596,92 @@ impl AggregateFunc {
         };
         scalar_type.nullable(nullable)
     }
-}
 
-fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
-    match a {
-        Datum::Map(dict) => dict
-            .iter()
-            .map(move |(k, mut v)| {
-                if stringify {
-                    v = jsonb_stringify(v, temp_storage);
-                }
-                (Row::pack_slice(&[Datum::String(k), v]), 1)
-            })
-            .collect(),
-        _ => vec![],
+    /// Returns true if the non-null constraint on the aggregation can be
+    /// converted into a non-null constraint on its parameter expression, ie.
+    /// whether the result of the aggregation is null if all the input values
+    /// are null.
+    pub fn propagates_nonnull_constraint(&self) -> bool {
+        match self {
+            AggregateFunc::MaxNumeric
+            | AggregateFunc::MaxInt16
+            | AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinNumeric
+            | AggregateFunc::MinInt16
+            | AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+            | AggregateFunc::SumInt16
+            | AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumNumeric => true,
+            // Count is never null
+            AggregateFunc::Count => false,
+            _ => false,
+        }
     }
 }
 
-fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<(Row, Diff)> {
-    match a {
-        Datum::Map(dict) => dict
-            .iter()
-            .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
-            .collect(),
-        _ => vec![],
-    }
+fn jsonb_each<'a>(
+    a: Datum<'a>,
+    temp_storage: &'a RowArena,
+    stringify: bool,
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    // First produce a map, so that a common iterator can be returned.
+    let map = match a {
+        Datum::Map(dict) => dict,
+        _ => repr::DatumMap::empty(),
+    };
+
+    map.iter().map(move |(k, mut v)| {
+        if stringify {
+            v = jsonb_stringify(v, temp_storage);
+        }
+        (Row::pack_slice(&[Datum::String(k), v]), 1)
+    })
+}
+
+fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let map = match a {
+        Datum::Map(dict) => dict,
+        _ => repr::DatumMap::empty(),
+    };
+
+    map.iter()
+        .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
 }
 
 fn jsonb_array_elements<'a>(
     a: Datum<'a>,
     temp_storage: &'a RowArena,
     stringify: bool,
-) -> Vec<(Row, Diff)> {
-    match a {
-        Datum::List(list) => list
-            .iter()
-            .map(move |mut e| {
-                if stringify {
-                    e = jsonb_stringify(e, temp_storage);
-                }
-                (Row::pack_slice(&[e]), 1)
-            })
-            .collect(),
-        _ => vec![],
-    }
+) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let list = match a {
+        Datum::List(list) => list,
+        _ => repr::DatumList::empty(),
+    };
+    list.iter().map(move |mut e| {
+        if stringify {
+            e = jsonb_stringify(e, temp_storage);
+        }
+        (Row::pack_slice(&[e]), 1)
+    })
 }
 
 fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
@@ -657,68 +695,62 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
     Some((Row::pack(datums), 1))
 }
 
-fn generate_series_int32(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
+fn generate_series_int32(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
     let start = start.unwrap_int32();
     let stop = stop.unwrap_int32();
-    (start..=stop)
-        .map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
-        .collect()
+    (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
 }
 
-fn generate_series_int64(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
+fn generate_series_int64(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
     let start = start.unwrap_int64();
     let stop = stop.unwrap_int64();
-    (start..=stop)
-        .map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
-        .collect()
+    (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
 }
 
-fn unnest_array(a: Datum) -> Vec<(Row, Diff)> {
+fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_array()
         .elements()
         .iter()
         .map(move |e| (Row::pack_slice(&[e]), 1))
-        .collect()
 }
 
-fn unnest_list(a: Datum) -> Vec<(Row, Diff)> {
+fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
     a.unwrap_list()
         .iter()
         .map(move |e| (Row::pack_slice(&[e]), 1))
-        .collect()
 }
 
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            AggregateFunc::MaxApd => f.write_str("max"),
+            AggregateFunc::MaxNumeric => f.write_str("max"),
+            AggregateFunc::MaxInt16 => f.write_str("max"),
             AggregateFunc::MaxInt32 => f.write_str("max"),
             AggregateFunc::MaxInt64 => f.write_str("max"),
             AggregateFunc::MaxFloat32 => f.write_str("max"),
             AggregateFunc::MaxFloat64 => f.write_str("max"),
-            AggregateFunc::MaxDecimal => f.write_str("max"),
             AggregateFunc::MaxBool => f.write_str("max"),
             AggregateFunc::MaxString => f.write_str("max"),
             AggregateFunc::MaxDate => f.write_str("max"),
             AggregateFunc::MaxTimestamp => f.write_str("max"),
             AggregateFunc::MaxTimestampTz => f.write_str("max"),
-            AggregateFunc::MinApd => f.write_str("min"),
+            AggregateFunc::MinNumeric => f.write_str("min"),
+            AggregateFunc::MinInt16 => f.write_str("min"),
             AggregateFunc::MinInt32 => f.write_str("min"),
             AggregateFunc::MinInt64 => f.write_str("min"),
             AggregateFunc::MinFloat32 => f.write_str("min"),
             AggregateFunc::MinFloat64 => f.write_str("min"),
-            AggregateFunc::MinDecimal => f.write_str("min"),
             AggregateFunc::MinBool => f.write_str("min"),
             AggregateFunc::MinString => f.write_str("min"),
             AggregateFunc::MinDate => f.write_str("min"),
             AggregateFunc::MinTimestamp => f.write_str("min"),
             AggregateFunc::MinTimestampTz => f.write_str("min"),
+            AggregateFunc::SumInt16 => f.write_str("sum"),
             AggregateFunc::SumInt32 => f.write_str("sum"),
             AggregateFunc::SumInt64 => f.write_str("sum"),
             AggregateFunc::SumFloat32 => f.write_str("sum"),
             AggregateFunc::SumFloat64 => f.write_str("sum"),
-            AggregateFunc::SumDecimal => f.write_str("sum"),
-            AggregateFunc::SumAPD => f.write_str("sum"),
+            AggregateFunc::SumNumeric => f.write_str("sum"),
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
@@ -771,6 +803,7 @@ impl AnalyzedRegex {
     }
 }
 
+// TODO: Convert to an `impl Iterator` return value.
 pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
     let bytes = a.unwrap_str().as_bytes();
     let mut row = Row::default();
@@ -789,49 +822,28 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
         .collect()
 }
 
-pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
+pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
     let n = Diff::cast_from(a.unwrap_int64());
-    vec![(Row::default(), n)]
-}
-
-// TODO(justin): this should return an error.
-pub fn files_for_source(id: GlobalId, persistence_directory: &PathBuf) -> Vec<PathBuf> {
-    let source_path = persistence_directory.join(id.to_string());
-    match std::fs::read_dir(&source_path) {
-        Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
-        Err(_) => {
-            // TODO(justin): it would be better to have a real error here, but saying
-            // "there are no records" is also acceptable for now.
-            return vec![];
-        }
+    if n != 0 {
+        Some((Row::default(), n))
+    } else {
+        None
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum TableFunc {
-    JsonbEach {
-        stringify: bool,
-    },
+    JsonbEach { stringify: bool },
     JsonbObjectKeys,
-    JsonbArrayElements {
-        stringify: bool,
-    },
+    JsonbArrayElements { stringify: bool },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
-    ReadCachedData {
-        source: GlobalId,
-        cache_directory: PathBuf,
-    },
-    UnnestArray {
-        el_typ: ScalarType,
-    },
-    UnnestList {
-        el_typ: ScalarType,
-    },
+    UnnestArray { el_typ: ScalarType },
+    UnnestList { el_typ: ScalarType },
 }
 
 impl TableFunc {
@@ -839,48 +851,27 @@ impl TableFunc {
         &'a self,
         datums: Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
-    ) -> Vec<(Row, Diff)> {
+    ) -> Box<dyn Iterator<Item = (Row, Diff)> + 'a> {
         if self.empty_on_null_input() {
             if datums.iter().any(|d| d.is_null()) {
-                return vec![];
+                return Box::new(vec![].into_iter());
             }
         }
         match self {
-            TableFunc::JsonbEach { stringify } => jsonb_each(datums[0], temp_storage, *stringify),
-            TableFunc::JsonbObjectKeys => jsonb_object_keys(datums[0]),
-            TableFunc::JsonbArrayElements { stringify } => {
-                jsonb_array_elements(datums[0], temp_storage, *stringify)
+            TableFunc::JsonbEach { stringify } => {
+                Box::new(jsonb_each(datums[0], temp_storage, *stringify))
             }
-            TableFunc::RegexpExtract(a) => regexp_extract(datums[0], a).into_iter().collect(),
-            TableFunc::CsvExtract(n_cols) => csv_extract(datums[0], *n_cols).into_iter().collect(),
-            TableFunc::GenerateSeriesInt32 => generate_series_int32(datums[0], datums[1]),
-            TableFunc::GenerateSeriesInt64 => generate_series_int64(datums[0], datums[1]),
-            TableFunc::Repeat => repeat(datums[0]),
-            TableFunc::ReadCachedData {
-                source,
-                cache_directory,
-            } => files_for_source(*source, cache_directory)
-                .iter()
-                .flat_map(|e| {
-                    CachedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
-                })
-                .map(|(e, r)| {
-                    (
-                        Row::pack_slice(&[
-                            Datum::String(e.to_str().unwrap()),
-                            Datum::Int64(r.offset),
-                            Datum::Bytes(&r.key),
-                            match &r.value {
-                                MessagePayload::Data(data) => Datum::Bytes(&*data),
-                                MessagePayload::EOF => Datum::Null,
-                            },
-                        ]),
-                        1,
-                    )
-                })
-                .collect::<Vec<(Row, Diff)>>(),
-            TableFunc::UnnestArray { .. } => unnest_array(datums[0]),
-            TableFunc::UnnestList { .. } => unnest_list(datums[0]),
+            TableFunc::JsonbObjectKeys => Box::new(jsonb_object_keys(datums[0])),
+            TableFunc::JsonbArrayElements { stringify } => {
+                Box::new(jsonb_array_elements(datums[0], temp_storage, *stringify))
+            }
+            TableFunc::RegexpExtract(a) => Box::new(regexp_extract(datums[0], a).into_iter()),
+            TableFunc::CsvExtract(n_cols) => Box::new(csv_extract(datums[0], *n_cols).into_iter()),
+            TableFunc::GenerateSeriesInt32 => Box::new(generate_series_int32(datums[0], datums[1])),
+            TableFunc::GenerateSeriesInt64 => Box::new(generate_series_int64(datums[0], datums[1])),
+            TableFunc::Repeat => Box::new(repeat(datums[0]).into_iter()),
+            TableFunc::UnnestArray { .. } => Box::new(unnest_array(datums[0])),
+            TableFunc::UnnestList { .. } => Box::new(unnest_list(datums[0])),
         }
     }
 
@@ -911,12 +902,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => vec![ScalarType::Int32.nullable(false)],
             TableFunc::GenerateSeriesInt64 => vec![ScalarType::Int64.nullable(false)],
             TableFunc::Repeat => vec![],
-            TableFunc::ReadCachedData { .. } => vec![
-                ScalarType::String.nullable(true),
-                ScalarType::Int64.nullable(false),
-                ScalarType::Bytes.nullable(false),
-                ScalarType::Bytes.nullable(true),
-            ],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
         })
@@ -932,7 +917,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
             TableFunc::Repeat => 0,
-            TableFunc::ReadCachedData { .. } => 4,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
         }
@@ -953,7 +937,6 @@ impl TableFunc {
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
-            | TableFunc::ReadCachedData { .. }
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. } => true,
         }
@@ -972,7 +955,6 @@ impl TableFunc {
             TableFunc::GenerateSeriesInt32 => true,
             TableFunc::GenerateSeriesInt64 => true,
             TableFunc::Repeat => false,
-            TableFunc::ReadCachedData { .. } => true,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
         }
@@ -990,9 +972,6 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat_row"),
-            TableFunc::ReadCachedData { source, .. } => {
-                write!(f, "internal_read_cached_data({})", source)
-            }
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
         }

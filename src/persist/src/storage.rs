@@ -14,10 +14,6 @@ use std::ops::Range;
 use abomonation_derive::Abomonation;
 
 use crate::error::Error;
-use crate::indexed::handle::{StreamMetaHandle, StreamWriteHandle};
-use crate::indexed::runtime::{self, RuntimeClient};
-use crate::indexed::Indexed;
-use crate::Token;
 
 /// A "sequence number", uniquely associated with an entry in a Buffer.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
@@ -45,6 +41,9 @@ pub trait Buffer {
 
     /// Returns a consistent snapshot of all written but not yet truncated
     /// entries.
+    ///
+    /// - Invariant: all returned entries must have a sequence number within
+    ///   the declared [lower, upper) range of sequence numbers.
     fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
     where
         F: FnMut(SeqNo, &[u8]) -> Result<(), Error>;
@@ -56,18 +55,15 @@ pub trait Buffer {
     /// Synchronously closes the buffer, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// Implementations must be idempotent.
-    fn close(&mut self) -> Result<(), Error>;
+    /// Implementations must be idempotent. Returns true if the buffer had not
+    /// previously been closed.
+    fn close(&mut self) -> Result<bool, Error>;
 }
 
 /// An abstraction over a `bytes key`->`bytes value` store.
 ///
 /// - Invariant: Implementations are responsible for ensuring that they are
 ///   exclusive writers to this location.
-///
-/// TODO: Document restrictions on what keys are legal.
-///
-/// TODO: Add the ability to close a blob so a new writer can use the location.
 pub trait Blob {
     /// Returns a reference to the value corresponding to the key.
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
@@ -78,65 +74,9 @@ pub trait Blob {
     /// Synchronously closes the buffer, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// Implementations must be idempotent.
-    fn close(&mut self) -> Result<(), Error>;
-}
-
-/// An implementation of a persister for multiplexed streams of (Key, Value,
-/// Time, Diff) updates.
-#[derive(Clone)]
-pub struct Persister {
-    runtime: RuntimeClient,
-}
-
-impl Persister {
-    /// Returns a [Persister] initialized with previous data, if any.
-    pub fn new<U: Buffer + Send + 'static, L: Blob + Send + 'static>(
-        buf: U,
-        blob: L,
-    ) -> Result<Self, Error> {
-        let indexed = Indexed::new(buf, blob)?;
-        let runtime = runtime::start(indexed);
-        Ok(Persister { runtime })
-    }
-
-    /// Synchronously closes the runtime, releasing exclusive-writer locks and
-    /// causing all future commands to error.
-    ///
-    /// This method is idempotent.
-    pub fn stop(&mut self) -> Result<(), Error> {
-        self.runtime.stop()
-    }
-}
-
-impl Persister {
-    /// Returns a token used to construct a persisted stream operator.
-    ///
-    /// If data was written by a previous [Persister] for this id, it's loaded and
-    /// replayed into the stream once constructed.
-    ///
-    /// Within a process, this can only be called once per id, even if that id
-    /// has since been destroyed. An `Err` is returned for calls after the
-    /// first. TODO: Is this restriction necessary/helpful?
-    pub fn create_or_load(
-        &mut self,
-        id: &str,
-    ) -> Result<Token<StreamWriteHandle, StreamMetaHandle>, Error> {
-        let id = self.runtime.register(id)?;
-        let write = StreamWriteHandle::new(id, self.runtime.clone());
-        let meta = StreamMetaHandle::new(id, self.runtime.clone());
-        Ok(Token { write, meta })
-    }
-
-    /// Remove the persisted stream.
-    ///
-    /// TODO: Should this live on Meta?
-    pub fn destroy(&mut self, _id: &str) -> Result<(), Error> {
-        // TODO: When we implement this, we'll almost certainly want to put both
-        // the external string stream name and internal u64 stream id into a
-        // graveyard, so they're not accidentally reused.
-        unimplemented!()
-    }
+    /// Implementations must be idempotent. Returns true if the buffer had not
+    /// previously been closed.
+    fn close(&mut self) -> Result<bool, Error>;
 }
 
 #[cfg(test)]
@@ -207,23 +147,23 @@ pub mod tests {
         assert!(slurp(&buf0)?.is_empty());
 
         // Cannot reuse a buffer once it is closed.
-        assert_eq!(buf0.close(), Ok(()));
+        assert_eq!(buf0.close(), Ok(true));
         assert!(buf0.write_sync(entries[1].clone()).is_err());
         assert!(slurp(&buf0).is_err());
         assert!(buf0.truncate(SeqNo(4)).is_err());
 
-        // Close must be idempotent.
-        assert_eq!(buf0.close(), Ok(()));
+        // Close must be idempotent and must return false if it did no work.
+        assert_eq!(buf0.close(), Ok(false));
 
         // But we can reopen it and use it.
         let mut buf0 = new_fn("0")?;
         assert_eq!(buf0.write_sync(entries[3].clone())?, SeqNo(3));
         assert_eq!(slurp(&buf0)?, sub_entries(3..=3));
-        assert_eq!(buf0.close(), Ok(()));
+        assert_eq!(buf0.close(), Ok(true));
         let mut buf0 = new_fn("0")?;
         assert_eq!(buf0.write_sync(entries[4].clone())?, SeqNo(4));
         assert_eq!(slurp(&buf0)?, sub_entries(3..=4));
-        assert_eq!(buf0.close(), Ok(()));
+        assert_eq!(buf0.close(), Ok(true));
 
         Ok(())
     }
@@ -258,12 +198,12 @@ pub mod tests {
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
 
         // Cannot reuse a blob once it is closed.
-        assert_eq!(blob0.close(), Ok(()));
+        assert_eq!(blob0.close(), Ok(true));
         assert!(blob0.get("k0").is_err());
         assert!(blob0.set("k1", values[0].clone(), true).is_err());
 
-        // Close must be idempotent.
-        assert_eq!(blob0.close(), Ok(()));
+        // Close must be idempotent and must return false if it did no work.
+        assert_eq!(blob0.close(), Ok(false));
 
         // But we can reopen it and use it.
         let blob0 = new_fn("0")?;

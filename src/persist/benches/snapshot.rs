@@ -14,13 +14,12 @@ use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
 use persist::error::Error;
 use persist::file::{FileBlob, FileBuffer};
 use persist::indexed::encoding::Id;
-use persist::indexed::Indexed;
+use persist::indexed::{Indexed, Snapshot};
 use persist::mem::{MemBlob, MemBuffer};
-use persist::persister::Snapshot;
 use persist::storage::{Blob, Buffer};
 
 fn read_full_snapshot<U: Buffer, L: Blob>(
-    index: &Indexed<U, L>,
+    index: &Indexed<String, String, U, L>,
     id: Id,
     expected_len: usize,
 ) -> Vec<((String, String), u64, isize)> {
@@ -34,7 +33,7 @@ fn read_full_snapshot<U: Buffer, L: Blob>(
 }
 
 fn bench_snapshot<U: Buffer, L: Blob>(
-    index: &Indexed<U, L>,
+    index: &Indexed<String, String, U, L>,
     id: Id,
     expected_len: usize,
     b: &mut Bencher,
@@ -46,7 +45,7 @@ fn bench_indexed_snapshots<U, L, F>(c: &mut Criterion, name: &str, mut new_fn: F
 where
     U: Buffer,
     L: Blob,
-    F: FnMut(usize) -> Result<Indexed<U, L>, Error>,
+    F: FnMut(usize) -> Result<Indexed<String, String, U, L>, Error>,
 {
     let data_len = 100_000;
     let data: Vec<_> = (0..data_len)
@@ -54,10 +53,10 @@ where
         .collect();
 
     let mut i = new_fn(1).expect("creating index cannot fail");
-    let id = i.register("0");
+    let id = i.register("0").expect("registration succeeds");
 
     // Write the data out to the index's buffer.
-    i.write_sync(id, &data)
+    i.write_sync(vec![(id, data)])
         .expect("writing to index cannot fail");
     c.bench_function(&format!("{}_buffer_snapshot", name), |b| {
         bench_snapshot(&i, id, data_len, b)
@@ -69,7 +68,7 @@ where
         bench_snapshot(&i, id, data_len, b)
     });
     // Seal the updates to move them all to the trace
-    i.seal(id, 100_001).expect("sealing update times");
+    i.seal(vec![id], 100_001).expect("sealing update times");
     c.bench_function(&format!("{}_trace_snapshot", name), |b| {
         bench_snapshot(&i, id, data_len, b)
     });
@@ -78,7 +77,7 @@ where
 pub fn bench_mem_snapshots(c: &mut Criterion) {
     bench_indexed_snapshots(c, "mem", |path| {
         let name = format!("snapshot_bench_{}", path);
-        Indexed::new(MemBuffer::new(&name)?, MemBlob::new(&name)?)
+        Indexed::new(MemBuffer::new(&name), MemBlob::new(&name))
     });
 }
 
@@ -91,7 +90,7 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
         let blob_dir = temp_dir
             .path()
             .join(format!("snapshot_bench_blob_{}", path));
-        let lock_info = b"snapshot_bench";
+        let lock_info = "snapshot_bench";
         Indexed::new(
             FileBuffer::new(buffer_dir, lock_info)?,
             FileBlob::new(blob_dir, lock_info)?,

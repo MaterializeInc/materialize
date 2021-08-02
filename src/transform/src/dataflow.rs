@@ -15,16 +15,23 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{Id, LocalId, MirRelationExpr};
+use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use std::collections::{HashMap, HashSet};
 
 /// Optimizes the implementation of each dataflow.
 ///
-/// This method is currently limited in scope to propagating filtering and
-/// projection information, though it could certainly generalize beyond.
-pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
+/// Inlines views, performs a full optimization pass including physical
+/// planning using the supplied indexes, propagates filtering and projection
+/// information to dataflow sources and lifts monotonicity information.
+pub fn optimize_dataflow(
+    dataflow: &mut DataflowDesc,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
     // Inline views that are used in only one other view.
     inline_views(dataflow);
+
+    // Full optimization pass after view inlining
+    optimize_dataflow_relations(dataflow, indexes);
 
     optimize_dataflow_filters(dataflow);
     // TODO: when the linear operator contract ensures that propagated
@@ -70,7 +77,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
         let mut occurrences_in_later_views = Vec::new();
         for other in (index + 1)..dataflow.objects_to_build.len() {
             if dataflow.objects_to_build[other]
-                .relation_expr
+                .view
                 .global_uses()
                 .contains(&global_id)
             {
@@ -92,23 +99,19 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             let new_local = LocalId::new(id_gen.allocate_id());
             // Use the same `id_gen` to assign new identifiers to `index`.
             update_let.action(
-                dataflow.objects_to_build[index]
-                    .relation_expr
-                    .as_inner_mut(),
+                dataflow.objects_to_build[index].view.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
             );
             // Assign new identifiers to the other relation.
             update_let.action(
-                dataflow.objects_to_build[other]
-                    .relation_expr
-                    .as_inner_mut(),
+                dataflow.objects_to_build[other].view.as_inner_mut(),
                 &mut HashMap::new(),
                 &mut id_gen,
             );
             // Install the `new_local` name wherever `global_id` was used.
             dataflow.objects_to_build[other]
-                .relation_expr
+                .view
                 .as_inner_mut()
                 .visit_mut(&mut |expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
@@ -122,16 +125,14 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             // a `MirRelationExpr::Let` binding, whose value is `index` and
             // whose body is `other`.
             let body = dataflow.objects_to_build[other]
-                .relation_expr
+                .view
                 .as_inner_mut()
                 .take_dangerous();
             let value = dataflow.objects_to_build[index]
-                .relation_expr
+                .view
                 .as_inner_mut()
                 .take_dangerous();
-            *dataflow.objects_to_build[other]
-                .relation_expr
-                .as_inner_mut() = MirRelationExpr::Let {
+            *dataflow.objects_to_build[other].view.as_inner_mut() = MirRelationExpr::Let {
                 id: new_local,
                 value: Box::new(value),
                 body: Box::new(body),
@@ -139,31 +140,25 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             dataflow.objects_to_build.remove(index);
         }
     }
+}
 
-    // Re-optimize each dataflow.
-    // TODO: We should attempt to minimize the number of re-optimizations, as each
-    // may introduce e.g. `ArrangeBy` operators that make sense at that optimization
-    // moment, but less sense later on (i.e. cost, but aren't needed). One candidate
-    // is to perform *logical* optimizations early (on view definition, when params
-    // are instatiated, here) and then *physical* optimization (e.g. join planning)
-    // only once (and probably in here).
+/// Performs a full optimization pass on the dataflow, including physcal planning
+/// using the supplied set of indexes.
+fn optimize_dataflow_relations(
+    dataflow: &mut DataflowDesc,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
+    // Re-optimize each dataflow and perform physical optimizations.
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
-    let mut indexes = HashMap::new();
-    for (global_id, (desc, _type)) in dataflow.index_imports.iter() {
-        indexes
-            .entry(desc.on_id)
-            .or_insert_with(Vec::new)
-            .push((*global_id, desc.keys.clone()));
-    }
-    let optimizer = crate::Optimizer::default();
+    let optimizer = crate::Optimizer::for_dataflow();
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
         optimizer
-            .transform(object.relation_expr.as_inner_mut(), &indexes)
+            .transform(object.view.as_inner_mut(), &indexes)
             .unwrap();
     }
 }
@@ -194,11 +189,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         let transform = crate::demand::Demand;
         if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-            transform.action(
-                build_desc.relation_expr.as_inner_mut(),
-                columns.clone(),
-                &mut demand,
-            );
+            transform.action(build_desc.view.as_inner_mut(), columns.clone(), &mut demand);
         }
     }
 
@@ -231,14 +222,14 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
         let transform = crate::predicate_pushdown::PredicatePushdown;
         if let Some(list) = predicates.get(&Id::Global(build_desc.id)).clone() {
             if !list.is_empty() {
-                *build_desc.relation_expr.as_inner_mut() = build_desc
-                    .relation_expr
+                *build_desc.view.as_inner_mut() = build_desc
+                    .view
                     .as_inner_mut()
                     .take_dangerous()
                     .filter(list.iter().cloned());
             }
         }
-        transform.dataflow_transform(build_desc.relation_expr.as_inner_mut(), &mut predicates);
+        transform.dataflow_transform(build_desc.view.as_inner_mut(), &mut predicates);
     }
 
     // Push predicate information into the SourceDesc.
@@ -355,7 +346,7 @@ pub mod monotonic {
 
         // Propagate predicate information from outputs to inputs.
         for build_desc in dataflow.objects_to_build.iter_mut() {
-            is_monotonic(build_desc.relation_expr.as_inner_mut(), &monotonic);
+            is_monotonic(build_desc.view.as_inner_mut(), &monotonic);
         }
     }
 }

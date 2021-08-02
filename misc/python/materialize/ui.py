@@ -10,12 +10,22 @@
 """Utilities for interacting with humans
 """
 
+import asyncio
 import datetime
 import os
 import shlex
 import sys
 import time
-from typing import Any, Callable, Generator, Iterable, Optional, NamedTuple, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    Callable,
+    Generator,
+    Iterable,
+    Optional,
+    NamedTuple,
+    Union,
+)
 
 from materialize import docker
 
@@ -93,6 +103,31 @@ def timeout_loop(timeout: int, tick: int = 1) -> Generator[float, None, None]:
         if after - before < tick:
             if tick > 0:
                 time.sleep(tick - (after - before))
+
+
+async def async_timeout_loop(
+    timeout: int, tick: int = 1
+) -> AsyncGenerator[float, None]:
+    """Loop until timeout, asynchronously sleeping until tick
+
+    Always iterates at least once
+
+    Args:
+        timeout: maximum. number of seconds to wait
+        tick: how long to ensure passes between loop iterations. Default: 1
+    """
+    end = time.monotonic() + timeout
+    while True:
+        before = time.monotonic()
+        yield end - before
+        after = time.monotonic()
+
+        if after >= end:
+            return
+
+        if after - before < tick:
+            if tick > 0:
+                await asyncio.sleep(tick - (after - before))
 
 
 def log_in_automation(msg: str) -> None:

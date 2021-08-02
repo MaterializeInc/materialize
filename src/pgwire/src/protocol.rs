@@ -19,12 +19,10 @@ use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::izip;
-use lazy_static::lazy_static;
 use log::debug;
 use message::decode_copy_text_format;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
-use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
 use tokio::time::{self, Duration, Instant};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -46,6 +44,7 @@ use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
+use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
@@ -68,21 +67,6 @@ pub fn match_handshake(buf: &[u8]) -> bool {
     VERSIONS.contains(&version)
 }
 
-lazy_static! {
-    static ref COMMAND_DURATIONS: prometheus::HistogramVec = register_histogram_vec!(
-        "mz_command_durations",
-        "how long individual commands took",
-        &["command", "status"],
-        ore::stats::HISTOGRAM_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref ROWS_RETURNED: prometheus::UIntCounter = register_uint_counter!(
-        "mz_pg_sent_rows",
-        "total number of rows sent to clients from pgwire"
-    )
-    .unwrap();
-}
-
 /// Parameters for the [`run`] function.
 pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
@@ -95,6 +79,8 @@ pub struct RunParams<'a, A> {
     pub version: i32,
     /// The parameters that the client provided in the startup message.
     pub params: HashMap<String, String>,
+    /// The server's metrics.
+    pub metrics: &'a Metrics,
 }
 
 /// Runs a pgwire connection to completion.
@@ -113,6 +99,7 @@ pub async fn run<'a, A>(
         conn,
         version,
         mut params,
+        metrics,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -205,6 +192,7 @@ where
         conn.flush().await?;
 
         let machine = StateMachine {
+            metrics,
             conn,
             coord_client: &mut coord_client,
         };
@@ -225,6 +213,7 @@ enum State {
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
     coord_client: &'a mut coord::SessionClient,
+    metrics: &'a Metrics,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -318,7 +307,8 @@ where
             State::Ready | State::Done => "success",
             State::Drain => "error",
         };
-        COMMAND_DURATIONS
+        self.metrics
+            .command_durations
             .with_label_values(&[name, status])
             .observe(timer.elapsed().as_secs_f64());
 
@@ -1288,7 +1278,9 @@ where
             }
         }
 
-        ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
+        self.metrics
+            .rows_returned
+            .inc_by(u64::cast_from(total_sent_rows));
 
         let portal = self
             .coord_client

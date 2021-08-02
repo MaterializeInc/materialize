@@ -268,15 +268,26 @@ pub struct TimestampBindingBox {
     durability_frontier: Antichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: Option<TimestampProposer>,
+    /// Never persist these bindings. This is used for BYO, where the bindings
+    /// are stored externally already.
+    never_requires_persistence: bool,
+    /// Whether or not these timestamp bindings need to be persisted.
+    requires_persistence: bool,
 }
 
 impl TimestampBindingBox {
-    fn new(timestamp_update_interval: Option<u64>, now: NowFn) -> Self {
+    fn new(
+        timestamp_update_interval: Option<u64>,
+        now: NowFn,
+        never_requires_persistence: bool,
+    ) -> Self {
         Self {
             partitions: HashMap::new(),
             compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i, now)),
+            never_requires_persistence,
+            requires_persistence: false,
         }
     }
 
@@ -428,10 +439,15 @@ pub struct TimestampBindingRc {
 
 impl TimestampBindingRc {
     /// Create a new instance of `TimestampBindingRc`.
-    pub fn new(timestamp_update_interval: Option<u64>, now: NowFn) -> Self {
+    pub fn new(
+        timestamp_update_interval: Option<u64>,
+        now: NowFn,
+        never_requires_persistence: bool,
+    ) -> Self {
         let wrapper = Rc::new(RefCell::new(TimestampBindingBox::new(
             timestamp_update_interval,
             now,
+            never_requires_persistence,
         )));
 
         let ret = Self {
@@ -543,6 +559,21 @@ impl TimestampBindingRc {
     /// Returns the current durability frontier
     pub fn durability_frontier(&self) -> Antichain<Timestamp> {
         self.wrapper.borrow().durability_frontier.clone()
+    }
+
+    /// Whether or not these timestamp bindings must be persisted.
+    pub fn requires_persistence(&self) -> bool {
+        let inner = self.wrapper.borrow();
+        if inner.never_requires_persistence {
+            false
+        } else {
+            inner.requires_persistence
+        }
+    }
+
+    /// Enables persistence for these bindings.
+    pub fn enable_persistence(&self) {
+        self.wrapper.borrow_mut().requires_persistence = true;
     }
 }
 

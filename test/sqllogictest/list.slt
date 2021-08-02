@@ -65,7 +65,7 @@ SELECT (LIST[[[[1], [2]]], [[[3]]]])::text
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error CAST does not support casting from integer list to integer list list
+query error LIST expression cannot be cast to uniform type: integer vs integer list
 SELECT LIST[1, null] :: INT LIST LIST
 
 query T
@@ -1703,17 +1703,28 @@ SELECT (LIST[1] || '{2}')::text
 ----
 {1,2}
 
-# Differently scaled decimals are implicitly castable to one another
+# Differently scaled numerics are implicitly castable to one another
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '{2.3}'::numeric(38,0) list)::text;
 ----
-{1.20000,2.00000}
+{1.2,2}
 
 # ...including on multiple dimensions
 query T
 SELECT ('{{1.2}}'::numeric(38,5) list list || '{{2.3}}'::numeric(38,0) list list)::text;
 ----
-{{1.20000},{2.00000}}
+{{1.2},{2}}
+
+# Determining common list element type for numerics does not rescale values
+query T
+SELECT LIST[1.234::numeric(39,2), 2.345]::text;
+----
+{1.23,2.345}
+
+query T
+SELECT LIST[1.234::numeric(39,2), 2.345]::numeric(39, 2) list::text;
+----
+{1.23,2.35}
 
 # 🔬🔬🔬 list + element
 
@@ -1725,7 +1736,7 @@ SELECT (LIST[1, 2] || 3)::text
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '2.3'::numeric(38,0))::text;
 ----
-{1.20000,2.00000}
+{1.2,2}
 
 # 🔬🔬🔬 element + list
 
@@ -1737,7 +1748,7 @@ SELECT (1 || LIST[2, 3])::text
 query T
 SELECT ('1.2'::numeric(38,5) || '{2.3}'::numeric(38,0) list)::text;
 ----
-{1.20000,2.00000}
+{1.2,2}
 
 # 🔬🔬🔬 list list + list (list + element)
 
@@ -1749,7 +1760,7 @@ SELECT (LIST[[1], [2]] || LIST[3])::text
 query T
 SELECT ('{{1.2}}'::numeric(38,5) list list || '{2.3}'::numeric(38,0) list)::text;
 ----
-{{1.20000},{2.00000}}
+{{1.2},{2}}
 
 # 🔬🔬🔬 list + list list (element + list)
 
@@ -1761,7 +1772,7 @@ SELECT (LIST[1] || LIST[[2], [3]])::text
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '{{2.3}}'::numeric(38,0) list list)::text;
 ----
-{{1.20000},{2.00000}}
+{{1.2},{2}}
 
 # 🔬🔬🔬 NULL elements
 
@@ -2084,7 +2095,7 @@ CREATE TYPE numeric_list_c AS LIST (element_type=numeric);
 query T
 SELECT '{1.23,2.34}'::numeric_list_c::text
 ----
-{1,2}
+{1.23,2.34}
 
 statement ok
 CREATE TYPE jsonb_list_c AS LIST (element_type=jsonb);
@@ -2137,17 +2148,17 @@ SELECT (1 || '{2}'::int4_list_c)::text;
 query T
 SELECT ('{1.2,2.3}'::numeric_list_c)::text;
 ----
-{1,2}
+{1.2,2.3}
 
 query T
-SELECT ('{1.2,2.3}'::numeric_list_c::numeric(38,5) list)::text;
+SELECT ('{1.2,2.34567890}'::numeric_list_c::numeric(38,5) list)::text;
 ----
-{1.00000,2.00000}
+{1.2,2.34568}
 
 query T
 SELECT ('{1.2,2.3}'::numeric(38,5) list::numeric_list_c)::text;
 ----
-{1,2}
+{1.2,2.3}
 
 # 🔬 Implicit casts between custom types
 

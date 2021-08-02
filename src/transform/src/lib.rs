@@ -166,6 +166,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::inline_let::InlineLet),
+                Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
@@ -186,7 +187,7 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(crate::reduction::FoldConstants),
+                Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
             ],
         }
     }
@@ -224,28 +225,8 @@ pub struct Optimizer {
 }
 
 impl Optimizer {
-    /// Optimizes the supplied relation expression.
-    fn transform(
-        &self,
-        relation: &mut MirRelationExpr,
-        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
-    ) -> Result<(), TransformError> {
-        let mut id_gen = Default::default();
-        for transform in self.transforms.iter() {
-            transform.transform(
-                relation,
-                TransformArgs {
-                    id_gen: &mut id_gen,
-                    indexes,
-                },
-            )?;
-        }
-        Ok(())
-    }
-}
-
-impl Default for Optimizer {
-    fn default() -> Self {
+    /// Builds a logical optimizer that only performs logical transformations.
+    pub fn for_view() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
@@ -292,18 +273,26 @@ impl Default for Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
-            // Logical transforms are above this line. Physical transforms are
-            // below this line.
-            // TODO: split these transforms into two sets so that physical
-            // transforms only run once?
-            // Implementation transformations
+        ];
+        Self { transforms }
+    }
+
+    /// Builds a physical optimizer.
+    ///
+    /// Performs logical transformations followed by all physical ones.
+    /// This is meant to be used for optimizing each view within a dataflow
+    /// once view inlining has already happened, right before dataflow
+    /// rendering.
+    pub fn for_dataflow() -> Self {
+        // Implementation transformations
+        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
-                    Box::new(crate::reduction::FoldConstants),
+                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::fusion::filter::Filter),
                     // fill in the new demand after maps have been shifted
                     // around.
@@ -317,14 +306,29 @@ impl Default for Optimizer {
             Box::new(crate::projection_lifting::ProjectionLifting),
             Box::new(crate::join_implementation::JoinImplementation),
             Box::new(crate::fusion::project::Project),
-            Box::new(crate::reduction::FoldConstants),
+            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+        ];
+        let mut optimizer = Self::for_view();
+        optimizer.transforms.extend(transforms);
+        optimizer
+    }
+
+    /// Simple fusion and elision transformations to render the query readable.
+    pub fn pre_optimization() -> Self {
+        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
+            Box::new(crate::fusion::join::Join),
+            Box::new(crate::inline_let::InlineLet),
+            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+            Box::new(crate::fusion::filter::Filter),
+            Box::new(crate::fusion::map::Map),
+            Box::new(crate::projection_extraction::ProjectionExtraction),
+            Box::new(crate::fusion::project::Project),
+            Box::new(crate::fusion::join::Join),
         ];
         Self { transforms }
     }
-}
 
-impl Optimizer {
-    /// Optimizes the supplied relation expression.
+    /// Optimizes the supplied relation expression returning an optimized relation.
     pub fn optimize(
         &mut self,
         mut relation: MirRelationExpr,
@@ -334,18 +338,22 @@ impl Optimizer {
         Ok(expr::OptimizedMirRelationExpr(relation))
     }
 
-    /// Simple fusion and elision transformations to render the query readable.
-    pub fn pre_optimization() -> Self {
-        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
-            Box::new(crate::fusion::join::Join),
-            Box::new(crate::inline_let::InlineLet),
-            Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::fusion::filter::Filter),
-            Box::new(crate::fusion::map::Map),
-            Box::new(crate::projection_extraction::ProjectionExtraction),
-            Box::new(crate::fusion::project::Project),
-            Box::new(crate::fusion::join::Join),
-        ];
-        Self { transforms }
+    /// Optimizes the supplied relation expression in place.
+    fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    ) -> Result<(), TransformError> {
+        let mut id_gen = Default::default();
+        for transform in self.transforms.iter() {
+            transform.transform(
+                relation,
+                TransformArgs {
+                    id_gen: &mut id_gen,
+                    indexes,
+                },
+            )?;
+        }
+        Ok(())
     }
 }

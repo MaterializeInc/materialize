@@ -23,7 +23,11 @@ topics.
 
 {{< diagram "key-constraint.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only" keyConstraint=true %}}
+### format_spec
+
+{{< diagram "format-spec.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only upsert" keyConstraint=true %}}
 
 ## Examples
 
@@ -35,26 +39,8 @@ named `SCHEMA`:
 ```sql
 CREATE SOURCE batches
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
-```
-
-This creates a source that...
-
-- Is append-only.
-- Decodes data received from the `billing` topic published by Kafka running on
-  `localhost:9092`.
-- Decodes data as the `Batch` message from the `billing` package, as described
-  in the [generated `FileDescriptorSet`](#filedescriptorset).
-
-### Caching records to local disk
-
-Assuming you've already generated a [`FileDescriptorSet`](#filedescriptorset)
-named `SCHEMA`:
-
-```sql
-CREATE SOURCE batches
-FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 WITH (cache = true)
+KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
 ```
 
@@ -65,7 +51,6 @@ This creates a source that...
   `localhost:9092`.
 - Decodes data as the `Batch` message from the `billing` package, as described
   in the [generated `FileDescriptorSet`](#filedescriptorset).
-- Caches messages from the `billing` topic to local disk.
 
 ### Connecting to a Kafka broker using SSL authentication
 

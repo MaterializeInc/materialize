@@ -944,6 +944,11 @@ statement ok
 DROP TABLE json_family
 
 query T
+SELECT jsonb_typeof('-123'::JSON)
+----
+number
+
+query T
 SELECT jsonb_typeof('-123.4'::JSON)
 ----
 number

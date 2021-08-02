@@ -18,9 +18,9 @@ use std::{ffi::CString, io::BufRead, time::Instant};
 use tokio::sync::Mutex;
 
 use anyhow::bail;
-use jemalloc_ctl::{epoch, raw, stats};
 use lazy_static::lazy_static;
 use tempfile::NamedTempFile;
+use tikv_jemalloc_ctl::{epoch, raw, stats};
 
 use super::{ProfStartTime, StackProfile, WeightedStack};
 
@@ -155,7 +155,7 @@ impl JemallocProfCtl {
         self.md
     }
 
-    pub fn activate(&mut self) -> Result<(), jemalloc_ctl::Error> {
+    pub fn activate(&mut self) -> Result<(), tikv_jemalloc_ctl::Error> {
         // SAFETY: "prof.active" is documented as being writable and taking a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", true) }?;
@@ -165,7 +165,7 @@ impl JemallocProfCtl {
         Ok(())
     }
 
-    pub fn deactivate(&mut self) -> Result<(), jemalloc_ctl::Error> {
+    pub fn deactivate(&mut self) -> Result<(), tikv_jemalloc_ctl::Error> {
         // SAFETY: "prof.active" is documented as being writable and taking a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", false) }?;
@@ -181,6 +181,13 @@ impl JemallocProfCtl {
         // http://jemalloc.net/jemalloc.3.html#prof.dump
         unsafe { raw::write(b"prof.dump\0", path.as_ptr()) }?;
         Ok(f.into_file())
+    }
+
+    pub fn dump_stats(&mut self) -> anyhow::Result<String> {
+        // Try to avoid allocations within `stats_print`
+        let mut buf = Vec::with_capacity(1 << 20);
+        tikv_jemalloc_ctl::stats_print::stats_print(&mut buf, Default::default())?;
+        Ok(String::from_utf8(buf)?)
     }
 
     pub fn stats(&self) -> anyhow::Result<JemallocStats> {

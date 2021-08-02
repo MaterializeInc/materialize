@@ -70,6 +70,6 @@ a
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ kafka-verify format=avro sink=materialize.public.snk
+$ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}
 {"before": null, "after": {"row":{"a": 2}}}

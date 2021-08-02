@@ -23,7 +23,7 @@ $ schema-registry-wait-schema schema=postgres.public.decimal_handling_mode_preci
   ENVELOPE DEBEZIUM;
 
 > SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_precise
-1234567.890 numeric(10,3)
+1234567.89 numeric
 
 #
 # Set decimal.handling.mode to DOUBLE

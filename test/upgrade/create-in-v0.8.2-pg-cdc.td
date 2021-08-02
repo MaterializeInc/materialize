@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+
+DROP PUBLICATION IF EXISTS upgrade_pg_cdc_publication;
+CREATE PUBLICATION upgrade_pg_cdc_publication FOR ALL TABLES;
+
+
+DROP TABLE IF EXISTS upgrade_pg_cdc_table;
+CREATE TABLE upgrade_pg_cdc_table (f1 INTEGER);
+ALTER TABLE upgrade_pg_cdc_table REPLICA IDENTITY FULL;
+INSERT INTO upgrade_pg_cdc_table VALUES (1),(2),(3),(4),(5);
+
+> CREATE MATERIALIZED SOURCE upgrade_pg_cdc_source
+  FROM POSTGRES
+  CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  PUBLICATION 'upgrade_pg_cdc_publication'
+
+> CREATE MATERIALIZED VIEWS FROM SOURCE upgrade_pg_cdc_source;
+
+> SELECT * FROM upgrade_pg_cdc_table;
+1
+2
+3
+4
+5

@@ -32,7 +32,7 @@ def main() -> None:
         contents = contents.replace("MATERIALIZED_URL", args.materialized_url)
         with open(fname, "w") as fh:
             fh.write(contents)
-            if os.getenv("MZ_LOG", "info") in ["debug"]:
+            if os.getenv("MZ_LOG_FILTER", "info") in ["debug"]:
                 say(f"New file {fname}:\n{contents}")
 
     pipes = args.create_pipes.split(",")

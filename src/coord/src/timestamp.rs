@@ -24,7 +24,8 @@ use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
 use mz_avro::schema::Schema;
 use mz_avro::types::Value;
-use prometheus::{register_int_gauge_vec, IntGaugeVec};
+use ore::metric;
+use ore::metrics::{IntGaugeVec, MetricsRegistry};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
@@ -85,12 +86,6 @@ lazy_static! {
           "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
         }"#.parse().unwrap()
     };
-
-    static ref MAX_AVAILABLE_OFFSET: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kafka_partition_offset_max",
-        "The high watermark for a partition, the maximum offset that we could hope to ingest",
-        &["topic", "source_id", "partition_id"]
-    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -255,6 +250,26 @@ pub struct Timestamper {
 
     /// Frequency at which thread should run
     timestamp_frequency: Duration,
+
+    /// Metrics that the timestamper reports.
+    metrics: Metrics,
+}
+
+#[derive(Clone)]
+struct Metrics {
+    max_available_offset: IntGaugeVec,
+}
+
+impl Metrics {
+    fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            max_available_offset: registry.register(metric!(
+                name: "mz_kafka_partition_offset_max",
+                help: "The high watermark for a partition, the maximum offset that we could hope to ingest",
+                var_labels: ["topic", "source_id", "partition_id"],
+            ))
+        }
+    }
 }
 
 /// Implements the byo timestamping logic
@@ -466,6 +481,7 @@ impl Timestamper {
         frequency: Duration,
         tx: mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
+        registry: &MetricsRegistry,
     ) -> Self {
         info!(
             "Starting Timestamping Thread. Frequency: {} ms.",
@@ -478,6 +494,7 @@ impl Timestamper {
             tx,
             rx,
             timestamp_frequency: frequency,
+            metrics: Metrics::register_with(registry),
         }
     }
 
@@ -512,6 +529,7 @@ impl Timestamper {
                         encoding,
                         envelope,
                         consistency,
+                        key_envelope: _,
                         ts_frequency: _,
                         timeline: _,
                     } = sc
@@ -705,7 +723,7 @@ impl Timestamper {
         // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
         let metadata_refresh_frequency = Duration::from_millis(
             kc.config_options
-                .get("topic_metadata_refresh_interval_ms")
+                .get("topic.metadata.refresh.interval.ms")
                 // Safe conversion: statement::extract_config enforces that option is a value
                 // between 0 and 3600000
                 .unwrap_or(&"30000".to_owned())
@@ -717,8 +735,14 @@ impl Timestamper {
             .name("rt_kafka_meta".to_string())
             .spawn({
                 let connector = connector.clone();
+                let metrics = self.metrics.clone();
                 move || {
-                    rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
+                    rt_kafka_metadata_fetch_loop(
+                        connector,
+                        consumer,
+                        metadata_refresh_frequency,
+                        &metrics,
+                    )
                 }
             })
             .unwrap();
@@ -860,7 +884,12 @@ impl Timestamper {
     }
 }
 
-fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wait: Duration) {
+fn rt_kafka_metadata_fetch_loop(
+    c: RtKafkaConnector,
+    consumer: BaseConsumer,
+    wait: Duration,
+    metrics: &Metrics,
+) {
     debug!(
         "Starting realtime Kafka thread for {} (source {})",
         &c.topic, &c.id
@@ -923,7 +952,7 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
         for pid in 0..current_partition_count {
             match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(30)) {
                 Ok((_low, high)) => {
-                    let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
+                    let max_offset = metrics.max_available_offset.with_label_values(&[
                         &c.topic,
                         &c.id.to_string(),
                         &pid.to_string(),

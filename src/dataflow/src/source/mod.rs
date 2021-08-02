@@ -17,7 +17,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -33,16 +32,14 @@ use dataflow_types::{
     Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
 };
 use expr::{PartitionId, SourceInstanceId};
-use lazy_static::lazy_static;
-use log::{debug, error};
+use log::error;
+use ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, UIntGauge,
+};
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
-use prometheus::{
-    register_int_counter, register_int_counter_vec, register_int_gauge_vec,
-    register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
-    IntGaugeVec, UIntGauge, UIntGaugeVec,
-};
-use repr::{CachedRecord, CachedRecordIter, Diff, Row, Timestamp};
+
+use repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::Scope;
@@ -51,22 +48,22 @@ use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 
+use self::metrics::SourceBaseMetrics;
+
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
-use crate::source::cache::WorkerCacheData;
 use crate::source::timestamp::TimestampBindingRc;
-use crate::CacheMessage;
 
 mod file;
 mod kafka;
 mod kinesis;
+pub(super) mod metrics;
 mod postgres;
 mod pubnub;
 mod s3;
 mod util;
 
-pub mod cache;
 pub mod timestamp;
 
 use differential_dataflow::Hashable;
@@ -112,12 +109,12 @@ pub struct SourceConfig<'a, G> {
     pub active: bool,
     /// Data encoding
     pub encoding: SourceDataEncoding,
-    /// Channel to send source caching information to cacher thread
-    pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Timely worker logger for source events
     pub logger: Option<Logger>,
     /// The function to return a now time.
     pub now: NowFn,
+    /// The metrics & registry that each source instantiates.
+    pub base_metrics: &'a SourceBaseMetrics,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -254,12 +251,6 @@ pub enum SourceStatus {
     Done,
 }
 
-// Global Prometheus metrics
-lazy_static! {
-    static ref BYTES_READ_COUNTER: IntCounter =
-        register_int_counter!("mz_bytes_read_total", "Count of bytes read from sources").unwrap();
-}
-
 /// Types that implement this trait expose a length function
 pub trait MaybeLength {
     /// Returns the size of the object
@@ -309,6 +300,7 @@ pub(crate) trait SourceReader {
         connector: ExternalSourceConnector,
         encoding: SourceDataEncoding,
         logger: Option<Logger>,
+        metrics: crate::source::metrics::SourceBaseMetrics,
     ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
     where
         Self: Sized;
@@ -327,65 +319,6 @@ pub(crate) trait SourceReader {
     /// Note that implementers are required to present messages in strictly ascending\
     /// offset order within each partition.
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error>;
-}
-
-fn cache_message(
-    message: &SourceMessage,
-    source_id: SourceInstanceId,
-    caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
-    timestamp: Timestamp,
-    predecessor: Option<MzOffset>,
-) {
-    // Send this record to be cached
-    if let Some(caching_tx) = caching_tx {
-        let partition_id = match message.partition {
-            PartitionId::Kafka(p) => p,
-            _ => unreachable!(),
-        };
-
-        // TODO(rkhaitan): let's experiment with wrapping these in a
-        // Arc so we don't have to clone.
-        let key = message.key.clone().unwrap_or_default();
-        let value = message.payload.clone().unwrap_or_default();
-
-        let cache_data = CacheMessage::Data(WorkerCacheData {
-            source_id: source_id.source_id,
-            partition_id,
-            record: CachedRecord {
-                predecessor: predecessor.map(|p| p.offset),
-                offset: message.offset.offset,
-                timestamp,
-                key,
-                value,
-            },
-        });
-
-        // TODO(benesch): the lack of backpressure here can result in
-        // unbounded memory usage.
-        caching_tx
-            .send(cache_data)
-            .expect("caching receiver should never drop first");
-    }
-}
-
-fn read_file(path: PathBuf) -> Vec<SourceMessage> {
-    debug!("reading cached data from {}", path.display());
-    let data = ::std::fs::read(&path).unwrap_or_else(|e| {
-        error!("failed to read source cache file {}: {}", path.display(), e);
-        vec![]
-    });
-
-    let partition =
-        crate::source::cache::cached_file_partition(&path).expect("partition known to exist");
-    CachedRecordIter::new(data)
-        .map(move |r| SourceMessage {
-            key: Some(r.key),
-            payload: Some(r.value),
-            offset: MzOffset { offset: r.offset },
-            upstream_time_millis: None,
-            partition: partition.clone(),
-        })
-        .collect()
 }
 
 #[derive(Debug)]
@@ -587,6 +520,7 @@ impl ConsistencyInfo {
         consistency: Consistency,
         timestamp_frequency: Duration,
         logger: Option<Logger>,
+        base_metrics: &SourceBaseMetrics,
     ) -> ConsistencyInfo {
         ConsistencyInfo {
             last_closed_ts: 0,
@@ -595,6 +529,7 @@ impl ConsistencyInfo {
             partition_metadata: HashMap::new(),
             source_type: consistency,
             source_metrics: SourceMetrics::new(
+                &base_metrics,
                 &metrics_name,
                 source_id,
                 &worker_id.to_string(),
@@ -811,39 +746,31 @@ pub struct SourceMetrics {
     logger: Option<Logger>,
     source_name: String,
     source_id: SourceInstanceId,
+    base_metrics: SourceBaseMetrics,
 }
 
 impl SourceMetrics {
     /// Initialises source metrics for a given (source_id, worker_id)
     pub fn new(
+        base: &SourceBaseMetrics,
         source_name: &str,
         source_id: SourceInstanceId,
         worker_id: &str,
         logger: Option<Logger>,
     ) -> SourceMetrics {
         let source_id_string = source_id.to_string();
-        lazy_static! {
-            static ref OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_operator_scheduled_total",
-                "The number of times the kafka client got invoked for this source",
-                &["topic", "source_id", "worker_id"]
-            )
-            .unwrap();
-            static ref CAPABILITY: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_capability",
-                "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",
-                &["topic", "source_id", "worker_id"]
-            )
-            .unwrap();
-        }
         let labels = &[source_name, &source_id_string, worker_id];
         SourceMetrics {
-            operator_scheduled_counter: OPERATOR_SCHEDULED_COUNTER.with_label_values(labels),
-            capability: CAPABILITY.with_label_values(labels),
+            operator_scheduled_counter: base
+                .source_specific
+                .operator_scheduled_counter
+                .with_label_values(labels),
+            capability: base.source_specific.capability.with_label_values(labels),
             partition_metrics: Default::default(),
             logger,
             source_name: source_name.to_string(),
             source_id,
+            base_metrics: base.clone(),
         }
     }
 
@@ -857,7 +784,12 @@ impl SourceMetrics {
             return;
         }
 
-        let metric = PartitionMetrics::new(&self.source_name, self.source_id, partition_id);
+        let metric = PartitionMetrics::new(
+            &self.base_metrics,
+            &self.source_name,
+            self.source_id,
+            partition_id,
+        );
         self.partition_metrics.insert(partition_id.clone(), metric);
     }
 
@@ -902,13 +834,13 @@ impl Drop for SourceMetrics {
 /// Partition-specific metrics, recorded to both Prometheus and a system table
 pub struct PartitionMetrics {
     /// Highest offset that has been received by the source and timestamped
-    offset_ingested: DeleteOnDropGauge<'static, AtomicI64>,
+    offset_ingested: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Highest offset that has been received by the source
-    offset_received: DeleteOnDropGauge<'static, AtomicI64>,
+    offset_received: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Value of the highest timestamp that is closed (for which all messages have been ingested)
-    closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
+    closed_ts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Total number of messages that have been received by the source and timestamped
-    messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
+    messages_ingested: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     last_offset: i64,
     last_timestamp: i64,
 }
@@ -937,65 +869,29 @@ impl PartitionMetrics {
 
     /// Initialises partition metrics for a given (source_id, partition_id)
     pub fn new(
+        base_metrics: &SourceBaseMetrics,
         source_name: &str,
         source_id: SourceInstanceId,
         partition_id: &PartitionId,
     ) -> PartitionMetrics {
-        const LABELS: &[&str] = &["topic", "source_id", "source_instance", "partition_id"];
-        lazy_static! {
-            static ref OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
-                "mz_partition_offset_ingested",
-                "The most recent offset that we have ingested into a dataflow. This correspond to \
-                data that we have 1)ingested 2) assigned a timestamp",
-                LABELS
-            )
-            .unwrap();
-            static ref OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
-                "mz_partition_offset_received",
-                "The most recent offset that we have been received by this source.",
-                LABELS
-            )
-            .unwrap();
-            static ref CLOSED_TS: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_partition_closed_ts",
-                "The highest closed timestamp for each partition in this dataflow",
-                LABELS
-            )
-            .unwrap();
-            static ref MESSAGES_INGESTED: IntCounterVec = register_int_counter_vec!(
-                "mz_messages_ingested",
-                "The number of messages ingested per partition.",
-                LABELS
-            )
-            .unwrap();
-        }
         let labels = &[
-            source_name,
-            &source_id.source_id.to_string(),
-            &source_id.dataflow_id.to_string(),
-            &partition_id.to_string(),
+            source_name.to_string(),
+            source_id.source_id.to_string(),
+            source_id.dataflow_id.to_string(),
+            partition_id.to_string(),
         ];
+        let base = &base_metrics.partition_specific;
         PartitionMetrics {
-            offset_ingested: DeleteOnDropGauge::new_with_error_handler(
-                OFFSET_INGESTED.with_label_values(labels),
-                &OFFSET_INGESTED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            offset_received: DeleteOnDropGauge::new_with_error_handler(
-                OFFSET_RECEIVED.with_label_values(labels),
-                &OFFSET_RECEIVED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            closed_ts: DeleteOnDropGauge::new_with_error_handler(
-                CLOSED_TS.with_label_values(labels),
-                &CLOSED_TS,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
-            messages_ingested: DeleteOnDropCounter::new_with_error_handler(
-                MESSAGES_INGESTED.with_label_values(labels),
-                &MESSAGES_INGESTED,
-                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
-            ),
+            offset_ingested: base
+                .offset_ingested
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            offset_received: base
+                .offset_received
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            closed_ts: base.closed_ts.get_delete_on_drop_gauge(labels.to_vec()),
+            messages_ingested: base
+                .messages_ingested
+                .get_delete_on_drop_counter(labels.to_vec()),
             last_offset: 0,
             last_timestamp: 0,
         }
@@ -1169,6 +1065,7 @@ where
         timestamp_frequency,
         logger,
         now,
+        base_metrics,
         ..
     } = config;
 
@@ -1202,7 +1099,13 @@ where
         let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
 
         let metrics_name = upstream_name.unwrap_or(name);
-        let mut metrics = SourceMetrics::new(&metrics_name, id, &worker_id.to_string(), logger);
+        let mut metrics = SourceMetrics::new(
+            &base_metrics,
+            &metrics_name,
+            id,
+            &worker_id.to_string(),
+            logger,
+        );
 
         if active {
             metrics.add_partition(&PartitionId::None);
@@ -1281,10 +1184,11 @@ where
         timestamp_frequency,
         active,
         encoding,
-        mut caching_tx,
         logger,
+        base_metrics,
         ..
     } = config;
+    let bytes_read_counter = base_metrics.bytes_read.clone();
     let (stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
@@ -1299,6 +1203,7 @@ where
             consistency,
             timestamp_frequency,
             logger.clone(),
+            &base_metrics,
         );
 
         // Create source information (this function is specific to a specific
@@ -1315,6 +1220,7 @@ where
                 source_connector.clone(),
                 encoding,
                 logger,
+                base_metrics.clone(),
             ) {
                 Ok((source_reader, partition)) => {
                     if let Some(pid) = partition {
@@ -1331,14 +1237,6 @@ where
             }
         };
 
-        let cached_files = dataflow_types::cached_files(source_connector);
-        let mut cached_files = crate::source::cache::cached_files_for_worker(
-            id.source_id,
-            cached_files,
-            &consistency_info,
-        );
-
-        let mut predecessor = None;
         // Stash messages we cannot yet timestamp here.
         let mut buffer = None;
 
@@ -1360,34 +1258,6 @@ where
                 }
             };
 
-            if let Some(file) = cached_files.pop() {
-                // TODO(rkhaitan) change this to properly re-use old timestamps.
-                // Currently this is hard to do because there can be arbitrary delays between
-                // different workers being scheduled, and this means that all cached state
-                // can potentially get pulled into memory without being able to close timestamps
-                // which causes the system to go out of memory.
-                // For now, constrain we constrain caching to RT sources, and we re-assign
-                // timestamps to cached messages on startup to 1 (which is the lowest possible timestamp)
-                let ts = 1;
-                let ts_cap = cap.delayed(&ts);
-
-                let messages = read_file(file);
-
-                for message in messages {
-                    let key = message.key.unwrap_or_default();
-                    let out = message.payload.unwrap_or_default();
-                    output.session(&ts_cap).give(Ok(SourceOutput::new(
-                        key,
-                        out,
-                        Some(message.offset.offset),
-                        message.upstream_time_millis,
-                    )));
-                }
-                // Yield to give downstream operators time to handle this data.
-                activator.activate_after(Duration::from_millis(10));
-                return SourceStatus::Alive;
-            }
-
             // Refresh any consistency info from the worker that we need to
             consistency_info.refresh(source_reader, &mut timestamp_histories);
             // Downgrade capability (if possible)
@@ -1395,7 +1265,7 @@ where
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
-            // Accumulate updates to BYTES_READ_COUNTER for Prometheus metrics collection
+            // Accumulate updates to bytes_read for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
             let mut metric_updates = HashMap::new();
@@ -1414,11 +1284,8 @@ where
                     let message = buffer.take().unwrap();
                     handle_message(
                         message,
-                        &mut predecessor,
                         &mut consistency_info,
-                        &id,
                         &mut bytes_read,
-                        &mut caching_tx,
                         &cap,
                         output,
                         &mut metric_updates,
@@ -1430,11 +1297,8 @@ where
                     match source_reader.get_next_message() {
                         Ok(NextMessage::Ready(message)) => handle_message(
                             message,
-                            &mut predecessor,
                             &mut consistency_info,
-                            &id,
                             &mut bytes_read,
-                            &mut caching_tx,
                             &cap,
                             output,
                             &mut metric_updates,
@@ -1467,7 +1331,7 @@ where
                 }
             }
 
-            BYTES_READ_COUNTER.inc_by(bytes_read as i64);
+            bytes_read_counter.inc_by(bytes_read as u64);
             consistency_info
                 .source_metrics
                 .record_partition_offsets(metric_updates);
@@ -1510,11 +1374,8 @@ where
 /// existing mess more obvious and points towards ways to improve it.
 fn handle_message(
     message: SourceMessage,
-    predecessor: &mut Option<MzOffset>,
     consistency_info: &mut ConsistencyInfo,
-    id: &SourceInstanceId,
     bytes_read: &mut usize,
-    caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
@@ -1530,8 +1391,6 @@ where
 {
     let partition = message.partition.clone();
     let offset = message.offset;
-    let msg_predecessor = *predecessor;
-    *predecessor = Some(offset);
 
     // Update ingestion metrics. Guaranteed to exist as the appropriate
     // entry gets created in SourceReader or when a new partition
@@ -1554,7 +1413,6 @@ where
             (SourceStatus::Alive, MessageProcessing::Yielded)
         }
         Some(ts) => {
-            cache_message(&message, *id, caching_tx, ts, msg_predecessor);
             // Note: empty and null payload/keys are currently
             // treated as the same thing.
             let key = message.key.unwrap_or_default();

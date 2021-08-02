@@ -9,4 +9,5 @@
 
 pub mod avro;
 pub mod bytes;
+pub mod json;
 pub mod protobuf;

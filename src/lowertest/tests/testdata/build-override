@@ -59,6 +59,18 @@ build override=true
 Some(SingleUnnamedField(SingleUnnamedArg(2.2)))
 
 build override=true
+(single_unnamed_field2 [-1 4 -2 0])
+----
+Some(SingleUnnamedField2([-1, 4, -2, 0]))
+
+#single field is a struct with named fields
+
+build override=true
+(single_unnamed_field3 ([true false false null] [[[-1.25 true] [1.24 false]]]))
+----
+Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(true), Some(false), Some(false), None], bizz: [[(SingleUnnamedArg(-1.25), true), (SingleUnnamedArg(1.24), false)]] }))
+
+build override=true
 (multi_unnamed_fields_2 false unit)
 ----
 Some(MultiUnnamedFields2(OptionalArg(false, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, ""))

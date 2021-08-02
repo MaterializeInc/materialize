@@ -17,8 +17,9 @@ use std::{
 };
 
 use chrono::NaiveDateTime;
-use prometheus::{proto::MetricType, Registry};
-use repr::{Datum, Row, Timestamp};
+use ore::metrics::MetricsRegistry;
+use prometheus::proto::MetricType;
+use repr::{Datum, Diff, Row, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::catalog::{builtin::BuiltinTable, BuiltinTableUpdate};
@@ -31,10 +32,10 @@ use super::{
 
 /// Scrapes the prometheus registry in a regular interval and submits a batch of metric data to a
 /// logging worker, to be inserted into a table.
-pub struct Scraper<'a> {
+pub struct Scraper {
     interval: Duration,
     retain_for: u64,
-    registry: &'a Registry,
+    registry: MetricsRegistry,
     command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
     internal_tx: UnboundedSender<super::Message>,
 }
@@ -131,11 +132,11 @@ fn metric_family_metadata(family: &prometheus::proto::MetricFamily) -> Row {
     ])
 }
 
-impl<'a> Scraper<'a> {
+impl Scraper {
     pub fn new(
         interval: Duration,
         retain_for: Duration,
-        registry: &'a Registry,
+        registry: MetricsRegistry,
         command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
         internal_tx: UnboundedSender<super::Message>,
     ) -> Self {
@@ -205,6 +206,9 @@ impl<'a> Scraper<'a> {
     }
 
     fn send_expiring_update(&self, table: &BuiltinTable, updates: Vec<Row>) {
+        // TODO: Make this send both records in the same message so we can
+        // persist them atomically. Otherwise, we may end up with permanent
+        // orphans if a restart/crash happens at the wrong time.
         let id = table.id;
         self.internal_tx
             .send(Message::InsertBuiltinTableUpdates(TimestampedUpdate {
@@ -228,7 +232,7 @@ impl<'a> Scraper<'a> {
             .expect("Sending metric reading retraction messages");
     }
 
-    fn send_metadata_update<I: IntoIterator<Item = Row>>(&self, updates: I, diff: isize) {
+    fn send_metadata_update<I: IntoIterator<Item = Row>>(&self, updates: I, diff: Diff) {
         let id = MZ_PROMETHEUS_METRICS.id;
         self.internal_tx
             .send(Message::InsertBuiltinTableUpdates(TimestampedUpdate {

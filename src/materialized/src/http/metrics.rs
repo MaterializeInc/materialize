@@ -9,16 +9,17 @@
 
 //! Metrics HTTP endpoints.
 
-use crate::BUILD_INFO;
+use crate::{Metrics, BUILD_INFO};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use askama::Template;
 use hyper::{Body, Request, Response};
+use ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
 
 use crate::http::util;
-use crate::server_metrics::{load_prom_metrics, PromMetric, REQUEST_METRICS_ENCODE};
+use crate::server_metrics::PromMetric;
 
 #[derive(Template)]
 #[template(path = "http/templates/status.html")]
@@ -29,27 +30,49 @@ struct StatusTemplate<'a> {
     metrics: Vec<&'a PromMetric<'a>>,
 }
 
-pub async fn handle_prometheus(
+/// Call [`prometheus::gather`], ensuring that all our metrics are up to date
+fn load_prom_metrics(
+    start_time: Instant,
+    registry: &MetricsRegistry,
+    global_metrics: &Metrics,
+) -> Vec<prometheus::proto::MetricFamily> {
+    let before_gather = Instant::now();
+    global_metrics.update_uptime(start_time);
+    let result = registry.gather();
+
+    global_metrics
+        .request_metrics_gather
+        .set(Instant::elapsed(&before_gather).as_micros() as u64);
+    result
+}
+
+pub fn handle_prometheus(
     _: Request<Body>,
     _: &mut coord::SessionClient,
     start_time: Instant,
+    registry: &MetricsRegistry,
+    global_metrics: &Metrics,
 ) -> Result<Response<Body>, anyhow::Error> {
-    let metric_families = load_prom_metrics(start_time);
+    let metric_families = load_prom_metrics(start_time, registry, global_metrics);
     let mut buffer = Vec::new();
     let encoder = prometheus::TextEncoder::new();
     let start = Instant::now();
     encoder.encode(&metric_families, &mut buffer)?;
-    REQUEST_METRICS_ENCODE.set(Instant::now().duration_since(start).as_micros() as i64);
+    global_metrics
+        .request_metrics_encode
+        .set(Instant::elapsed(&start).as_micros() as u64);
 
     Ok(Response::new(Body::from(buffer)))
 }
 
-pub async fn handle_status(
+pub fn handle_status(
     _: Request<Body>,
     _: &mut coord::SessionClient,
     start_time: Instant,
+    registry: &MetricsRegistry,
+    global_metrics: &Metrics,
 ) -> Result<Response<Body>, anyhow::Error> {
-    let metric_families = load_prom_metrics(start_time);
+    let metric_families = load_prom_metrics(start_time, registry, global_metrics);
 
     let desired_metrics = {
         let mut s = BTreeSet::new();

@@ -13,14 +13,20 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
+use ore::result::ResultExt;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::pin;
 use tokio_stream::StreamExt;
 
 use crate::action::{Action, Context, State};
-use crate::format::avro;
+use crate::format::{avro, json};
 use crate::parser::BuiltinCommand;
+
+pub enum SinkFormat {
+    Avro,
+    Json { key: bool },
+}
 
 pub enum SinkConsistencyFormat {
     Debezium,
@@ -28,6 +34,7 @@ pub enum SinkConsistencyFormat {
 
 pub struct VerifyAction {
     sink: String,
+    format: SinkFormat,
     consistency: Option<SinkConsistencyFormat>,
     sort_messages: bool,
     expected_messages: Vec<String>,
@@ -35,7 +42,13 @@ pub struct VerifyAction {
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyAction, String> {
-    let _format = cmd.args.string("format")?;
+    let format = match cmd.args.string("format")?.as_str() {
+        "avro" => SinkFormat::Avro,
+        "json" => SinkFormat::Json {
+            key: cmd.args.parse("key")?,
+        },
+        f => return Err(format!("unknown format: {}", f)),
+    };
     let sink = cmd.args.string("sink")?;
     let consistency = match cmd.args.opt_string("consistency").as_deref() {
         Some("debezium") => Some(SinkConsistencyFormat::Debezium),
@@ -48,6 +61,7 @@ pub fn build_verify(mut cmd: BuiltinCommand, context: Context) -> Result<VerifyA
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,
+        format,
         consistency,
         sort_messages,
         expected_messages,
@@ -77,7 +91,7 @@ fn avro_from_bytes(
     }
 
     let datum = avro::from_avro_datum(schema, &mut bytes)
-        .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?;
+        .map_err(|e| format!("from_avro_datum: {:#}", e))?;
     Ok(datum)
 }
 
@@ -111,37 +125,15 @@ impl Action for VerifyAction {
 
         println!("Verifying results in Kafka topic {}", topic);
 
-        let value_schema = state
-            .ccsr_client
-            .get_schema_by_subject(&format!("{}-value", topic))
-            .await
-            .map_err(|e| format!("fetching schema: {}", e))?
-            .raw;
-
-        let key_schema = state
-            .ccsr_client
-            .get_schema_by_subject(&format!("{}-key", topic))
-            .await
-            .ok()
-            .map(|key_schema| {
-                avro::parse_schema(&key_schema.raw)
-                    .map_err(|e| format!("parsing avro schema: {}", e))
-            })
-            .transpose()?;
-
         let mut config = state.kafka_config.clone();
         config.set("enable.auto.offset.store", "false");
 
-        let value_schema =
-            avro::parse_schema(&value_schema).map_err(|e| format!("parsing avro schema: {}", e))?;
-        let value_schema = &value_schema;
-
         let consumer: StreamConsumer = config
             .create()
-            .map_err(|e| format!("creating kafka consumer: {}", e))?;
+            .map_err(|e| format!("creating kafka consumer: {:#}", e))?;
         consumer
             .subscribe(&[&topic])
-            .map_err(|e| format!("subscribing: {}", e.to_string()))?;
+            .map_err(|e| format!("subscribing: {:#}", e))?;
 
         // Wait up to 15 seconds for each message.
         let message_stream = consumer
@@ -150,51 +142,112 @@ impl Action for VerifyAction {
             .timeout(cmp::max(state.default_timeout, Duration::from_secs(15)));
         pin!(message_stream);
 
-        let mut actual_messages = vec![];
-
         // Collect all messages that arrive without timing out. If we trip
         // the timeout, suppress the error and return what we have. This
         // is nicer than returning "timeout expired", as the user will
         // instead get an error message about the expected messages that
         // were missing.
+        let mut actual_bytes = vec![];
         while let Some(Ok(message)) = message_stream.next().await {
-            let message = message.map_err(|e| e.to_string())?;
-
+            let message = message.map_err_to_string()?;
             consumer
                 .store_offset(&message)
-                .map_err(|e| format!("storing message offset: {}", e.to_string()))?;
+                .map_err(|e| format!("storing message offset: {:#}", e))?;
+            actual_bytes.push((
+                message.key().and_then(|bytes| Some(bytes.to_owned())),
+                message.payload().and_then(|bytes| Some(bytes.to_owned())),
+            ));
+        }
 
-            let bytes = message.payload();
+        match &self.format {
+            SinkFormat::Avro => {
+                let value_schema = state
+                    .ccsr_client
+                    .get_schema_by_subject(&format!("{}-value", topic))
+                    .await
+                    .map_err(|e| format!("fetching schema: {}", e))?
+                    .raw;
 
-            let value_datum = match bytes {
-                None => None,
-                Some(bytes) => Some(avro_from_bytes(value_schema, bytes)?),
-            };
+                let key_schema = state
+                    .ccsr_client
+                    .get_schema_by_subject(&format!("{}-key", topic))
+                    .await
+                    .ok()
+                    .map(|key_schema| {
+                        avro::parse_schema(&key_schema.raw)
+                            .map_err(|e| format!("parsing avro schema: {}", e))
+                    })
+                    .transpose()?;
 
-            let key_datum = key_schema
-                .as_ref()
-                .map(|key_schema| {
-                    let bytes = match message.key() {
-                        Some(key) => key,
-                        None => return Err("empty message key".into()),
+                let value_schema = avro::parse_schema(&value_schema)
+                    .map_err(|e| format!("parsing avro schema: {}", e))?;
+                let value_schema = &value_schema;
+
+                let mut actual_messages = vec![];
+                for (key, value) in actual_bytes {
+                    let key_datum = key_schema
+                        .as_ref()
+                        .map(|key_schema| {
+                            let bytes = match key {
+                                Some(key) => key,
+                                None => return Err("empty message key".into()),
+                            };
+                            avro_from_bytes(key_schema, &bytes)
+                        })
+                        .transpose()?;
+                    let value_datum = match value {
+                        None => None,
+                        Some(bytes) => Some(avro_from_bytes(value_schema, &bytes)?),
                     };
-                    avro_from_bytes(key_schema, bytes)
-                })
-                .transpose()?;
-            actual_messages.push((key_datum, value_datum));
-        }
+                    actual_messages.push((key_datum, value_datum));
+                }
 
-        if self.sort_messages {
-            actual_messages.sort_by_key(|k| format!("{:?}", k.1));
-        }
+                if self.sort_messages {
+                    actual_messages.sort_by_key(|k| format!("{:?}", k.1));
+                }
 
-        avro::validate_sink(
-            key_schema.as_ref(),
-            value_schema,
-            &self.expected_messages,
-            &actual_messages,
-            &self.context.regex,
-            &self.context.regex_replacement,
-        )
+                avro::validate_sink(
+                    key_schema.as_ref(),
+                    value_schema,
+                    &self.expected_messages,
+                    &actual_messages,
+                    &self.context.regex,
+                    &self.context.regex_replacement,
+                )
+            }
+            SinkFormat::Json { key } => {
+                let mut actual_messages = vec![];
+                for (key, value) in actual_bytes {
+                    let key_datum =
+                        match key {
+                            None => None,
+                            Some(bytes) => Some(serde_json::from_slice(&bytes).map_err(|e| {
+                                format!("converting bytes to JSON {}", e.to_string())
+                            })?),
+                        };
+                    let value_datum =
+                        match value {
+                            None => None,
+                            Some(bytes) => Some(serde_json::from_slice(&bytes).map_err(|e| {
+                                format!("converting bytes to JSON {}", e.to_string())
+                            })?),
+                        };
+
+                    actual_messages.push((key_datum, value_datum));
+                }
+
+                if self.sort_messages {
+                    actual_messages.sort_by_key(|k| format!("{:?}", k.1));
+                }
+
+                json::validate_sink(
+                    *key,
+                    &self.expected_messages,
+                    &actual_messages,
+                    &self.context.regex,
+                    &self.context.regex_replacement,
+                )
+            }
+        }
     }
 }

@@ -30,12 +30,12 @@ build-scalar
 build-scalar
 (
     if
-    (call_binary gt #0 (-2 (decimal 10 2)))
+    (call_binary gt #0 (-2 numeric))
     (call_variadic substr [#1 (1 int64) (4 int64)])
     "hello"
 )
 ----
-if (#0 > -2dec) then {substr(#1, 1, 4)} else {"hello"}
+if (#0 > -2) then {substr(#1, 1, 4)} else {"hello"}
 
 build-scalar
 (call_binary (jsonb_get_string true) #2 ("field1" string))
@@ -46,3 +46,8 @@ build-scalar
 (call_unary is_null null)
 ----
 isnull(null)
+
+build-scalar
+("1999-12-31 23:42:23.342" timestamp)
+----
+1999-12-31 23:42:23.342

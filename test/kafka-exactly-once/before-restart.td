@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ set schema={
     "type": "record",
     "name": "envelope",
@@ -72,9 +74,9 @@ $ kafka-create-topic topic=input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
-> CREATE SINK output2 FROM input_rt
+> CREATE SINK output_rt FROM input_rt
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-rt-sink-${testdrive.seed}'
-  WITH (exactly_once=true, consistency_topic='output-rt-sink-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE MATERIALIZED SOURCE input_byo
@@ -82,9 +84,9 @@ $ kafka-create-topic topic=input
     WITH (consistency_topic = 'testdrive-input-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
-> CREATE SINK output FROM input_byo
+> CREATE SINK output_byo FROM input_byo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-byo-sink-${testdrive.seed}'
-  WITH (exactly_once=true, consistency_topic='output-byo-sink-consistency-${testdrive.seed}')
+  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschemakey}
@@ -114,49 +116,35 @@ $ kafka-ingest format=avro topic=input schema=${schema} timestamp=4
 {"before": null, "after": {"row": {"a": 3, "b": 4}}}
 {"before": null, "after": {"row": {"a": 5, "b": 6}}}
 
-$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.output_byo sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "1"}}
 
-$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.output_byo sort-messages=true
 {"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "2"}}
 {"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "2"}}
 
-$ kafka-verify format=avro sink=materialize.public.output sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.output_byo sort-messages=true
 {"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "3"}}
 {"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "3"}}
 
-> SELECT * FROM input_byo
-a  b
-------
-1   1
-2   1
-3   1
-1   2
-11  11
-22  11
-3   4
-5   6
+# can't distinguish "transactions" with real-time timestamping
 
-# Reingest the sink based on rt sources to confirm correct output.
-# TODO: this needs to have deduplication='none' because the deduplication code expects
-# certain fields that the sink does not emit
-> CREATE MATERIALIZED SOURCE reingest_rt_sink
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-rt-sink-${testdrive.seed}'
-  WITH (deduplication='none')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM
+$ kafka-verify format=avro sink=materialize.public.output_rt sort-messages=true
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "<TIMESTAMP>"}}
 
-> SELECT * FROM reingest_rt_sink
-a  b
-------
-1   1
-2   1
-3   1
-1   2
-11  11
-22  11
-3   4
-5   6
+# Wait a bit to allow timestamp compaction to happen. We need to ensure that we
+# get correct results even with compaction, which re-timestamps earlier data
+# at later timestamps upon restarting.
+
+> SELECT mz_internal.mz_sleep(2);
+<null>

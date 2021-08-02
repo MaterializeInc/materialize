@@ -150,6 +150,33 @@ SELECT pg_typeof('1.2'::double)
 ----
 double precision
 
+# 🔬🔬 int2
+
+query T
+SELECT '1'::int2
+----
+1
+
+query T
+SELECT '1'::pg_catalog.int2
+----
+1
+
+# 🔬🔬🔬 int2 aliases
+
+query T
+SELECT '1'::smallint
+----
+1
+
+query error unknown catalog item 'pg_catalog.smallint'
+SELECT '1'::pg_catalog.smallint
+
+query T
+SELECT pg_typeof('1'::smallint)
+----
+smallint
+
 # 🔬🔬 int4
 
 query T
@@ -187,19 +214,6 @@ SELECT '1'::pg_catalog.integer
 
 query T
 SELECT pg_typeof('1'::integer)
-----
-integer
-
-query T
-SELECT '1'::smallint
-----
-1
-
-query error unknown catalog item 'pg_catalog.smallint'
-SELECT '1'::pg_catalog.smallint
-
-query T
-SELECT pg_typeof('1'::smallint)
 ----
 integer
 

@@ -26,6 +26,8 @@ pub enum Type {
     Float4,
     /// An 8-byte floating point number.
     Float8,
+    /// A 2-byte signed integer.
+    Int2,
     /// A 4-byte signed integer.
     Int4,
     /// An 8-byte signed integer.
@@ -57,8 +59,6 @@ pub enum Type {
     TimestampTz,
     /// A universally unique identifier.
     Uuid,
-    /// Refactored numeric type using `rust-dec`
-    APD,
 }
 
 lazy_static! {
@@ -82,24 +82,11 @@ lazy_static! {
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
-
-    /// Placeholder for `rust-dec`-backed numeric implementation.
-    pub static ref APD: postgres_types::Type = postgres_types::Type::new(
-        "apd".to_owned(),
-        oid::TYPE_APD_OID,
-        postgres_types::Kind::Simple,
-        "mz_catalog".to_owned(),
-    );
 }
 
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.
     pub fn from_oid(oid: u32) -> Option<Type> {
-        match oid {
-            oid::TYPE_APD_OID => return Some(Type::APD),
-            _ => {}
-        }
-
         let ty = postgres_types::Type::from_oid(oid)?;
         match ty {
             postgres_types::Type::BOOL => Some(Type::Bool),
@@ -107,7 +94,7 @@ impl Type {
             postgres_types::Type::DATE => Some(Type::Date),
             postgres_types::Type::FLOAT4 => Some(Type::Float4),
             postgres_types::Type::FLOAT8 => Some(Type::Float8),
-            postgres_types::Type::INT2 => Some(Type::Int4),
+            postgres_types::Type::INT2 => Some(Type::Int2),
             postgres_types::Type::INT4 => Some(Type::Int4),
             postgres_types::Type::INT8 => Some(Type::Int8),
             postgres_types::Type::INTERVAL => Some(Type::Interval),
@@ -136,6 +123,7 @@ impl Type {
                 Type::Date => &postgres_types::Type::DATE_ARRAY,
                 Type::Float4 => &postgres_types::Type::FLOAT4_ARRAY,
                 Type::Float8 => &postgres_types::Type::FLOAT8_ARRAY,
+                Type::Int2 => &postgres_types::Type::INT2_ARRAY,
                 Type::Int4 => &postgres_types::Type::INT4_ARRAY,
                 Type::Int8 => &postgres_types::Type::INT8_ARRAY,
                 Type::Interval => &postgres_types::Type::INTERVAL_ARRAY,
@@ -150,13 +138,13 @@ impl Type {
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
-                Type::APD => unreachable!(),
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
             Type::Date => &postgres_types::Type::DATE,
             Type::Float4 => &postgres_types::Type::FLOAT4,
             Type::Float8 => &postgres_types::Type::FLOAT8,
+            Type::Int2 => &postgres_types::Type::INT2,
             Type::Int4 => &postgres_types::Type::INT4,
             Type::Int8 => &postgres_types::Type::INT8,
             Type::Interval => &postgres_types::Type::INTERVAL,
@@ -171,7 +159,6 @@ impl Type {
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
-            Type::APD => &APD,
         }
     }
 
@@ -200,6 +187,7 @@ impl Type {
             &postgres_types::Type::BOOL => "boolean",
             &postgres_types::Type::FLOAT4 => "real",
             &postgres_types::Type::FLOAT8 => "double precision",
+            &postgres_types::Type::INT2 => "smallint",
             &postgres_types::Type::INT4 => "integer",
             &postgres_types::Type::INT8 => "bigint",
             &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
@@ -224,6 +212,7 @@ impl Type {
             Type::Date => 4,
             Type::Float4 => 4,
             Type::Float8 => 8,
+            Type::Int2 => 2,
             Type::Int4 => 4,
             Type::Int8 => 8,
             Type::Interval => 16,
@@ -238,16 +227,14 @@ impl Type {
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::Uuid => 16,
-            Type::APD => 16,
         }
     }
 
     /// Provides a [`ScalarType`] from `self`, but without necessarily
     /// associating any meaningful values within the returned type.
     ///
-    /// For example `Type::Numeric` returns `ScalarType::Decimal(0,0)`, meaning
-    /// that its precision and scale need to be associated with values from
-    /// elsewhere.
+    /// For example `Type::Numeric` returns `SScalarType::Numeric { scale: None }`,
+    /// meaning that its scale might need values from elsewhere.
     pub fn to_scalar_type_lossy(&self) -> ScalarType {
         match self {
             Type::Array(t) => ScalarType::Array(Box::new(t.to_scalar_type_lossy())),
@@ -256,6 +243,7 @@ impl Type {
             Type::Date => ScalarType::Date,
             Type::Float4 => ScalarType::Float32,
             Type::Float8 => ScalarType::Float64,
+            Type::Int2 => ScalarType::Int16,
             Type::Int4 => ScalarType::Int32,
             Type::Int8 => ScalarType::Int64,
             Type::Interval => ScalarType::Interval,
@@ -268,7 +256,7 @@ impl Type {
                 value_type: Box::new(value_type.to_scalar_type_lossy()),
                 custom_oid: None,
             },
-            Type::Numeric => ScalarType::Decimal(0, 0),
+            Type::Numeric => ScalarType::Numeric { scale: None },
             Type::Oid => ScalarType::Oid,
             Type::Record(_) => ScalarType::Record {
                 fields: vec![],
@@ -280,7 +268,6 @@ impl Type {
             Type::Timestamp => ScalarType::Timestamp,
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
-            Type::APD => ScalarType::APD { scale: None },
         }
     }
 }
@@ -292,9 +279,9 @@ impl From<&ScalarType> for Type {
             ScalarType::Bool => Type::Bool,
             ScalarType::Bytes => Type::Bytea,
             ScalarType::Date => Type::Date,
-            ScalarType::Decimal(_, _) => Type::Numeric,
             ScalarType::Float64 => Type::Float8,
             ScalarType::Float32 => Type::Float4,
+            ScalarType::Int16 => Type::Int2,
             ScalarType::Int32 => Type::Int4,
             ScalarType::Int64 => Type::Int8,
             ScalarType::Interval => Type::Interval,
@@ -317,7 +304,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Timestamp => Type::Timestamp,
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
-            ScalarType::APD { .. } => Type::APD,
+            ScalarType::Numeric { .. } => Type::Numeric,
         }
     }
 }

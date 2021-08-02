@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryInto;
+use std::convert::TryFrom;
 use std::env;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use coord::PersistConfig;
 use lazy_static::lazy_static;
+use ore::metrics::MetricsRegistry;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -116,6 +118,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         }
         Some(data_directory) => (data_directory, None),
     };
+    let metrics_registry = MetricsRegistry::new();
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         logging: config
             .logging_granularity
@@ -125,7 +128,6 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
                 retain_readings_for: granularity,
             }),
         timestamp_frequency: Duration::from_secs(1),
-        cache: None,
         logical_compaction_window: config.logical_compaction_window,
         workers: config.workers,
         timely_worker: timely::WorkerConfig::default(),
@@ -137,10 +139,13 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         safe_mode: config.safe_mode,
         telemetry: None,
         introspection_frequency: Duration::from_secs(1),
+        metrics_registry: metrics_registry.clone(),
+        persist: PersistConfig::disabled(),
     }))?;
     let server = Server {
         inner,
         runtime,
+        metrics_registry,
         _temp_dir: temp_dir,
     };
     Ok(server)
@@ -150,6 +155,7 @@ pub struct Server {
     pub inner: materialized::Server,
     pub runtime: Arc<Runtime>,
     _temp_dir: Option<TempDir>,
+    pub metrics_registry: MetricsRegistry,
 }
 
 impl Server {
@@ -209,10 +215,7 @@ pub struct MzTimestamp(pub u64);
 impl<'a> FromSql<'a> for MzTimestamp {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
         let n = pgrepr::Numeric::from_sql(ty, raw)?;
-        if n.0.scale() != 0 {
-            return Err("scale of numeric was not 0".into());
-        }
-        Ok(MzTimestamp(n.0.significand().try_into()?))
+        Ok(MzTimestamp(u64::try_from(n.0 .0)?))
     }
 
     fn accepts(ty: &Type) -> bool {

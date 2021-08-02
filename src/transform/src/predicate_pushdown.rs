@@ -244,12 +244,21 @@ impl PredicatePushdown {
                                     // `MirScalarExpr` to a join constraint, we
                                     // need to retain the `!isnull(col1)`
                                     // information.
-                                    pred_not_translated.push(
-                                        expr1
-                                            .clone()
-                                            .call_unary(UnaryFunc::IsNull)
-                                            .call_unary(UnaryFunc::Not),
-                                    );
+                                    if expr1.typ(&input_type).nullable {
+                                        pred_not_translated.push(
+                                            expr1
+                                                .clone()
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
+                                    } else if expr2.typ(&input_type).nullable {
+                                        pred_not_translated.push(
+                                            expr2
+                                                .clone()
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
+                                    }
                                     equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);
                                     continue;
                                 }
@@ -520,7 +529,7 @@ impl PredicatePushdown {
                 ..
             } => {
                 // The goal is to push
-                //   1) equivalences of the form `expr = literal`, where `expr`
+                //   1) equivalences of the form `expr = <runtime constant>`, where `expr`
                 //      comes from a single input.
                 //   2) equivalences of the form `expr1 = expr2`, where both
                 //      expressions come from the same single input.
@@ -547,25 +556,31 @@ impl PredicatePushdown {
                         return;
                     }
 
-                    if let Some(literal_pos) = equivalences[equivalence_pos]
+                    let runtime_constants = equivalences[equivalence_pos]
                         .iter()
-                        .position(|expr| expr.is_literal())
-                    {
-                        // Case 2: There is one literal in the equivalence class
-                        let literal = equivalences[equivalence_pos][literal_pos].clone();
-                        let gen_literal_equality_pred = |expr| {
-                            if literal.is_literal_null() {
-                                MirScalarExpr::CallUnary {
-                                    func: expr::UnaryFunc::IsNull,
-                                    expr: Box::new(expr),
-                                }
-                            } else {
-                                MirScalarExpr::CallBinary {
-                                    func: expr::BinaryFunc::Eq,
-                                    expr1: Box::new(expr),
-                                    expr2: Box::new(literal.clone()),
-                                }
+                        .filter(|expr| expr.support().is_empty())
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !runtime_constants.is_empty() {
+                        // Case 2: There is at least one runtime constant the equivalence class
+                        let gen_literal_equality_preds = |expr: MirScalarExpr| {
+                            let mut equality_preds = Vec::new();
+                            for constant in runtime_constants.iter() {
+                                let pred = if constant.is_literal_null() {
+                                    MirScalarExpr::CallUnary {
+                                        func: expr::UnaryFunc::IsNull,
+                                        expr: Box::new(expr.clone()),
+                                    }
+                                } else {
+                                    MirScalarExpr::CallBinary {
+                                        func: expr::BinaryFunc::Eq,
+                                        expr1: Box::new(expr.clone()),
+                                        expr2: Box::new(constant.clone()),
+                                    }
+                                };
+                                equality_preds.push(pred);
                             }
+                            equality_preds
                         };
 
                         // Find all single input expressions in the equivalence
@@ -591,14 +606,28 @@ impl PredicatePushdown {
                             .collect::<Vec<_>>();
 
                         // For every single-input expression `expr`, we can push
-                        // down `expr = literal` and remove `expr` from the
+                        // down `expr = <runtime constant>` and remove `expr` from the
                         // equivalence class.
                         for (expr_pos, input, expr) in single_input_exprs.drain(..).rev() {
-                            push_downs[input].push(gen_literal_equality_pred(expr));
+                            push_downs[input].extend(gen_literal_equality_preds(expr));
                             equivalences[equivalence_pos].remove(expr_pos);
                         }
+
+                        // If none of the expressions in the equivalence depend on input
+                        // columns and equality predicates with them are pushed down,
+                        // we can safely remove them from the equivalence.
+                        // TODO: we could probably push equality predicates among the
+                        // remaining constants to all join inputs to prevent any computation
+                        // from happening until the condition is satisfied.
+                        if equivalences[equivalence_pos]
+                            .iter()
+                            .all(|e| e.support().is_empty())
+                            && push_downs.iter().any(|p| !p.is_empty())
+                        {
+                            equivalences[equivalence_pos].clear();
+                        }
                     } else {
-                        // Case 3: There are no literals in the equivalence
+                        // Case 3: There are no constants in the equivalence
                         // class. Push a predicate for every pair of expressions
                         // in the equivalence that either belong to a single
                         // input or can be localized to a given input through

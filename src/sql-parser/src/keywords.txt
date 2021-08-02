@@ -60,6 +60,7 @@ Committed
 Compression
 Confluent
 Connection
+Consistency
 Constraint
 Copy
 Create
@@ -120,6 +121,7 @@ Hours
 If
 Ilike
 In
+Include
 Index
 Indexes
 Inner

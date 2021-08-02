@@ -30,12 +30,12 @@ macro_rules! coord_bail {
     }
 }
 
-mod cache;
 mod client;
 mod command;
 mod coord;
 mod error;
 mod id_alloc;
+mod persistcfg;
 mod sink_connector;
 mod timestamp;
 mod util;
@@ -43,9 +43,9 @@ mod util;
 pub mod catalog;
 pub mod session;
 
-pub use crate::cache::CacheConfig;
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{Cancelled, ExecuteResponse, StartupMessage, StartupResponse};
 pub use crate::coord::{serve, serve_debug, Config, LoggingConfig};
 pub use crate::error::CoordError;
+pub use crate::persistcfg::{PersistConfig, PersisterWithConfig};
 pub use crate::timestamp::Timestamper;

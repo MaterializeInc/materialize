@@ -23,6 +23,7 @@ use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
 use ore::now::{to_datetime, EpochMillis, NowFn};
+use persist::indexed::runtime::MultiWriteHandle;
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use persist::error::Error as PersistError;
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -51,6 +53,7 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
+use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
 use crate::session::Session;
 
 mod builtin_table_updates;
@@ -98,7 +101,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 #[derive(Debug, Clone)]
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
-    by_id: BTreeMap<GlobalId, CatalogEntry>,
+    by_id: CatalogEntryMap,
     by_oid: HashMap<u32, GlobalId>,
     indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
@@ -107,6 +110,99 @@ pub struct Catalog {
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     config: sql::catalog::CatalogConfig,
+    /// Handle to persistence runtime and feature configuration.
+    persist: PersisterWithConfig,
+}
+
+// A newtype wrapper for the by_id map that makes it easier to reason about
+// maintenance of the persist_multi_details invariant (which is a cached value
+// derived from by_id, updated when by_id is updated).
+//
+// This intentionally impls Deref to make it transparently behave like the
+// BTreeMap for reads, but not DerefMut, so we have control of the mutation
+// paths.
+#[derive(Debug, Clone)]
+struct CatalogEntryMap {
+    by_id: BTreeMap<GlobalId, CatalogEntry>,
+    /// Handle allowing operations on multiple persisted streams, either for
+    /// atomicity (writing a user transaction over multiple tables) or
+    /// efficiency (advancing the timestamp of all user tables in bulk).
+    ///
+    /// Invariant: This contains the same ids and handles as the set of tables
+    /// currently being persisted (i.e it matches the output of
+    /// self.generate_persist_multi_details() and is updated whenever the set of
+    /// persisted tables changes).
+    persist_multi_details: Option<PersistMultiDetails>,
+}
+
+impl std::ops::Deref for CatalogEntryMap {
+    type Target = BTreeMap<GlobalId, CatalogEntry>;
+    fn deref(&self) -> &Self::Target {
+        &self.by_id
+    }
+}
+
+impl CatalogEntryMap {
+    pub fn new(by_id: BTreeMap<GlobalId, CatalogEntry>) -> Self {
+        let mut ret = CatalogEntryMap {
+            by_id,
+            persist_multi_details: None,
+        };
+        ret.persist_multi_details = ret.generate_persist_multi_details();
+        ret
+    }
+
+    pub fn get_mut(&mut self, key: &GlobalId) -> Option<&mut CatalogEntry> {
+        // NB: Unfortunately, there's no way for this to regenerate
+        // self.persist_multi_details after the mutation is finished. However,
+        // as of when this was written, none of the callsites used this to
+        // change whether the entry is persisted, so we should be fine.
+        self.by_id.get_mut(key)
+    }
+
+    pub fn insert(&mut self, key: GlobalId, value: CatalogEntry) -> Option<CatalogEntry> {
+        let ret = self.by_id.insert(key, value);
+        self.persist_multi_details = self.generate_persist_multi_details();
+        ret
+    }
+
+    pub fn remove(&mut self, key: &GlobalId) -> Option<CatalogEntry> {
+        let ret = self.by_id.remove(key);
+        self.persist_multi_details = self.generate_persist_multi_details();
+        ret
+    }
+
+    fn generate_persist_multi_details(&self) -> Option<PersistMultiDetails> {
+        let mut all_table_ids = Vec::new();
+        let mut handles = Vec::new();
+        for (_, entry) in self.by_id.iter() {
+            match entry.item() {
+                CatalogItem::Table(Table {
+                    persist: Some(persist),
+                    ..
+                }) => {
+                    all_table_ids.push(persist.write_handle.stream_id());
+                    handles.push(&persist.write_handle);
+                }
+                _ => {}
+            }
+        }
+        MultiWriteHandle::new(&handles)
+            .ok()
+            .map(|write_handle| PersistMultiDetails {
+                all_table_ids,
+                write_handle,
+            })
+    }
+
+    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+        // Verify the persist_multi_details invariant.
+        debug_assert_eq!(
+            &self.persist_multi_details,
+            &self.generate_persist_multi_details()
+        );
+        self.persist_multi_details.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -179,6 +275,7 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    pub persist: Option<PersistDetails>,
 }
 
 impl Table {
@@ -493,7 +590,7 @@ impl Catalog {
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
-            by_id: BTreeMap::new(),
+            by_id: CatalogEntryMap::new(BTreeMap::new()),
             by_oid: HashMap::new(),
             indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
@@ -509,12 +606,12 @@ impl Catalog {
                 safe_mode: config.safe_mode,
                 cluster_id,
                 session_id: Uuid::new_v4(),
-                cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
                 num_workers: config.num_workers,
                 timestamp_frequency: config.timestamp_frequency,
                 now: config.now,
             },
+            persist: config.persist.clone(),
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
@@ -596,9 +693,10 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local(
-                                Timeline::EpochMilliseconds,
-                            ),
+                            connector: dataflow_types::SourceConnector::Local {
+                                timeline: Timeline::EpochMilliseconds,
+                                persisted_name: None,
+                            },
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
@@ -642,6 +740,11 @@ impl Catalog {
                         &index_columns,
                     );
                     let oid = catalog.allocate_oid()?;
+                    let persist = if table.persistent {
+                        catalog.persist_details(table.id)?
+                    } else {
+                        None
+                    };
                     catalog.insert_item(
                         table.id,
                         oid,
@@ -652,6 +755,7 @@ impl Catalog {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
+                            persist,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -678,7 +782,7 @@ impl Catalog {
 
                 Builtin::View(view) if config.enable_logging || !view.needs_logs => {
                     let item = catalog
-                        .parse_item(view.sql.into(), None)
+                        .parse_item(view.id, view.sql.into(), None)
                         .unwrap_or_else(|e| {
                             panic!(
                                 "internal error: failed to load bootstrap view:\n\
@@ -789,7 +893,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match c.deserialize_item(def) {
+            let item = match c.deserialize_item(id, def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -820,11 +924,11 @@ impl Catalog {
             enable_logging: true,
             experimental_mode: None,
             safe_mode: false,
-            cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
             num_workers: 0,
             timestamp_frequency: Duration::from_secs(1),
             now,
+            persist: PersistConfig::disabled().init()?,
         })?;
         Ok(catalog)
     }
@@ -1769,21 +1873,23 @@ impl Catalog {
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
 
-    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
+    fn deserialize_item(&self, id: GlobalId, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env: _,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(create_sql, Some(&PlanContext::zero()))
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
     }
 
     fn parse_item(
         &self,
+        id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let persist = self.persist_details(id)?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
@@ -1793,9 +1899,10 @@ impl Catalog {
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
+                persist,
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
-                let mut optimizer = Optimizer::default();
+                let mut optimizer = Optimizer::for_view();
                 let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
@@ -1809,7 +1916,7 @@ impl Catalog {
             Plan::CreateView(CreateViewPlan {
                 view, depends_on, ..
             }) => {
-                let mut optimizer = Optimizer::default();
+                let mut optimizer = Optimizer::for_view();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -1954,7 +2061,7 @@ impl Catalog {
                     ExternalSourceConnector::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local(_) => Volatile,
+                SourceConnector::Local { .. } => Volatile,
             },
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one
@@ -1971,6 +2078,7 @@ impl Catalog {
                     }
                 })
             }
+            // TODO: Persisted tables should be Nonvolatile.
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
@@ -2029,6 +2137,14 @@ impl Catalog {
             }
         }
         relations.into_iter().collect()
+    }
+
+    pub fn persist_details(&self, id: GlobalId) -> Result<Option<PersistDetails>, PersistError> {
+        self.persist.details(id)
+    }
+
+    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+        self.by_id.persist_multi_details()
     }
 }
 
@@ -2190,11 +2306,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     // qualified object name to refer to type.
                     self.get_item_by_oid(&pgrepr_type.oid()).name().to_string()
                 };
-                if let ScalarType::Decimal(p, s) = typ {
-                    format!("{}({},{})", res, p, s)
-                } else {
-                    res
-                }
+                res
             }
         }
     }

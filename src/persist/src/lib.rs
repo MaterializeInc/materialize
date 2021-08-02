@@ -16,25 +16,26 @@
     clippy::cast_sign_loss
 )]
 
+use std::fmt;
+
+use abomonation::Abomonation;
+
 pub mod error;
 pub mod file;
 pub mod indexed;
 pub mod mem;
+#[cfg(test)]
+pub mod nemesis;
 pub mod operators;
-pub mod persister;
 pub mod storage;
+pub mod unreliable;
 
 // TODO
-// - Should we hard-code the Key, Val, Time, Diff types everywhere or introduce
-//   them as type parameters? Materialize will only be using one combination of
-//   them (two with `()` vals?) but the generality might make things easier to
-//   read. Of course, it also might make things harder to read.
 // - This method of getting the metadata handle ends up being pretty clunky in
 //   practice. Maybe instead the user should pass in a mutable reference to a
 //   `Meta` they've constructed like `probe_with`?
 // - Error handling. Right now, there are a bunch of `expect`s and this likely
 //   needs to hook into the error streams that Materialize hands around.
-// - What's our story with poisoned mutexes?
 // - Backward compatibility of persisted data, particularly the encoded keys and
 //   values.
 // - Restarting with a different number of workers.
@@ -56,16 +57,8 @@ pub mod storage;
 // - Failure while draining from buffer into future.
 // - Equality edge cases around all the various timestamp/frontier checks.
 
-/// An exclusivity token needed to construct persistence [operators].
+/// A type usable as a persisted key or value.
 ///
-/// Intentionally not Clone since it's an exclusivity token.
-pub struct Token<W, M> {
-    write: W,
-    meta: M,
-}
-
-impl<W, M> Token<W, M> {
-    fn into_inner(self) -> (W, M) {
-        (self.write, self.meta)
-    }
-}
+/// TODO: Replace Abomonation with something like an Encode+Decode trait.
+pub trait Data: Clone + Abomonation + fmt::Debug + Ord {}
+impl<T: Clone + Abomonation + fmt::Debug + Ord> Data for T {}

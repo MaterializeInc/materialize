@@ -17,7 +17,6 @@ pub const FUNC_CONCAT_AGG_OID: u32 = 16_387;
 pub const FUNC_CSV_EXTRACT_OID: u32 = 16_388;
 pub const FUNC_CURRENT_TIMESTAMP_OID: u32 = 16_389;
 pub const FUNC_FLOOR_F32_OID: u32 = 16_390;
-pub const FUNC_INTERNAL_READ_CACHED_DATA_OID: u32 = 16_391;
 pub const FUNC_LIST_APPEND_OID: u32 = 16_392;
 pub const FUNC_LIST_CAT_OID: u32 = 16_393;
 pub const FUNC_LIST_LENGTH_MAX_OID: u32 = 16_394;
@@ -63,9 +62,10 @@ pub const FUNC_MZ_SLEEP_OID: u32 = 16_434;
 pub const FUNC_MZ_SESSION_ID_OID: u32 = 16_435;
 pub const FUNC_MZ_UPTIME_OID: u32 = 16_436;
 pub const FUNC_MZ_WORKERS_OID: u32 = 16_437;
-pub const TYPE_APD_OID: u32 = 16_438;
+pub const __DEPRECATED_TYPE_APD_OID: u32 = 16_438;
 pub const FUNC_LIST_EQ_OID: u32 = 16_439;
 pub const FUNC_MZ_ROW_SIZE: u32 = 16_440;
-pub const FUNC_MAX_APD_OID: u32 = 16_441;
-pub const FUNC_MIN_APD_OID: u32 = 16_442;
-// next ID: 16_443
+pub const FUNC_MAX_NUMERIC_OID: u32 = 16_441;
+pub const FUNC_MIN_NUMERIC_OID: u32 = 16_442;
+pub const FUNC_MZ_AVG_PROMOTION_I16_OID: u32 = 16_443;
+// next ID: 16_444

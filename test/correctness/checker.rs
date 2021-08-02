@@ -33,11 +33,9 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 static MAX_BACKOFF: Duration = Duration::from_secs(2);
 
 fn main() -> Result<(), Error> {
-    LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
+    LogBuilder::from_env(Env::new().filter_or("MZ_LOG_FILTER", "info"))
         .target(Target::Stdout)
         .init();
-
-    mz_process_collector::register_default_process_collector()?;
 
     let args: Args = ore::cli::parse_args();
     let config = args::load_config(args.config_file.as_deref(), args.checks.as_deref())?;

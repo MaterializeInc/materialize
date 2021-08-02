@@ -25,7 +25,6 @@ use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
-use tokio::sync::mpsc;
 use url::Url;
 use uuid::Uuid;
 
@@ -34,7 +33,7 @@ use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, P
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
-use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType, Timestamp};
+use repr::{ColumnName, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -55,25 +54,38 @@ impl PeekResponse {
     }
 }
 
+/// Various responses that can be communicated about the progress of a TAIL command.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TailResponse {
+    /// Rows that should be returned in order to the client.
+    Rows(Vec<Row>),
+    /// Sent once the stream is complete. Indicates the end.
+    Complete,
+    /// The TAIL dataflow was dropped before completing. Indicates the end.
+    Dropped,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {
     pub row: Row,
     pub timestamp: u64,
-    pub diff: isize,
+    pub diff: Diff,
 }
 
-/// A description of view or index to be added to the local context
-/// for a dataflow
+/// A commonly used name for dataflows contain MIR expressions.
+pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr>;
+
+/// An association of a global identifier to an expression.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct BuildDesc {
+pub struct BuildDesc<View> {
     pub id: GlobalId,
-    pub relation_expr: OptimizedMirRelationExpr,
+    pub view: View,
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Default)]
-pub struct DataflowDesc {
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DataflowDescription<View> {
     /// Sources made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, (SourceDesc, GlobalId)>,
     /// Indexes made available to the dataflow.
@@ -81,7 +93,7 @@ pub struct DataflowDesc {
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
     /// dependencies of later objects on prior identifiers.
-    pub objects_to_build: Vec<BuildDesc>,
+    pub objects_to_build: Vec<BuildDesc<View>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view)
     pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
@@ -100,12 +112,18 @@ pub struct DataflowDesc {
     pub debug_name: String,
 }
 
-impl DataflowDesc {
+impl DataflowDescription<OptimizedMirRelationExpr> {
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
-        DataflowDesc {
+        Self {
+            source_imports: Default::default(),
+            index_imports: Default::default(),
+            objects_to_build: Vec::new(),
+            index_exports: Default::default(),
+            sink_exports: Default::default(),
+            dependent_objects: Default::default(),
+            as_of: Default::default(),
             debug_name: name,
-            ..Default::default()
         }
     }
 
@@ -141,14 +159,11 @@ impl DataflowDesc {
     }
 
     /// Binds to `id` the relation expression `expr`.
-    pub fn insert_view(&mut self, id: GlobalId, expr: OptimizedMirRelationExpr) {
-        for get_id in expr.global_uses() {
+    pub fn insert_view(&mut self, id: GlobalId, view: OptimizedMirRelationExpr) {
+        for get_id in view.global_uses() {
             self.record_depends_on(id, get_id);
         }
-        self.objects_to_build.push(BuildDesc {
-            id,
-            relation_expr: expr,
-        });
+        self.objects_to_build.push(BuildDesc { id, view });
     }
 
     /// Exports as `id` an index on `on_id`.
@@ -179,18 +194,14 @@ impl DataflowDesc {
         from_id: GlobalId,
         from_desc: RelationDesc,
         connector: SinkConnector,
-        envelope: SinkEnvelope,
+        envelope: Option<SinkEnvelope>,
         as_of: SinkAsOf,
     ) {
-        let key_desc = connector.get_key_desc().cloned();
-        let value_desc = connector.get_value_desc().clone();
         self.sink_exports.push((
             id,
             SinkDesc {
                 from: from_id,
                 from_desc,
-                key_desc,
-                value_desc,
                 connector,
                 envelope,
                 as_of,
@@ -242,6 +253,28 @@ impl DataflowDesc {
         self.as_of = Some(as_of);
     }
 
+    /// The number of columns associated with an identifier in the dataflow.
+    pub fn arity_of(&self, id: &GlobalId) -> usize {
+        for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
+            if source_id == id {
+                return desc.bare_desc.arity();
+            }
+        }
+        for (_index_id, (desc, typ)) in self.index_imports.iter() {
+            if &desc.on_id == id {
+                return typ.arity();
+            }
+        }
+        for desc in self.objects_to_build.iter() {
+            if &desc.id == id {
+                return desc.view.arity();
+            }
+        }
+        panic!("GlobalId {} not found in DataflowDesc", id);
+    }
+}
+
+impl<View> DataflowDescription<View> {
     /// Collects all indexes required to construct all exports.
     pub fn get_all_imports(&self) -> HashSet<GlobalId> {
         let mut result = HashSet::new();
@@ -270,26 +303,6 @@ impl DataflowDesc {
         }
         result.retain(|id| self.dependent_objects.get(id).is_none());
         result
-    }
-
-    /// The number of columns associated with an identifier in the dataflow.
-    pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
-            if source_id == id {
-                return desc.bare_desc.arity();
-            }
-        }
-        for (_index_id, (desc, typ)) in self.index_imports.iter() {
-            if &desc.on_id == id {
-                return typ.arity();
-            }
-        }
-        for desc in self.objects_to_build.iter() {
-            if &desc.id == id {
-                return desc.relation_expr.arity();
-            }
-        }
-        panic!("GlobalId {} not found in DataflowDesc", id);
     }
 }
 
@@ -344,52 +357,108 @@ impl SourceDataEncoding {
         }
     }
 
-    pub fn desc(&self, envelope: &SourceEnvelope) -> Result<RelationDesc, anyhow::Error> {
+    pub fn desc(
+        &self,
+        envelope: &SourceEnvelope,
+        key_envelope: &KeyEnvelope,
+    ) -> Result<RelationDesc, anyhow::Error> {
         match self {
             SourceDataEncoding::Single(enc) => enc.desc(envelope, RelationDesc::empty(), None),
-            SourceDataEncoding::KeyValue { key, value } => {
-                // Add columns for the key, if using the upsert envelope.
-                // TODO: this will be removed with upsert value rewriting
-                let desc = if matches!(envelope, SourceEnvelope::Upsert) {
-                    let key_desc = {
-                        let key_desc =
-                            key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
-
-                        // It doesn't make sense for the key to have keys.
-                        assert!(key_desc.typ().keys.is_empty());
-
-                        // Add the key columns as a key.
-                        let key_indices = (0..key_desc.arity()).collect();
-                        let key_desc = key_desc.with_key(key_indices);
-
-                        // Rename key columns to "keyN" if the encoding is not Avro.
-                        match key {
-                            DataEncoding::Avro(_) => key_desc,
-                            _ => {
-                                let names =
-                                    (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
-                                key_desc.with_names(names)
-                            }
-                        }
-                    };
-                    let key_schema = if let DataEncoding::Avro(AvroEncoding { schema, .. }) = key {
-                        Some(&**schema)
-                    } else {
-                        None
-                    };
-                    value.desc(envelope, key_desc, key_schema)
-                } else {
-                    value.desc(envelope, RelationDesc::empty(), None)
-                };
-                desc
-            }
+            SourceDataEncoding::KeyValue { key, value } => match key_envelope {
+                KeyEnvelope::None => value.desc(envelope, RelationDesc::empty(), None),
+                KeyEnvelope::Flattened => insert_flattened_key(key, value, envelope, false),
+                KeyEnvelope::LegacyUpsert => insert_flattened_key(key, value, envelope, true),
+                KeyEnvelope::Named(key_name) => insert_named_key(key_name, key, value, envelope),
+            },
         }
     }
+}
+
+/// modify the desc to include the key using the appropriate name
+fn insert_named_key(
+    key_name: &str,
+    key: &DataEncoding,
+    value: &DataEncoding,
+    envelope: &SourceEnvelope,
+) -> Result<RelationDesc, anyhow::Error> {
+    let key_desc = {
+        let key_desc = key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
+
+        // It doesn't make sense for the key to have keys.
+        assert!(key_desc.typ().keys.is_empty());
+
+        // if the key has multiple objects, nest them as a record inside of a single name
+        if key_desc.arity() > 1 {
+            let key_type = key_desc.typ();
+            let key_as_record = RelationType::new(vec![ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::Record {
+                    fields: key_desc
+                        .iter_names()
+                        .enumerate()
+                        .map(|(i, name)| {
+                            name.map(Clone::clone)
+                                .unwrap_or_else(|| format!("key{}", i).into())
+                        })
+                        .zip(key_type.column_types.iter())
+                        .map(|(name, typ)| (name, typ.clone()))
+                        .collect(),
+                    custom_oid: None,
+                    custom_name: None,
+                },
+            }])
+            // The entire record is a key
+            .with_key(vec![0]);
+
+            RelationDesc::new(key_as_record, vec![Some(key_name.to_string())])
+        } else {
+            key_desc.with_names(vec![Some(key_name.to_string())])
+        }
+    };
+
+    value.desc(envelope, key_desc, None)
+}
+
+fn insert_flattened_key(
+    key: &DataEncoding,
+    value: &DataEncoding,
+    envelope: &SourceEnvelope,
+    is_legacy_upsert: bool,
+) -> Result<RelationDesc, anyhow::Error> {
+    let key_desc = {
+        let key_desc = key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
+
+        // It doesn't make sense for the key to have keys.
+        assert!(key_desc.typ().keys.is_empty());
+
+        // Add the key columns as a key.
+        let key_indices = (0..key_desc.arity()).collect();
+        let key_desc = key_desc.with_key(key_indices);
+
+        if let DataEncoding::Avro(_) = key {
+            key_desc
+        } else if is_legacy_upsert {
+            // Rename key columns to "keyN" if the encoding is not Avro and we're in unadorned
+            // upsert mode
+            let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
+            key_desc.with_names(names)
+        } else {
+            key_desc
+        }
+    };
+    let key_schema = if let DataEncoding::Avro(AvroEncoding { schema, .. }) = key {
+        Some(&**schema)
+    } else {
+        None
+    };
+    value.desc(envelope, key_desc, key_schema)
 }
 
 impl DataEncoding {
     /// Computes the [`RelationDesc`] for the relation specified by this
     /// data encoding and envelope.
+    ///
+    /// If a key desc is provided it will be prepended to the returned desc
     fn desc(
         &self,
         envelope: &SourceEnvelope,
@@ -559,14 +628,12 @@ pub struct SourceDesc {
 }
 
 /// A sink for updates to a relational collection.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SinkDesc {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
-    pub value_desc: RelationDesc,
-    pub key_desc: Option<RelationDesc>,
     pub connector: SinkConnector,
-    pub envelope: SinkEnvelope,
+    pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf,
 }
 
@@ -574,7 +641,6 @@ pub struct SinkDesc {
 pub enum SinkEnvelope {
     Debezium,
     Upsert,
-    Tail { emit_progress: bool },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -657,11 +723,15 @@ pub enum SourceConnector {
         connector: ExternalSourceConnector,
         encoding: SourceDataEncoding,
         envelope: SourceEnvelope,
+        key_envelope: KeyEnvelope,
         consistency: Consistency,
         ts_frequency: Duration,
         timeline: Timeline,
     },
-    Local(Timeline),
+    Local {
+        timeline: Timeline,
+        persisted_name: Option<String>,
+    },
 }
 
 impl SourceConnector {
@@ -690,7 +760,7 @@ impl SourceConnector {
     pub fn name(&self) -> &'static str {
         match self {
             SourceConnector::External { connector, .. } => connector.name(),
-            SourceConnector::Local(_) => "local",
+            SourceConnector::Local { .. } => "local",
         }
     }
 
@@ -707,27 +777,11 @@ impl SourceConnector {
         }
     }
 
-    pub fn caching_enabled(&self) -> bool {
-        match self {
-            SourceConnector::External { connector, .. } => connector.caching_enabled(),
-            SourceConnector::Local(_) => false,
-        }
-    }
-
     pub fn timeline(&self) -> Timeline {
         match self {
             SourceConnector::External { timeline, .. } => timeline.clone(),
-            SourceConnector::Local(timeline) => timeline.clone(),
+            SourceConnector::Local { timeline, .. } => timeline.clone(),
         }
-    }
-}
-
-pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
-    match e {
-        ExternalSourceConnector::Kafka(KafkaSourceConnector { cached_files, .. }) => {
-            cached_files.clone().unwrap_or_else(Vec::new)
-        }
-        _ => vec![],
     }
 }
 
@@ -794,14 +848,6 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::S3(_) => None,
             ExternalSourceConnector::Postgres(_) => None,
             ExternalSourceConnector::PubNub(_) => None,
-        }
-    }
-
-    /// Returns whether or not source caching is enabled for this connector
-    pub fn caching_enabled(&self) -> bool {
-        match self {
-            ExternalSourceConnector::Kafka(k) => k.enable_caching,
-            _ => false,
         }
     }
 
@@ -897,11 +943,28 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    pub enable_caching: bool,
+    pub key_envelope: KeyEnvelope,
     pub cluster_id: Uuid,
-    // This field gets set after the initial construction of this struct, so this is None if it has
-    // not yet been set.
-    pub cached_files: Option<Vec<PathBuf>>,
+}
+
+/// Whether and how to include the key portion of a stream in dataflows
+///
+/// Currently only Kafka streams have Key parts of messages, but there do exist other streaming
+/// systems which we do not yet integrate with that have a similar concept.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KeyEnvelope {
+    /// Do not include the key in dataflows.
+    None,
+    /// For composite key encodings, pull the fields from the encoding into columns.
+    Flattened,
+    /// Upsert is identical to Flattened but differs for non-avro sources, for which key names are overwritten.
+    LegacyUpsert,
+    /// Always use the given name for the key.
+    ///
+    /// * For a single-field key, this means that the column will get the given name.
+    /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
+    ///   that Record will get the given name.
+    Named(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -950,7 +1013,7 @@ pub enum S3KeySource {
     SqsNotifications { queue: String },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
     Tail(TailSinkConnector),
@@ -975,8 +1038,7 @@ pub struct KafkaSinkConnector {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,
-    pub key_schema_id: Option<i32>,
-    pub value_schema_id: i32,
+    pub published_schema_info: Option<PublishedSchemaInfo>,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
     pub exactly_once: bool,
     // Source dependencies for exactly-once sinks.
@@ -1003,46 +1065,41 @@ impl SinkConnector {
         }
     }
 
-    pub fn get_key_desc(&self) -> Option<&RelationDesc> {
+    /// Returns `true` if this sink requires sources to block timestamp binding
+    /// compaction until all sinks that depend on a given source have finished
+    /// writing out that timestamp.
+    ///
+    /// To achieve that, each sink will hold a `AntichainToken` for all of
+    /// the sources it depends on, and will advance all of its source
+    /// dependencies' compaction frontiers as it completes writes.
+    ///
+    /// Sinks that do need to hold back compaction need to insert an
+    /// [`Antichain`] into `RenderState.sink_write_frontiers` that they update
+    /// in order to advance the frontier that holds back upstream compaction
+    /// of timestamp bindings.
+    ///
+    /// See also [`transitive_source_dependencies`](SinkConnector::transitive_source_dependencies).
+    pub fn requires_source_compaction_holdback(&self) -> bool {
         match self {
-            SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
+            SinkConnector::Kafka(k) => k.exactly_once,
+            SinkConnector::AvroOcf(_) => false,
+            SinkConnector::Tail(_) => false,
         }
     }
 
-    pub fn get_key_indices(&self) -> Option<&[usize]> {
+    /// Returns the [`GlobalIds`](GlobalId) of the transitive sources of this
+    /// sink.
+    pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
         match self {
-            SinkConnector::Kafka(k) => k
-                .key_desc_and_indices
-                .as_ref()
-                .map(|(_desc, indices)| indices.as_slice()),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
-        }
-    }
-
-    pub fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        match self {
-            SinkConnector::Kafka(k) => k.relation_key_indices.as_deref(),
-            SinkConnector::Tail(_) => None,
-            SinkConnector::AvroOcf(_) => None,
-        }
-    }
-
-    pub fn get_value_desc(&self) -> &RelationDesc {
-        match self {
-            SinkConnector::Kafka(k) => &k.value_desc,
-            SinkConnector::Tail(t) => &t.value_desc,
-            SinkConnector::AvroOcf(a) => &a.value_desc,
+            SinkConnector::Kafka(k) => &k.transitive_source_dependencies,
+            SinkConnector::AvroOcf(_) => &[],
+            SinkConnector::Tail(_) => &[],
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TailSinkConnector {
-    #[serde(skip)]
-    pub tx: mpsc::UnboundedSender<Vec<Row>>,
     pub emit_progress: bool,
     pub object_columns: usize,
     pub value_desc: RelationDesc,
@@ -1064,9 +1121,7 @@ pub struct AvroOcfSinkConnectorBuilder {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectorBuilder {
     pub broker_addrs: KafkaAddrs,
-    pub schema_registry_url: Url,
-    pub key_schema: Option<String>,
-    pub value_schema: String,
+    pub format: KafkaSinkFormat,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
     /// The user-specified key for the sink.
@@ -1080,10 +1135,37 @@ pub struct KafkaSinkConnectorBuilder {
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
-    pub ccsr_config: ccsr::ClientConfig,
-    pub exactly_once: bool,
+    // Forces the sink to always write to the same topic across restarts instead
+    // of picking a new topic each time.
+    pub reuse_topic: bool,
     // Source dependencies for exactly-once sinks.
     pub transitive_source_dependencies: Vec<GlobalId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaSinkFormat {
+    Avro {
+        schema_registry_url: Url,
+        key_schema: Option<String>,
+        value_schema: String,
+        ccsr_config: ccsr::ClientConfig,
+    },
+    Json,
+}
+
+impl KafkaSinkFormat {
+    pub fn ccsr_config(&self) -> Option<&ccsr::ClientConfig> {
+        match self {
+            KafkaSinkFormat::Avro { ccsr_config, .. } => Some(&ccsr_config),
+            KafkaSinkFormat::Json => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublishedSchemaInfo {
+    pub key_schema_id: Option<i32>,
+    pub value_schema_id: i32,
 }
 
 /// An index storing processed updates so they can be queried

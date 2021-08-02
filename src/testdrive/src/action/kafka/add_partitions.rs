@@ -11,6 +11,7 @@ use std::cmp;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use ore::result::ResultExt;
 use rdkafka::admin::NewPartitions;
 use rdkafka::producer::Producer;
 
@@ -71,7 +72,7 @@ impl Action for AddPartitionsAction {
             .kafka_admin
             .create_partitions(&[partitions], &state.kafka_admin_opts)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err_to_string()?;
         if res.len() != 1 {
             return Err(format!(
                 "kafka partition addition returned {} results, but exactly one result was expected",
@@ -92,7 +93,7 @@ impl Action for AddPartitionsAction {
                         Some(&topic_name),
                         Some(cmp::max(state.default_timeout, Duration::from_secs(1))),
                     )
-                    .map_err(|e| e.to_string())?;
+                    .map_err_to_string()?;
                 if metadata.topics().len() != 1 {
                     return Err("metadata fetch returned no topics".to_string());
                 }

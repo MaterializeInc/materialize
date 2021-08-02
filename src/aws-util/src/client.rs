@@ -24,10 +24,10 @@ use rusoto_sqs::SqsClient;
 
 use crate::aws::ConnectInfo;
 
-/// Get an [`HttpClient`]  that respects the `http_proxy` environment variables
-pub(crate) fn http() -> Result<HttpClient<http_util::ProxiedConnector>, anyhow::Error> {
+/// Gets an [`HttpClient`] that respects the system proxy configuration.
+pub(crate) fn http() -> Result<HttpClient<http_util::hyper::Connector>, anyhow::Error> {
     Ok(HttpClient::from_connector(
-        http_util::connector().map_err(|e| anyhow!(e))?,
+        http_util::hyper::connector().map_err(|e| anyhow!(e))?,
     ))
 }
 
@@ -57,7 +57,7 @@ wrapped in an [`AutoRefreshingProvider`].
 The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 automatically fetching updated credentials if they've expired.
 "]
-pub async fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
+pub fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
     let request_dispatcher = http().context(
         concat!("creating HTTP client for ", $client_name))?;
     let the_client = if let Some(creds) = conn_info.credentials {

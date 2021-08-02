@@ -27,17 +27,15 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use dataflow_types::{DataflowDesc, DataflowError};
+use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
-use repr::{Row, RowArena};
+use repr::{Diff, Row, RowArena};
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-
-pub type Diff = isize;
 
 // Local type definition to avoid the horror in signatures.
 pub type Arrangement<S, V> = Arranged<S, TraceValHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
@@ -89,7 +87,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Creates a new empty Context.
-    pub fn for_dataflow(dataflow: &DataflowDesc, dataflow_id: usize) -> Self {
+    pub fn for_dataflow<Plan>(dataflow: &DataflowDescription<Plan>, dataflow_id: usize) -> Self {
         let as_of_frontier = dataflow
             .as_of
             .clone()
@@ -163,6 +161,30 @@ where
     ),
 }
 
+impl<S: Scope, V: Data, T: Lattice> ArrangementFlavor<S, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Presents `self` as a stream of updates.
+    ///
+    /// This method presents the contents as they are, without further computation.
+    /// For some cases, the [CollectionBundle] provides the same or more specific functions,
+    /// specifically [CollectionBundle::as_collection_core].
+    pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
+        match self {
+            ArrangementFlavor::Local(oks, errs) => (
+                oks.as_collection(|_k, v| v.clone()),
+                errs.as_collection(|k, _v| k.clone()),
+            ),
+            ArrangementFlavor::Trace(_, oks, errs) => (
+                oks.as_collection(|_k, v| v.clone()),
+                errs.as_collection(|k, _v| k.clone()),
+            ),
+        }
+    }
+}
+
 /// A bundle of the various ways a collection can be represented.
 ///
 /// This type maintains the invariant that it does contain at least one valid
@@ -227,21 +249,11 @@ where
         if let Some(collection) = &self.collection {
             collection.clone()
         } else {
-            let arranged = self
-                .arranged
+            self.arranged
                 .values()
                 .next()
-                .expect("Invariant violated: CollectionBundle contains no collection.");
-            match arranged {
-                ArrangementFlavor::Local(oks, errs) => (
-                    oks.as_collection(|_k, v| v.clone()),
-                    errs.as_collection(|k, _v| k.clone()),
-                ),
-                ArrangementFlavor::Trace(_, oks, errs) => (
-                    oks.as_collection(|_k, v| v.clone()),
-                    errs.as_collection(|k, _v| k.clone()),
-                ),
-            }
+                .expect("Invariant violated: CollectionBundle contains no collection.")
+                .as_collection()
         }
     }
 
@@ -371,23 +383,12 @@ where
         })
     }
 
-    /// Look up an arrangemement by the expressions that form the key.
+    /// Look up an arrangement by the expressions that form the key.
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
     pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, V, T>> {
         self.arranged.get(key).map(|x| x.clone())
-    }
-
-    /// Reports the keys for any arrangement which evaluate to a literal under `key_selector`.
-    pub fn constrained_keys<K>(&self, mut key_selector: K) -> Vec<(Vec<MirScalarExpr>, V)>
-    where
-        K: FnMut(&[MirScalarExpr]) -> Option<V>,
-    {
-        self.arranged
-            .keys()
-            .filter_map(|key| key_selector(key).map(|val| (key.clone(), val)))
-            .collect::<Vec<_>>()
     }
 }
 
@@ -443,9 +444,13 @@ where
     ///
     /// This operator is able to apply the logic of `mfp` early, which can substantially
     /// reduce the amount of data produced when `mfp` is non-trivial.
+    ///
+    /// The `key_val` argument, when present, indicates that a specific arrangement should
+    /// be used, and that we can seek to the supplied row.
     pub fn as_collection_core(
         &self,
         mut mfp: MapFilterProject,
+        key_val: Option<(Vec<MirScalarExpr>, Row)>,
     ) -> (
         Collection<S, repr::Row, Diff>,
         Collection<S, DataflowError, Diff>,
@@ -454,12 +459,7 @@ where
             self.as_collection()
         } else {
             mfp.optimize();
-            let mfp2 = mfp.clone();
             let mfp_plan = mfp.into_plan().unwrap();
-            // TODO: Improve key selection heuristic.
-            let key_val = self
-                .constrained_keys(move |exprs| mfp2.literal_constraints(exprs))
-                .pop();
             let (stream, errors) = self.flat_map(key_val, {
                 let mut datums = crate::render::datum_vec::DatumVec::new();
                 move |data, time, diff| {

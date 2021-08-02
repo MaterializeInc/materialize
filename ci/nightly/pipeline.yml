@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+- id: coverage
+  label: Code coverage
+  timeout_in_minutes: 240
+  command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
+
 - id: sqlsmith
   label: SQLsmith fuzzing
   timeout_in_minutes: 240
@@ -42,3 +47,10 @@
     - ./ci/plugins/mzcompose:
         composition: testdrive
         run: testdrive-redpanda
+
+- id: upgrade
+  label: "Upgrade testing"
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: upgrade
+        run: upgrade

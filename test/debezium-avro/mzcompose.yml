@@ -59,7 +59,7 @@ services:
       - bash
     environment:
     - TMPDIR=/share/tmp
-    - MZ_LOG
+    - MZ_LOG_FILTER
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
@@ -76,7 +76,6 @@ services:
       --data-directory=/share/mzdata
       --workers 1
       --experimental
-      --cache-max-pending-records 1
       --timestamp-frequency 100ms
       --disable-telemetry
       --retain-prometheus-metrics 1s
@@ -84,7 +83,7 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG
+    - MZ_LOG_FILTER
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
@@ -95,7 +94,7 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-kafka:5.5.4
     environment:
@@ -115,21 +114,21 @@ services:
       - 5432
     command: postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20
   debezium:
-    image: debezium/connect:1.5
+    image: debezium/connect:1.6
     hostname: debezium
     ports:
       - 8083
     environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      CONFIG_STORAGE_TOPIC: connect_configs
-      OFFSET_STORAGE_TOPIC: connect_offsets
-      STATUS_STORAGE_TOPIC: connect_statuses
-      # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
-      # record the schema
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    - BOOTSTRAP_SERVERS=kafka:9092
+    - CONFIG_STORAGE_TOPIC=connect_configs
+    - OFFSET_STORAGE_TOPIC=connect_offsets
+    - STATUS_STORAGE_TOPIC=connect_statuses
+    # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
+    # record the schema
+    - KEY_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+    - CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
     depends_on: [kafka, schema-registry]
 
 volumes:
