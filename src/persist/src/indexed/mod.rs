@@ -391,7 +391,11 @@ where
 
     /// Atomically moves all writes currently in the buffer into the future.
     fn drain_buf(&mut self) -> Result<(), Error> {
-        let mut buffer_entries = vec![];
+        let mut updates_by_id: BTreeMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = BTreeMap::new();
+        let mut creates_deletes_by_id: BTreeMap<Id, (String, bool)> = BTreeMap::new();
+        let mut seals_by_id: BTreeMap<Id, u64> = BTreeMap::new();
+        let mut sinces_by_id: BTreeMap<Id, u64> = BTreeMap::new();
+
         let desc = self.buf_reader.snapshot(|seqno, buf| {
             if seqno < self.futures_seqno_upper {
                 return Ok(());
@@ -402,20 +406,9 @@ where
             if !remaining.is_empty() {
                 return Err(format!("invalid buffer entry").into());
             }
-            buffer_entries.push((seqno, entry.clone()));
 
-            Ok(())
-        })?;
-
-        let mut start = None;
-        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = HashMap::new();
-        for (seqno, entry) in buffer_entries {
             match entry {
                 BufferEntry::Write(updates) => {
-                    if start.is_none() {
-                        start = Some(seqno);
-                    }
-
                     for (id, updates) in updates.iter() {
                         // iter and cloned instead of append because I don't have a mental
                         // model of what's safe with abomonation.
@@ -427,31 +420,48 @@ where
                             }));
                     }
                 }
-                other => {
-                    if let Some(start_val) = &mut start {
-                        self.drain_updates(&mut updates_by_id, &(*start_val..SeqNo(seqno.0)))?;
-                        start = None;
-                    }
-
-                    self.handle_command(other, seqno)?;
+                BufferEntry::Register(id, name) => {
+                    creates_deletes_by_id.insert(*id, (name.clone(), true));
                 }
+                BufferEntry::Seal(ids, time) => {
+                    for id in ids.iter() {
+                        seals_by_id.insert(*id, *time);
+                    }
+                }
+            }
+
+            Ok(())
+        })?;
+
+        for (id, (name, is_create)) in creates_deletes_by_id.into_iter() {
+            if is_create {
+                debug_assert_eq!(id, self.next_stream_id);
+                self.id_mapping.push((name.to_owned(), id));
+                self.next_stream_id = Id(id.0 + 1);
+                self.futures
+                    .insert(id, BlobFuture::new(BlobFutureMeta::new(id)));
+                self.traces
+                    .insert(id, BlobTrace::new(BlobTraceMeta::new(id)));
+            } else {
+                debug_assert!(id <= self.next_stream_id);
+                if id == self.next_stream_id {
+                    // This stream was created and destroyed
+                    continue;
+                }
+                // TODO Handle deletes here
             }
         }
 
-        if let Some(start) = start {
-            // Need to push down the final set of writes
-            self.drain_updates(&mut updates_by_id, &(start..desc.end))?;
+        for (id, ts_upper) in seals_by_id.into_iter() {
+            let trace = self
+                .traces
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            trace.update_seal(ts_upper)?;
         }
 
-        Ok(())
-    }
-
-    fn drain_updates(
-        &mut self,
-        updates_by_id: &mut HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>>,
-        desc: &Range<SeqNo>,
-    ) -> Result<(), Error> {
-        for (id, updates) in updates_by_id.drain() {
+        for (id, updates) in updates_by_id.into_iter() {
             let future = self
                 .futures
                 .get_mut(&id)
@@ -467,7 +477,7 @@ where
             let mut desc = desc.clone();
             desc.start = new_start;
 
-            self.drain_updates_inner(id, updates, &desc)?;
+            self.drain_buf_inner(id, updates, &desc)?;
         }
         self.futures_seqno_upper = desc.end;
         // TODO: Instead of fully overwriting META each time, this should be
@@ -482,7 +492,7 @@ where
     ///
     /// The caller is responsible for updating META after they've finished
     /// updating futures.
-    fn drain_updates_inner(
+    fn drain_buf_inner(
         &mut self,
         id: Id,
         mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
@@ -595,36 +605,6 @@ where
         // more like a compactable log.
         self.blob.set_meta(self.serialize_meta())?;
         Ok(())
-    }
-
-    /// Handle the receipt of a command (e.g. seal / allow compaction) from the Buffer.
-    fn handle_command(&mut self, command: BufferEntry<K, V>, seqno: SeqNo) -> Result<(), Error> {
-        self.check_invariants()?;
-        match command {
-            BufferEntry::Register(id, name) => {
-                debug_assert_eq!(id, self.next_stream_id);
-                self.id_mapping.push((name.to_owned(), id));
-                self.next_stream_id = Id(id.0 + 1);
-                self.futures
-                    .insert(id, BlobFuture::new(BlobFutureMeta::new(id)));
-                self.traces
-                    .insert(id, BlobTrace::new(BlobTraceMeta::new(id)));
-            }
-            BufferEntry::Seal(ids, ts_upper) => {
-                for id in ids.into_iter() {
-                    let trace = self
-                        .traces
-                        .get_mut(&id)
-                        .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-
-                    trace.update_seal(ts_upper)?;
-                }
-            }
-            BufferEntry::Write(_) => unreachable!(),
-        }
-
-        self.futures_seqno_upper = seqno;
-        self.blob.set_meta(self.serialize_meta())
     }
 }
 
@@ -1345,6 +1325,25 @@ mod tests {
 
         // Can advance compaction frontier to a time that has already been sealed
         i.allow_compaction(id, 2)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_indexed_client() -> Result<(), Box<dyn Error>> {
+        let updates = vec![
+            (("1".to_string(), "".to_string()), 1, 1),
+            (("2".to_string(), "".to_string()), 2, 1),
+        ];
+
+        let mut i = IndexedClient::new(
+            MemBuffer::new("indexed_client"),
+            MemBlob::new("indexed_client"),
+        )?;
+        let id = i.register("0")?;
+        // After a write, all data is in the buffer.
+        i.write_sync(vec![(id, updates.clone())])?;
+        i.seal(vec![id], 2)?;
 
         Ok(())
     }
