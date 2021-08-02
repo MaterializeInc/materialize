@@ -81,6 +81,7 @@ use dataflow_types::DataflowError;
 use dec::OrderedDecimal;
 use expr::{AggregateExpr, AggregateFunc};
 use ore::cast::CastFrom;
+use ore::soft_assert_or_log;
 use repr::adt::numeric::{self, Numeric, NumericAgg};
 use repr::{Datum, DatumList, Row, RowArena};
 
@@ -785,9 +786,11 @@ where
                 // We expect not to have any negative multiplicities, but are not 100% sure it will
                 // never happen so for now just log an error if it does.
                 for (val, cnt) in input.iter() {
-                    if cnt < &0 {
-                        log::error!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
-                    }
+                    soft_assert_or_log!(
+                        *cnt >= 0,
+                        "[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}",
+                        val, cnt,
+                    );
                 }
 
                 for ((reduction_type, row), _) in input.iter() {
@@ -886,9 +889,11 @@ where
 {
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
-    if aggrs.len() <= 1 {
-        log::error!("Unexpectedly computing {} basic aggregations together but we expected to be doing more than one", aggrs.len());
-    }
+    soft_assert_or_log!(
+        aggrs.len() > 1,
+        "Unexpectedly computing {} basic aggregations together but we expected to be doing more than one",
+        aggrs.len(),
+    );
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
         let result = build_basic_aggregate(input.clone(), index, &aggr, false);
@@ -965,9 +970,11 @@ where
             if source.iter().any(|(_val, cnt)| cnt < &0) {
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
-                    if cnt < &0 {
-                        log::error!("[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
-                    }
+                    soft_assert_or_log!(
+                        *cnt >= 0,
+                        "[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?}",
+                        val, cnt,
+                    );
                 }
             } else {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
@@ -1088,10 +1095,12 @@ where
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
                     for (val, cnt) in source.iter() {
-                        if cnt <= &0 {
-                            // XXX: This reports user data, which we perhaps should not do!
-                            log::error!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
-                        }
+                        // XXX: This reports user data, which we perhaps should not do!
+                        soft_assert_or_log!(
+                            *cnt > 0,
+                            "[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}",
+                            key, val, cnt,
+                        );
                     }
                 } else {
                     let mut output = Vec::with_capacity(aggrs.len());
@@ -1622,14 +1631,13 @@ where
                     // operator, when this key is presented but matching aggregates are not found. We will
                     // suppress the output for inputs without net-positive records, which *should* avoid
                     // that panic.
-                    if accum.total == 0 && !accum.inner.is_zero() {
-                        log::error!(
-                            "[customer-data] ReduceAccumulable observed net-zero records \
-                            with non-zero accumulation: {:?}: {:?}",
-                            aggr,
-                            accum,
-                        );
-                    }
+                    soft_assert_or_log!(
+                        accum.total != 0 || accum.inner.is_zero(),
+                        "[customer-data] ReduceAccumulable observed net-zero records \
+                        with non-zero accumulation: {:?}: {:?}",
+                        aggr,
+                        accum,
+                    );
 
                     // The finished value depends on the aggregation function in a variety of ways.
                     // For all aggregates but count, if only null values were
@@ -1739,12 +1747,11 @@ where
 /// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
 fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
     for i in 1..indexes.len() {
-        if indexes[i - 1] >= indexes[i] {
-            log::error!(
-                "convert_indexes_to_skip needs indexes to be strictly increasing. Received: {:?}",
-                indexes,
-            );
-        }
+        soft_assert_or_log!(
+            indexes[i - 1] < indexes[i],
+            "convert_indexes_to_skip needs indexes to be strictly increasing. Received: {:?}",
+            indexes,
+        );
     }
 
     for i in (1..indexes.len()).rev() {
@@ -1825,6 +1832,7 @@ pub mod monoids {
     use serde::{Deserialize, Serialize};
 
     use expr::AggregateFunc;
+    use ore::soft_panic_or_log;
     use repr::{Datum, Row};
 
     /// A monoid containing a single-datum row.
@@ -1867,11 +1875,13 @@ pub mod monoids {
                         lhs.clone_from(&rhs);
                     }
                 }
-                (lhs, rhs) => log::error!(
-                    "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
-                    lhs,
-                    rhs
-                ),
+                (lhs, rhs) => {
+                    soft_panic_or_log!(
+                        "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
+                        lhs,
+                        rhs
+                    );
+                }
             }
         }
 

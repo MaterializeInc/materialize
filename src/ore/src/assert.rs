@@ -14,6 +14,100 @@
 // limitations under the License.
 
 //! Assertion utilities.
+//!
+//! # Soft assertions
+//!
+//! Soft assertions are like debug assertions, but they can be toggled on and
+//! off at runtime in a release build.
+//!
+//! They are useful in two scenarios:
+//!
+//!   * When a failed assertion should result in a log message rather a process
+//!     crash.
+//!
+//!   * When evaluating the condition is too expensive to evaluate in production
+//!     deployments.
+//!
+//! When soft assertions are disabled, the performance cost of each assertion is
+//! one branch on an atomic.
+//!
+//! Ore provides the following macros to make soft assertions:
+//!
+//!   * [`soft_assert`](crate::soft_assert)
+//!   * [`soft_assert_eq`](crate::soft_assert_eq)
+//!   * [`soft_assert_or_log`](crate::soft_assert_or_log)
+//!   * [`soft_panic_or_log`](crate::soft_panic_or_log)
+//!
+//! Due to limitations in Rust, these macros are exported at the crate root.
+
+use std::sync::atomic::AtomicBool;
+
+use crate::env;
+
+/// Whether to enable soft assertions.
+///
+/// This value defaults to `true` when `debug_assertions` are enabled, or to the
+/// value of the `MZ_SOFT_ASSERTIONS` environment variable otherwise.
+// The rules about what you can do in a `ctor` function are somewhat fuzzy,
+// because Rust does not explicitly support constructors. But a scan of the
+// stdlib suggests that reading environment variables is safe enough.
+#[ctor::ctor]
+pub static SOFT_ASSERTIONS: AtomicBool = {
+    let default = cfg!(debug_assertions) || env::is_var_truthy("MZ_SOFT_ASSERTIONS");
+    AtomicBool::new(default)
+};
+
+/// Asserts that a condition is true if soft assertions are enabled.
+///
+/// Soft assertions have a small runtime cost even when disabled. See
+/// [`ore::assert`](crate::assert#Soft-assertions) for details.
+#[macro_export]
+macro_rules! soft_assert {
+    ($cond:expr $(, $($arg:tt)+)?) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            assert!($cond$(, $($arg)+)?);
+        }
+    }}
+}
+
+/// Asserts that two values are equal if soft assertions are enabled.
+///
+/// Soft assertions have a small runtime cost even when disabled. See
+/// [`ore::assert`](crate::assert#Soft-assertions) for details.
+#[macro_export]
+macro_rules! soft_assert_eq {
+    ($cond:expr, $($arg:tt)+) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            assert_eq!($cond, $($arg)+);
+        }
+    }}
+}
+
+/// Asserts that a condition is true if soft assertions are enabled, or logs
+/// an error if soft assertions are disabled and the condition is false.
+#[macro_export]
+macro_rules! soft_assert_or_log {
+    ($cond:expr, $($arg:tt)+) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            assert!($cond, $($arg)+);
+        } else if !$cond {
+            ::log::error!($($arg)+)
+        }
+    }}
+}
+
+/// Panics if soft assertions are enabled, or logs an error if soft
+/// assertions are disabled.
+#[macro_export]
+macro_rules! soft_panic_or_log {
+    ($($arg:tt)+) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            panic!($($arg)+);
+        } else {
+            ::log::error!($($arg)+)
+        }
+    }}
+}
 
 /// Asserts that the left expression contains the right expression.
 ///
