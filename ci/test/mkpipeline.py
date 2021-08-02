@@ -66,8 +66,8 @@ def main() -> int:
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline.
     for step in pipeline["steps"]:
-        if "inputs" in step:
-            del step["inputs"]
+        step.pop("inputs", None)
+        step.pop("exclude_image_dependencies", None)
 
     f = TemporaryFile()
     yaml.dump(pipeline, f, encoding="utf-8")  # type: ignore
@@ -123,6 +123,9 @@ def trim_pipeline(pipeline: Any) -> None:
                 step.step_dependencies.update(d)
             else:
                 raise ValueError(f"unexpected non-str non-list for depends_on: {d}")
+        image_blocklist = set()
+        if "exclude_image_dependencies" in config:
+            image_blocklist.update(config["exclude_image_dependencies"])
         if "plugins" in config:
             for plugin in config["plugins"]:
                 for plugin_name, plugin_config in plugin.items():
@@ -130,8 +133,10 @@ def trim_pipeline(pipeline: Any) -> None:
                         name = plugin_config["composition"]
                         composition = mzcompose.Composition(repo, name)
                         for image in composition.images:
-                            step.image_dependencies.add(images[image.name])
+                            if image not in image_blocklist:
+                                step.image_dependencies.add(images[image.name])
                         step.extra_inputs.add(str(repo.compositions[name]))
+
         steps[step.id] = step
 
     # Find all the steps whose inputs have changed with respect to main.

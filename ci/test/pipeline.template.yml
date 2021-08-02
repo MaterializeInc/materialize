@@ -233,6 +233,19 @@ steps:
           composition: catalog-compat
           run: catalog-compat
 
+  - id: upgrade
+    label: "Upgrade testing"
+    depends_on: build
+    timeout_in_minutes: 60
+    inputs: [test/upgrade]
+    exclude_image_dependencies:
+      - materialized
+      - testdrive
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upgrade
+          run: upgrade
+
   - id: metabase-demo
     label: "metabase-demo"
     depends_on: build
