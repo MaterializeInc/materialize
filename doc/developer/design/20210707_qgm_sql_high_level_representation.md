@@ -30,7 +30,7 @@ and the one proposed in this document, which adds normalization at the SQL level
     * represent the query at a conceptual level, free of syntactic concepts,
     * be a self-contained data structure,
     * be easy to use,
-    * be normalization-friendly.
+    * be normalization-friendly,
     * allow supporting complex features such as recursion in CTEs,
 * Proper support of `LATERAL` joins ([#6875](https://github.com/MaterializeInc/materialize/issues/6875))
 * Support for functional dependency analysis during name resolution.
@@ -314,12 +314,12 @@ materialize=>
 
 When a colum name is resolved against any of the leaf quantifiers in the current context, the resulting column
 reference must be lifted through the projection of all the intermediate boxes until reaching a quantifier
-in the current box (the one referenced in `NameResolution::owner_box` in the current context).
+in the current box (the one referenced in `NameResolutionContext::owner_box` in the current context).
 
 #### Name resolution in LATERAL joins
 
 A lateral join operand must see all quantifiers at its left in all the intermediate joins up to the comma join.
-In the following examples query there is a lateral join operand in the rightmost position of the join tree,
+In the following example query there is a lateral join operand in the rightmost position of the join tree,
 that must see the symbols from the tables in the left-hand side of all the intermediate joins up to the comma-join
 (included).
 
@@ -387,7 +387,7 @@ Note that Boxes 8 and 12 are pass-through boxes created by the prototype every t
 #### Name resolution within subqueries
 
 Expressions within subqueries must see the symbols visible from the context the subquery is in. To support that
-`NameResultionContext` will contain an optional reference to a parent `NameResolutionContext`, that is passed
+`NameResolutionContext` will contain an optional reference to a parent `NameResolutionContext`, that is passed
 down for planning the subquery, so that if a name cannot be resolved against the context of the `FROM` clause of
 the subquery, we go through the chain of parent contexts until we find a symbol that matches in one of them.
 
@@ -617,7 +617,7 @@ applying each of them. The query graph will be dumped as a `dot` graph which, on
 ones in the appendix with examples.
 
 The `dot` graph generator will also be very handy for debugging transformations. Also, for better debuggability
-Jthe rules themselves should not drive the traversal of the graph, but just make explicit the type of traversal
+the rules themselves should not drive the traversal of the graph, but just make explicit the type of traversal
 they require. The traversal of the graph will be driven by some external code, that could be instrumentalized for
 dumping the full graph before and after applying the rule to every node of the graph. That way, by just patching
 one method, we could follow step by step the evolution of a query graph as it goes through the different
@@ -671,7 +671,7 @@ lowering the query graph to a dataflow and `dot` graph generator.
 The second milestone will add full support for joins, including lateral joins, and subqueries, including correlated
 ones.
 
-The follwing milestones will add support for `GROUP BY`, `UNION` and the rest of the SQL constructs currently
+The following milestones will add support for `GROUP BY`, `UNION` and the rest of the SQL constructs currently
 supported.
 
 In parallel, after the second milestone, work could be done on introducing query normalization before lowering,
