@@ -592,7 +592,7 @@ where
             )
         }
         None => {
-            let encoder = JsonEncoder::new(key_desc, value_desc);
+            let encoder = JsonEncoder::new(key_desc, value_desc, connector.consistency.is_some());
             encode_stream(
                 stream,
                 as_of.clone(),

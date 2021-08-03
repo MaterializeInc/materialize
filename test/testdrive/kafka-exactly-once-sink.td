@@ -228,24 +228,93 @@ $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_s
 {"id": "<TIMESTAMP>", "status": "BEGIN", "event_count": null, "data_collections": null}
 {"id": "<TIMESTAMP>", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "rt-binding-consistency-test-output-${testdrive.seed}"}]}}
 
-# Test that we bail out if CONSISTENCY TOPIC or CONSISTENCY FORMAT are provided
-! CREATE SINK compaction_test_sink FROM compaction_test_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
-  CONSISTENCY TOPIC 'fail'
-  WITH (reuse_topic=true) FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
-CONSISTENCY TOPIC and CONSISTENCY FORMAT not yet supported
+# Test the CONSISTENCY TOPIC and CONSISTENCY FORMAT options
 
-! CREATE SINK compaction_test_sink FROM compaction_test_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
-  CONSISTENCY FORMAT JSON
-  WITH (reuse_topic=true) FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
+
+# Can't provide CONSISTENCY FORMAT without a TOPIC
+! CREATE SINK double_avro FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
+  CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (consistency_topic='willfail')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Expected end of statement, found CONSISTENCY
 
-! CREATE SINK compaction_test_sink FROM compaction_test_input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'compaction-test-output-${testdrive.seed}'
-  CONSISTENCY TOPIC 'fail' CONSISTENCY FORMAT JSON
-  WITH (reuse_topic=true) FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
-CONSISTENCY TOPIC and CONSISTENCY FORMAT not yet supported
+# Can't provide CONSISTENCY FORMAT and consistency_topic WITH option
+! CREATE SINK double_avro FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
+    CONSISTENCY TOPIC 'topicname'
+    WITH (consistency_topic='willfail')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Cannot specify consistency_topic and CONSISTENCY options simultaneously
+
+# Can't create sinks with JSON-encoded consistency topics
+! CREATE SINK double_avro FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
+    CONSISTENCY TOPIC 'consistency-double-avro' CONSISTENCY FORMAT JSON
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+CONSISTENCY FORMAT JSON not yet supported
+
+# Providing CONSISTENCY TOPIC without CONSISTENCY FORMAT will default to the sink's FORMAT
+# of the sink, if valid
+> CREATE SINK default_avro FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro'
+    CONSISTENCY TOPIC 'consistency-default-avro'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# Fail to default to JSON
+! CREATE SINK default_avro FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro'
+    CONSISTENCY TOPIC 'consistency-default-avro'
+  FORMAT JSON
+CONSISTENCY FORMAT JSON not yet supported
+
+> CREATE SINK double_avro FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
+    CONSISTENCY TOPIC 'consistency-double-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=true
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
+
+> CREATE SINK json_avro FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro'
+    CONSISTENCY TOPIC 'consistency-json-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT JSON
+
+$ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true key=false
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
+
+! CREATE SINK json_reuse_topic FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
+    WITH (reuse_topic=true)
+  FORMAT JSON
+JSON consistency topic not yet supported
+
+> CREATE SINK json_reuse_topic FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
+    CONSISTENCY TOPIC 'consistency-json-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    WITH (reuse_topic=true)
+  FORMAT JSON
+
+$ kafka-verify format=json sink=materialize.public.json_reuse_topic sort-messages=true key=false
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
+
+# Default consistency format is Avro if consistency_topic is used
+> CREATE SINK default_avro_2 FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro-2'
+    WITH (consistency_topic='default-consistency-avro')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=true
+{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
+
+> CREATE SINK json_avro_upsert_key FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro-upsert-key'
+  KEY (b)
+    CONSISTENCY TOPIC 'consistency-json-avro-upsert-key' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT JSON
+  ENVELOPE UPSERT
+
+$ kafka-verify format=json sink=materialize.public.json_avro_upsert_key key=true
+{"b": 2} {"column1": 1, "b": 2, "column3": 3, "transaction": {"id": "0"}}
