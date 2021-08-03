@@ -15,7 +15,7 @@ use ore::{
     metrics::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec},
 };
 
-use super::{PendingPeek, SequencedCommand};
+use super::{Command, PendingPeek};
 
 #[derive(Clone)]
 pub(super) struct ServerMetrics {
@@ -74,7 +74,7 @@ pub(super) struct WorkerMetrics {
 }
 
 impl WorkerMetrics {
-    pub(super) fn observe_command_queue(&self, commands: &[SequencedCommand]) {
+    pub(super) fn observe_command_queue(&self, commands: &[Command]) {
         self.command_queue.set(commands.len() as i64);
     }
 
@@ -83,7 +83,7 @@ impl WorkerMetrics {
     }
 
     /// Observe that we have executed a command. Must be paired with [`WorkerMetrics::observe_command_finish`]
-    pub(super) fn observe_command(&mut self, command: &SequencedCommand) {
+    pub(super) fn observe_command(&mut self, command: &Command) {
         self.commands_processed.observe(command)
     }
 
@@ -186,31 +186,23 @@ impl CommandsProcessedMetrics {
         }
     }
 
-    fn observe(&mut self, command: &SequencedCommand) {
+    fn observe(&mut self, command: &Command) {
         match command {
-            SequencedCommand::CreateDataflows(..) => self.create_dataflows_int += 1,
-            SequencedCommand::DropSources(..) => self.drop_sources_int += 1,
-            SequencedCommand::DropSinks(..) => self.drop_sinks_int += 1,
-            SequencedCommand::DropIndexes(..) => self.drop_indexes_int += 1,
-            SequencedCommand::Peek { .. } => self.peek_int += 1,
-            SequencedCommand::CancelPeek { .. } => self.cancel_peek_int += 1,
-            SequencedCommand::Insert { .. } => self.insert_int += 1,
-            SequencedCommand::AllowCompaction(..) => self.allow_compaction_int += 1,
-            SequencedCommand::DurabilityFrontierUpdates(..) => {
-                self.durability_frontier_updates_int += 1
-            }
-            SequencedCommand::AddSourceTimestamping { .. } => self.add_source_timestamping_int += 1,
-            SequencedCommand::AdvanceSourceTimestamp { .. } => {
-                self.advance_source_timestamp_int += 1
-            }
-            SequencedCommand::DropSourceTimestamping { .. } => {
-                self.drop_source_timestamping_int += 1
-            }
-            SequencedCommand::EnableLogging(_) => self.enable_logging_int += 1,
-            SequencedCommand::Shutdown { .. } => self.shutdown_int += 1,
-            SequencedCommand::AdvanceAllLocalInputs { .. } => {
-                self.advance_all_local_inputs_int += 1
-            }
+            Command::CreateDataflows(..) => self.create_dataflows_int += 1,
+            Command::DropSources(..) => self.drop_sources_int += 1,
+            Command::DropSinks(..) => self.drop_sinks_int += 1,
+            Command::DropIndexes(..) => self.drop_indexes_int += 1,
+            Command::Peek { .. } => self.peek_int += 1,
+            Command::CancelPeek { .. } => self.cancel_peek_int += 1,
+            Command::Insert { .. } => self.insert_int += 1,
+            Command::AllowCompaction(..) => self.allow_compaction_int += 1,
+            Command::DurabilityFrontierUpdates(..) => self.durability_frontier_updates_int += 1,
+            Command::AddSourceTimestamping { .. } => self.add_source_timestamping_int += 1,
+            Command::AdvanceSourceTimestamp { .. } => self.advance_source_timestamp_int += 1,
+            Command::DropSourceTimestamping { .. } => self.drop_source_timestamping_int += 1,
+            Command::EnableLogging(_) => self.enable_logging_int += 1,
+            Command::Shutdown { .. } => self.shutdown_int += 1,
+            Command::AdvanceAllLocalInputs { .. } => self.advance_all_local_inputs_int += 1,
         }
     }
 

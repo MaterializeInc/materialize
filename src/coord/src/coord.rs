@@ -70,9 +70,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
-use dataflow::{
-    SequencedCommand, TimestampBindingFeedback, WorkerFeedback, WorkerFeedbackWithMeta,
-};
+use dataflow::{TimestampBindingFeedback, WorkerFeedback};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
@@ -131,7 +129,7 @@ mod prometheus;
 #[derive(Debug)]
 pub enum Message {
     Command(Command),
-    Worker(WorkerFeedbackWithMeta),
+    Worker(dataflow::Response),
     AdvanceSourceTimestamp(AdvanceSourceTimestamp),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
@@ -200,7 +198,7 @@ pub struct Config<'a> {
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     worker_guards: WorkerGuards<()>,
-    worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
+    worker_txs: Vec<crossbeam_channel::Sender<dataflow::Command>>,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
@@ -382,7 +380,7 @@ impl Coordinator {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
-                        // `SequencedCommand::EnableLogging`. Just teach the
+                        // `dataflow::Command::EnableLogging`. Just teach the
                         // coordinator of their existence, without creating a
                         // dataflow for the index.
                         //
@@ -492,7 +490,7 @@ impl Coordinator {
         mut self,
         internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         cmd_rx: mpsc::UnboundedReceiver<Command>,
-        feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
+        feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
         _timestamper_thread_handle: JoinOnDropHandle<()>,
         _metric_thread_handle: Option<JoinOnDropHandle<()>>,
     ) {
@@ -565,7 +563,7 @@ impl Coordinator {
                 }
             }
 
-            self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+            self.broadcast(dataflow::Command::AdvanceAllLocalInputs {
                 advance_to: next_ts,
             });
             self.closed_up_to = next_ts;
@@ -574,10 +572,10 @@ impl Coordinator {
 
     fn message_worker(
         &mut self,
-        WorkerFeedbackWithMeta {
+        dataflow::Response {
             worker_id: _,
             message,
-        }: WorkerFeedbackWithMeta,
+        }: dataflow::Response,
     ) {
         match message {
             WorkerFeedback::PeekResponse(conn_id, response) => {
@@ -686,7 +684,7 @@ impl Coordinator {
 
                 // Announce the new frontiers that have been durably persisted.
                 if !durability_updates.is_empty() {
-                    self.broadcast(SequencedCommand::DurabilityFrontierUpdates(
+                    self.broadcast(dataflow::Command::DurabilityFrontierUpdates(
                         durability_updates,
                     ));
                 }
@@ -764,14 +762,14 @@ impl Coordinator {
             .as_ref()
             .map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
         self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
-        self.broadcast(SequencedCommand::Shutdown);
+        self.broadcast(dataflow::Command::Shutdown);
     }
 
     fn message_advance_source_timestamp(
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
-        self.broadcast(SequencedCommand::AdvanceSourceTimestamp { id, update });
+        self.broadcast(dataflow::Command::AdvanceSourceTimestamp { id, update });
     }
 
     fn message_command(&mut self, cmd: Command) {
@@ -1184,7 +1182,7 @@ impl Coordinator {
             .collect();
 
         if !since_updates.is_empty() {
-            self.broadcast(SequencedCommand::AllowCompaction(since_updates));
+            self.broadcast(dataflow::Command::AllowCompaction(since_updates));
         }
     }
 
@@ -1312,7 +1310,7 @@ impl Coordinator {
                 }
             }
             // Allow dataflow to cancel any pending peeks.
-            self.broadcast(SequencedCommand::CancelPeek { conn_id });
+            self.broadcast(dataflow::Command::CancelPeek { conn_id });
 
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
@@ -2297,7 +2295,7 @@ impl Coordinator {
                         // Write all updates, both persistent and volatile.
                         // Persistence takes care of introducing anything it
                         // writes to the dataflow, so we only need a
-                        // SequencedCommand::Insert for the volatile updates.
+                        // Command::Insert for the volatile updates.
                         if !persist_updates.is_empty() {
                             if !volatile_updates.is_empty() {
                                 coord_bail!("transaction had mixed persistent and volatile writes");
@@ -2321,7 +2319,7 @@ impl Coordinator {
                             return Ok(Some(rx));
                         } else {
                             for (id, updates) in volatile_updates {
-                                self.broadcast(SequencedCommand::Insert { id, updates });
+                                self.broadcast(dataflow::Command::Insert { id, updates });
                             }
                         }
                     }
@@ -2563,7 +2561,7 @@ impl Coordinator {
             // Insert the pending peek, and initialize to expect the number of workers.
             self.pending_peeks
                 .insert(session.conn_id(), (rows_tx, self.num_workers()));
-            self.broadcast(SequencedCommand::Peek {
+            self.broadcast(dataflow::Command::Peek {
                 id: index_id,
                 key: literal_row,
                 conn_id: session.conn_id(),
@@ -3090,13 +3088,13 @@ impl Coordinator {
                 self.catalog.delete_timestamp_bindings(id)?;
                 self.sources.remove(&id);
             }
-            self.broadcast(SequencedCommand::DropSources(sources_to_drop));
+            self.broadcast(dataflow::Command::DropSources(sources_to_drop));
         }
         if !sinks_to_drop.is_empty() {
             for id in sinks_to_drop.iter() {
                 self.sink_writes.remove(id);
             }
-            self.broadcast(SequencedCommand::DropSinks(sinks_to_drop));
+            self.broadcast(dataflow::Command::DropSinks(sinks_to_drop));
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop);
@@ -3159,7 +3157,7 @@ impl Coordinator {
                         timestamp,
                     })
                     .collect();
-                self.broadcast(SequencedCommand::Insert { id, updates })
+                self.broadcast(dataflow::Command::Insert { id, updates })
             }
         }
     }
@@ -3170,7 +3168,7 @@ impl Coordinator {
 
     fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            self.broadcast(SequencedCommand::DropSinks(dataflow_names));
+            self.broadcast(dataflow::Command::DropSinks(dataflow_names));
         }
     }
 
@@ -3182,7 +3180,7 @@ impl Coordinator {
             }
         }
         if !trace_keys.is_empty() {
-            self.broadcast(SequencedCommand::DropIndexes(trace_keys))
+            self.broadcast(dataflow::Command::DropIndexes(trace_keys))
         }
     }
 
@@ -3350,10 +3348,10 @@ impl Coordinator {
         }
 
         // Finalize the dataflow by broadcasting its construction to all workers.
-        self.broadcast(SequencedCommand::CreateDataflows(dataflow_plans));
+        self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans));
     }
 
-    fn broadcast(&self, cmd: SequencedCommand) {
+    fn broadcast(&self, cmd: dataflow::Command) {
         for tx in &self.worker_txs {
             tx.send(cmd.clone())
                 .expect("worker command receiver should not drop first")
@@ -3375,7 +3373,7 @@ impl Coordinator {
                     self.ts_tx
                         .send(TimestampMessage::Add(source_id, s.connector.clone()))
                         .expect("Failed to send CREATE Instance notice to timestamper");
-                    self.broadcast(SequencedCommand::AddSourceTimestamping {
+                    self.broadcast(dataflow::Command::AddSourceTimestamping {
                         id: source_id,
                         connector: s.connector.clone(),
                         bindings,
@@ -3386,7 +3384,7 @@ impl Coordinator {
             self.ts_tx
                 .send(TimestampMessage::Drop(source_id))
                 .expect("Failed to send DROP Instance notice to timestamper");
-            self.broadcast(SequencedCommand::DropSourceTimestamping { id: source_id });
+            self.broadcast(dataflow::Command::DropSourceTimestamping { id: source_id });
         }
     }
 
@@ -3609,7 +3607,7 @@ pub async fn serve(
                 pending_tails: HashMap::new(),
             };
             if let Some(config) = &logging {
-                coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
+                coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
                     granularity_ns: config.granularity.as_nanos(),
                     active_logs: BUILTINS
                         .logs()
@@ -3628,7 +3626,7 @@ pub async fn serve(
                 // Explicitly drop the timestamper handle here so we can wait for
                 // the thread to return.
                 drop(timestamper_thread_handle);
-                coord.broadcast(SequencedCommand::Shutdown);
+                coord.broadcast(dataflow::Command::Shutdown);
                 return;
             }
             handle.block_on(coord.serve(
@@ -3661,8 +3659,8 @@ pub fn serve_debug(
 ) -> (
     JoinOnDropHandle<()>,
     Client,
-    tokio::sync::mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
-    tokio::sync::mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
+    tokio::sync::mpsc::UnboundedSender<dataflow::Response>,
+    tokio::sync::mpsc::UnboundedReceiver<dataflow::Response>,
     Arc<Mutex<u64>>,
 ) {
     lazy_static! {

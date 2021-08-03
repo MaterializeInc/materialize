@@ -61,7 +61,7 @@ use coord::{
     session::{EndTransactionAction, Session},
     Client, ExecuteResponse, SessionClient,
 };
-use dataflow::{WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::WorkerFeedback;
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
 use ore::thread::JoinOnDropHandle;
@@ -78,13 +78,13 @@ use timely::progress::change_batch::ChangeBatch;
 // The field order matters a lot here so the various threads/tasks are shut
 // down without ever panicing.
 pub struct CoordTest {
-    coord_feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
+    coord_feedback_tx: mpsc::UnboundedSender<dataflow::Response>,
     client: Option<Client>,
     _handle: JoinOnDropHandle<()>,
-    dataflow_feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
+    dataflow_feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
     // Keep a queue of messages in the order received from dataflow_feedback_rx so
     // we can safely modify or inject things and maintain original message order.
-    queued_feedback: Vec<WorkerFeedbackWithMeta>,
+    queued_feedback: Vec<dataflow::Response>,
     _catalog_file: NamedTempFile,
     temp_dir: TempDir,
     uppers: HashMap<GlobalId, Timestamp>,
@@ -164,7 +164,7 @@ impl CoordTest {
                 let mut requeue = uppers.clone();
                 requeue.retain(|(id, _data)| exclude_uppers.contains(id));
                 if !requeue.is_empty() {
-                    to_queue.push(WorkerFeedbackWithMeta {
+                    to_queue.push(dataflow::Response {
                         worker_id: msg.worker_id,
                         message: WorkerFeedback::FrontierUppers(requeue),
                     });
@@ -367,7 +367,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                         updates.push((id, batch));
                     }
                     ct.coord_feedback_tx
-                        .send(WorkerFeedbackWithMeta {
+                        .send(dataflow::Response {
                             worker_id: 0,
                             message: WorkerFeedback::FrontierUppers(updates),
                         })
