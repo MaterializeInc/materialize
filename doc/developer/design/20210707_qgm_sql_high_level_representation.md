@@ -40,6 +40,7 @@ Existing issues that should be addressed sooner rather than later:
 * [sql: handle aggregates that refer exclusively to outer columns #3720](https://github.com/MaterializeInc/materialize/issues/3720)
 * [sql: make SQL responsible for its equality semantics #7597](https://github.com/MaterializeInc/materialize/pull/7597)
 * [sql: wrong results with outer join due to incorrect name resolution  #7618](https://github.com/MaterializeInc/materialize/issues/7618)
+* [sql: ambiguous column name error reported for equivalent expressions in the selection list](https://github.com/MaterializeInc/materialize/issues/7549)
 
 ## Non-Goals
 
