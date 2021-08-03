@@ -88,7 +88,7 @@ where
         // This has a lot of potential for improvement in the near future.
         match src.connector.clone() {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
-            // via SequencedCommand::Insert commands.
+            // via Command::Insert commands.
             SourceConnector::Local { persisted_name, .. } => {
                 let ((handle, capability), ok_stream, err_collection) = {
                     let ((handle, capability), ok_stream) = scope.new_unordered_input();

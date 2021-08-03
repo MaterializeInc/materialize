@@ -61,7 +61,7 @@ static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum SequencedCommand {
+pub enum Command {
     /// Create a sequence of dataflows.
     ///
     /// Each of the dataflows must contain `as_of` members that are valid
@@ -164,7 +164,7 @@ pub enum SequencedCommand {
 
 /// Information from timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerFeedbackWithMeta {
+pub struct Response {
     /// Identifies the worker by its identifier.
     pub worker_id: usize,
     /// The feedback itself.
@@ -200,7 +200,7 @@ pub struct Config {
     ///
     /// The length of this vector determines the number of worker threads that
     /// will be spawned.
-    pub command_receivers: Vec<crossbeam_channel::Receiver<SequencedCommand>>,
+    pub command_receivers: Vec<crossbeam_channel::Receiver<Command>>,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
     /// Whether the server is running in experimental mode.
@@ -212,7 +212,7 @@ pub struct Config {
     /// Handle to the persistence runtime. None if disabled.
     pub persist: Option<RuntimeClient<Vec<u8>, ()>>,
     /// Responses to commands should be sent into this channel.
-    pub feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
+    pub feedback_tx: mpsc::UnboundedSender<Response>,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -298,11 +298,11 @@ where
     /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<SequencedCommand>,
+    command_rx: crossbeam_channel::Receiver<Command>,
     /// Peek commands that are awaiting fulfillment.
     pending_peeks: Vec<PendingPeek>,
     /// The channel over which frontier information is reported.
-    feedback_tx: mpsc::UnboundedSender<WorkerFeedbackWithMeta>,
+    feedback_tx: mpsc::UnboundedSender<Response>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Tracks the timestamp binding durability information that has been sent over `feedback_tx`.
@@ -488,7 +488,7 @@ where
             let cmds: Vec<_> = self.command_rx.try_iter().collect();
             self.metrics.observe_command_queue(&cmds);
             for cmd in cmds {
-                if let SequencedCommand::Shutdown = cmd {
+                if let Command::Shutdown = cmd {
                     shutdown = true;
                 }
                 self.metrics.observe_command(&cmd);
@@ -582,7 +582,7 @@ where
 
         if !progress.is_empty() {
             self.feedback_tx
-                .send(WorkerFeedbackWithMeta {
+                .send(Response {
                     worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::FrontierUppers(progress),
                 })
@@ -648,7 +648,7 @@ where
 
         if !changes.is_empty() || !bindings.is_empty() {
             self.feedback_tx
-                .send(WorkerFeedbackWithMeta {
+                .send(Response {
                     worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
                         changes,
@@ -670,9 +670,9 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: SequencedCommand) {
+    fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            SequencedCommand::CreateDataflows(dataflows) => {
+            Command::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         self.reported_frontiers
@@ -704,19 +704,19 @@ where
                 }
             }
 
-            SequencedCommand::DropSources(names) => {
+            Command::DropSources(names) => {
                 for name in names {
                     self.render_state.local_inputs.remove(&name);
                 }
             }
-            SequencedCommand::DropSinks(ids) => {
+            Command::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
                     self.render_state.sink_write_frontiers.remove(&id);
                     self.render_state.dataflow_tokens.remove(&id);
                 }
             }
-            SequencedCommand::DropIndexes(ids) => {
+            Command::DropIndexes(ids) => {
                 for id in ids {
                     self.render_state.traces.del_trace(&id);
                     let frontier = self
@@ -732,7 +732,7 @@ where
                 }
             }
 
-            SequencedCommand::Peek {
+            Command::Peek {
                 id,
                 key,
                 timestamp,
@@ -774,7 +774,7 @@ where
                 if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
                     // Respond with the response.
                     self.feedback_tx
-                        .send(WorkerFeedbackWithMeta {
+                        .send(Response {
                             worker_id: self.timely_worker.index(),
                             message: WorkerFeedback::PeekResponse(peek.conn_id, response),
                         })
@@ -790,7 +790,7 @@ where
                 self.metrics.observe_pending_peeks(&self.pending_peeks);
             }
 
-            SequencedCommand::CancelPeek { conn_id } => {
+            Command::CancelPeek { conn_id } => {
                 let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
@@ -804,13 +804,13 @@ where
                 })
             }
 
-            SequencedCommand::AdvanceAllLocalInputs { advance_to } => {
+            Command::AdvanceAllLocalInputs { advance_to } => {
                 for (_, local_input) in self.render_state.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
                 }
             }
 
-            SequencedCommand::Insert { id, updates } => {
+            Command::Insert { id, updates } => {
                 if self.timely_worker.index() == 0 {
                     let input = match self.render_state.local_inputs.get_mut(&id) {
                         Some(input) => input,
@@ -824,7 +824,7 @@ where
                 }
             }
 
-            SequencedCommand::AllowCompaction(list) => {
+            Command::AllowCompaction(list) => {
                 for (id, frontier) in list {
                     self.render_state
                         .traces
@@ -834,22 +834,22 @@ where
                     }
                 }
             }
-            SequencedCommand::DurabilityFrontierUpdates(list) => {
+            Command::DurabilityFrontierUpdates(list) => {
                 for (id, frontier) in list {
                     if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
             }
-            SequencedCommand::EnableLogging(config) => {
+            Command::EnableLogging(config) => {
                 self.initialize_logging(&config);
             }
-            SequencedCommand::Shutdown => {
+            Command::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
             }
-            SequencedCommand::AddSourceTimestamping {
+            Command::AddSourceTimestamping {
                 id,
                 connector,
                 bindings,
@@ -948,7 +948,7 @@ where
                     assert!(bindings.is_empty());
                 }
             }
-            SequencedCommand::AdvanceSourceTimestamp { id, update } => {
+            Command::AdvanceSourceTimestamp { id, update } => {
                 if let Some(history) = self.render_state.ts_histories.get_mut(&id) {
                     match update {
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
@@ -983,7 +983,7 @@ where
                     }
                 }
             }
-            SequencedCommand::DropSourceTimestamping { id } => {
+            Command::DropSourceTimestamping { id } => {
                 let prev = self.render_state.ts_histories.remove(&id);
 
                 if prev.is_none() {
@@ -1013,7 +1013,7 @@ where
             if let Some(response) = peek.seek_fulfillment(&mut upper) {
                 // Respond with the response.
                 self.feedback_tx
-                    .send(WorkerFeedbackWithMeta {
+                    .send(Response {
                         worker_id: self.timely_worker.index(),
                         message: WorkerFeedback::PeekResponse(peek.conn_id, response),
                     })
@@ -1034,7 +1034,7 @@ where
         let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
             self.feedback_tx
-                .send(WorkerFeedbackWithMeta {
+                .send(Response {
                     worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::TailResponse(sink_id, response),
                 })
