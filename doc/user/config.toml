@@ -58,6 +58,12 @@ url = "/sql/create-source"
 weight= 2
 
 [[menu.main]]
+name = "Sinks"
+parent = "connections"
+url = "/sql/create-sink"
+weight= 3
+
+[[menu.main]]
 identifier = "sql"
 name = "SQL"
 weight = 70
