@@ -45,7 +45,7 @@ pub fn parse_proc_self_cgroup() -> Option<Vec<CgroupEntry>> {
     let file = BufReader::new(file);
     Some(
         file.lines()
-            .filter_map(|result| result.ok())
+            .flatten()
             .filter_map(CgroupEntry::from_line)
             .collect(),
     )
@@ -95,7 +95,7 @@ pub fn parse_proc_self_mountinfo() -> Option<(Vec<Mountinfo>, Vec<Mountinfo>)> {
     let file = BufReader::new(file);
     Some(
         file.lines()
-            .filter_map(|result| result.ok())
+            .flatten()
             .filter_map(Mountinfo::from_line)
             .filter(|mi| mi.fs_type == "cgroup" || mi.fs_type == "cgroup2")
             .partition(|mi| mi.fs_type == "cgroup2"),
@@ -103,11 +103,13 @@ pub fn parse_proc_self_mountinfo() -> Option<(Vec<Mountinfo>, Vec<Mountinfo>)> {
 }
 
 /// Represents a cgroup memory limit, with both ram and swap maximums if they exist.
+/// Fields should be None if a limit does not exist or when running on a platform without cgroup
+/// support (ie: non-Linux platforms).
 #[derive(Debug)]
 pub struct MemoryLimit {
-    /// Maximum RAM limit, in bytes.
+    /// Maximum RAM limit, in bytes, if a limit exists.
     pub max: Option<usize>,
-    /// Maximum swap limit, in bytes.
+    /// Maximum swap limit, in bytes, if a limit exists.
     pub swap_max: Option<usize>,
 }
 
@@ -120,7 +122,7 @@ fn read_file_to_usize<P: AsRef<Path>>(path: P) -> Option<usize> {
 
 /// Finds the mountpoint corresponding to the provided cgroup v2,
 /// and reads the memory limits within.
-pub fn read_v2_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Option<MemoryLimit> {
+fn read_v2_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Option<MemoryLimit> {
     // cgroups v2 only supports a single cgroup per process
     let mount = mounts.first()?;
     if mount.root != cgroups.first()?.root {
@@ -141,7 +143,7 @@ pub fn read_v2_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Op
 
 /// Finds the cgroup v1 and mountpoint combination containing the memory controller,
 /// and reads the memory limits within.
-pub fn read_v1_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Option<MemoryLimit> {
+fn read_v1_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Option<MemoryLimit> {
     // https://www.kernel.org/doc/Documentation/cgroup-v1/memory.txt
     let memory_cgroup = cgroups
         .into_iter()
@@ -161,7 +163,6 @@ pub fn read_v1_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Op
 }
 /// Returns the cgroup (v1 or v2) memory limit if it exists.
 pub fn detect_memory_limit() -> Option<MemoryLimit> {
-    //println!("cgroups: {:#?}", parse_proc_self_cgroup());
     let (v2_mounts, v1_mounts) = parse_proc_self_mountinfo()?;
     let cgroups = parse_proc_self_cgroup()?;
 
