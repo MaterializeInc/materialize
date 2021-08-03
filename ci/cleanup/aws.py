@@ -16,11 +16,9 @@ from urllib.parse import unquote, urlparse
 import boto3
 import botocore  # type: ignore
 
-from materialize import spawn
-from materialize.scratch import get_old_instances
+from materialize import spawn, scratch
 
 MAX_AGE = timedelta(hours=1)
-MAX_EC2_AGE = timedelta(weeks=1)
 
 
 def clean_up_kinesis() -> None:
@@ -86,10 +84,11 @@ def clean_up_sqs() -> None:
 
 
 def clean_up_ec2() -> None:
-    print(f"Terminating scratch ec2 instances whose age exceeds {MAX_EC2_AGE}")
-    olds = [
-        i["InstanceId"] for i in get_old_instances(int(MAX_EC2_AGE.total_seconds()))
-    ]
+    print(
+        f"Terminating scratch ec2 instances whose age exceeds the deletion time (default lifespan: {scratch.MAX_AGE})"
+    )
+    olds = [i["InstanceId"] for i in scratch.get_old_instances()]
+    print(f"Instances to delete: {olds}")
     boto3.client("ec2").terminate_instances(InstanceIds=olds)
 
 

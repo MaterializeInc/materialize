@@ -18,10 +18,9 @@ import random
 import shlex
 import sys
 import boto3
-import time
 from subprocess import CalledProcessError
 from typing import Any, Dict, List, NamedTuple, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from materialize import git
 from materialize import ui
@@ -30,6 +29,7 @@ from materialize import ssh
 
 SPEAKER = ui.speaker("scratch> ")
 ROOT = os.environ["MZ_ROOT"]
+MAX_AGE = timedelta(weeks=1)
 
 
 def launch(
@@ -49,7 +49,9 @@ def launch(
 
     if display_name:
         tags["Name"] = display_name
-    tags["scratch-created"] = str(datetime.now().timestamp())
+    tags["scratch-delete-after"] = str(
+        datetime.now().timestamp() + MAX_AGE.total_seconds()
+    )
     tags["nonce"] = nonce
     tags["git_ref"] = git.describe()
 
@@ -288,17 +290,17 @@ def launch_cluster(
     return instances
 
 
-def get_old_instances(threshold_seconds: int) -> List[Any]:
+def get_old_instances() -> List[Any]:
     def is_running(i: Any) -> bool:
         return bool(i["State"]["Name"] == "running")
 
     def is_old(i: Any) -> bool:
         tags_dict = {tag["Key"]: tag["Value"] for tag in i["Tags"]}
-        created = tags_dict.get("scratch-created")
-        if created is None:
+        delete_after = tags_dict.get("scratch-delete-after")
+        if delete_after is None:
             return False
-        created = float(created)
-        return time.time() - created > threshold_seconds
+        delete_after = float(delete_after)
+        return datetime.now().timestamp() > delete_after
 
     return [
         i
