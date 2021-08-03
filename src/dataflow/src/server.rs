@@ -592,8 +592,6 @@ where
 
     /// Send information about new timestamp bindings created by dataflow workers back to
     /// the coordinator.
-    ///
-    /// Only enabled when running in experimental mode for now.
     fn report_timestamp_bindings(&mut self) {
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
