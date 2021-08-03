@@ -24,6 +24,7 @@ use coord::PersistConfig;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use ore::{
+    cgroup::{detect_memory_limit, MemoryLimit},
     metric,
     metrics::{Gauge, MetricsRegistry, UIntGauge, UIntGaugeVec},
 };
@@ -199,6 +200,18 @@ impl Metrics {
             help: "how long it took to gather metrics, used for very low frequency high accuracy measures",
             var_labels: ["action"],
         ));
+        let memory_limit = detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+            max: None,
+            swap_max: None,
+        });
+        let memory_max_str = match memory_limit.max {
+            Some(max) => (max / 1024).to_string(),
+            None => "None".to_owned(),
+        };
+        let swap_max_str = match memory_limit.swap_max {
+            Some(max) => (max / 1024).to_string(),
+            None => "None".to_owned(),
+        };
         Self {
             worker_count: registry.register(metric!(
                 name: "mz_server_metadata_timely_worker_threads",
@@ -221,7 +234,9 @@ impl Metrics {
                             Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
                         }
                     },
-                    "memory_total" => &system.total_memory().to_string()
+                    "memory_total" => &system.total_memory().to_string(),
+                    "memory_limit" => memory_max_str,
+                    "swap_limit" => swap_max_str
                 },
             )),
             request_metrics_gather: request_metrics.with_label_values(&["gather"]),

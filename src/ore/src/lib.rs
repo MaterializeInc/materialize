@@ -24,6 +24,7 @@
 #[cfg(feature = "test")]
 pub mod assert;
 pub mod cast;
+pub mod cgroup;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod codegen;
