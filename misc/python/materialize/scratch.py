@@ -20,7 +20,7 @@ import sys
 import boto3
 from subprocess import CalledProcessError
 from typing import Any, Dict, List, NamedTuple, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from materialize import git
 from materialize import ui
@@ -50,7 +50,7 @@ def launch(
     if display_name:
         tags["Name"] = display_name
     tags["scratch-delete-after"] = str(
-        datetime.now().timestamp() + MAX_AGE.total_seconds()
+        datetime.now(timezone.utc).timestamp() + MAX_AGE.total_seconds()
     )
     tags["nonce"] = nonce
     tags["git_ref"] = git.describe()
@@ -300,7 +300,7 @@ def get_old_instances() -> List[Any]:
         if delete_after is None:
             return False
         delete_after = float(delete_after)
-        return datetime.now().timestamp() > delete_after
+        return datetime.now(timezone.utc).timestamp() > delete_after
 
     return [
         i
