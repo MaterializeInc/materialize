@@ -197,8 +197,9 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputEr
     // need directly, but that would require a large refactor.
     let mut expected_output: String = line_reader
         .inner
-        .chars()
-        .take_while(|c| !is_sigil(Some(*c)))
+        .lines()
+        .take_while(|l| !is_sigil(l.chars().next()))
+        .map(|l| format!("{}\n", l))
         .collect();
     slurp_all(line_reader);
     while expected_output.ends_with("\n\n") {
