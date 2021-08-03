@@ -300,7 +300,7 @@ All the contexts in the `sibling_context` share the same parent context, ie. the
 `quantifiers` contains leaf quantifiers of the join, the ones that are used for name resolution.
 
 A new `NameResolutionContext` is created for each intermediate join within the join tree, which leaves quantifiers
-are merged into the context of the parent join when after processing the intermeidate join, unless it is a nested
+are merged into the context of the parent join after processing the intermeidate join, unless it is a nested
 join with an alias. In that case, the quantifier that is added in the parent context is the one ranging over
 the sub-join. This distinction is needed to properly support this case:
 
