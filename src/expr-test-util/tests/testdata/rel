@@ -87,7 +87,6 @@ build
 (join
     [(get y) (get y)]
     [[#0 #3]]
-    [0 1 5]
     (delta_query [[[0 [#0]] [1 [#0]]]
                   [[1 [#0]] [0 [#0]]]]))
 ----
@@ -103,7 +102,6 @@ build
 | | implementation = DeltaQuery
 | |   delta %0 %0.(#0) %1.(#0)
 | |   delta %1 %1.(#0) %0.(#0)
-| | demand = (#0, #1, #5)
 ----
 ----
 

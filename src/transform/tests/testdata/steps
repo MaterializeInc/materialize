@@ -120,35 +120,35 @@ steps in=json format=test
 {"Filter":{"input":{"Join":{"inputs":[{"Get":{"id":{"Global":{"User":1}},"typ":{"column_types":[{"scalar_type":"Int64","nullable":true},{"scalar_type":"Int64","nullable":true}],"keys":[]}}},{"Get":{"id":{"Global":{"User":0}},"typ":{"column_types":[{"scalar_type":"Bool","nullable":true},{"scalar_type":"Bool","nullable":true}],"keys":[]}}}],"equivalences":[],"demand":null,"implementation":"Unimplemented"}},"predicates":[{"CallBinary":{"func":"Or","expr1":{"CallBinary":{"func":"And","expr1":{"CallUnary":{"func":{"IsNull":null},"expr":{"Column":0}}},"expr2":{"CallUnary":{"func":{"IsNull":null},"expr":{"Column":2}}}}},"expr2":{"CallBinary":{"func":"Eq","expr1":{"Column":0},"expr2":{"CallBinary":{"func":"AddInt64","expr1":{"Column":2},"expr2":{"Literal":[{"Ok":{"data":[5,1,0,0,0,0,0,0,0]}},{"scalar_type":"Int64","nullable":false}]}}}}}}}]}}
 ----
 ----
-(Filter (Join [(get u1) (get x)] [] null Unimplemented) [(CallBinary Or (CallBinary And (CallUnary (IsNull ) #0) (CallUnary (IsNull ) #2)) (CallBinary Eq #0 (CallBinary AddInt64 #2 (1 Int64))))])
+(Filter (Join [(get u1) (get x)] [] Unimplemented) [(CallBinary Or (CallBinary And (CallUnary (IsNull ) #0) (CallUnary (IsNull ) #2)) (CallBinary Eq #0 (CallBinary AddInt64 #2 (1 Int64))))])
 
 ====
 No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }
 ====
 Applied Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
-(Join [(get u1) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null Unimplemented)
+(Join [(get u1) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] Unimplemented)
 
 ====
 No change: Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet { inline_mfp: false }, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, UpdateLet, Map, Fixpoint { transforms: [Join, RedundantJoin, Project, Union, UnionBranchCancellation, RelationCSE, InlineLet { inline_mfp: true }], limit: 100 }
 ====
 Applied Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Demand, LiteralLifting], limit: 100 }:
-(Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]]))
+(Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]]))
 
 ====
 No change: ReductionPushdown, CanonicalizeMfp
 ====
 Applied RelationCSE:
-(let l0 (get u1) (let l1 (ArrangeBy (get l0) [[#0]]) (let l2 (get x) (let l3 (Join [(get l1) (get l2)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]])) (get l3)))))
+(let l0 (get u1) (let l1 (ArrangeBy (get l0) [[#0]]) (let l2 (get x) (let l3 (Join [(get l1) (get l2)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]])) (get l3)))))
 
 ====
 Applied InlineLet { inline_mfp: false }:
-(Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]]))
+(Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]]))
 
 ====
 No change: UpdateLet, FoldConstants { limit: Some(10000) }
 ====
 Final:
-(Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]]))
+(Join [(ArrangeBy (get u1) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] (Differential [1 null] [[0 [#0]]]))
 
 ====
 ====
@@ -177,6 +177,6 @@ build format=json
     ]
 )
 ----
-{"Filter":{"input":{"Join":{"inputs":[{"Get":{"id":{"Global":{"User":1}},"typ":{"column_types":[{"scalar_type":"Int64","nullable":true},{"scalar_type":"Int64","nullable":true}],"keys":[]}}},{"Get":{"id":{"Global":{"User":0}},"typ":{"column_types":[{"scalar_type":"Bool","nullable":true},{"scalar_type":"Bool","nullable":true}],"keys":[]}}}],"equivalences":[],"demand":null,"implementation":"Unimplemented"}},"predicates":[{"CallBinary":{"func":"Or","expr1":{"CallBinary":{"func":"And","expr1":{"CallUnary":{"func":{"IsNull":null},"expr":{"Column":0}}},"expr2":{"CallUnary":{"func":{"IsNull":null},"expr":{"Column":2}}}}},"expr2":{"CallBinary":{"func":"Eq","expr1":{"Column":0},"expr2":{"CallBinary":{"func":"AddInt64","expr1":{"Column":2},"expr2":{"Literal":[{"Ok":{"data":[5,1,0,0,0,0,0,0,0]}},{"scalar_type":"Int64","nullable":false}]}}}}}}}]}}
+{"Filter":{"input":{"Join":{"inputs":[{"Get":{"id":{"Global":{"User":1}},"typ":{"column_types":[{"scalar_type":"Int64","nullable":true},{"scalar_type":"Int64","nullable":true}],"keys":[]}}},{"Get":{"id":{"Global":{"User":0}},"typ":{"column_types":[{"scalar_type":"Bool","nullable":true},{"scalar_type":"Bool","nullable":true}],"keys":[]}}}],"equivalences":[],"implementation":"Unimplemented"}},"predicates":[{"CallBinary":{"func":"Or","expr1":{"CallBinary":{"func":"And","expr1":{"CallUnary":{"func":{"IsNull":null},"expr":{"Column":0}}},"expr2":{"CallUnary":{"func":{"IsNull":null},"expr":{"Column":2}}}}},"expr2":{"CallBinary":{"func":"Eq","expr1":{"Column":0},"expr2":{"CallBinary":{"func":"AddInt64","expr1":{"Column":2},"expr2":{"Literal":[{"Ok":{"data":[5,1,0,0,0,0,0,0,0]}},{"scalar_type":"Int64","nullable":false}]}}}}}}}]}}
 
 ## #endregion

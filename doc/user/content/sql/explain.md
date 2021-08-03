@@ -165,7 +165,6 @@ example is the choice of implementation in the `Join` operator.
 | |   delta %0 %1.(#1) %2.(#0)
 | |   delta %1 %0.(#0) %2.(#0)
 | |   delta %2 %1.(#0) %0.(#0)
-| | demand = (#6, #8, #12, #15, #22, #23, #27)
 | Filter (#6 = "BUILDING"), (#12 < 1995-03-15), (#27 > 1995-03-15)
 | Reduce group=(#8, #12, #15) sum((#22 * (100dec - #23)))
 | Project (#0, #3, #1, #2)

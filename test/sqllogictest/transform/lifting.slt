@@ -298,7 +298,6 @@ explain select * from (select 1 as a from t), generate_series(a+1, 4);
 | Get materialize.public.t (u1)
 | Project ()
 | FlatMap generate_series(2, 4, 1)
-| | demand = (#0)
 | Map 1
 | Project (#1, #0)
 

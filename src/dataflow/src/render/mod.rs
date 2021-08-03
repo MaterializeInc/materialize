@@ -954,17 +954,7 @@ pub mod plan {
                         b_keys,
                     )
                 }
-                MirRelationExpr::FlatMap {
-                    input,
-                    func,
-                    exprs,
-                    demand,
-                } => {
-                    // Map the demand into the MapFilterProject.
-                    // TODO: Remove this once demand is removed.
-                    if let Some(demand) = demand {
-                        prepend_mfp_demand(&mut mfp, expr, demand);
-                    }
+                MirRelationExpr::FlatMap { input, func, exprs } => {
                     let (input, _keys) = Plan::from_mir(input, arrangements)?;
                     // This stage can absorb arbitrary MFP instances.
                     let mfp = mfp.take();
@@ -982,15 +972,8 @@ pub mod plan {
                 MirRelationExpr::Join {
                     inputs,
                     equivalences,
-                    demand,
                     implementation,
                 } => {
-                    // Map the demand into the MapFilterProject.
-                    // TODO: Remove this once demand is removed.
-                    if let Some(demand) = demand {
-                        prepend_mfp_demand(&mut mfp, expr, demand);
-                    }
-
                     let input_mapper = JoinInputMapper::new(inputs);
 
                     // Plan each of the join inputs independently.
@@ -1322,37 +1305,6 @@ pub mod plan {
                 },
             }
         }
-    }
-
-    /// Pre-prends a MapFilterProject instance with a transform that blanks out all but the columns in `demand`.
-    fn prepend_mfp_demand(
-        mfp: &mut MapFilterProject,
-        relation_expr: &MirRelationExpr,
-        demand: &[usize],
-    ) {
-        let output_arity = relation_expr.arity();
-        // Determine dummy columns for un-demanded outputs, and a projection.
-        let mut dummies = Vec::new();
-        let mut demand_projection = Vec::new();
-        for (column, typ) in relation_expr.typ().column_types.into_iter().enumerate() {
-            if demand.contains(&column) {
-                demand_projection.push(column);
-            } else {
-                demand_projection.push(output_arity + dummies.len());
-                dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type));
-            }
-        }
-
-        let (map, filter, project) = mfp.as_map_filter_project();
-
-        let map_filter_project = MapFilterProject::new(output_arity)
-            .map(dummies)
-            .project(demand_projection)
-            .map(map)
-            .filter(filter)
-            .project(project);
-
-        *mfp = map_filter_project;
     }
 
     /// Helper method to convert linear operators to MapFilterProject instances.

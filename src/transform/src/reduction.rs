@@ -183,12 +183,7 @@ impl FoldConstants {
                     };
                 }
             }
-            MirRelationExpr::FlatMap {
-                input,
-                func,
-                exprs,
-                demand: _,
-            } => {
+            MirRelationExpr::FlatMap { input, func, exprs } => {
                 let input_typ = input_types.first().unwrap();
                 for expr in exprs.iter_mut() {
                     expr.reduce(input_typ);

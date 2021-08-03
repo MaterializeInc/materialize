@@ -27,7 +27,7 @@ cat
 ----
 ok
 
-(Reduce (Filter (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get u31) (get u37)] [] null Unimplemented) [(CallBinary Eq #0 #25) (CallBinary Eq #1 #23) (CallBinary Eq #2 #24) (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61)) (CallBinary Eq #22 #30) (CallBinary Eq #23 #31) (CallBinary Eq #24 #32) (CallBinary Eq #32 #41) (CallBinary Eq #34 #40) (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58)) (CallBinary Eq #61 #65) (CallBinary Eq #67 #69) (CallBinary Eq #70 ("EUROPE" String)) (CallBinary Gte (CallUnary CastDateToTimestamp #26) ("2007-01-02 00:00:00" Timestamp))]) [#66] [(SumNumeric #38 false)] false null)
+(Reduce (Filter (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get u31) (get u37)] [] Unimplemented) [(CallBinary Eq #0 #25) (CallBinary Eq #1 #23) (CallBinary Eq #2 #24) (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61)) (CallBinary Eq #22 #30) (CallBinary Eq #23 #31) (CallBinary Eq #24 #32) (CallBinary Eq #32 #41) (CallBinary Eq #34 #40) (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58)) (CallBinary Eq #61 #65) (CallBinary Eq #67 #69) (CallBinary Eq #70 ("EUROPE" String)) (CallBinary Gte (CallUnary CastDateToTimestamp #26) ("2007-01-02 00:00:00" Timestamp))]) [#66] [(SumNumeric #38 false)] false null)
 ----
 ----
 
@@ -45,26 +45,30 @@ cat
 ok
 
 build
-(Filter
-    (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get
-        u31) (get u37)] [] null Unimplemented)
-    [(CallBinary Eq #0 #25)
-    (CallBinary Eq #1 #23)
-    (CallBinary Eq #2 #24)
-    (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61))
-    (CallBinary Eq #22 #30)
-    (CallBinary Eq #23 #31)
-    (CallBinary Eq #24 #32)
-    (CallBinary Eq #32 #41)
-    (CallBinary Eq #34 #40)
-    (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58))
-    (CallBinary Eq #61 #65)
-    (CallBinary Eq #67 #69)
-    (CallBinary Eq #70 ("EUROPE" String))
-    (CallBinary Gte (CallUnary CastDateToTimestamp #26)
-        ("2007-01-02 00:00:00" Timestamp))
-    ]
-)
+(Reduce
+    (Filter
+        (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get u31) (get
+        u37)] [] Unimplemented)
+        [(CallBinary Eq #0 #25)
+        (CallBinary Eq #1 #23)
+        (CallBinary Eq #2 #24)
+        (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61))
+        (CallBinary Eq #22 #30)
+        (CallBinary Eq #23 #31)
+        (CallBinary Eq #24 #32)
+        (CallBinary Eq #32 #41)
+        (CallBinary Eq #34 #40)
+        (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58))
+        (CallBinary Eq #61 #65)
+        (CallBinary Eq #67 #69)
+        (CallBinary Eq #70 ("EUROPE" String))
+        (CallBinary Gte (CallUnary CastDateToTimestamp #26) ("2007-01-02
+        00:00:00" Timestamp))
+        ])
+    [#66]
+    [(SumNumeric #38 false)]
+    false
+    null)
 ----
 ----
 %0 =
@@ -92,5 +96,7 @@ build
 | Join %0 %1 %2 %3 %4 %5 %6
 | | implementation = Unimplemented
 | Filter (#0 = #25), (#1 = #23), (#2 = #24), (#21 = i16toi32(#61)), (#22 = #30), (#23 = #31), (#24 = #32), (#32 = #41), (#34 = #40), (#57 = i16toi32(#58)), (#61 = #65), (#67 = #69), (#70 = "EUROPE"), (datetots(#26) >= 2007-01-02 00:00:00)
+| Reduce group=(#66)
+| | agg sum(#38)
 ----
 ----

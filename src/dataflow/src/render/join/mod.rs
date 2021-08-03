@@ -233,7 +233,7 @@ struct JoinBuildState {
     /// The linear operator logic (maps, filters, and projection) that remains to be applied
     /// to the output of the join.
     ///
-    /// We we advance through the construction of the join dataflow, we may be able to peel
+    /// When we advance through the construction of the join dataflow, we may be able to peel
     /// off some of this work, ideally reducing `mfp` to something nearly the identity.
     mfp: MapFilterProject,
 }

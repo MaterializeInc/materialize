@@ -98,12 +98,7 @@ impl ColumnKnowledge {
                 }
                 input_knowledge
             }
-            MirRelationExpr::FlatMap {
-                input,
-                func,
-                exprs,
-                demand: _,
-            } => {
+            MirRelationExpr::FlatMap { input, func, exprs } => {
                 let mut input_knowledge =
                     ColumnKnowledge::harvest(input, knowledge, knowledge_stack)?;
                 let input_typ = input.typ();

@@ -340,12 +340,7 @@ impl LiteralLifting {
 
                 result
             }
-            MirRelationExpr::FlatMap {
-                input,
-                func,
-                exprs,
-                demand: _,
-            } => {
+            MirRelationExpr::FlatMap { input, func, exprs } => {
                 let literals = self.action(input, gets);
                 if !literals.is_empty() {
                     let input_arity = input.arity();
@@ -389,7 +384,6 @@ impl LiteralLifting {
             MirRelationExpr::Join {
                 inputs,
                 equivalences,
-                demand,
                 implementation,
             } => {
                 // before lifting, save the original shape of the inputs
@@ -418,7 +412,6 @@ impl LiteralLifting {
                 }
 
                 if input_literals.iter().any(|l| !l.is_empty()) {
-                    *demand = None;
                     *implementation = expr::JoinImplementation::Unimplemented;
 
                     // We should be able to install any literals in the
