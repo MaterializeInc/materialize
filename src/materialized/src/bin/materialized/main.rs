@@ -42,6 +42,7 @@ use coord::PersistConfig;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::info;
+use ore::cgroup::{detect_memory_limit, MemoryLimit};
 use ore::metric;
 use ore::metrics::{IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
@@ -493,6 +494,18 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
     let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let memory_limit = detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+        max: None,
+        swap_max: None,
+    });
+    let memory_max_str = match memory_limit.max {
+        Some(max) => format!(", {}KiB limit", max / 1024),
+        None => "".to_owned(),
+    };
+    let swap_max_str = match memory_limit.swap_max {
+        Some(max) => format!(", {}KiB limit", max / 1024),
+        None => "".to_owned(),
+    };
 
     // Print system information as the very first thing in the logs. The goal is
     // to increase the probability that we can reproduce a reported bug if all
@@ -507,8 +520,8 @@ invoked as: {invocation}
 os: {os}
 cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
-memory: {memory_total}KB total, {memory_used}KB used
-swap: {swap_total}KB total, {swap_used}KB used",
+memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
+swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
@@ -537,8 +550,10 @@ swap: {swap_total}KB total, {swap_used}KB used",
         },
         memory_total = system.total_memory(),
         memory_used = system.used_memory(),
+        memory_limit = memory_max_str,
         swap_total = system.total_swap(),
         swap_used = system.used_swap(),
+        swap_limit = swap_max_str,
     );
 
     sys::adjust_rlimits();
