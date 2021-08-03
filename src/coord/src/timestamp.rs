@@ -27,6 +27,7 @@ use mz_avro::types::Value;
 use ore::metric;
 use ore::metrics::{IntGaugeVec, MetricsRegistry};
 use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
@@ -162,11 +163,23 @@ struct TimestampingState {
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
     consumer: BaseConsumer,
+
+    /// Offset of the last consistency record we received and processed. We use
+    /// this to filter out messages that we have seen already.
+    ///
+    /// Session timeouts, together with consumer-group re-arrangement, combined
+    /// with the fact that we don't commit read offsets for the BYO consumer
+    /// can lead to cases where an existing consumer starts reading the
+    /// consistency topic from the beginning, after a connection outage.
+    last_offset: Option<i64>,
 }
 
 impl ByoKafkaConnector {
     fn new(consumer: BaseConsumer) -> ByoKafkaConnector {
-        ByoKafkaConnector { consumer }
+        ByoKafkaConnector {
+            consumer,
+            last_offset: None,
+        }
     }
 }
 
@@ -185,8 +198,30 @@ fn byo_query_source(
     let mut messages = vec![];
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_connector) => {
-            while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer)? {
-                messages.push(ValueEncoding::Bytes(payload));
+            while let Some(message) = kafka_get_next_message(&mut kafka_connector.consumer)? {
+                if let Some(last_offset) = kafka_connector.last_offset {
+                    if message.offset() <= last_offset {
+                        // it would probably be nicer to print the decoded
+                        // message here. But we don't know the message format
+                        // and I don't necessarily want to pipe Kafka specifics
+                        // (offsets) to the decoding part.
+                        debug!(
+                            "Received BYO consistency record that we have received before: {:?}",
+                            message
+                        );
+                        continue;
+                    }
+                }
+                kafka_connector.last_offset = Some(message.offset());
+
+                match message.payload() {
+                    Some(payload) => {
+                        messages.push(ValueEncoding::Bytes(payload.to_vec()));
+                    }
+                    None => {
+                        bail!("unexpected null payload");
+                    }
+                }
             }
         }
     }
@@ -194,15 +229,13 @@ fn byo_query_source(
 }
 
 /// Polls a message from a Kafka Source
-fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Result<Option<Vec<u8>>, anyhow::Error> {
+fn kafka_get_next_message(
+    consumer: &mut BaseConsumer,
+) -> Result<Option<BorrowedMessage>, anyhow::Error> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
-            Ok(message) => match message.payload() {
-                Some(p) => Ok(Some(p.to_vec())),
-                None => {
-                    bail!("unexpected null payload");
-                }
-            },
+            Ok(message) => Ok(Some(message)),
+
             Err(err) => {
                 bail!("Failed to process message {}", err);
             }
