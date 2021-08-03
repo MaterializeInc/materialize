@@ -12,6 +12,7 @@
 
 // NB: These really don't need to be public, but the public doc lint is nice.
 pub mod cache;
+pub mod command_queue;
 pub mod encoding;
 pub mod future;
 pub mod runtime;
