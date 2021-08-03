@@ -17,8 +17,10 @@ import boto3
 import botocore  # type: ignore
 
 from materialize import spawn
+from materialize.scratch import get_old_instances
 
 MAX_AGE = timedelta(hours=1)
+MAX_EC2_AGE = timedelta(weeks=1)
 
 
 def clean_up_kinesis() -> None:
@@ -83,10 +85,17 @@ def clean_up_sqs() -> None:
             client.delete_queue(QueueUrl=queue)
 
 
+def clean_up_ec2() -> None:
+    print(f"Terminating scratch ec2 instances whose age exceeds {MAX_EC2_AGE}")
+    olds = [i["InstanceId"] for i in get_old_instances(MAX_EC2_AGE.total_seconds())]
+    boto3.client("ec2").terminate_instances(InstanceIds=olds)
+
+
 def main() -> None:
     clean_up_kinesis()
     clean_up_s3()
     clean_up_sqs()
+    clean_up_ec2()
 
 
 if __name__ == "__main__":
