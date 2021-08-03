@@ -33,10 +33,13 @@ and the one proposed in this document, which adds normalization at the SQL level
     * be normalization-friendly,
     * allow supporting complex features such as recursion in CTEs,
 * Proper support of `LATERAL` joins ([#6875](https://github.com/MaterializeInc/materialize/issues/6875))
-* Support for functional dependency analysis during name resolution.
+* Support for functional dependency analysis during name resolution
+([#7647](https://github.com/MaterializeInc/materialize/issues/7647)).
 
 Existing issues that should be addressed sooner rather than later:
 * [sql: handle aggregates that refer exclusively to outer columns #3720](https://github.com/MaterializeInc/materialize/issues/3720)
+* [sql: make SQL responsible for its equality semantics #7597](https://github.com/MaterializeInc/materialize/pull/7597)
+* [sql: wrong results with outer join due to incorrect name resolution  #7618](https://github.com/MaterializeInc/materialize/issues/7618)
 
 ## Non-Goals
 
