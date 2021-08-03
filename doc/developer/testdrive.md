@@ -328,6 +328,23 @@ Note that you can provide a string that is a substring of the expected error. Th
 
 By default, `testdrive` will run all `>` and `!` statements in a single connection. A limited form of multiple connections is provided by the `$ postgres-connect` action. See the "Connecting to databases over the pgwire protocol" section below.
 
+## Executing an `EXPLAIN` statement
+
+Since the output of `EXPLAIN` is a multi-line string, a separate `? EXPLAIN` action is provided:
+
+```
+$ set-regex match=u\d+ replacement=UID
+
+? EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+%0 =
+| Get materialize.public.t1 (UID)
+| Filter !(isnull(#0))
+| ArrangeBy ()
+...
+```
+
+As the `EXPLAIN` output contains parts that change between invocations, a `$ set-regex` is required to produce a stable test.
+
 # Using Variables
 
 > :warning: **all testdrive variables are initialized to their ultimate value at the start of the test**
