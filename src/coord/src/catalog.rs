@@ -844,6 +844,7 @@ impl Catalog {
                 return Err(Error::new(ErrorKind::FailedMigration {
                     last_version: catalog_content_version,
                     name: migration.name,
+                    introduced_for: migration.introduced_for,
                     cause: e.to_string(),
                 }));
             }

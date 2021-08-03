@@ -61,12 +61,13 @@ production readiness.
   > `v0.5.10-dev` -> `v0.6.0` when they upgrade than upgrading and going from `v0.6.0-dev` ->
   > `v0.5.10`.
 
-  - [ ] Related to the above note, **if this is a feature release** (i.e. the
-    product team has decided that we are bumping the major or minor version) you
-    must also update the [release notes][]: the highest unreleased
-    version will be incorrect. It will be a patch version (i.e. the `Y` in
-    `W.X.Y`) instead of a major or minor version change (`W` or `X`), update the
-    release notes to reflect the version that is actually being released.
+  - Related to the above note, **if this is a feature release** (i.e. the product team has
+    decided that we are bumping the major or minor version) you must also update two items because
+    the highest unreleased version will be incorrect. It will be a patch version (i.e. the `Y` in
+    `W.X.Y`) instead of a major or minor version change (`W` or `X`), update the release notes to
+    reflect the version that is actually being released:
+    - [ ] The [release notes][]
+    - [ ] Some recent migration versions in `src/coord/src/catalog/migrate.rs`
 
 - [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
 

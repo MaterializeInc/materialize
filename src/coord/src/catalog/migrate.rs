@@ -25,6 +25,7 @@ use crate::catalog::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA};
 
 pub struct Migration {
     pub name: &'static str,
+    pub introduced_for: &'static str,
     pub command: fn(&mut Catalog) -> Result<(), anyhow::Error>,
 }
 
@@ -37,10 +38,9 @@ pub const CONTENT_MIGRATIONS: &[Migration] = &[
     // replanning the `CREATE` statement because the catalog still contains no
     // items at this point, e.g. attempting to plan any item with a dependency
     // will fail.
-    //
-    // Introduced for v0.6.1
     Migration {
         name: "rewrite-type-references",
+        introduced_for: "v0.6.1",
         command: |catalog: &mut Catalog| {
             struct TypeNormalizer;
 
@@ -149,10 +149,9 @@ pub const CONTENT_MIGRATIONS: &[Migration] = &[
     },
     // This was previously the place where the function name migration occurred;
     // however #5802 showed that the implementation was insufficient.
-    //
-    // Introduced for v0.7.0
     Migration {
         name: "function-name-removed",
+        introduced_for: "v0.7.0",
         command: |_: &mut Catalog| Ok(()),
     },
     // Rewrites all function references to have `pg_catalog` qualification; this
@@ -162,10 +161,9 @@ pub const CONTENT_MIGRATIONS: &[Migration] = &[
     //
     // The approach is to prepend `pg_catalog` to all `UnresolvedObjectName`
     // names that could refer to functions.
-    //
-    // Introduced for v0.7.1
     Migration {
         name: "use-pg-catalog",
+        introduced_for: "v0.7.1",
         command: |catalog: &mut Catalog| {
             fn normalize_function_name(name: &mut UnresolvedObjectName) {
                 if name.0.len() == 1 {
@@ -293,10 +291,9 @@ pub const CONTENT_MIGRATIONS: &[Migration] = &[
     // to include those magic bytes. In case we change the default to a
     // possibly more reasonable one in the future, we ensure that the current
     // default is encoded in the on-disk catalog.
-    //
-    // Introduced for v0.7.1
     Migration {
         name: "insert-default-confluent-wire-format",
+        introduced_for: "v0.7.1",
         command: |catalog: &mut Catalog| {
             let mut storage = catalog.storage();
             let items = storage.load_items()?;
@@ -347,10 +344,9 @@ pub const CONTENT_MIGRATIONS: &[Migration] = &[
     // Rewrites all table references to use their id as reference rather than
     // their name. This allows us to safely rename tables without having to
     // rewrite their dependents.
-    //
-    // Introduced for v0.7.1
     Migration {
         name: "use-id-for-table-format",
+        introduced_for: "v0.7.1",
         command: |catalog: &mut Catalog| {
             let cat = Catalog::load_catalog_items(catalog.clone())?;
             let cat = cat.for_system_session();
