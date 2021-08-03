@@ -87,7 +87,9 @@ def clean_up_sqs() -> None:
 
 def clean_up_ec2() -> None:
     print(f"Terminating scratch ec2 instances whose age exceeds {MAX_EC2_AGE}")
-    olds = [i["InstanceId"] for i in get_old_instances(int(MAX_EC2_AGE.total_seconds()))]
+    olds = [
+        i["InstanceId"] for i in get_old_instances(int(MAX_EC2_AGE.total_seconds()))
+    ]
     boto3.client("ec2").terminate_instances(InstanceIds=olds)
 
 
