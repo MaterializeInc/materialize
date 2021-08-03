@@ -63,7 +63,7 @@ impl ClientConfig {
 
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
-        let mut builder = http_util::reqwest::client_builder();
+        let mut builder = mz_http_proxy::reqwest::client_builder();
 
         for root_cert in self.root_certs {
             builder = builder.add_root_certificate(root_cert.into());

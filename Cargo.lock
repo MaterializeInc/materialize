@@ -222,8 +222,8 @@ name = "aws-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "http-util",
  "log",
+ "mz-http-proxy",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
@@ -385,9 +385,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
- "http-util",
  "hyper",
  "lazy_static",
+ "mz-http-proxy",
  "native-tls",
  "openssl",
  "reqwest",
@@ -1656,20 +1656,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-util"
-version = "0.0.0"
-dependencies = [
- "http",
- "hyper",
- "hyper-proxy",
- "hyper-tls",
- "ipnet",
- "lazy_static",
- "log",
- "reqwest",
-]
-
-[[package]]
 name = "httparse"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2134,7 +2120,6 @@ dependencies = [
  "futures",
  "hex",
  "hex-literal",
- "http-util",
  "hyper",
  "hyper-openssl",
  "include_dir",
@@ -2144,6 +2129,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "mz-http-proxy",
  "mz-process-collector",
  "nix",
  "num_cpus",
@@ -2327,6 +2313,20 @@ dependencies = [
  "sha2",
  "snap",
  "uuid",
+]
+
+[[package]]
+name = "mz-http-proxy"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "hyper",
+ "hyper-proxy",
+ "hyper-tls",
+ "ipnet",
+ "lazy_static",
+ "log",
+ "reqwest",
 ]
 
 [[package]]
