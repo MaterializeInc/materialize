@@ -47,35 +47,34 @@ fn validate_proto_field<'a>(
             validate_proto_field_resolved(seen_messages, field, descriptors)?;
             ScalarType::Jsonb
         }
-        FieldLabel::Optional => {
-            match field.field_type(descriptors) {
-                FieldType::Bool => ScalarType::Bool,
-                FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
-                FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
-                FieldType::Enum(_) => ScalarType::String,
-                FieldType::Float => ScalarType::Float32,
-                FieldType::Double => ScalarType::Float64,
-                FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
-                    ScalarType::Numeric { scale: Some(0) }
-                } // is that right
-                FieldType::String => ScalarType::String,
-                FieldType::Bytes => ScalarType::Bytes,
-                FieldType::Message(m) => {
-                    if seen_messages.contains(m.name()) {
-                        bail!("Recursive types are not supported: {}", m.name());
-                    }
-                    seen_messages.insert(m.name());
-                    for f in m.fields().iter() {
-                        validate_proto_field_resolved(seen_messages, &f, descriptors)?;
-                    }
-                    seen_messages.remove(m.name());
-                    ScalarType::Jsonb
+        FieldLabel::Optional => match field.field_type(descriptors) {
+            FieldType::Bool => ScalarType::Bool,
+            FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
+            FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
+            FieldType::Enum(_) => ScalarType::String,
+            FieldType::Float => ScalarType::Float32,
+            FieldType::Double => ScalarType::Float64,
+            FieldType::UInt32 => bail!("Protobuf type \"uint32\" is not supported"),
+            FieldType::UInt64 => bail!("Protobuf type \"uint64\" is not supported"),
+            FieldType::Fixed32 => bail!("Protobuf type \"fixed32\" is not supported"),
+            FieldType::Fixed64 => bail!("Protobuf type \"fixed64\" is not supported"),
+            FieldType::String => ScalarType::String,
+            FieldType::Bytes => ScalarType::Bytes,
+            FieldType::Message(m) => {
+                if seen_messages.contains(m.name()) {
+                    bail!("Recursive types are not supported: {}", m.name());
                 }
-                FieldType::Group => bail!("Unions are currently not supported"),
-                FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
-                FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+                seen_messages.insert(m.name());
+                for f in m.fields().iter() {
+                    validate_proto_field_resolved(seen_messages, &f, descriptors)?;
+                }
+                seen_messages.remove(m.name());
+                ScalarType::Jsonb
             }
-        }
+            FieldType::Group => bail!("Unions are currently not supported"),
+            FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
+            FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+        },
     })
 }
 
@@ -485,7 +484,6 @@ mod tests {
         Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
     };
 
-    use repr::adt::numeric::Numeric;
     use repr::{Datum, DatumList, RelationDesc, ScalarType};
 
     use gen::fuzz::{
@@ -570,7 +568,7 @@ mod tests {
             "age",
             2,
             FieldLabel::Optional,
-            InternalFieldType::UInt32,
+            InternalFieldType::Int32,
             None,
         ));
         descriptors.add_message(m1);
@@ -642,8 +640,6 @@ mod tests {
         test_record.set_string_field("one".to_string());
         test_record.set_int64_field(10000);
         test_record.set_color_field(Color::BLUE);
-        test_record.set_uint_field(5);
-        test_record.set_uint64_field(55);
         test_record.set_float_field(5.456);
         test_record.set_double_field(99.99);
 
@@ -663,8 +659,6 @@ mod tests {
             Datum::String("one"),
             Datum::Int64(10000),
             Datum::String("BLUE"),
-            Datum::from(Numeric::from(5)),
-            Datum::from(Numeric::from(55)),
             Datum::Float32(OrderedFloat::from(5.456)),
             Datum::Float64(OrderedFloat::from(99.99)),
         ];
@@ -693,8 +687,6 @@ mod tests {
             Datum::String(""),
             Datum::Int64(0),
             Datum::String("RED"),
-            Datum::from(Numeric::from(0)),
-            Datum::from(Numeric::from(0)),
             Datum::Float32(OrderedFloat::from(0.0)),
             Datum::Float64(OrderedFloat::from(0.0)),
         ];
@@ -769,8 +761,6 @@ mod tests {
                     ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
                     ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
                     ("string_field", Datum::String("one")),
-                    ("uint64_field", Datum::Float64(OrderedFloat::from(0.0))),
-                    ("uint_field", Datum::Float64(OrderedFloat::from(0.0))),
                 ]
             );
         } else {
@@ -867,8 +857,6 @@ mod tests {
                             ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
                             ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
                             ("string_field", Datum::String("")),
-                            ("uint64_field", Datum::Float64(OrderedFloat::from(0.0))),
-                            ("uint_field", Datum::Float64(OrderedFloat::from(0.0))),
                         ]
                     );
                 } else {

@@ -20,8 +20,6 @@ message TestRecord {
   string string_field = 2;
   int64 int64_field = 3;
   Color color_field = 4;
-  uint32 uint_field = 5;
-  uint64 uint64_field = 6;
   float float_field = 7;
   double double_field = 8;
 }

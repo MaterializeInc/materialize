@@ -34,3 +34,19 @@ message RepeatedStruct {
   repeated Struct struct_field = 1;
   repeated string st_repeated = 2;
 }
+
+message UInt32 {
+  uint32 f = 1;
+}
+
+message UInt64 {
+  uint64 f = 1;
+}
+
+message Fixed32 {
+  fixed32 f = 1;
+}
+
+message Fixed64 {
+  fixed64 f = 1;
+}
