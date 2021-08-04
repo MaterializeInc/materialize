@@ -2012,7 +2012,10 @@ impl Coordinator {
         let mut ops = vec![];
         let mut index_ids = vec![];
 
+        let mut if_not_exists = false;
         for view_plan in plan.views {
+            if_not_exists = if_not_exists || view_plan.if_not_exists;
+
             let (mut view_ops, index_id) = self.generate_view_ops(session, view_plan)?;
             ops.append(&mut view_ops);
             if let Some(index_id) = index_id {
@@ -2030,8 +2033,7 @@ impl Coordinator {
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
-            // TODO somehow check this or remove if not exists modifiers
-            // Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
     }
