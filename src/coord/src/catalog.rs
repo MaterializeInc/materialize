@@ -839,9 +839,12 @@ impl Catalog {
         let mut catalog_content_version = catalog.storage().get_catalog_content_version()?;
 
         while CONTENT_MIGRATIONS.len() > catalog_content_version {
-            if let Err(e) = CONTENT_MIGRATIONS[catalog_content_version](&mut catalog) {
+            let migration = &CONTENT_MIGRATIONS[catalog_content_version];
+            if let Err(e) = (migration.command)(&mut catalog) {
                 return Err(Error::new(ErrorKind::FailedMigration {
                     last_version: catalog_content_version,
+                    name: migration.name,
+                    introduced_for: migration.introduced_for,
                     cause: e.to_string(),
                 }));
             }

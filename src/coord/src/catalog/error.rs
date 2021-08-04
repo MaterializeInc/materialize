@@ -55,6 +55,8 @@ pub enum ErrorKind {
     ExperimentalModeUnavailable,
     FailedMigration {
         last_version: usize,
+        name: &'static str,
+        introduced_for: &'static str,
         cause: String,
     },
 }
@@ -213,11 +215,13 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
             ),
             ErrorKind::FailedMigration {
                 last_version,
+                name,
+                introduced_for,
                 cause,
             } => write!(
                 f,
-                "migration from catalog content version {} failed: {}",
-                last_version, cause,
+                "migration {}-{} from catalog content version {} failed: {}",
+                name, introduced_for, last_version, cause,
             ),
         }
     }
