@@ -1657,7 +1657,7 @@ impl Coordinator {
         index_depends_on.push(table_id);
         let persist = self
             .catalog
-            .persist_details(table_id)
+            .persist_details(table_id, &name)
             .map_err(|err| anyhow!("{}", err))?;
         let table = catalog::Table {
             create_sql: table.create_sql,

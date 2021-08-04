@@ -110,9 +110,13 @@ struct Args {
     )]
     third_party_metrics_listen_addr: Option<SocketAddr>,
 
-    /// Enable persistent tables. Has to be used with --experimental.
+    /// Enable persistent user tables. Has to be used with --experimental.
     #[structopt(long, hidden = true)]
-    persistent_tables: bool,
+    persistent_user_tables: bool,
+
+    /// Enable persistent system tables. Has to be used with --experimental.
+    #[structopt(long, hidden = true)]
+    persistent_system_tables: bool,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -603,10 +607,17 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
 
     // Configure persistence core.
     let persist_config = {
-        let user_table_enabled = if args.experimental && args.persistent_tables {
+        let user_table_enabled = if args.experimental && args.persistent_user_tables {
             true
-        } else if args.persistent_tables {
-            bail!("cannot specify --persistent-tables without --experimental");
+        } else if args.persistent_user_tables {
+            bail!("cannot specify --persistent-user-tables without --experimental");
+        } else {
+            false
+        };
+        let system_table_enabled = if args.experimental && args.persistent_system_tables {
+            true
+        } else if args.persistent_system_tables {
+            bail!("cannot specify --persistent-system-tables without --experimental");
         } else {
             false
         };
@@ -623,6 +634,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             buffer_path: data_directory.join("persist").join("buffer"),
             blob_path: data_directory.join("persist").join("blob"),
             user_table_enabled,
+            system_table_enabled,
             lock_info,
         }
     };

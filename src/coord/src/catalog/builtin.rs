@@ -833,9 +833,10 @@ lazy_static! {
                 .with_key(vec![0, 1, 2]),
         id: GlobalId::System(4043),
         index_id: GlobalId::System(4044),
-        // TODO: Enable this once persistence compaction is moved into its own
-        // thread.
-        persistent: false,
+        // Note that the `system_table_enabled` field of PersistConfig (hooked
+        // up to --persistent-system-tables) also has to be true for this to be
+        // persisted.
+        persistent: true,
     };
     pub static ref MZ_PROMETHEUS_METRICS: BuiltinTable = BuiltinTable {
         name: "mz_metrics_meta",
@@ -861,9 +862,10 @@ lazy_static! {
                 .with_key(vec![0, 1, 2]),
         id: GlobalId::System(4047),
         index_id: GlobalId::System(4048),
-        // TODO: Enable this once persistence compaction is moved into its own
-        // thread.
-        persistent: false,
+        // Note that the `system_table_enabled` field of PersistConfig (hooked
+        // up to --persistent-system-tables) also has to be true for this to be
+        // persisted.
+        persistent: true,
     };
 }
 

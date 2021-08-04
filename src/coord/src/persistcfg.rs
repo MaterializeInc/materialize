@@ -29,10 +29,14 @@ pub struct PersistConfig {
     /// A directory under which larger batches of indexed data are stored. This
     /// will eventually be S3 for Cloud.
     pub blob_path: PathBuf,
-    /// Whether to persist user tables. This is extremely experimental and
+    /// Whether to persist all user tables. This is extremely experimental and
     /// should not even be tried by users. It's initially here for end-to-end
     /// testing.
     pub user_table_enabled: bool,
+    /// Whether to persist certain system tables that have opted in. This is
+    /// extremely experimental and should not even be tried by users. It's
+    /// initially here for end-to-end testing.
+    pub system_table_enabled: bool,
     /// Information stored in the "lock" files created by the buffer and blob to
     /// ensure that they are exclusive writers to those locations. This should
     /// contain whatever information might be useful to investigating an
@@ -47,6 +51,7 @@ impl PersistConfig {
             buffer_path: Default::default(),
             blob_path: Default::default(),
             user_table_enabled: false,
+            system_table_enabled: false,
             lock_info: Default::default(),
         }
     }
@@ -55,7 +60,7 @@ impl PersistConfig {
     /// interacting with it. Returns None and does not start the runtime if all
     /// persistence features are disabled.
     pub fn init(&self) -> Result<PersisterWithConfig, anyhow::Error> {
-        let persister = if self.user_table_enabled {
+        let persister = if self.user_table_enabled || self.system_table_enabled {
             let buffer = FileBuffer::new(&self.buffer_path, &self.lock_info)
                 .map_err(|err| anyhow!("{}", err))?;
             let blob = FileBlob::new(&self.blob_path, &self.lock_info)
@@ -79,28 +84,30 @@ pub struct PersisterWithConfig {
 }
 
 impl PersisterWithConfig {
-    fn stream_name(&self, id: GlobalId) -> Option<String> {
+    fn stream_name(&self, id: GlobalId, pretty: &str) -> Option<String> {
         match id {
             GlobalId::User(id) if self.config.user_table_enabled => {
-                // TODO: This needs to be written down somewhere in the catalog in case
-                // we need to change the naming at some point.
-                Some(format!("user-table-{:?}", id))
+                // TODO: This needs to be written down somewhere in the catalog
+                // in case we need to change the naming at some point. See
+                // related TODO in Catalog::deserialize_item.
+                Some(format!("user-table-{:?}-{}", id, pretty))
             }
-            GlobalId::System(id) => {
-                // TODO: This needs to be written down somewhere in the catalog in case
-                // we need to change the naming at some point.
-                Some(format!("system-table-{:?}", id))
+            GlobalId::System(id) if self.config.system_table_enabled => {
+                // TODO: This needs to be written down somewhere in the catalog
+                // in case we need to change the naming at some point. See
+                // related TODO in Catalog::deserialize_item.
+                Some(format!("system-table-{:?}-{}", id, pretty))
             }
             _ => None,
         }
     }
 
-    pub fn details(&self, id: GlobalId) -> Result<Option<PersistDetails>, Error> {
+    pub fn details(&self, id: GlobalId, pretty: &str) -> Result<Option<PersistDetails>, Error> {
         let persister = match self.persister.as_ref() {
             Some(x) => x,
             None => return Ok(None),
         };
-        let stream_name = match self.stream_name(id) {
+        let stream_name = match self.stream_name(id, pretty) {
             Some(x) => x,
             None => return Ok(None),
         };

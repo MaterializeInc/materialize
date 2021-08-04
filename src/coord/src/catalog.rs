@@ -740,7 +740,7 @@ impl Catalog {
                     );
                     let oid = catalog.allocate_oid()?;
                     let persist = if table.persistent {
-                        catalog.persist_details(table.id)?
+                        catalog.persist_details(table.id, &name)?
                     } else {
                         None
                     };
@@ -780,8 +780,9 @@ impl Catalog {
                 }
 
                 Builtin::View(view) if config.enable_logging || !view.needs_logs => {
+                    let allow_persist = false;
                     let item = catalog
-                        .parse_item(view.id, view.sql.into(), None)
+                        .parse_item(view.id, &name, view.sql.into(), None, allow_persist)
                         .unwrap_or_else(|e| {
                             panic!(
                                 "internal error: failed to load bootstrap view:\n\
@@ -898,7 +899,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match c.deserialize_item(id, def) {
+            let item = match c.deserialize_item(id, &name, def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -1883,23 +1884,44 @@ impl Catalog {
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
 
-    fn deserialize_item(&self, id: GlobalId, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
+    fn deserialize_item(
+        &self,
+        id: GlobalId,
+        name: &FullName,
+        bytes: Vec<u8>,
+    ) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env: _,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
+        // TODO: Serialize the persisted stream name and pass it in here instead
+        // of re-deriving it from scratch. This will allow us to later change
+        // our persisted stream naming scheme, if necessary.
+        let allow_persist = true;
+        self.parse_item(
+            id,
+            &name,
+            create_sql,
+            Some(&PlanContext::zero()),
+            allow_persist,
+        )
     }
 
     fn parse_item(
         &self,
         id: GlobalId,
+        name: &FullName,
         create_sql: String,
         pcx: Option<&PlanContext>,
+        allow_persist: bool,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
-        let persist = self.persist_details(id)?;
+        let persist = if allow_persist {
+            self.persist_details(id, name)?
+        } else {
+            None
+        };
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
@@ -2149,8 +2171,12 @@ impl Catalog {
         relations.into_iter().collect()
     }
 
-    pub fn persist_details(&self, id: GlobalId) -> Result<Option<PersistDetails>, PersistError> {
-        self.persist.details(id)
+    pub fn persist_details(
+        &self,
+        id: GlobalId,
+        name: &FullName,
+    ) -> Result<Option<PersistDetails>, PersistError> {
+        self.persist.details(id, &name.to_string())
     }
 
     pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
