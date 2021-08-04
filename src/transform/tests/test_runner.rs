@@ -205,6 +205,9 @@ mod tests {
                 transform::projection_extraction::ProjectionExtraction,
             )),
             "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
+            "ProjectionPushdown" => {
+                Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
+            }
             "ReductionPushdown" => Ok(Box::new(transform::reduction_pushdown::ReductionPushdown)),
             "UnionBranchCancellation" => {
                 Ok(Box::new(transform::union_cancel::UnionBranchCancellation))

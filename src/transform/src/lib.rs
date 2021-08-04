@@ -41,6 +41,7 @@ pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
+pub mod projection_pushdown;
 pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
@@ -184,6 +185,8 @@ impl Default for FuseAndCollapse {
                 // no longer works against redundant join, check if it is still
                 // necessary to run RedundantJoin here.
                 Box::new(crate::redundant_join::RedundantJoin),
+                Box::new(crate::projection_pushdown::ProjectionPushdown),
+                Box::new(crate::update_let::UpdateLet),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
@@ -295,22 +298,14 @@ impl Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
-                    Box::new(crate::fusion::filter::Filter),
-                    // fill in the new demand after maps have been shifted
-                    // around.
-                    Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
-                    Box::new(crate::fusion::map::Map),
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
-            Box::new(crate::cse::map::Map),
-            Box::new(crate::projection_lifting::ProjectionLifting),
-            Box::new(crate::join_implementation::JoinImplementation),
+            Box::new(crate::cse::mfp::Mfp),
             Box::new(crate::fusion::project::Project),
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.

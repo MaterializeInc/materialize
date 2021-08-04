@@ -9,5 +9,5 @@
 
 //! Common subexpression elimination.
 
-pub mod map;
+pub mod mfp;
 pub mod relation_cse;

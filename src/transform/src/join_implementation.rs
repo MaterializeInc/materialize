@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use expr::{Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -105,15 +105,10 @@ impl JoinImplementation {
                 .collect::<Vec<_>>();
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
             for index in 0..inputs.len() {
-                // We can work around filters, as we can lift the predicates into the join execution.
-                let mut input = &mut inputs[index];
-                while let MirRelationExpr::Filter {
-                    input: inner,
-                    predicates: _,
-                } = input
-                {
-                    input = inner;
-                }
+                // We can work around mfps, as we can lift the mfps into the join execution.
+                let (mfp, input) =
+                    MapFilterProject::extract_non_errors_from_expression(&inputs[index]);
+                let (_, _, project) = mfp.as_map_filter_project();
                 // Get and ArrangeBy expressions contribute arrangements.
                 match input {
                     MirRelationExpr::Get { id, typ: _ } => {
@@ -139,6 +134,23 @@ impl JoinImplementation {
                 }
                 available_arrangements[index].sort();
                 available_arrangements[index].dedup();
+                let reverse_project = project
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| (c, i))
+                    .collect::<HashMap<_, _>>();
+                // Eliminate arrangements refering to columns that have been
+                // projected away by surrounding MFPs.
+                available_arrangements[index].retain(|key| {
+                    key.iter()
+                        .all(|k| k.support().iter().all(|c| reverse_project.contains_key(c)))
+                });
+                // Permute arrangements so columns reference what is after the MFP.
+                for key_set in available_arrangements[index].iter_mut() {
+                    for key in key_set.iter_mut() {
+                        key.permute_map(&reverse_project);
+                    }
+                }
                 // Currently we only support using arrangements all of whose
                 // keys can be found in some equivalence.
                 // Note: because `order_input` currently only finds arrangements
@@ -196,7 +208,7 @@ mod delta_queries {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            demand,
+            demand: _,
             implementation,
         } = &mut new_join
         {
@@ -234,32 +246,12 @@ mod delta_queries {
                 .collect::<Vec<_>>();
 
             // Implement arrangements in each of the inputs.
-            let mut lifted = Vec::new();
-            super::implement_arrangements(
-                inputs,
-                available,
-                input_mapper,
-                orders.iter().flatten(),
-                &mut lifted,
-            );
-
-            if !lifted.is_empty() {
-                // We must add the support of expression in `lifted` to the `demand`
-                // member to ensure they are correctly populated.
-                if let Some(demand) = demand {
-                    for expr in lifted.iter() {
-                        demand.extend(expr.support());
-                        demand.sort_unstable();
-                        demand.dedup();
-                    }
-                }
-            }
+            let lifted_mfp =
+                super::implement_arrangements(inputs, available, orders.iter().flatten());
 
             *implementation = JoinImplementation::DeltaQuery(orders);
 
-            if !lifted.is_empty() {
-                new_join = new_join.filter(lifted);
-            }
+            super::install_lifted_mfp(&mut new_join, lifted_mfp);
 
             // Hooray done!
             Some(new_join)
@@ -285,7 +277,7 @@ mod differential {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            demand,
+            demand: _,
             implementation,
         } = &mut new_join
         {
@@ -337,26 +329,7 @@ mod differential {
             };
 
             // Implement arrangements in each of the inputs.
-            let mut lifted = Vec::new();
-            super::implement_arrangements(
-                inputs,
-                available,
-                input_mapper,
-                order.iter(),
-                &mut lifted,
-            );
-
-            if !lifted.is_empty() {
-                // We must add the support of expression in `lifted` to the `demand`
-                // member to ensure they are correctly populated.
-                if let Some(demand) = demand {
-                    for expr in lifted.iter() {
-                        demand.extend(expr.support());
-                        demand.sort_unstable();
-                        demand.dedup();
-                    }
-                }
-            }
+            let lifted_mfp = super::implement_arrangements(inputs, available, order.iter());
 
             if start_keys.is_some() {
                 // now that the starting arrangement has been implemented,
@@ -368,9 +341,7 @@ mod differential {
             // Install the implementation.
             *implementation = JoinImplementation::Differential((start, start_keys), order);
 
-            if !lifted.is_empty() {
-                new_join = new_join.filter(lifted);
-            }
+            super::install_lifted_mfp(&mut new_join, lifted_mfp);
 
             // Hooray done!
             Some(new_join)
@@ -386,47 +357,111 @@ mod differential {
 fn implement_arrangements<'a>(
     inputs: &mut [MirRelationExpr],
     available_arrangements: &[Vec<Vec<MirScalarExpr>>],
-    input_mapper: &JoinInputMapper,
     needed_arrangements: impl Iterator<Item = &'a (usize, Vec<MirScalarExpr>)>,
-    lifted_predicates: &mut Vec<MirScalarExpr>,
-) {
+) -> MapFilterProject {
     // Collect needed arrangements by source index.
     let mut needed = vec![Vec::new(); inputs.len()];
     for (index, key) in needed_arrangements {
         needed[*index].push(key.clone());
     }
 
+    let mut lifted_mfps = vec![None; inputs.len()];
+
     // Transform inputs[index] based on needed and available arrangements.
-    // Specifically, lift intervening predicates if all arrangements exist.
+    // Specifically, lift intervening mfps if all arrangements exist.
     for (index, needed) in needed.iter_mut().enumerate() {
         needed.sort();
         needed.dedup();
-        // We should lift any predicates, iff all arrangements are otherwise available.
+        // We should lift any mfps, iff all arrangements are otherwise available.
         if !needed.is_empty()
             && needed
                 .iter()
                 .all(|key| available_arrangements[index].contains(key))
         {
-            while let MirRelationExpr::Filter {
-                input: inner,
-                predicates,
-            } = &mut inputs[index]
-            {
-                lifted_predicates.extend(
-                    predicates
-                        .drain(..)
-                        .map(|expr| input_mapper.map_expr_to_global(expr, index)),
-                );
-                inputs[index] = inner.take_dangerous();
-            }
+            lifted_mfps[index] = Some(MapFilterProject::extract_from_expression_mut(
+                &mut inputs[index],
+            ));
         }
         // Clean up existing arrangements, and install one with the needed keys.
         while let MirRelationExpr::ArrangeBy { input: inner, .. } = &mut inputs[index] {
             inputs[index] = inner.take_dangerous();
         }
         if !needed.is_empty() {
+            // If a mfp was lifted in order to install the arrangement, permute
+            // the arrangement.
+            if let Some(lifted_mfp) = &lifted_mfps[index] {
+                let (_, _, project) = lifted_mfp.as_map_filter_project();
+                for arr in needed.iter_mut() {
+                    for key in arr.iter_mut() {
+                        key.permute(&project);
+                    }
+                }
+            }
             inputs[index] = MirRelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
         }
+    }
+
+    // Combined lifted mfps into one.
+    let new_join_mapper = JoinInputMapper::new(inputs);
+    let mut arity = new_join_mapper.total_columns();
+    let combined_mfp = MapFilterProject::new(arity);
+    let mut combined_filter = Vec::new();
+    let mut combined_map = Vec::new();
+    let mut combined_project = Vec::new();
+    for (index, lifted_mfp) in lifted_mfps.into_iter().enumerate() {
+        if let Some(mut lifted_mfp) = lifted_mfp {
+            lifted_mfp.permute(
+                // globalize all input column references
+                &(new_join_mapper
+                    .local_columns(index)
+                    .zip(new_join_mapper.global_columns(index)))
+                .collect(),
+                // shift the position of scalars to be after the last input
+                // column
+                arity,
+            );
+            let (mut map, mut filter, mut project) = lifted_mfp.as_map_filter_project();
+            arity += map.len();
+            combined_map.append(&mut map);
+            combined_filter.append(&mut filter);
+            combined_project.append(&mut project);
+        } else {
+            combined_project.extend(new_join_mapper.global_columns(index));
+        }
+    }
+    combined_mfp
+        .map(combined_map)
+        .filter(combined_filter)
+        .project(combined_project)
+}
+
+fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
+    if !mfp.is_identity() {
+        let (map, filter, project) = mfp.as_map_filter_project();
+        if let MirRelationExpr::Join { equivalences, .. } = new_join {
+            for equivalence in equivalences.iter_mut() {
+                for expr in equivalence.iter_mut() {
+                    // permute `equivalences` in light of the project being lifted
+                    expr.permute(&project);
+                    // if column references refer to mapped expressions that have been
+                    // lifted, replace the column reference with the mapped expression.
+                    expr.visit_mut_pre_post(
+                        &mut |e| {
+                            if let MirScalarExpr::Column(c) = e {
+                                if *c >= mfp.input_arity {
+                                    if *c >= mfp.input_arity {
+                                        *e = map[*c - mfp.input_arity].clone();
+                                    }
+                                }
+                            }
+                            None
+                        },
+                        &mut |_| {},
+                    );
+                }
+            }
+        }
+        *new_join = new_join.clone().map(map).filter(filter).project(project);
     }
 }
 

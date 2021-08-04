@@ -86,3 +86,99 @@ opt
 ----
 %0 =
 | Constant
+
+# test that JoinImplementation properly lifts MapFilterProjects
+
+opt
+(join
+    [
+        (project (filter (map (reduce (get x) [#0] [(sum_int32 #1)]) [(call_unary
+    neg_int32 #1)]) [(call_binary lt #1 #2)])[#2 #1 #0])
+        (get x)
+    ]
+    [[#2 #3]]
+)
+----
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg sum(#1)
+| ArrangeBy (#0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| Filter (#1 < -(#1))
+| Map -(#1)
+| Project (#5, #1, #0, #0, #3, #4)
+----
+----
+
+opt
+(join
+    [
+        (project (filter (map (get x) [(call_unary neg_int32 #1)]) [(call_binary
+        lt #1 #0)])[#1 #3 #0])
+        (reduce (get x) [#0] [(sum_int32 #1)])]
+    [[#1 #3]]
+)
+----
+----
+%0 =
+| Get x (u0)
+| Filter (#1 < #0)
+| Map -(#1)
+| Project (#0, #1, #3)
+
+%1 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg sum(#1)
+| ArrangeBy (#0)
+
+%2 =
+| Join %0 %1 (= #2 #3)
+| | implementation = Differential %0 %1.(#0)
+| Project (#1, #2, #0, #2, #4)
+----
+----
+
+opt
+(join
+    [
+        (project (filter (map (reduce (get x) [#0] [(sum_int32 #1)]) [(call_unary
+    neg_int32 #1)]) [(call_binary lt #1 #2)])[#1 #2 #0])
+        (get x)
+        (reduce (get x) [#1] [(max_int32 #2)])
+    ]
+    [[#2 #3] [#1 #6]]
+)
+----
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg sum(#1)
+| ArrangeBy (#0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Get x (u0)
+| Reduce group=(#1)
+| | agg max(#2)
+| ArrangeBy (#0)
+
+%3 =
+| Join %0 %1 %2 (= #0 #2) (= #5 -(#1))
+| | implementation = Differential %1 %0.(#0) %2.(#0)
+| Filter (#1 < -(#1))
+| Map -(#1)
+| Project (#1, #7, #0, #0, #3, #4, #7, #6)
+----
+----
