@@ -263,7 +263,7 @@ impl PredicatePushdown {
                                     continue;
                                 }
                             } else if let Some((expr1, expr2)) =
-                                Self::extract_equal_or_both_null(&mut predicate)
+                                Self::extract_equal_or_both_null(&mut predicate, &input_type)
                             {
                                 // Also translate into join variable constraints:
                                 // 3) `((nonliteral1 = nonliteral2) || (nonliteral
@@ -764,9 +764,13 @@ impl PredicatePushdown {
     }
 
     /// If `s` is of the form
-    /// `(isnull(expr1) && isnull(expr2)) || (expr1 = expr2)`,
+    /// `(isnull(expr1) && isnull(expr2)) || (expr1 = expr2)`, or
+    /// `(decompose_is_null(expr1) && decompose_is_null(expr2)) || (expr1 = expr2)`,
     /// extract `expr1` and `expr2`.
-    fn extract_equal_or_both_null(s: &mut MirScalarExpr) -> Option<(MirScalarExpr, MirScalarExpr)> {
+    fn extract_equal_or_both_null(
+        s: &mut MirScalarExpr,
+        relation_type: &repr::RelationType,
+    ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         // Or, And, and Eq are all commutative functions. For each of these
         // functions, order expr1 and expr2 so you only need to check
         // `condition1(expr1) && condition2(expr2)`, and you do
@@ -785,33 +789,46 @@ impl PredicatePushdown {
                 expr2: eqinnerexpr2,
             } = &mut **expr2
             {
-                if let MirScalarExpr::CallBinary {
-                    func: BinaryFunc::And,
-                    expr1: andinnerexpr1,
-                    expr2: andinnerexpr2,
-                } = &mut **expr1
+                let isnull1 = eqinnerexpr1.clone().call_unary(UnaryFunc::IsNull);
+                let isnull2 = eqinnerexpr2.clone().call_unary(UnaryFunc::IsNull);
+                let both_null = isnull1.call_binary(isnull2, BinaryFunc::And);
+
+                if Self::extract_reduced_conjunction_terms(both_null, relation_type)
+                    == Self::extract_reduced_conjunction_terms((**expr1).clone(), relation_type)
                 {
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::IsNull,
-                        expr: nullexpr1,
-                    } = &**andinnerexpr1
-                    {
-                        if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull,
-                            expr: nullexpr2,
-                        } = &**andinnerexpr2
-                        {
-                            if (&**eqinnerexpr1 == &**nullexpr1)
-                                && (&**eqinnerexpr2 == &**nullexpr2)
-                            {
-                                return Some(((**eqinnerexpr1).clone(), (**eqinnerexpr2).clone()));
-                            }
-                        }
-                    }
+                    return Some(((**eqinnerexpr1).clone(), (**eqinnerexpr2).clone()));
                 }
             }
         }
         None
+    }
+
+    /// Reduces the given expression and returns its AND-ed terms.
+    fn extract_reduced_conjunction_terms(
+        mut s: MirScalarExpr,
+        relation_type: &repr::RelationType,
+    ) -> Vec<MirScalarExpr> {
+        s.reduce(relation_type);
+
+        let mut pending = vec![s];
+        let mut terms = Vec::new();
+
+        while let Some(expr) = pending.pop() {
+            if let MirScalarExpr::CallBinary {
+                func: expr::BinaryFunc::And,
+                expr1,
+                expr2,
+            } = expr
+            {
+                pending.push(*expr1);
+                pending.push(*expr2);
+            } else {
+                terms.push(expr);
+            }
+        }
+        terms.sort();
+        terms.dedup();
+        terms
     }
 
     /// Defines a criteria for inlining scalar expressions.
