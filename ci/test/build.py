@@ -88,13 +88,12 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
         ],
         cwd=repo.root,
     )
-    deb_size = deb_path.stat().st_size
 
     # Stage the package on S3
     boto3.client("s3").upload_file(
-        str(deb_path),
-        APT_BUCKET,
-        apt_materialized_path(version),
+        Filename=str(deb_path),
+        Bucket=APT_BUCKET,
+        Key=apt_materialized_path(version),
     )
 
 

@@ -67,7 +67,9 @@ def publish_deb(package: str, version: str) -> None:
 
     # Download the staged package, as deb-s3 needs various metadata from it.
     boto3.client("s3").download_file(
-        APT_BUCKET, apt_materialized_path(version), f"materialized-{version}.deb"
+        Bucket=APT_BUCKET,
+        Key=apt_materialized_path(version),
+        Filename=f"materialized-{version}.deb",
     )
 
     # Import our GPG signing key from the environment.

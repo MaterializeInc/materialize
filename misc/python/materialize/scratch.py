@@ -7,24 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Utilities for launching and interacting with scratch ec2 instances
-"""
+"""Utilities for launching and interacting with scratch EC2 instances."""
 
 import os
-import json
-import argparse
 import asyncio
-import random
 import shlex
-import sys
 import boto3
 from subprocess import CalledProcessError
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional
 from datetime import datetime, timedelta, timezone
 
+from mypy_boto3_ec2.service_resource import Instance
+from mypy_boto3_ec2.type_defs import (
+    InstanceNetworkInterfaceSpecificationTypeDef,
+    InstanceTypeDef,
+    RunInstancesRequestRequestTypeDef,
+)
+
+from materialize import errors
 from materialize import git
 from materialize import ui
-from materialize import spawn
 from materialize import ssh
 
 SPEAKER = ui.speaker("scratch> ")
@@ -44,7 +46,7 @@ def launch(
     security_group_id: str,
     instance_profile: Optional[str],
     nonce: str,
-) -> Any:
+) -> Instance:
     """Launch and configure an ec2 instance with the given properties."""
 
     if display_name:
@@ -55,14 +57,22 @@ def launch(
     tags["nonce"] = nonce
     tags["git_ref"] = git.describe()
 
+    network_interface: InstanceNetworkInterfaceSpecificationTypeDef = {
+        "AssociatePublicIpAddress": True,
+        "DeviceIndex": 0,
+        "Groups": [security_group_id],
+    }
+    if subnet_id:
+        network_interface["SubnetId"] = subnet_id
+
     SPEAKER(f"launching instance {display_name or '(unnamed)'}")
     with open(ROOT + "/misc/load-tests/provision.bash") as f:
         provisioning_script = f.read()
-    kwargs = {
+    kwargs: RunInstancesRequestRequestTypeDef = {
         "MinCount": 1,
         "MaxCount": 1,
         "ImageId": ami,
-        "InstanceType": instance_type,
+        "InstanceType": instance_type,  # type: ignore
         "UserData": provisioning_script,
         "TagSpecifications": [
             {
@@ -70,14 +80,7 @@ def launch(
                 "Tags": [{"Key": k, "Value": v} for (k, v) in tags.items()],
             }
         ],
-        "NetworkInterfaces": [
-            {
-                "AssociatePublicIpAddress": True,
-                "DeviceIndex": 0,
-                "Groups": [security_group_id],
-                "SubnetId": subnet_id,
-            }
-        ],
+        "NetworkInterfaces": [network_interface],
         "BlockDeviceMappings": [
             {
                 "DeviceName": "/dev/sda1",
@@ -103,7 +106,7 @@ class CommandResult(NamedTuple):
     stderr: str
 
 
-async def run_ssm(i: Any, commands: List[str], timeout: int = 60) -> CommandResult:
+async def run_ssm(i: Instance, commands: List[str], timeout: int = 60) -> CommandResult:
     id = boto3.client("ssm").send_command(
         InstanceIds=[i.instance_id],
         DocumentName="AWS-RunShellScript",
@@ -131,8 +134,8 @@ async def run_ssm(i: Any, commands: List[str], timeout: int = 60) -> CommandResu
     )
 
 
-async def setup(i: Any, subnet_id: Optional[str], local_pub_key: str) -> None:
-    def is_ready(i: Any) -> bool:
+async def setup(i: Instance, subnet_id: Optional[str], local_pub_key: str) -> None:
+    def is_ready(i: Instance) -> bool:
         return bool(
             i.public_ip_address and i.state and i.state.get("Name") == "running"
         )
@@ -189,7 +192,7 @@ async def setup(i: Any, subnet_id: Optional[str], local_pub_key: str) -> None:
     mkrepo(i)
 
 
-def mkrepo(i: Any) -> None:
+def mkrepo(i: Instance) -> None:
     """Create a Materialize repository on the remote ec2 instance and push the present repository to it."""
     ssh.runv(
         ["git", "init", "--bare", "/home/ubuntu/materialize/.git"],
@@ -220,7 +223,9 @@ class MachineDesc(NamedTuple):
     size_gb: int
 
 
-async def setup_all(instances: List[Any], subnet_id: str, local_pub_key: str) -> None:
+async def setup_all(
+    instances: List[Instance], subnet_id: str, local_pub_key: str
+) -> None:
     await asyncio.gather(*(setup(i, subnet_id, local_pub_key) for i in instances))
 
 
@@ -232,7 +237,7 @@ def launch_cluster(
     security_group_id: str,
     instance_profile: Optional[str],
     extra_tags: Dict[str, str],
-) -> List[Any]:
+) -> List[Instance]:
     """Launch a cluster of instances with a given nonce"""
     instances = [
         launch(
@@ -290,11 +295,11 @@ def launch_cluster(
     return instances
 
 
-def get_old_instances() -> List[Any]:
-    def is_running(i: Any) -> bool:
-        return bool(i["State"]["Name"] == "running")
+def get_old_instances() -> List[InstanceTypeDef]:
+    def is_running(i: InstanceTypeDef) -> bool:
+        return i["State"]["Name"] == "running"
 
-    def is_old(i: Any) -> bool:
+    def is_old(i: InstanceTypeDef) -> bool:
         tags_dict = {tag["Key"]: tag["Value"] for tag in i["Tags"]}
         delete_after = tags_dict.get("scratch-delete-after")
         if delete_after is None:

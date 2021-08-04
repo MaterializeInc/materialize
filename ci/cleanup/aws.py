@@ -7,16 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
-from typing import Dict, List
 from urllib.parse import unquote, urlparse
 
 import boto3
-import botocore  # type: ignore
+import botocore
 
-from materialize import spawn, scratch
+from materialize import scratch
 
 MAX_AGE = timedelta(hours=1)
 
