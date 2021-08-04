@@ -616,6 +616,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                 Antichain::from_elem(Timestamp::minimum()),
             );
 
+            // TODO: if there's no data in the future then we have to create a
+            // pointless empty batch. Instead of deriving the upper from the list
+            // of batches we ought to store an upper, or perhaps even better a
+            // description of the stream since we already store a stream level since.
+
             // Move a batch of data from future into trace by reading a
             // snapshot from future...
             let mut updates = Vec::new();
@@ -628,15 +633,31 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
             // Trace batches are required to be sorted and consolidated by ((k, v), t)
             differential_dataflow::consolidation::consolidate_updates(&mut updates);
-            updates_by_id.push((*id, seal, updates.clone()));
+            updates_by_id.push((*id, seal.clone(), updates.clone()));
 
             // ...and atomically swapping that snapshot's data into trace.
-            let batch = BlobTraceBatch { desc, updates };
+            let batch = BlobTraceBatch {
+                desc,
+                updates: updates.clone(),
+            };
             let new_future_ts_lower = batch.desc.upper().clone();
 
             // TODO handle these errors correctly.
             trace.append(batch, &mut self.blob).expect("wip");
             future.truncate(new_future_ts_lower).expect("wip");
+
+            // TODO: we actually should send this notification after
+            // meta is committed
+            if let Some(listen_fns) = self.listeners.get(id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Records(updates.clone()));
+                }
+            }
+            if let Some(listen_fns) = self.listeners.get(id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Sealed(seal[0]));
+                }
+            }
         }
 
         // TODO: This is a good point to compact future. The data that's been

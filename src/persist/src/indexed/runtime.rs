@@ -76,7 +76,8 @@ where
             last_cmdq_drain: Instant::now(),
             last_future_drain: Instant::now(),
             cmdq_drain_interval: Duration::from_millis(100),
-            future_drain_interval: Duration::from_secs(2),
+            // TODO: does this still work at high values?
+            future_drain_interval: Duration::from_secs(1),
         };
         while l.work() {}
     };
@@ -479,38 +480,51 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
     fn work(&mut self) -> bool {
-        let cmd = match self.rx.recv() {
-            Ok(cmd) => cmd,
-            Err(crossbeam_channel::RecvError) => {
+        let cmd = match self.rx.recv_timeout(self.cmdq_drain_interval) {
+            Ok(cmd) => Some(cmd),
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                 // All Runtime handles hung up. Drop should have shut things down
                 // nicely, so this is unexpected.
                 return false;
             }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => None,
         };
-        match cmd {
-            cmd @ Cmd::Stop(_) => {
-                self.cmdq.push(cmd);
-                let cmdq = self.drain_cmdq();
-                self.indexed.handle_commands(cmdq);
 
-                return false;
-            }
+        if let Some(cmd) = cmd {
+            match cmd {
+                cmd @ Cmd::Stop(_) => {
+                    self.cmdq.push(cmd);
+                    let cmdq = self.drain_cmdq();
+                    self.indexed.handle_commands(cmdq);
 
-            cmd @ Cmd::Snapshot(..) | cmd @ Cmd::Listen(..) => {
-                self.cmdq.push(cmd);
-                let cmdq = self.drain_cmdq();
-                self.indexed.handle_commands(cmdq);
+                    return false;
+                }
+
+                // TODO: register and destroy don't need to be flush the pipeline
+                // hacking this in because at the moment those two commads are called
+                // synchronously.
+                cmd @ Cmd::Snapshot(..)
+                | cmd @ Cmd::Listen(..)
+                | cmd @ Cmd::Register(..)
+                | cmd @ Cmd::Destroy(..) => {
+                    self.cmdq.push(cmd);
+                    let cmdq = self.drain_cmdq();
+                    self.indexed.handle_commands(cmdq);
+                }
+                cmd => {
+                    self.cmdq.push(cmd);
+                }
             }
-            cmd => self.cmdq.push(cmd),
         }
-
         let now = Instant::now();
 
         if now.duration_since(self.last_cmdq_drain) > self.cmdq_drain_interval {
             self.last_cmdq_drain = now;
             let cmdq = self.drain_cmdq();
             self.indexed.handle_commands(cmdq);
-        } else if now.duration_since(self.last_future_drain) > self.future_drain_interval {
+        }
+
+        if now.duration_since(self.last_future_drain) > self.future_drain_interval {
             self.last_future_drain = now;
             self.indexed.drain_future();
         }
