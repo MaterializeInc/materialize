@@ -31,6 +31,7 @@ use crate::indexed::encoding::{
     BlobFutureBatch, BlobFutureMeta, BlobMeta, BlobTraceBatch, BlobTraceMeta, BufferEntry, Id,
 };
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
+use crate::indexed::runtime::Cmd;
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
@@ -146,17 +147,24 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         Ok(())
     }
 
+    /// Check if a registration command is logically valid.
+    fn validate_register(&self, name: &str) -> Result<(), Error> {
+        if self.graveyard.iter().any(|(s, _)| s == &name) {
+            return Err(Error::from(format!(
+                "invalid registration: stream {} already destroyed",
+                name
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Creates, if necessary, a new future and trace with the given external
     /// stream name, returning the corresponding internal stream id.
     ///
     /// This method is idempotent: ids may be registered multiple times.
     pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
-        if self.graveyard.iter().any(|(s, _)| s == &id_str) {
-            return Err(Error::from(format!(
-                "invalid registration: stream {} already destroyed",
-                id_str
-            )));
-        }
+        self.validate_register(id_str)?;
         let id = self.id_mapping.iter().find(|(s, _)| s == &id_str);
         let id = match id {
             Some((_, id)) => *id,
@@ -176,12 +184,32 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         Ok(id)
     }
 
+    fn validate_destroy(&self, name: &str) -> Result<(), Error> {
+        if self
+            .graveyard
+            .iter()
+            .any(|(destroyed_name, _)| destroyed_name == &name)
+            || self
+                .id_mapping
+                .iter()
+                .any(|(stream_name, _)| stream_name == &name)
+        {
+            Ok(())
+        } else {
+            Err(Error::from(format!(
+                "invalid destroy of stream {} that was never registered or destroyed",
+                name
+            )))
+        }
+    }
+
     /// Removes a stream from the index.
     ///
     /// This method is idempotent and may be called multiple times. It returns
     /// true if the stream was destroyed from this call, and false if it was
     /// already destroyed.
     pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
+        self.validate_destroy(id_str)?;
         if self
             .graveyard
             .iter()
@@ -190,17 +218,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             return Ok(false);
         }
 
-        let mapping = self.id_mapping.iter().find(|(name, _)| name == &id_str);
-
-        let mapping = match mapping {
-            Some(mapping) => mapping.clone(),
-            None => {
-                return Err(Error::from(format!(
-                    "invalid destroy of stream {} that was never registered or destroyed",
-                    id_str
-                )));
-            }
-        };
+        let mapping = self
+            .id_mapping
+            .iter()
+            .find(|(name, _)| name == &id_str)
+            .expect("name known to exist");
 
         self.id_mapping.retain(|(name, _)| name != &id_str);
 
@@ -213,7 +235,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         debug_assert!(future.is_some());
         debug_assert!(trace.is_some());
 
-        self.graveyard.push(mapping);
+        self.graveyard.push(mapping.clone());
 
         return Ok(true);
     }
@@ -230,12 +252,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         // TODO: Incrementally compact future.
     }
 
-    /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
-    /// with the given id.
-    pub fn write_sync(
-        &mut self,
-        updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
-    ) -> Result<SeqNo, Error> {
+    fn validate_write_sync(
+        &self,
+        updates: &[(Id, Vec<((K, V), u64, isize)>)],
+    ) -> Result<(), Error> {
         for (id, updates) in updates.iter() {
             let sealed_frontier = self.sealed_frontier(*id)?;
             for update in updates.iter() {
@@ -249,12 +269,46 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
+    /// with the given id.
+    pub fn write_sync(
+        &mut self,
+        updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+    ) -> Result<SeqNo, Error> {
+        self.validate_write_sync(&updates)?;
+
         let entry = BufferEntry { updates };
         let mut entry_bytes = Vec::new();
         unsafe { abomonation::encode(&entry, &mut entry_bytes) }
             .expect("write to Vec is infallible");
         let seqno = self.buf.write_sync(entry_bytes)?;
         Ok(seqno)
+    }
+
+    /// Handle all the commands in `cmdq` and either:
+    /// - execute and commit all of them
+    /// - execute and commit none of them.
+    ///
+    /// This doesn't mean they all have to be valid, just that
+    /// all of the ones that needed to get written down do get written down
+    fn handle_commands(&mut self, cmdq: Vec<Cmd<K, V>>) -> Result<(), Vec<Cmd<K, V>>> {
+        unimplemented!()
+    }
+
+    fn validate_command(&self, cmd: &Cmd<K, V>) -> Result<(), Error> {
+        match cmd {
+            Cmd::Register(name, _) => self.validate_register(name),
+            Cmd::Destroy(name, _) => self.validate_destroy(name),
+            Cmd::Write(writes, _) => self.validate_write_sync(writes),
+            Cmd::Seal(ids, ts_upper, _) => self.validate_seal(ids, *ts_upper).map(|_| ()),
+            Cmd::AllowCompaction(id, ts, _) => self.validate_allow_compaction(*id, *ts),
+            Cmd::Snapshot(id, _) => self.validate_registered_id(*id),
+            Cmd::Listen(id, _, _) => self.validate_registered_id(*id),
+            Cmd::Stop(_) => Ok(()),
+        }
     }
 
     /// Atomically moves all writes currently in the buffer into the future.
@@ -505,6 +559,22 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         }
     }
 
+    fn validate_allow_compaction(&self, id: Id, since: u64) -> Result<(), Error> {
+        let trace = self
+            .traces
+            .get(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let prev = trace.since();
+        if !prev.less_than(&since) {
+            Err(Error::from(format!(
+                "invalid since for {:?}: {:?} not in advance of current since frontier {:?}",
+                id, since, prev
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Permit compaction of updates at times < since to since.
     ///
     /// The compaction frontier can only monotonically increase and it is an error
@@ -516,12 +586,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// calls with a frontier <= current_compaction_frontier. We chose to mirror
     /// the `seal` API here but if that doesn't make sense, remove the restrictions.
     pub fn allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
-        let trace = self
-            .traces
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        self.validate_allow_compaction(id, since)?;
+        let trace = self.traces.get_mut(&id).expect("trace known to exist");
         let since = Antichain::from_elem(since);
 
+        // WIP TODO: make this bit not fallible.
         trace.allow_compaction(since)?;
         // Atomically update the meta with both the trace and future changes.
         //
@@ -558,16 +627,19 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         }
     }
 
+    fn validate_registered_id(&self, id: Id) -> Result<(), Error> {
+        if !self.futures.contains_key(&id) {
+            Err(Error::from(format!("never registered: {:?}", id)))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Returns a [Snapshot] for the given id.
     pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot<K, V>, Error> {
-        let future = self
-            .futures
-            .get(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let trace = self
-            .traces
-            .get(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        self.validate_registered_id(id)?;
+        let future = self.futures.get(&id).expect("future known to exist");
+        let trace = self.traces.get(&id).expect("trace known to exist");
         let trace = trace.snapshot(&self.blob)?;
         let future = future.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
@@ -603,7 +675,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     // tail, subscribe, tee, inspect, and capture.
     pub fn listen(&mut self, id: Id, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
         // Verify that id has been registered.
-        let _ = self.sealed_frontier(id)?;
+        self.validate_registered_id(id)?;
         self.listeners.entry(id).or_default().push(listen_fn);
         Ok(())
     }

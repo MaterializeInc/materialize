@@ -27,14 +27,23 @@ use crate::pfuture::{Future, FutureHandle};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Data;
 
-enum Cmd<K, V> {
+/// A command sent to Indexed.
+pub enum Cmd<K, V> {
+    /// Register a stream with a name
     Register(String, FutureHandle<Id>),
+    /// Destroy a stream.
     Destroy(String, FutureHandle<bool>),
+    /// Write a set of updates to a given set of streams.
     Write(Vec<(Id, Vec<((K, V), u64, isize)>)>, FutureHandle<SeqNo>),
+    /// Seal a set of streams to a given time.
     Seal(Vec<Id>, u64, FutureHandle<()>),
+    /// allow comoaction
     AllowCompaction(Id, u64, FutureHandle<()>),
+    /// snapshot
     Snapshot(Id, FutureHandle<IndexedSnapshot<K, V>>),
+    /// listen
     Listen(Id, ListenFn<K, V>, FutureHandle<()>),
+    /// stop TODO WIP fix these
     Stop(FutureHandle<()>),
 }
 

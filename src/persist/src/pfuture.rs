@@ -55,10 +55,12 @@ impl<T> Future<T> {
 }
 
 /// A handle for filling the result of an asynchronous computation.
-pub(crate) struct FutureHandle<T>(oneshot::Sender<Result<T, Error>>);
+/// WIP TODO: revert this change that make this public
+pub struct FutureHandle<T>(oneshot::Sender<Result<T, Error>>);
 
 impl<T> FutureHandle<T> {
-    pub(crate) fn fill(self, res: Result<T, Error>) {
+    /// TODO docs
+    pub fn fill(self, res: Result<T, Error>) {
         // Don't care if the receiver hung up.
         let _ = self.0.send(res);
     }
