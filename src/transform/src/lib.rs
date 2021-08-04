@@ -172,6 +172,17 @@ impl Default for FuseAndCollapse {
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
+                Box::new(crate::predicate_pushdown::PredicatePushdown),
+                // Remove empty Filter nodes left behind by predicate pushdown.
+                // This should run before redundant join to ensure that key info
+                // is correct.
+                Box::new(crate::fusion::filter::Filter),
+                // Lifts the information `!isnull(col)`
+                Box::new(crate::nonnullable::NonNullable),
+                Box::new(crate::update_let::UpdateLet),
+                // However, predicate pushdown unlocks the ability to remove
+                // redundant join inputs in some other cases, so run it again here.
+                Box::new(crate::redundant_join::RedundantJoin),
                 // Since predicates may prevent redundant join inputs from being
                 // removed, get predicates out of the way by lifting them, before
                 // attempting redundant join removal, and then push them back down.
@@ -183,17 +194,15 @@ impl Default for FuseAndCollapse {
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
                 Box::new(crate::redundant_join::RedundantJoin),
+                // Cleanup after PredicatePullup
                 Box::new(crate::predicate_pushdown::PredicatePushdown),
                 // Remove empty Filter nodes left behind by predicate pushdown.
                 // This should run before redundant join to ensure that key info
                 // is correct.
-                Box::new(crate::update_let::UpdateLet),
                 Box::new(crate::fusion::filter::Filter),
                 // Lifts the information `!isnull(col)`
                 Box::new(crate::nonnullable::NonNullable),
-                // However, predicate pushdown unlocks the ability to remove
-                // redundant join inputs in some other cases, so run it again here.
-                Box::new(crate::redundant_join::RedundantJoin),
+                Box::new(crate::update_let::UpdateLet),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can

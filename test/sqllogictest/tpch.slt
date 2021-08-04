@@ -1660,31 +1660,33 @@ ORDER BY
 ----
 %0 =
 | Get materialize.public.supplier (u8)
-| ArrangeBy ()
+| ArrangeBy (#0) (#3)
 
 %1 =
 | Get materialize.public.lineitem (u21)
-| Filter (#12 > #11)
-| ArrangeBy ()
+| ArrangeBy (#0) (#2)
 
 %2 =
 | Get materialize.public.orders (u18)
-| Filter (#2 = "F")
-| ArrangeBy ()
+| ArrangeBy (#0)
 
 %3 =
 | Get materialize.public.nation (u1)
-| Filter (#1 = "SAUDI ARABIA")
+| ArrangeBy (#0)
 
 %4 = Let l0 =
-| Join %0 %1 %2 %3
-| | implementation = Differential %3 %0.() %1.() %2.()
-| | demand = (#0, #1, #3, #7, #9, #23, #32)
+| Join %0 %1 %2 %3 (= #0 #9) (= #3 #32) (= #7 #23)
+| | implementation = DeltaQuery
+| |   delta %0 %3.(#0) %1.(#2) %2.(#0)
+| |   delta %1 %0.(#0) %2.(#0) %3.(#0)
+| |   delta %2 %1.(#0) %0.(#0) %3.(#0)
+| |   delta %3 %0.(#3) %1.(#2) %2.(#0)
+| | demand = (#0, #1, #7, #18, #19, #25, #33)
+| Filter (#25 = "F"), (#33 = "SAUDI ARABIA"), (#19 > #18)
 
 %5 =
 | Get %4 (l0)
-| Filter (#0 = #9), (#3 = #32), (#7 = #23)
-| Distinct group=(#7, #9)
+| Distinct group=(#7, #0)
 
 %6 =
 | Get materialize.public.lineitem (u21)
@@ -1701,16 +1703,14 @@ ORDER BY
 %8 = Let l1 =
 | Join %4 %7 (= #0 #37) (= #7 #36)
 | | implementation = Differential %4 %7.(#0, #1)
-| | demand = (#0, #1, #3, #7, #9, #23, #32)
+| | demand = (#0, #1, #7)
 
 %9 = Let l2 =
 | Get %8 (l1)
-| Filter (#0 = #9), (#3 = #32), (#7 = #23)
-| Distinct group=(#7, #9)
+| Distinct group=(#7, #0)
 
 %10 =
 | Get %8 (l1)
-| Filter (#0 = #9), (#3 = #32), (#7 = #23)
 | ArrangeBy (#0, #7)
 
 %11 =
