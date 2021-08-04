@@ -1,0 +1,63 @@
+{
+    "name": "chbench",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find chbench run cloud-load-test",
+    "instance_type": "r5ad.4xlarge",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 64,
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "lt_name": "release-chbench",
+        "purpose": "load_test",
+        "mzconduct_workflow": "cloud-load-test",
+        "test": "chbench",
+        "environment": "scratch"
+    }
+}
+
+{
+    "name": "billing-demo",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find chbench run cloud-load-test",
+    "instance_type": "r5ad.4xlarge",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 64,
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "lt_name": "release-billing-demo",
+        "purpose": "load_test",
+        "mzconduct_workflow": "cloud-load-test",
+        "test": "billing",
+        "environment": "scratch"
+    }
+}
+
+{
+    "name": "kinesis",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find chbench run cloud-load-test",
+    "instance_type": "r5ad.4xlarge",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 64,
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "lt_name": "release-kinesis",
+        "purpose": "load_test",
+        "mzconduct_workflow": "cloud-load-test",
+        "test": "perf-kinesis",
+        "environment": "scratch"
+    }
+}
+
+{
+    "name": "chaos",
+    "launch_script": "MZ_WORKERS=4 bin/mzcompose --mz-find chbench run cloud-load-test",
+    "instance_type": "r5ad.4xlarge",
+    "ami": "ami-0b29b6e62f2343b46",
+    "size_gb": 64,
+    "tags": {
+        "scrape_benchmark_numbers": "true",
+        "lt_name": "release-chaos-bytes-to-kafka",
+        "purpose": "load_test",
+        "mzconduct_workflow": "test-bytes-to-kafka",
+        "test": "chaos",
+        "environment": "scratch"
+    }
+}
