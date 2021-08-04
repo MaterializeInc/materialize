@@ -269,7 +269,7 @@ where
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
         // arrangement, as well as provides time to accumulate our produced output.
-        let refuel = 1000000;
+        let refuel = 1;
         // If `key_val` is set, and we have the arrangement by that key, we should
         // use that arrangement.
         if let Some((key, val)) = key_val {
