@@ -1,9 +1,8 @@
-2. Click the **Connect** button in the same row as the deployment.
-3. Click **Download certificates**.
-4. Unzip the certificate package.
-5. To connect to the deployment with the psql command-line tool, copy the command from the connection dialog and run it from the directory that contains the certificates.
+2. Click the **Connect** button in the same row as the deployment. It might take a couple of minutes before you're able to connect.
+3. Click **Download certificates** and unzip the certificate package.
+4. To connect to the deployment, you can use any [Materialize-compatible CLI](/connect/cli), like `psql` or `mzcli`. If you have `psql` installed on your machine, copy the command from the connection dialog and run it from the directory that contains the certificates.
 
-   The sample code below will not work unless you substitute your real hostname.
+   **Note:** The sample command below will not work unless you replace `hostname` with the one you were provided.
 
    ```
    psql "postgresql://materialize@hostname:6875materialize?
@@ -11,4 +10,4 @@
    sslkey=materialize.key&sslrootcert=ca.crt"
    ```
 
-    If you've just created the deployment, you may need to wait a minute or two before you'll be able to connect.
+   Otherwise, you can find the steps to install and use your CLI of choice under [Install](/install/#cli-connections).
