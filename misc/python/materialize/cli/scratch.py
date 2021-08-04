@@ -7,14 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
-import json
 import argparse
-import sys
+import json
+import os
 import random
-from typing import List, Dict, Any
+import sys
+from typing import Any, Dict, List
 
-from materialize.scratch import launch_cluster, MachineDesc
+from materialize.scratch import MachineDesc, launch_cluster
 
 
 def check_required_vars() -> None:

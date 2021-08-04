@@ -7,16 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize import git
-from materialize import spawn
-from pathlib import Path
-import boto3
-import humanize
 import os
 import tarfile
 import tempfile
 import time
+from pathlib import Path
 
+import boto3
+import humanize
+
+from materialize import git, spawn
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
@@ -43,18 +43,18 @@ def _sanitize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
 def upload_tarball(tarball: Path, platform: str, version: str) -> None:
     s3_object = f"materialized-{version}-{platform}.tar.gz"
     boto3.client("s3").upload_file(
-        str(tarball),
-        BINARIES_BUCKET,
-        s3_object,
+        Filename=str(tarball),
+        Bucket=BINARIES_BUCKET,
+        Key=s3_object,
     )
 
 
 def set_latest_redirect(platform: str, version: str) -> None:
     with tempfile.NamedTemporaryFile() as empty:
         boto3.client("s3").upload_fileobj(
-            empty,
-            BINARIES_BUCKET,
-            f"materialized-latest-{platform}.tar.gz",
+            Fileobj=empty,
+            Bucket=BINARIES_BUCKET,
+            Key=f"materialized-latest-{platform}.tar.gz",
             ExtraArgs={
                 "WebsiteRedirectLocation": f"/materialized-{version}-{platform}.tar.gz",
             },

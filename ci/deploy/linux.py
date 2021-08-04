@@ -7,22 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import boto3
 import io
 import os
 import subprocess
 from pathlib import Path
 
+import boto3
 import semver
 
-from materialize import cargo
-from materialize import ci_util
-from materialize import deb
-from materialize import git
-from materialize import mzbuild
-from materialize import spawn
+from materialize import cargo, ci_util, deb, git, mzbuild, spawn
+
 from . import deploy_util
-from .deploy_util import apt_materialized_path, APT_BUCKET
+from .deploy_util import APT_BUCKET, apt_materialized_path
 
 
 def main() -> None:
@@ -67,7 +63,9 @@ def publish_deb(package: str, version: str) -> None:
 
     # Download the staged package, as deb-s3 needs various metadata from it.
     boto3.client("s3").download_file(
-        APT_BUCKET, apt_materialized_path(version), f"materialized-{version}.deb"
+        Bucket=APT_BUCKET,
+        Key=apt_materialized_path(version),
+        Filename=f"materialized-{version}.deb",
     )
 
     # Import our GPG signing key from the environment.

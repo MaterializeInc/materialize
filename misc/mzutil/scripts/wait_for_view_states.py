@@ -21,15 +21,15 @@ import glob
 import io
 import json
 import os
-import sys
 import pathlib
+import sys
 import time
-import toml
 import typing
 
 import psycopg2  # type: ignore
 import psycopg2.errors  # type: ignore
 import psycopg2.extensions  # type: ignore
+import toml
 
 
 def view_names(

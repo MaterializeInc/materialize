@@ -10,7 +10,6 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-import dateparser
 import datetime
 import io
 import math
@@ -25,10 +24,10 @@ import uuid
 import confluent_kafka.admin
 import confluent_kafka.avro
 import confluent_kafka.schema_registry
+import dateparser
 import prometheus_api_client
 import prometheus_api_client.utils
 import requests
-
 
 METRICS_DIRECTORY = "/usr/share/benchmarks/schemas"
 

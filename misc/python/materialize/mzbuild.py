@@ -15,25 +15,6 @@ documentation][user-docs].
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
-from collections import OrderedDict
-from functools import lru_cache
-from pathlib import Path
-from tempfile import TemporaryFile
-from typing import (
-    cast,
-    Any,
-    Dict,
-    List,
-    Set,
-    Sequence,
-    Optional,
-    Union,
-    Iterable,
-    Iterator,
-    IO,
-    overload,
-)
-from typing_extensions import Literal
 import base64
 import contextlib
 import enum
@@ -46,13 +27,29 @@ import stat
 import subprocess
 import sys
 import time
+from collections import OrderedDict
+from functools import lru_cache
+from pathlib import Path
+from tempfile import TemporaryFile
+from typing import (
+    IO,
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Union,
+    cast,
+    overload,
+)
 
 import yaml
+from typing_extensions import Literal
 
-from materialize import cargo
-from materialize import git
-from materialize import spawn
-from materialize import ui
+from materialize import cargo, git, spawn, ui
 
 announce = ui.speaker("==> ")
 

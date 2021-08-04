@@ -7,8 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Utilities for interacting with humans
-"""
+"""Utilities for interacting with humans."""
 
 import asyncio
 import datetime
@@ -16,16 +15,7 @@ import os
 import shlex
 import sys
 import time
-from typing import (
-    Any,
-    AsyncGenerator,
-    Callable,
-    Generator,
-    Iterable,
-    Optional,
-    NamedTuple,
-    Union,
-)
+from typing import Any, AsyncGenerator, Callable, Generator, Iterable, Optional, Union
 
 from materialize import docker
 

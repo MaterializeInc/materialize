@@ -13,12 +13,11 @@ import subprocess
 import sys
 from functools import lru_cache, total_ordering
 from pathlib import Path
-from typing import List, Optional, Set, Union, NamedTuple
+from typing import List, NamedTuple, Optional, Set, Union
 
 import semver.version
 
-from materialize import spawn
-from materialize import errors
+from materialize import errors, spawn
 
 
 def rev_count(rev: str) -> int:

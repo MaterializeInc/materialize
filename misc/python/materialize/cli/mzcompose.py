@@ -9,22 +9,18 @@
 #
 # mzcompose.py — runs Docker Compose with Materialize customizations.
 
-from pathlib import Path
-from typing import IO, List, Tuple, Text, Optional, Sequence
-from typing_extensions import NoReturn
 import argparse
 import json
 import os
 import subprocess
 import sys
 import webbrowser
+from pathlib import Path
+from typing import IO, List, Optional, Sequence, Text, Tuple
 
-from materialize import errors
-from materialize import mzbuild
-from materialize import mzcompose
-from materialize import spawn
-from materialize import ui
+from typing_extensions import NoReturn
 
+from materialize import errors, mzbuild, mzcompose, spawn, ui
 
 announce = ui.speaker("==> ")
 say = ui.speaker("")

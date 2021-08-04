@@ -9,8 +9,7 @@
 
 """Debian packaging utilities."""
 
-from materialize import cargo
-from materialize import git
+from materialize import cargo, git
 
 
 def unstable_version(workspace: cargo.Workspace) -> str:

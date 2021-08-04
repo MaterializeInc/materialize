@@ -15,10 +15,11 @@ operations provided by the standard [`subprocess`][subprocess] module.
 [subprocess]: https://docs.python.org/3/library/subprocess.html
 """
 
-from pathlib import Path
-from typing import Dict, Sequence, Union, Optional, IO, overload
-from typing_extensions import Literal
 import subprocess
+from pathlib import Path
+from typing import IO, Dict, Optional, Sequence, Union, overload
+
+from typing_extensions import Literal
 
 from materialize import ui
 

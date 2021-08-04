@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from unittest.mock import patch
-import pytest  # type: ignore
 
+import pytest  # type: ignore
 from semver.version import Version
 
 from materialize import git

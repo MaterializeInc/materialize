@@ -7,11 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from psycopg3.oids import builtins
+import unittest
+
 import psycopg2
 import psycopg3
 import sqlalchemy
-import unittest
+from psycopg3.oids import builtins
 
 MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 

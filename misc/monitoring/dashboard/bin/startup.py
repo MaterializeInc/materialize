@@ -18,9 +18,9 @@ import shlex
 import signal
 import subprocess
 import time
-from urllib.request import urlopen, Request
+from typing import Any, Optional
 from urllib.error import URLError
-from typing import Optional, Any
+from urllib.request import Request, urlopen
 
 
 def main() -> None:

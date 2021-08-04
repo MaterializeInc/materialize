@@ -15,11 +15,13 @@ necessary to support this repository are implemented.
 [Cargo]: https://doc.rust-lang.org/cargo/
 """
 
-from materialize import git
 from pathlib import Path
 from typing import Set
+
 import semver
 import toml
+
+from materialize import git
 
 
 class Crate:
