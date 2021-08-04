@@ -27,6 +27,8 @@ pub mod mem;
 #[cfg(test)]
 pub mod nemesis;
 pub mod operators;
+// TODO: Rename this to future once we rename indexed::future to unsealed.
+pub mod pfuture;
 pub mod storage;
 pub mod unreliable;
 

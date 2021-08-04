@@ -10,14 +10,10 @@
 //! A Timely Dataflow operator that passes through its input after persisting
 //! it.
 
-use std::convert::identity;
-use std::sync::mpsc;
-
 use timely::dataflow::operators::{Concat, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use crate::error::Error;
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
 use crate::operators;
 
@@ -52,16 +48,12 @@ where
 
         let (ok_new, err_new) = self.ok_err(
             move |((k, v), ts, diff)| -> Result<((K, V), u64, isize), (String, u64, isize)> {
+                let res = write.write(&[((k.clone(), v.clone()), ts, diff)]);
                 // TODO: Don't do this synchronously.
-                let (tx, rx) = mpsc::channel();
-                write.write(&[((k.clone(), v.clone()), ts, diff)], tx.into());
-                rx.recv()
-                    .map_err(|_| Error::RuntimeShutdown)
-                    .and_then(identity)
-                    .map_err(|err| {
-                        let err_str = format!("persisting data: {}", err);
-                        (err_str, ts, 1)
-                    })?;
+                res.recv().map_err(|err| {
+                    let err_str = format!("persisting data: {}", err);
+                    (err_str, ts, 1)
+                })?;
                 Ok(((k, v), ts, diff))
             },
         );

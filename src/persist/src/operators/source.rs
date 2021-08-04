@@ -136,13 +136,10 @@ mod tests {
             });
 
             let (write, _) = p.create_or_load("1").unwrap();
-            let (tx, rx) = mpsc::channel();
             for i in 1..=5 {
-                write.write(&[((i.to_string(), ()), i, 1)], tx.clone().into());
-            }
-            for _ in 1..=5 {
-                rx.recv()
-                    .expect("runtime has not stopped")
+                write
+                    .write(&[((i.to_string(), ()), i, 1)])
+                    .recv()
                     .expect("write was successful");
             }
             recv
@@ -174,13 +171,9 @@ mod tests {
             worker.dataflow::<u64, _, _>(|scope| {
                 let (write, _) = p.create_or_load("1").unwrap();
                 // Write one thing from each worker.
-                let (tx, rx) = mpsc::channel();
-                write.write(
-                    &[((format!("worker-{}", scope.index()), ()), 1, 1)],
-                    tx.into(),
-                );
-                rx.recv()
-                    .expect("runtime has not stopped")
+                write
+                    .write(&[((format!("worker-{}", scope.index()), ()), 1, 1)])
+                    .recv()
                     .expect("write was successful")
             });
         })?;
@@ -197,22 +190,14 @@ mod tests {
                 let (ok_stream, _) = scope.persisted_source(&read);
 
                 // Write one thing from each worker again. This time at timestamp 2.
-                let (tx, rx) = mpsc::channel();
-                write.write(
-                    &[((format!("worker-{}", scope.index()), ()), 2, 1)],
-                    tx.into(),
-                );
-                rx.recv()
-                    .expect("runtime has not stopped")
+                write
+                    .write(&[((format!("worker-{}", scope.index()), ()), 2, 1)])
+                    .recv()
                     .expect("write was successful");
 
                 // Now seal time 3 so we can probe the output.
                 if scope.index() == 0 {
-                    let (tx, rx) = mpsc::channel();
-                    write.seal(3, tx.into());
-                    rx.recv()
-                        .expect("runtime has not stopped")
-                        .expect("seal was successful");
+                    write.seal(3).recv().expect("seal was successful");
                 }
 
                 // Send the data to be captured by a channel so that we can replay

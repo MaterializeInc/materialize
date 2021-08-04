@@ -20,9 +20,12 @@ abomonation = "0.7"
 abomonation_derive = "0.5"
 crossbeam-channel = "0.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+futures-util = "0.3.16"
+futures-executor = "0.3.16"
 log = "0.4.13"
 ore = { path = "../ore", default-features = false }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = { version = "1.9.0", default-features = false, features = ["macros", "sync"] }
 
 [dev-dependencies]
 criterion = "0.3.5"

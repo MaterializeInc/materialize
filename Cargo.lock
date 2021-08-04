@@ -2715,12 +2715,15 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "differential-dataflow",
+ "futures-executor",
+ "futures-util",
  "log",
  "ore",
  "rand",
  "serde",
  "tempfile",
  "timely",
+ "tokio",
 ]
 
 [[package]]
