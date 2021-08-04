@@ -214,12 +214,12 @@ pub fn plan_create_table(
         desc,
         defaults,
         temporary,
+        depends_on,
     };
     Ok(Plan::CreateTable(CreateTablePlan {
         name,
         table,
         if_not_exists: *if_not_exists,
-        depends_on,
     }))
 }
 
@@ -1285,11 +1285,11 @@ pub fn plan_create_view(
             expr: relation_expr,
             column_names: desc.iter_names().map(|n| n.cloned()).collect(),
             temporary,
+            depends_on,
         },
         replace,
         materialize,
         if_not_exists,
-        depends_on,
     }))
 }
 
@@ -1760,10 +1760,10 @@ pub fn plan_create_sink(
             from: from.id(),
             connector_builder,
             envelope,
+            depends_on,
         },
         with_snapshot,
         if_not_exists,
-        depends_on,
     }))
 }
 
@@ -1946,10 +1946,10 @@ pub fn plan_create_index(
             create_sql,
             on: on.id(),
             keys,
+            depends_on,
         },
         options,
         if_not_exists,
-        depends_on,
     }))
 }
 
@@ -2062,8 +2062,11 @@ pub fn plan_create_type(
 
     Ok(Plan::CreateType(CreateTypePlan {
         name,
-        typ: Type { create_sql, inner },
-        depends_on: ids,
+        typ: Type {
+            create_sql,
+            inner,
+            depends_on: ids,
+        },
     }))
 }
 

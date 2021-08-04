@@ -1729,7 +1729,6 @@ impl Coordinator {
             name,
             table,
             if_not_exists,
-            depends_on,
         } = plan;
 
         let conn_id = if table.temporary {
@@ -1738,7 +1737,7 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog.allocate_id()?;
-        let mut index_depends_on = depends_on.clone();
+        let mut index_depends_on = table.depends_on.clone();
         index_depends_on.push(table_id);
         let persist = self
             .catalog
@@ -1749,7 +1748,7 @@ impl Coordinator {
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
-            depends_on,
+            depends_on: table.depends_on,
             persist,
         };
         let index_id = self.catalog.allocate_id()?;
@@ -1930,7 +1929,6 @@ impl Coordinator {
             sink,
             with_snapshot,
             if_not_exists,
-            depends_on,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
@@ -1965,7 +1963,7 @@ impl Coordinator {
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
                 envelope: sink.envelope,
                 with_snapshot,
-                depends_on,
+                depends_on: sink.depends_on,
             }),
         };
         match self.catalog_transact(vec![op]) {
@@ -2011,7 +2009,6 @@ impl Coordinator {
             replace,
             materialize,
             if_not_exists: _,
-            depends_on,
         } = plan;
 
         self.validate_timeline(view.expr.global_uses())?;
@@ -2035,7 +2032,7 @@ impl Coordinator {
             } else {
                 None
             },
-            depends_on,
+            depends_on: view.depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2142,7 +2139,6 @@ impl Coordinator {
             mut index,
             options,
             if_not_exists,
-            depends_on,
         } = plan;
 
         for key in &mut index.keys {
@@ -2154,7 +2150,7 @@ impl Coordinator {
             keys: index.keys,
             on: index.on,
             conn_id: None,
-            depends_on,
+            depends_on: index.depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
         };
         let oid = self.catalog.allocate_oid()?;
@@ -2188,7 +2184,7 @@ impl Coordinator {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
             inner: plan.typ.inner.into(),
-            depends_on: plan.depends_on,
+            depends_on: plan.typ.depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
