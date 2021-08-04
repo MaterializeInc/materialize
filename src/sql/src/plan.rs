@@ -158,7 +158,9 @@ pub struct CreateViewPlan {
 
 #[derive(Debug)]
 pub struct CreateViewsPlan {
-    pub views: Vec<CreateViewPlan>,
+    pub views: Vec<(FullName, View)>,
+    pub materialize: bool,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
