@@ -9,7 +9,7 @@
 
 //! Per-connection configuration parameters and state.
 
-#![forbid(missing_docs)]
+#![warn(missing_docs)]
 
 use std::collections::HashMap;
 use std::mem;

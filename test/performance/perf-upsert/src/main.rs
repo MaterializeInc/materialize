@@ -9,7 +9,7 @@
 
 //! Performance test for Materialize Upsert sources
 
-#![deny(missing_debug_implementations, missing_docs)]
+#![warn(missing_debug_implementations, missing_docs)]
 
 use std::process;
 use std::sync::Arc;

@@ -19,7 +19,7 @@
 //! Modules are included in this crate when they are broadly useful but too
 //! small to warrant their own crate.
 
-#![deny(missing_docs, missing_debug_implementations)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 #[cfg(feature = "test")]
 pub mod assert;

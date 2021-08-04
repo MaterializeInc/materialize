@@ -9,7 +9,7 @@
 
 //! Core expression language.
 
-#![deny(missing_debug_implementations)]
+#![warn(missing_debug_implementations)]
 
 use std::fmt;
 use std::ops::Deref;
