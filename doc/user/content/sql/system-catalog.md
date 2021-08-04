@@ -355,12 +355,12 @@ The `mz_metrics` table contains recordings for each [Prometheus
 metric](/ops/monitoring#prometheus) in the system that is a counter or gauge.
 The values are recorded every second and retained for five minutes.
 
-Field    | Type                 | Meaning
----------|----------------------|--------
-`metric` | [`text`]             | The name of the metric.
-`time`   | [`timestamp`]        | The time at which the metric was recorded.
-`labels` | [`jsonb`]            | The metric's labels and their associated values as a JSON object.
-`value`  | [`double precision`] | The value of the counter or gauge.
+Field    | Type                         | Meaning
+---------|------------------------------|--------
+`metric` | [`text`]                     | The name of the metric.
+`time`   | [`timestamp with time zone`] | The time at which the metric was recorded.
+`labels` | [`jsonb`]                    | The metric's labels and their associated values as a JSON object.
+`value`  | [`double precision`]         | The value of the counter or gauge.
 
 ### `mz_metrics_meta`
 
@@ -682,6 +682,7 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 [`oid`]: /sql/types/oid
 [`text`]: /sql/types/text
 [`timestamp`]: /sql/types/timestamp
+[`timestamp with time zone`]: /sql/types/timestamp
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [oid]: /sql/types/oid
 [`text array`]: /sql/types/array

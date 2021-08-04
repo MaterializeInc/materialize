@@ -835,7 +835,7 @@ lazy_static! {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
                 .with_named_column("metric", ScalarType::String.nullable(false))
-                .with_named_column("time", ScalarType::Timestamp.nullable(false))
+                .with_named_column("time", ScalarType::TimestampTz.nullable(false))
                 .with_named_column("labels", ScalarType::Jsonb.nullable(false))
                 .with_named_column("value", ScalarType::Float64.nullable(false))
                 .with_key(vec![0, 1, 2]),

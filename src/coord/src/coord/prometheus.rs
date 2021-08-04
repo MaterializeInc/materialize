@@ -9,26 +9,22 @@
 
 //! A task that scrapes materialized's prometheus metrics and sends them to our logging tables.
 
-use std::{
-    collections::HashMap,
-    convert::TryInto,
-    thread,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::collections::HashMap;
+use std::thread;
+use std::time::Duration;
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use ore::metrics::MetricsRegistry;
+use ore::now;
 use prometheus::proto::MetricType;
-use repr::{Datum, Diff, Row, Timestamp};
+use repr::{Datum, Diff, Row};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::catalog::{builtin::BuiltinTable, BuiltinTableUpdate};
-
-use super::Message;
-use super::{
-    catalog::builtin::{MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS},
-    TimestampedUpdate,
+use crate::catalog::builtin::{
+    BuiltinTable, MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS,
 };
+use crate::catalog::BuiltinTableUpdate;
+use crate::coord::{Message, TimestampedUpdate};
 
 /// Scrapes the prometheus registry in a regular interval and submits a batch of metric data to a
 /// logging worker, to be inserted into a table.
@@ -49,7 +45,7 @@ fn convert_metrics_to_value_rows<
     'a,
     M: IntoIterator<Item = &'a prometheus::proto::MetricFamily>,
 >(
-    timestamp: NaiveDateTime,
+    timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
     let mut row_packer = Row::default();
@@ -87,7 +83,7 @@ fn convert_metrics_to_histogram_rows<
     'a,
     M: IntoIterator<Item = &'a prometheus::proto::MetricFamily>,
 >(
-    timestamp: NaiveDateTime,
+    timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
     let mut row_packer = Row::default();
@@ -156,21 +152,16 @@ impl Scraper {
         let mut metadata: HashMap<Row, u64> = HashMap::new();
         loop {
             thread::sleep(self.interval);
-            let now: Timestamp = UNIX_EPOCH
-                .elapsed()
-                .expect("system clock is recent enough")
-                .as_millis()
-                .try_into()
-                .expect("materialized is younger than 550M years.");
+
+            let now = now::system_time();
+            let timestamp = now::to_datetime(now);
+
             if let Ok(cmd) = self.command_rx.try_recv() {
                 match cmd {
                     ScraperMessage::Shutdown => return,
                 }
             }
 
-            let timestamp = NaiveDateTime::from_timestamp(0, 0)
-                + chrono::Duration::from_std(Duration::from_millis(now))
-                    .expect("Couldn't convert timestamps");
             let metric_fams = self.registry.gather();
 
             let (value_readings, meta_value) =
