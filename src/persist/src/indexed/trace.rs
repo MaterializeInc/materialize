@@ -303,6 +303,13 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
         self.since = since;
         Ok(())
     }
+
+    /// Unchecked update of the trace's since frontier
+    ///
+    /// Intentionally infallible and unchecked.
+    pub fn update_allow_compaction(&mut self, since: u64) {
+        self.since = Antichain::from_elem(since);
+    }
 }
 
 /// A consistent snapshot of the data currently in a persistent [BlobTrace].

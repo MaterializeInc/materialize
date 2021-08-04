@@ -16,7 +16,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log;
 
@@ -67,7 +67,17 @@ where
     let (tx, rx) = crossbeam_channel::unbounded();
     let runtime_f = move || {
         // TODO: Set up the tokio or other async runtime context here.
-        let mut l = RuntimeImpl { indexed, rx };
+        // TODO make these options configurable ideally in a separate
+        // struct.
+        let mut l = RuntimeImpl {
+            indexed,
+            rx,
+            cmdq: vec![],
+            last_cmdq_drain: Instant::now(),
+            last_future_drain: Instant::now(),
+            cmdq_drain_interval: Duration::from_millis(100),
+            future_drain_interval: Duration::from_secs(2),
+        };
         while l.work() {}
     };
     let id = RuntimeId::new();
@@ -456,6 +466,12 @@ impl<K: Clone, V: Clone> StreamReadHandle<K, V> {
 struct RuntimeImpl<K, V, U: Buffer, L: Blob> {
     indexed: Indexed<K, V, U, L>,
     rx: crossbeam_channel::Receiver<Cmd<K, V>>,
+    cmdq: Vec<Cmd<K, V>>,
+    last_cmdq_drain: Instant,
+    last_future_drain: Instant,
+    // TODO: make this optional for tests
+    cmdq_drain_interval: Duration,
+    future_drain_interval: Duration,
 }
 
 impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
@@ -472,42 +488,38 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> RuntimeImpl<K, V, U, L> {
             }
         };
         match cmd {
-            Cmd::Stop(res) => {
-                res.fill(self.indexed.close());
+            cmd @ Cmd::Stop(_) => {
+                self.cmdq.push(cmd);
+                let cmdq = self.drain_cmdq();
+                self.indexed.handle_commands(cmdq);
+
                 return false;
             }
-            Cmd::Register(id, res) => {
-                let r = self.indexed.register(&id);
-                res.fill(r);
+
+            cmd @ Cmd::Snapshot(..) | cmd @ Cmd::Listen(..) => {
+                self.cmdq.push(cmd);
+                let cmdq = self.drain_cmdq();
+                self.indexed.handle_commands(cmdq);
             }
-            Cmd::Destroy(id, res) => {
-                let r = self.indexed.destroy(&id);
-                res.fill(r);
-            }
-            Cmd::Write(updates, res) => {
-                let write_res = self.indexed.write_sync(updates);
-                // TODO: Move this to a Cmd::Tick or something.
-                let step_res = self.indexed.step();
-                res.fill(step_res.and_then(|_| write_res));
-            }
-            Cmd::Seal(ids, ts, res) => {
-                let r = self.indexed.seal(ids, ts);
-                res.fill(r);
-            }
-            Cmd::AllowCompaction(id, ts, res) => {
-                let r = self.indexed.allow_compaction(id, ts);
-                res.fill(r);
-            }
-            Cmd::Snapshot(id, res) => {
-                let r = self.indexed.snapshot(id);
-                res.fill(r);
-            }
-            Cmd::Listen(id, listen_fn, res) => {
-                let r = self.indexed.listen(id, listen_fn);
-                res.fill(r);
-            }
+            cmd => self.cmdq.push(cmd),
         }
+
+        let now = Instant::now();
+
+        if now.duration_since(self.last_cmdq_drain) > self.cmdq_drain_interval {
+            self.last_cmdq_drain = now;
+            let cmdq = self.drain_cmdq();
+            self.indexed.handle_commands(cmdq);
+        } else if now.duration_since(self.last_future_drain) > self.future_drain_interval {
+            self.last_future_drain = now;
+            self.indexed.drain_future();
+        }
+
         return true;
+    }
+
+    fn drain_cmdq(&mut self) -> Vec<Cmd<K, V>> {
+        std::mem::take(&mut self.cmdq)
     }
 }
 

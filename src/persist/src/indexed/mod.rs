@@ -73,6 +73,10 @@ use crate::Data;
 pub struct Indexed<K, V, U: Buffer, L: Blob> {
     next_stream_id: Id,
     futures_seqno_upper: SeqNo,
+    // Temporary variable used to simulate a sequence number
+    // now that we don't have a buffer.
+    // TODO: do we really need SeqNo anymore?
+    seqno: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
     // and this representation is optimized for the metadata serialization path,
     // which is less rare.
@@ -83,6 +87,19 @@ pub struct Indexed<K, V, U: Buffer, L: Blob> {
     futures: HashMap<Id, BlobFuture<K, V>>,
     traces: HashMap<Id, BlobTrace<K, V>>,
     listeners: HashMap<Id, Vec<ListenFn<K, V>>>,
+}
+
+/// A response to a command from the command queue.
+enum Response<K, V> {
+    Register(Id),
+    Destroy(bool),
+    Write(SeqNo),
+    Seal,
+    AllowCompaction,
+    // TODO change.
+    Snapshot(Option<IndexedSnapshot<K, V>>),
+    Listen,
+    Stop,
 }
 
 impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
@@ -121,6 +138,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         let indexed = Indexed {
             next_stream_id: meta.next_stream_id,
             futures_seqno_upper: meta.futures_seqno_upper,
+            seqno: meta.futures_seqno_upper,
             id_mapping: meta.id_mapping,
             graveyard: meta.graveyard,
             buf,
@@ -159,18 +177,16 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         Ok(())
     }
 
-    /// Creates, if necessary, a new future and trace with the given external
-    /// stream name, returning the corresponding internal stream id.
+    /// Apply a pre-validated register command to the in-memory state.
     ///
-    /// This method is idempotent: ids may be registered multiple times.
-    pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
-        self.validate_register(id_str)?;
-        let id = self.id_mapping.iter().find(|(s, _)| s == &id_str);
+    /// This has to be infallible.
+    fn do_register_mem(&mut self, name: &str) -> Id {
+        let id = self.id_mapping.iter().find(|(s, _)| s == &name);
         let id = match id {
             Some((_, id)) => *id,
             None => {
                 let id = self.next_stream_id;
-                self.id_mapping.push((id_str.to_owned(), id));
+                self.id_mapping.push((name.to_owned(), id));
                 self.next_stream_id = Id(id.0 + 1);
                 id
             }
@@ -181,7 +197,21 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         self.traces
             .entry(id)
             .or_insert_with_key(|id| BlobTrace::new(BlobTraceMeta::new(*id)));
-        Ok(id)
+
+        id
+    }
+
+    /// Creates, if necessary, a new future and trace with the given external
+    /// stream name, returning the corresponding internal stream id.
+    ///
+    /// This method is idempotent: ids may be registered multiple times.
+    pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
+        self.validate_register(id_str)?;
+
+        // TODO: this function needs to commit the registration to memory
+        // and be able to revert the in-memory modifications if it was unable
+        // to commit.
+        Ok(self.do_register_mem(id_str))
     }
 
     fn validate_destroy(&self, name: &str) -> Result<(), Error> {
@@ -203,26 +233,21 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         }
     }
 
-    /// Removes a stream from the index.
-    ///
-    /// This method is idempotent and may be called multiple times. It returns
-    /// true if the stream was destroyed from this call, and false if it was
-    /// already destroyed.
-    pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
-        self.validate_destroy(id_str)?;
+    fn do_destroy_mem(&mut self, id_str: &str) -> bool {
         if self
             .graveyard
             .iter()
             .any(|(destroyed_name, _)| destroyed_name == &id_str)
         {
-            return Ok(false);
+            return false;
         }
 
         let mapping = self
             .id_mapping
             .iter()
             .find(|(name, _)| name == &id_str)
-            .expect("name known to exist");
+            .expect("name known to exist")
+            .clone();
 
         self.id_mapping.retain(|(name, _)| name != &id_str);
 
@@ -235,9 +260,26 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         debug_assert!(future.is_some());
         debug_assert!(trace.is_some());
 
-        self.graveyard.push(mapping.clone());
+        self.graveyard.push(mapping);
 
-        return Ok(true);
+        true
+    }
+
+    /// Removes a stream from the index.
+    ///
+    /// This method is idempotent and may be called multiple times. It returns
+    /// true if the stream was destroyed from this call, and false if it was
+    /// already destroyed.
+    pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
+        self.validate_destroy(id_str)?;
+        return Ok(self.do_destroy_mem(id_str));
+
+        // TODO this function still needs to commit the in-memory updates
+        // to durable storage and be able to undo them if that durable
+        // commit fails.
+
+        // TODO: we still need to physically delete any batches associated with
+        // this stream.
     }
 
     /// Drains writes from the buffer into the future and does any necessary
@@ -248,7 +290,9 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<(), Error> {
         self.drain_buf()?;
-        self.drain_future()
+        self.drain_future();
+
+        Ok(())
         // TODO: Incrementally compact future.
     }
 
@@ -294,8 +338,75 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     ///
     /// This doesn't mean they all have to be valid, just that
     /// all of the ones that needed to get written down do get written down
-    fn handle_commands(&mut self, cmdq: Vec<Cmd<K, V>>) -> Result<(), Vec<Cmd<K, V>>> {
-        unimplemented!()
+    /// TODO make infallible.
+    fn handle_commands(&mut self, cmdq: Vec<Cmd<K, V>>) {
+        let mut writes_by_id = HashMap::new();
+        let mut pending_responses: Vec<Result<Response<K, V>, Error>> = vec![];
+        for cmd in cmdq.iter() {
+            match self.validate_command(cmd) {
+                Err(e) => pending_responses.push(Err(e)),
+                Ok(_) => pending_responses.push(Ok(self.do_command_mem(cmd, &mut writes_by_id))),
+            }
+        }
+
+        let desc = self.futures_seqno_upper..self.seqno;
+        self.futures_seqno_upper = desc.end;
+
+        // Persist writes and metadata changes to durable storage. Any failure here
+        // needs to be handled by sending an error response for all commands and
+        // reverting the in-memory state back to what it was prior to processing all
+        // commands.
+
+        // First, persist the writes.
+        for (id, updates) in writes_by_id {
+            if !updates.is_empty() {
+                debug_assert!(desc.end > desc.start);
+                // TODO: correctly handle error here.
+                self.drain_buf_inner(id, updates, &desc).expect("WIP");
+            }
+        }
+
+        // TODO: correctly handle error here.
+        self.blob.set_meta(self.serialize_meta()).expect("WIP");
+
+        // We're basically home free now. Go ahead and perform any snapshots and
+        // listen functions as needed.
+        for (cmd, rsp) in cmdq.into_iter().zip(pending_responses.into_iter()) {
+            match (cmd, rsp) {
+                (Cmd::Register(_, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Destroy(_, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Write(_, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Seal(_, _, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::AllowCompaction(_, _, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Snapshot(_, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Listen(_, _, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Stop(res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Register(_, res), Ok(Response::Register(id))) => res.fill(Ok(id)),
+                (Cmd::Destroy(_, res), Ok(Response::Destroy(b))) => res.fill(Ok(b)),
+                (Cmd::Write(_, res), Ok(Response::Write(seqno))) => res.fill(Ok(seqno)),
+                (Cmd::Seal(_, _, res), Ok(Response::Seal)) => res.fill(Ok(())),
+                (Cmd::AllowCompaction(_, _, res), Ok(Response::AllowCompaction)) => {
+                    res.fill(Ok(()))
+                }
+                (Cmd::Snapshot(id, res), Ok(Response::Snapshot(_))) => {
+                    // TODO: this is only valid if you assume snapshot's
+                    // happen without any following commands.
+                    res.fill(self.snapshot(id))
+                }
+                (Cmd::Listen(id, listen_fn, res), Ok(Response::Listen)) => {
+                    // TODO this is only valid if you assume listen's
+                    // happen without any following commands.
+                    self.do_listen_mem(id, listen_fn);
+                    res.fill(Ok(()))
+                }
+                (Cmd::Stop(res), Ok(Response::Stop)) => {
+                    // TODO: this is only valid if you assume close's
+                    // happen without any following commands.
+                    res.fill(self.close())
+                }
+                _ => panic!("invalid cmd / rsp combination"),
+            }
+        }
     }
 
     fn validate_command(&self, cmd: &Cmd<K, V>) -> Result<(), Error> {
@@ -308,6 +419,65 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             Cmd::Snapshot(id, _) => self.validate_registered_id(*id),
             Cmd::Listen(id, _, _) => self.validate_registered_id(*id),
             Cmd::Stop(_) => Ok(()),
+        }
+    }
+
+    /// Update in-memory state for commands that are valid.
+    ///
+    /// Intentionally not fallible.
+    /// TODO: better name?
+    fn do_command_mem(
+        &mut self,
+        cmd: &Cmd<K, V>,
+        writes_by_id: &mut HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>>,
+    ) -> Response<K, V> {
+        match cmd {
+            Cmd::Register(name, _) => Response::Register(self.do_register_mem(name)),
+            Cmd::Destroy(name, _) => {
+                // TODO: WIP: normally you would need to clear out the pending
+                // writes at `name`. For now let's assume that destroy triggers
+                // a pipeline flush.
+                //
+                // Edit: I no longer believe that is true, and instead think
+                // it is just a performance optimization.
+                Response::Destroy(self.do_destroy_mem(name))
+            }
+            Cmd::Write(writes, _) => {
+                let seqno = self.seqno;
+                for (id, updates) in writes.iter() {
+                    writes_by_id
+                        .entry(*id)
+                        .or_default()
+                        .extend(updates.iter().map(|((key, val), ts, diff)| {
+                            (seqno, (key.clone(), val.clone()), *ts, *diff)
+                        }));
+                }
+
+                self.seqno = SeqNo(seqno.0 + 1);
+                Response::Write(seqno)
+            }
+            Cmd::Seal(ids, ts_upper, _) => {
+                self.do_seal_mem(ids, *ts_upper);
+                Response::Seal
+            }
+            Cmd::AllowCompaction(id, since, _) => {
+                self.do_allow_compaction_mem(*id, *since);
+                Response::AllowCompaction
+            }
+            Cmd::Snapshot(..) => {
+                // We need to wait until everything is flushed out to
+                // durable storage before taking the snapshot.
+                Response::Snapshot(None)
+            }
+            Cmd::Listen(..) => {
+                // TODO: WIP: It seems like cloning trait objects is
+                // nontrivial. Going to do the simplest thing I can think
+                // of _right now_ and do nothing here.
+                //self.do_listen_mem(*id, listen_fn);
+                Response::Listen
+            }
+
+            Cmd::Stop(_) => Response::Stop,
         }
     }
 
@@ -425,7 +595,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// Atomically moves all writes in future not in advance of the trace's
     /// seal frontier into the trace and does any necessary resulting eviction
     /// work to remove uneccessary batches.
-    fn drain_future(&mut self) -> Result<(), Error> {
+    fn drain_future(&mut self) {
         let mut updates_by_id = vec![];
         for (id, trace) in self.traces.iter_mut() {
             // If this future is already properly sealed then we don't need
@@ -434,28 +604,25 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             let trace_upper = trace.ts_upper();
             if seal == trace_upper {
                 continue;
+            } else {
+                debug_assert!(PartialOrder::less_equal(&trace_upper, &seal));
             }
 
-            let future = self
-                .futures
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            let future = self.futures.get_mut(&id).expect("future known to exist");
 
             let desc = Description::new(
                 trace_upper,
                 seal.clone(),
                 Antichain::from_elem(Timestamp::minimum()),
             );
-            if PartialOrder::less_equal(desc.upper(), desc.lower()) {
-                return Err(format!("invalid batch bounds: {:?}", desc).into());
-            }
 
             // Move a batch of data from future into trace by reading a
             // snapshot from future...
             let mut updates = Vec::new();
             {
-                let mut snap =
-                    future.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
+                let mut snap = future
+                    .snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)
+                    .expect("wip");
                 while snap.read(&mut updates) {}
             }
 
@@ -466,8 +633,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
             let new_future_ts_lower = batch.desc.upper().clone();
-            trace.append(batch, &mut self.blob)?;
-            future.truncate(new_future_ts_lower)?;
+
+            // TODO handle these errors correctly.
+            trace.append(batch, &mut self.blob).expect("wip");
+            future.truncate(new_future_ts_lower).expect("wip");
         }
 
         // TODO: This is a good point to compact future. The data that's been
@@ -476,7 +645,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())?;
+        // TODO handle this error correctly.
+        self.blob
+            .set_meta(self.serialize_meta())
+            .expect("wip need to rollback state if we fail to write meta");
 
         for (id, seal, updates) in updates_by_id {
             if let Some(listen_fns) = self.listeners.get(&id) {
@@ -486,8 +658,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Returns the current "sealed" frontier for an id.
@@ -525,13 +695,10 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             .collect()
     }
 
-    /// Sealing a time advances the "sealed" frontier for an id, which restricts
-    /// what times can later be sealed and written for that id. See
-    /// `sealed_frontier` for details.
-    pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64) -> Result<(), Error> {
-        let prev = self.validate_seal(&ids, seal_ts)?;
-
-        // Update in-memory state to reflect the new seal.
+    /// Apply the pre-validated seal command to the in-memory state.
+    ///
+    /// Intentionally not fallible.
+    fn do_seal_mem(&mut self, ids: &[Id], seal_ts: u64) {
         // TODO: we should keep the in-memory state immutable until after the
         // results have been safely committed to durable storage. For now this
         // protocol is simple enough to reason about.
@@ -540,7 +707,15 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
             trace.update_seal(seal_ts);
         }
+    }
 
+    /// Sealing a time advances the "sealed" frontier for an id, which restricts
+    /// what times can later be sealed and written for that id. See
+    /// `sealed_frontier` for details.
+    pub fn seal(&mut self, ids: Vec<Id>, ts_upper: u64) -> Result<(), Error> {
+        let prev = self.validate_seal(&ids, ts_upper)?;
+
+        self.do_seal_mem(&ids, ts_upper);
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
         if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
@@ -575,6 +750,15 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         }
     }
 
+    /// Update the since frontier for a trace in memory.
+    ///
+    /// This function assumes the proposed frontier was pre-validated and
+    /// is intentionally infallible.
+    fn do_allow_compaction_mem(&mut self, id: Id, since: u64) {
+        let trace = self.traces.get_mut(&id).expect("trace known to exist");
+        trace.update_allow_compaction(since);
+    }
+
     /// Permit compaction of updates at times < since to since.
     ///
     /// The compaction frontier can only monotonically increase and it is an error
@@ -587,16 +771,12 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// the `seal` API here but if that doesn't make sense, remove the restrictions.
     pub fn allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
         self.validate_allow_compaction(id, since)?;
-        let trace = self.traces.get_mut(&id).expect("trace known to exist");
-        let since = Antichain::from_elem(since);
-
-        // WIP TODO: make this bit not fallible.
-        trace.allow_compaction(since)?;
-        // Atomically update the meta with both the trace and future changes.
-        //
+        self.do_allow_compaction_mem(id, since);
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
         self.blob.set_meta(self.serialize_meta())
+        // TODO: this function needs to revert the in-memory change if the
+        // commit to physical storage fails.
     }
 
     /// Appends the given `batch` to the future for `id`, writing the data into
@@ -669,6 +849,13 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         Ok(IndexedSnapshot(buffer, future, trace))
     }
 
+    /// Registers a callback to a pre-validated stream id.
+    ///
+    /// Intentionally not fallible.
+    pub fn do_listen_mem(&mut self, id: Id, listen_fn: ListenFn<K, V>) {
+        self.listeners.entry(id).or_default().push(listen_fn);
+    }
+
     /// Registers a callback to be invoked on successful writes and seals.
     //
     // TODO: Finish the naming bikeshed for this. Other options so far include
@@ -676,7 +863,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     pub fn listen(&mut self, id: Id, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
         // Verify that id has been registered.
         self.validate_registered_id(id)?;
-        self.listeners.entry(id).or_default().push(listen_fn);
+        self.do_listen_mem(id, listen_fn);
         Ok(())
     }
 }
