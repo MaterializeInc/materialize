@@ -16,9 +16,9 @@ into a dataflow, before important concepts for the normalization of SQL queries,
 subquery boundaries, are blurred. The following two diagrams show the current view/query compilation pipeline
 and the one proposed in this document, which adds normalization at the SQL level:
 
-![Current optimizer pipeline](qgm/current-optimizer-pipeline.svg)
+![Current optimizer pipeline](static/qgm/current-optimizer-pipeline.svg)
 
-![Proposed optimizer pipeline](qgm/proposed-optimizer-pipeline.svg)
+![Proposed optimizer pipeline](static/qgm/proposed-optimizer-pipeline.svg)
 
 ## Goals
 
@@ -328,7 +328,7 @@ In the following example query there is a lateral join operand in the rightmost 
 that must see the symbols from the tables in the left-hand side of all the intermediate joins up to the comma-join
 (included).
 
-![Name resolution in joins](qgm/name-resolution-1.svg)
+![Name resolution in joins](static/qgm/name-resolution-1.svg)
 
 Box16 represents the lateral join operand. When processing its content, the context stack looks like this:
 
@@ -704,16 +704,16 @@ connecting the quantifiers involved in the predicate.
 
 #### Simple `SELECT *`
 
-![Simple SELECT *](qgm/simple-select-star.svg)
+![Simple SELECT *](static/qgm/simple-select-star.svg)
 
 #### Simple `GROUP BY`
 
-![Simple GROUP BY](qgm/simple-group-by.svg)
+![Simple GROUP BY](static/qgm/simple-group-by.svg)
 
 
 #### `GROUP BY + HAVING`
 
-![GROUP BY + HAVING](qgm/simple-group-by-having.svg)
+![GROUP BY + HAVING](static/qgm/simple-group-by-having.svg)
 
 Note that the having filter is just a regular predicate on the `Select` box ranging over the `Grouping` box.
 
@@ -722,34 +722,34 @@ Note that the having filter is just a regular predicate on the `Select` box rang
 As mentioned above, `GROUP BY` and `DISTINCT` use different representation in QGM. The following diagram
 shows a simple `DISTINCT` query.
 
-![DISTINCT](qgm/simple-distinct.svg)
+![DISTINCT](static/qgm/simple-distinct.svg)
 
 As shown below, the equivalent `GROUP BY` query is automatically converted into the query graph above
 during the normalization process.
 
-![GROUP BY DISTINCT before normalization](qgm/group-by-distinct-before.svg)
+![GROUP BY DISTINCT before normalization](static/qgm/group-by-distinct-before.svg)
 
-![GROUP BY DISTINCT after normalization](qgm/group-by-distinct-after.svg)
+![GROUP BY DISTINCT after normalization](static/qgm/group-by-distinct-after.svg)
 
 #### Comma join
 
-![Simple comma join](qgm/simple-comma-join.svg)
+![Simple comma join](static/qgm/simple-comma-join.svg)
 
 #### Inner join
 
-![Simple inner join](qgm/simple-inner-join.svg)
+![Simple inner join](static/qgm/simple-inner-join.svg)
 
 Note that the inner join above is semantically equivalent to the comma join in the previous example. Boxes 1 and 2
 represent the binary inner joins in the query, but they can be squashed into box 0, without altering the results of
 the query. In fact, the normalization step will simplify this query leaving it exactly as the one in the example above:
 
-![Simple inner join after normalization](qgm/simple-inner-join-after-normalization.svg)
+![Simple inner join after normalization](static/qgm/simple-inner-join-after-normalization.svg)
 
 #### Outer join
 
-![Simple left join](qgm/simple-left-join.svg)
+![Simple left join](static/qgm/simple-left-join.svg)
 
-![Simple right join](qgm/simple-right-join.svg)
+![Simple right join](static/qgm/simple-right-join.svg)
 
 Note that in QGM there is no join direction, so left and right joins have the same exact representation. Only the type
 of the quantifiers change its order.
@@ -759,8 +759,8 @@ from the query graph. For example, the following two queries are semantically eq
 query models where the join ordering is implied. We could add a normalization rule that always pushes inner joins
 through the preserving side of an outer join, assuming that it is always better to do inner joins first.
 
-![join](qgm/outer-inner-join.svg)
-![join](qgm/inner-outer-join.svg)
+![join](static/qgm/outer-inner-join.svg)
+![join](static/qgm/inner-outer-join.svg)
 
 However, we would still have the explicit join ordering issue if both joins in the query above where outer joins.
 To fix that issue, normalization will lift the preserving quantifier of an outer join to the parent `Select`
@@ -769,23 +769,23 @@ will represent a special potentially-correlated operator that produces a `NULL` 
 produced by its input matches the predicate. With this normalization, the query mentioned above will look as
 follows:
 
-![join](qgm/normalized-outer-joins.svg)
+![join](static/qgm/normalized-outer-joins.svg)
 
 #### Cross join
 
 A `CROSS JOIN` can be represented as a `Select` box with no predicates as shown below:
 
-![Simple cross join](qgm/simple-cross-join.svg)
+![Simple cross join](static/qgm/simple-cross-join.svg)
 
 #### CTEs
 
-![Simple CTE](qgm/simple-cte.svg)
+![Simple CTE](static/qgm/simple-cte.svg)
 
 Quantifiers 2 and 3 are ranging over the same box, which represents the CTE. Box 2 doesn't alter the results of
 box 0, but just adds aliases for the columns, for name resolution purposes. Normalization will get rid of all
 the intermediate `Select` boxes, leaving the query as follows:
 
-![Simple CTE after normalization](qgm/simple-cte-after-normalization.svg)
+![Simple CTE after normalization](static/qgm/simple-cte-after-normalization.svg)
 
 #### Lateral joins
 
@@ -794,7 +794,7 @@ containing column references from quantifiers belonging in the parent context. F
 example quantifier 4 is correlated within box 0, since its sub-graph references a column from quantifier 0 which
 belongs in box 0. This correlation is made explicit by the edge going from Q1 in box 2 to Q0 in box 0.
 
-![Lateral join](qgm/lateral-join.svg)
+![Lateral join](static/qgm/lateral-join.svg)
 
 We will see later how we could decorrelate a query like that via transformations of the query model.
 
@@ -810,16 +810,16 @@ that doesn't make sense anymore after it.
 `EXISTS` and `IN SELECT` subqueries are represented via `Existential` quantifiers. In fact, `EXISTS` subqueries
 are represented as `1 IN (SELECT 1 FROM (<exists subquery>))` as shown in the second example below.
 
-![IN SELECT](qgm/simple-in-select.svg)
+![IN SELECT](static/qgm/simple-in-select.svg)
 
-![EXISTS](qgm/simple-exists.svg)
+![EXISTS](static/qgm/simple-exists.svg)
 
 Given that the two queries above are equivalent, the normalization process should normalize both to the same
 representation.
 
 ##### Scalar subqueries
 
-![Scalar subquery](qgm/simple-scalar-subquery.svg)
+![Scalar subquery](static/qgm/simple-scalar-subquery.svg)
 
 Scalar subqueries are represented via `Scalar` quantifiers as shown above. These quantifiers can be converted into
 regular `Foreach` quantifiers iff the inner subquery is guaranteed to always return one row at most and the NULL
@@ -830,18 +830,18 @@ quantifier.
 
 `ANY`/`ALL` subqueries are represented via `Any` and `All` quantifier types respectively.
 
-![ALL](qgm/subquery-all.svg)
-![ANY](qgm/subquery-any.svg)
+![ALL](static/qgm/subquery-all.svg)
+![ANY](static/qgm/subquery-any.svg)
 
 #### `VALUES`
 
-![VALUES](qgm/simple-values.svg)
+![VALUES](static/qgm/simple-values.svg)
 
-![VALUES with alias](qgm/simple-values-with-alias.svg)
+![VALUES with alias](static/qgm/simple-values-with-alias.svg)
 
 In the example above, an extra box is added for the simple purpose of storing the column aliases. This extra box
 is merged into the top-level one during the normalization process by the `SelMerge` rule described in the paper.
 
 #### `UNION`
 
-![UNION](qgm/simple-union.svg)
+![UNION](static/qgm/simple-union.svg)
