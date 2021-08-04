@@ -52,7 +52,6 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
     PG_CATALOG_SCHEMA,
 };
-use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
 use crate::session::Session;
 
@@ -836,25 +835,21 @@ impl Catalog {
             }
         }
 
-        let mut catalog_content_version = catalog.storage().get_catalog_content_version()?;
+        let last_seen_version = catalog.storage().get_catalog_content_version()?;
+        crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
+            Error::new(ErrorKind::FailedMigration {
+                last_seen_version,
+                this_version: catalog.config.build_info.version,
+                cause: e.to_string(),
+            })
+        })?;
+        catalog
+            .storage()
+            .set_catalog_content_version(catalog.config.build_info.version)?;
 
-        while CONTENT_MIGRATIONS.len() > catalog_content_version {
-            let migration = &CONTENT_MIGRATIONS[catalog_content_version];
-            if let Err(e) = (migration.command)(&mut catalog) {
-                return Err(Error::new(ErrorKind::FailedMigration {
-                    last_version: catalog_content_version,
-                    name: migration.name,
-                    introduced_for: migration.introduced_for,
-                    cause: e.to_string(),
-                }));
-            }
-            catalog_content_version += 1;
-            catalog
-                .storage()
-                .set_catalog_content_version(catalog_content_version)?;
-        }
-
-        let catalog = Self::load_catalog_items(catalog)?;
+        let mut storage = catalog.storage();
+        let tx = storage.transaction()?;
+        let catalog = Self::load_catalog_items(&tx, &catalog)?;
 
         let mut builtin_table_updates = vec![];
         for (schema_name, schema) in &catalog.ambient_schemas {
@@ -881,12 +876,18 @@ impl Catalog {
         Ok((catalog, builtin_table_updates))
     }
 
-    // Takes a catalog which only has items in its on-disk storage ("unloaded")
-    // and cannot yet resolve names, and returns a catalog loaded with those
-    // items.
-    // TODO(justin): it might be nice if these were two different types.
-    pub fn load_catalog_items(mut c: Catalog) -> Result<Catalog, Error> {
-        let items = c.storage().load_items()?;
+    /// Takes a catalog which only has items in its on-disk storage ("unloaded")
+    /// and cannot yet resolve names, and returns a catalog loaded with those
+    /// items.
+    ///
+    /// This function requires transactions to support loading a catalog with
+    /// the transaction's currently in-flight updates to existing catalog
+    /// objects, which is necessary for at least one catalog migration.
+    ///
+    /// TODO(justin): it might be nice if these were two different types.
+    pub fn load_catalog_items(tx: &storage::Transaction, c: &Catalog) -> Result<Catalog, Error> {
+        let mut c = c.clone();
+        let items = tx.load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because

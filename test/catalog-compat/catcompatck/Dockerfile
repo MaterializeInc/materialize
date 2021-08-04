@@ -11,9 +11,7 @@ ARG BUILDKITE_BUILD_NUMBER
 
 FROM materialize/materialized:v0.1.0 AS golden010
 FROM materialize/materialized:v0.6.0 AS golden060
-# TODO(justin); we can't use v0.7.0 because that has the bug this is testing for,
-# but we should change this to v0.7.1 proper once that is released.
-FROM materialize/materialized:v0.7.1-rc1 AS golden071
+FROM materialize/materialized:v0.7.1 AS golden071
 MZFROM materialized AS edge
 MZFROM testdrive AS testdrive
 FROM ubuntu:bionic-20200403

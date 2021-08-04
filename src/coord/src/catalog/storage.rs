@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryFrom;
-
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use rusqlite::OptionalExtension;
@@ -277,36 +275,33 @@ impl Connection {
         res
     }
 
-    pub fn get_catalog_content_version(&mut self) -> Result<usize, Error> {
+    pub fn get_catalog_content_version(&mut self) -> Result<String, Error> {
         let tx = self.inner.transaction()?;
-        let current_setting: Option<u32> = tx
+        let current_setting: Option<String> = tx
             .query_row(
-                "SELECT CAST(value AS int) FROM settings WHERE name = 'catalog_content_version';",
+                "SELECT value FROM settings WHERE name = 'catalog_content_version';",
                 params![],
                 |row| row.get(0),
             )
             .optional()?;
         let version = match current_setting {
-            Some(v) => v,
-            None => {
-                tx.execute(
-                    "INSERT INTO settings (name, value) VALUES ('catalog_content_version', 0);",
-                    params![],
-                )?;
-                0
-            }
+            Some(v) => match v.parse::<u32>() {
+                // Prior to v0.8.4 catalog content versions was stored as a u32
+                Ok(_) => "pre-v0.8.4".to_string(),
+                Err(_) => v,
+            },
+            None => "new".to_string(),
         };
         tx.commit()?;
-        Ok(usize::cast_from(version))
+        Ok(version)
     }
 
-    pub fn set_catalog_content_version(&mut self, new_version: usize) -> Result<(), Error> {
+    pub fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
         let tx = self.inner.transaction()?;
         tx.execute(
-            "UPDATE settings SET value = ? WHERE name = 'catalog_content_version'",
-            params![
-                u32::try_from(new_version).expect("fewer than u32::MAX catalog content migrations")
-            ],
+            "INSERT INTO settings (name, value) VALUES ('catalog_content_version', ?)
+                    ON CONFLICT (name) DO UPDATE SET value=excluded.value;",
+            params![new_version],
         )?;
         tx.commit()?;
         Ok(())
@@ -350,6 +345,33 @@ impl Connection {
             .collect()
     }
 
+    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
+        let tx = self.inner.transaction()?;
+        // SQLite doesn't support u64s, so we constrain ourselves to the more
+        // limited range of positive i64s.
+        let id: i64 = tx.query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
+            row.get(0)
+        })?;
+        if id == i64::max_value() {
+            return Err(Error::new(ErrorKind::IdExhaustion));
+        }
+        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
+        tx.commit()?;
+        Ok(GlobalId::User(id as u64))
+    }
+
+    pub fn transaction(&mut self) -> Result<Transaction, Error> {
+        Ok(Transaction {
+            inner: self.inner.transaction()?,
+        })
+    }
+}
+
+pub struct Transaction<'a> {
+    inner: rusqlite::Transaction<'a>,
+}
+
+impl Transaction<'_> {
     pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, Error> {
         // Order user views by their GlobalId
         self.inner
@@ -379,33 +401,6 @@ impl Connection {
             .collect()
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
-        let tx = self.inner.transaction()?;
-        // SQLite doesn't support u64s, so we constrain ourselves to the more
-        // limited range of positive i64s.
-        let id: i64 = tx.query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
-            row.get(0)
-        })?;
-        if id == i64::max_value() {
-            return Err(Error::new(ErrorKind::IdExhaustion));
-        }
-        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
-        tx.commit()?;
-        Ok(GlobalId::User(id as u64))
-    }
-
-    pub fn transaction(&mut self) -> Result<Transaction, Error> {
-        Ok(Transaction {
-            inner: self.inner.transaction()?,
-        })
-    }
-}
-
-pub struct Transaction<'a> {
-    inner: rusqlite::Transaction<'a>,
-}
-
-impl Transaction<'_> {
     pub fn load_database_id(&self, database_name: &str) -> Result<i64, Error> {
         match self
             .inner

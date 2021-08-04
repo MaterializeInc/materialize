@@ -60,6 +60,13 @@ Wrap your release notes at the 80 character mark.
 - **Breaking change.** The `HTTP_PROXY` variable is no longer respected. Use
   `http_proxy` instead.
 
+- **Breaking change.** Avro-formatted sources created prior to v0.7.1 which have
+  not been accessed by a Materialize binary between v0.7.1 and v0.8.3 might not
+  be able to ingest data because of a missing `confluent_wire_format` setting.
+
+  To fix this issue, you can launch a v0.8.3 Materialize instance using the same
+  data directory, and then upgrade to the current version.
+
 - Respect the [`no_proxy` environment variable](/cli/#http-proxies) to exclude
   certain hosts from the configured HTTP/HTTPS proxy, if any.
 
