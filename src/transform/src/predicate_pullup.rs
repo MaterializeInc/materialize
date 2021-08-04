@@ -229,6 +229,92 @@ impl PredicatePullup {
                 }
             }
 
+            MirRelationExpr::Union { base, inputs } => {
+                self.action(base, get_predicates);
+                for input in inputs.iter_mut() {
+                    self.action(input, get_predicates);
+                }
+
+                // We can lift the predicates that are common to all branches.
+                if let MirRelationExpr::Filter {
+                    input: base_input,
+                    predicates: base_predicates,
+                } = &mut **base
+                {
+                    if base_predicates.iter().all(|x| !x.is_literal_err()) {
+                        let mut lifted_predicates = base_predicates.clone();
+
+                        for input in inputs.iter() {
+                            if lifted_predicates.is_empty() {
+                                break;
+                            }
+                            if let MirRelationExpr::Filter {
+                                input: _,
+                                predicates,
+                            } = input
+                            {
+                                lifted_predicates.retain(|p| predicates.contains(p));
+                            } else {
+                                lifted_predicates.clear();
+                            }
+                        }
+
+                        if !lifted_predicates.is_empty() {
+                            let remaining_base_predicates = base_predicates
+                                .iter()
+                                .filter(|p| !lifted_predicates.contains(p))
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            if remaining_base_predicates.is_empty() {
+                                **base = base_input.take_dangerous();
+                            } else {
+                                **base = base_input
+                                    .take_dangerous()
+                                    .filter(remaining_base_predicates);
+                            }
+                            for input in inputs.iter_mut() {
+                                if let MirRelationExpr::Filter {
+                                    input: inner_input,
+                                    predicates,
+                                } = input
+                                {
+                                    let remaining_predicates = predicates
+                                        .iter()
+                                        .filter(|p| !lifted_predicates.contains(p))
+                                        .cloned()
+                                        .collect::<Vec<_>>();
+                                    if remaining_predicates.is_empty() {
+                                        *input = inner_input.take_dangerous();
+                                    } else {
+                                        *input = inner_input
+                                            .take_dangerous()
+                                            .filter(remaining_predicates);
+                                    }
+                                }
+                            }
+                            *relation = relation.take_dangerous().filter(lifted_predicates);
+                        }
+                    }
+                }
+            }
+
+            MirRelationExpr::Negate { input } => {
+                self.action(input, get_predicates);
+
+                if let MirRelationExpr::Filter {
+                    input: inner_input,
+                    predicates,
+                } = &mut **input
+                {
+                    if predicates.iter().all(|x| !x.is_literal_err()) {
+                        *relation = inner_input
+                            .take_dangerous()
+                            .negate()
+                            .filter(predicates.clone());
+                    }
+                }
+            }
+
             // TODO We currently don't lift predicates from the input of FlatMaps since
             // predicate pushdown won't push them back down. Enable when #7617 is fixed.
             // MirRelationExpr::FlatMap {

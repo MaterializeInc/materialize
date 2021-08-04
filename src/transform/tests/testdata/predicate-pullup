@@ -141,6 +141,124 @@ build apply=PredicatePullup
 ----
 ----
 
+# Union
+build apply=PredicatePullup
+(union
+  [(filter
+    (get x)
+    [(call_binary eq #0 #1)])
+  (filter
+    (get x)
+    [(call_binary not_eq #0 #1)])])
+----
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1)
+
+%1 =
+| Get x (u0)
+| Filter (#0 != #1)
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=PredicatePullup
+(union
+  [(filter
+    (get x)
+    [(call_binary eq #0 #1)])
+  (filter
+    (get x)
+    [(call_binary eq #0 #1)])])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Union %0 %1
+| Filter (#0 = #1)
+----
+----
+
+build apply=PredicatePullup
+(union
+  [(filter
+    (get x)
+    [(call_binary eq #0 #1) (call_binary eq #1 10)])
+  (filter
+    (get x)
+    [(call_binary eq #0 #1) (call_binary eq #1 20)])])
+----
+----
+%0 =
+| Get x (u0)
+| Filter (#1 = 10)
+
+%1 =
+| Get x (u0)
+| Filter (#1 = 20)
+
+%2 =
+| Union %0 %1
+| Filter (#0 = #1)
+----
+----
+
+build apply=PredicatePullup
+(union
+  [(filter
+    (get x)
+    [(call_binary eq #0 #1) (call_binary eq #1 10)])
+    (get x)])
+----
+----
+%0 =
+| Get x (u0)
+| Filter (#0 = #1), (#1 = 10)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+# Negate
+
+build apply=PredicatePullup
+(union
+  [(filter
+    (get x)
+    [(call_binary eq #0 #1)])
+   (negate
+     (filter
+       (get x)
+       [(call_binary eq #0 #1)]))])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+| Negate
+
+%2 =
+| Union %0 %1
+| Filter (#0 = #1)
+----
+----
+
+# FlatMap
+
 # TODO update this test once #7617 is fixed
 build apply=PredicatePullup
 (flat_map (filter (get x) [(call_binary eq #0 #1)]) generate_series_int32 [0 200])
