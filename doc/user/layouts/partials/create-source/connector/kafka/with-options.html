@@ -30,8 +30,9 @@ cluster. For more detail, see [Kerberized Kafka details](#kerberized-kafka-detai
 Field | Value | Description
 ------|-------|------------
 `sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
-`sasl_username` | `text` | Required if `sasl_mechanisms` is `PLAIN`.
-`sasl_password` | `text` | Required if `sasl_mechanisms` is `PLAIN`.
+`sasl_username` | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
+`sasl_password` | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
+`sasl_password_env` | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
 `sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
 `sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
 `sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.

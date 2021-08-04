@@ -73,3 +73,21 @@ a
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}
 {"before": null, "after": {"row":{"a": 2}}}
+
+# Check environment variables; defined in mzcompose.yml
+
+> CREATE SINK env_pw_snk FROM data
+  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password_env = 'SSL_KEY_PASSWORD'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+
+$ kafka-verify format=avro sink=materialize.public.env_pw_snk sort-messages=true
+{"before": null, "after": {"row":{"a": 1}}}
+{"before": null, "after": {"row":{"a": 2}}}

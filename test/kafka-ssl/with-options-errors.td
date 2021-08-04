@@ -34,63 +34,52 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 1}}}
 
 > CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password = 'mzmzmz'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+
+! CREATE SINK env_pw_snk FROM data
+  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password = 'mzmzmz',
+      ssl_key_password_env = 'SSL_KEY_PASSWORD'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
+
+! CREATE SINK env_pw_snk FROM data
+  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = '/share/secrets/materialized.key',
+      ssl_certificate_location = '/share/secrets/materialized.crt',
+      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_password_env = 'SSL_KEY_PASSWORD',
+      ssl_key_password = 'mzmzmz'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Invalid WITH options: cannot specify both ssl_key_password and ssl_key_password_env options at the same time
+
+! CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
       sasl_username = 'materialize',
-      sasl_password = 'sekurity',
+      ssl_key_password_env = 'DNE',
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
-
-> SELECT * FROM data
-a
----
-1
-
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"before": null, "after": {"row": {"a": 2}}}
-
-> SELECT * FROM data
-a
----
-1
-2
-
-> CREATE SINK data_snk
-  FROM data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password = 'sekurity',
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
-{"before": null, "after": {"row": {"a": 1}}}
-{"before": null, "after": {"row": {"a": 2}}}
-
-# Check environment variables; defined in mzcompose.yml
-
-> CREATE MATERIALIZED SOURCE env_pw_data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password_env = 'SASL_PASSWORD',
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM
-
-> SELECT * FROM env_pw_data
-a
----
-1
-2
+Invalid WITH option ssl_key_password_env='DNE': environment variable not found

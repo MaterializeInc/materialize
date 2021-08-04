@@ -39,7 +39,7 @@ services:
         --cert-password=mzmzmz
         $$*
       - bash
-    command: test/kafka-sasl-plain/smoketest.td
+    command: test/kafka-sasl-plain/*.td
     volumes:
       - ../../:/workdir
       - secrets:/share/secrets
@@ -50,6 +50,7 @@ services:
     command: -w1 --disable-telemetry
     environment:
       - MZ_DEV=1
+      - SASL_PASSWORD=sekurity
     volumes:
       - secrets:/share/secrets
     depends_on: [test-certs]

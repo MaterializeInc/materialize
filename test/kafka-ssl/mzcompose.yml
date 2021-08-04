@@ -35,7 +35,7 @@ services:
         --cert-password=mzmzmz
         $$*
       - bash
-    command: test/kafka-ssl/smoketest.td
+    command: test/kafka-ssl/*.td
     volumes:
       - ../../:/workdir
       - secrets:/share/secrets
@@ -49,6 +49,7 @@ services:
     depends_on: [test-certs]
     environment:
       - MZ_DEV=1
+      - SSL_KEY_PASSWORD=mzmzmz
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
