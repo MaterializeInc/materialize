@@ -19,6 +19,8 @@ dataflow-types = { path = "../dataflow-types" }
 dec = { version = "0.4.5", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+enum-iterator = "0.7.0"
+enum-kinds = "0.5.0"
 expr = { path = "../expr" }
 flate2 = "1.0.20"
 futures = "0.3.16"
@@ -30,6 +32,7 @@ kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
+num_enum = "0.5.3"
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
 persist = { path = "../persist" }
@@ -48,6 +51,7 @@ rusoto_s3 = "0.47.0"
 rusoto_sqs = "0.47.0"
 serde = { version = "1.0.127", features = ["derive"] }
 serde_json = "1.0.66"
+serde_variant = "0.1.0"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.9.0", features = ["fs", "rt", "sync"] }

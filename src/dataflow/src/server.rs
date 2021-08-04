@@ -18,6 +18,9 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
+use enum_iterator::IntoEnumIterator;
+use enum_kinds::EnumKind;
+use num_enum::IntoPrimitive;
 use ore::metrics::MetricsRegistry;
 use serde::{Deserialize, Serialize};
 use timely::communication::initialize::WorkerGuards;
@@ -60,7 +63,14 @@ mod metrics;
 static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 
 /// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
+#[enum_kind(
+    CommandKind,
+    derive(Serialize, IntoPrimitive, IntoEnumIterator),
+    repr(usize),
+    serde(rename_all = "snake_case"),
+    doc = "The kind of command that was received"
+)]
 pub enum Command {
     /// Create a sequence of dataflows.
     ///
