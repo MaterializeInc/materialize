@@ -12,7 +12,7 @@
 
 import sys
 from contextlib import contextmanager
-from typing import Callable, Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 class MzError(Exception):
@@ -20,7 +20,7 @@ class MzError(Exception):
 
 
 class MzConfigurationError(MzError):
-    """An error that occurred because user-provided code was in error """
+    """An error that occurred because user-provided code was in error"""
 
 
 class MzRuntimeError(MzError):

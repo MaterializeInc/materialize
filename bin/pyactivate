@@ -11,8 +11,6 @@
 #
 # pyactivate — runs a script in the Materialize Python virtualenv.
 
-from typing import List, Optional
-from pathlib import Path
 import logging
 import os
 import platform
@@ -20,6 +18,8 @@ import subprocess
 import sys
 import sysconfig
 import venv  # type: ignore
+from pathlib import Path
+from typing import List, Optional
 
 logger = logging.getLogger("bootstrap")
 

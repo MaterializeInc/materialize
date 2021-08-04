@@ -11,8 +11,7 @@ import itertools
 import os
 from pathlib import Path
 
-from materialize import mzbuild
-from materialize import spawn
+from materialize import mzbuild, spawn
 
 IMAGES = [
     "antithesis-cp-combined",

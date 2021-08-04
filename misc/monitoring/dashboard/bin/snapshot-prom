@@ -12,8 +12,8 @@
 import json
 import os
 import sys
-from urllib.request import Request, urlopen
 from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 req = Request("http://localhost:9090/api/v1/admin/tsdb/snapshot", method="POST")
 try:

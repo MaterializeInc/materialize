@@ -10,10 +10,9 @@
 """SSH utilities."""
 
 import subprocess
+from typing import List
 
 from materialize import spawn
-
-from typing import List
 
 
 def runv(

@@ -21,10 +21,7 @@ import click
 import requests
 from semver.version import Version
 
-from materialize import errors
-from materialize import git
-from materialize import spawn
-from materialize import ui
+from materialize import errors, git, spawn, ui
 
 BIN_CARGO_TOML = "src/materialized/Cargo.toml"
 LICENSE = "LICENSE"

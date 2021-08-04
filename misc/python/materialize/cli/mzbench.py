@@ -10,6 +10,7 @@
 # mzbench.py -- script to run materialized benchmarks
 
 import argparse
+import collections
 import csv
 import itertools
 import multiprocessing
@@ -18,10 +19,9 @@ import pathlib
 import subprocess
 import sys
 import typing
-from typing import List, Dict, Any, Optional, Tuple, Union
 import uuid
 import webbrowser
-import collections
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 class Bench:

@@ -15,45 +15,41 @@ documentation][user-docs].
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
+import functools
+import ipaddress
+import json
+import os
+import pathlib
+import random
+import re
+import shlex
+import subprocess
+import sys
+import time
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
-    Any,
-    Dict,
     IO,
-    List,
-    Optional,
-    Collection,
-    Type,
+    Any,
     Callable,
+    Collection,
+    Dict,
+    Iterable,
+    List,
     Match,
+    Optional,
+    Type,
     TypeVar,
     Union,
-    Iterable,
     cast,
 )
-from typing_extensions import Literal, TypedDict
-import functools
-import os
-import pathlib
-import ipaddress
-import shlex
-import json
-import subprocess
-import sys
-import random
-import re
-import time
-import yaml
 
 import pg8000  # type: ignore
 import pymysql
 import yaml
+from typing_extensions import Literal, TypedDict
 
-from materialize import errors
-from materialize import mzbuild
-from materialize import spawn
-from materialize import ui
+from materialize import errors, mzbuild, spawn, ui
 
 T = TypeVar("T")
 say = ui.speaker("C> ")

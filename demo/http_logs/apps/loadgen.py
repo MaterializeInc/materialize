@@ -9,16 +9,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import requests
-import time
-import random
 import bisect
-from enum import Enum, auto
-from collections import namedtuple
+import random
 import string
-import numpy as np
-import time
 import sys
+import time
+from collections import namedtuple
+from enum import Enum, auto
+
+import numpy as np
+import requests
 
 
 class State(Enum):

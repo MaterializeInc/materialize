@@ -10,7 +10,6 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-import dateparser
 import datetime
 import io
 import os
@@ -23,10 +22,10 @@ import urllib
 import confluent_kafka.admin
 import confluent_kafka.avro
 import confluent_kafka.schema_registry
+import dateparser
 import psycopg2
 import psycopg2.extensions
 import psycopg2.extras
-
 
 METRICS_DIRECTORY = "/usr/share/perf-scraper/metrics"
 

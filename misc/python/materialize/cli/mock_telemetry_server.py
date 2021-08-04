@@ -47,14 +47,14 @@ Increasing the latest version like so should cause Materialize to log a "new
 version" notice. You may need to check the log file to see the notice.
 """
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 import json
 import os
 import os.path
 import ssl
-import toml
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
+import toml
 from materialize.cargo import Workspace
 
 

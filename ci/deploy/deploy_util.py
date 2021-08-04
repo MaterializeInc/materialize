@@ -7,16 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize import git
-from materialize import spawn
-from pathlib import Path
-import boto3
-import humanize
 import os
 import tarfile
 import tempfile
 import time
+from pathlib import Path
 
+import boto3
+import humanize
+
+from materialize import git, spawn
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"

@@ -9,14 +9,14 @@
 
 """Utilities for launching and interacting with scratch EC2 instances."""
 
-import os
 import asyncio
+import os
 import shlex
-import boto3
+from datetime import datetime, timedelta, timezone
 from subprocess import CalledProcessError
 from typing import Dict, List, NamedTuple, Optional
-from datetime import datetime, timedelta, timezone
 
+import boto3
 from mypy_boto3_ec2.service_resource import Instance
 from mypy_boto3_ec2.type_defs import (
     InstanceNetworkInterfaceSpecificationTypeDef,
@@ -24,10 +24,7 @@ from mypy_boto3_ec2.type_defs import (
     RunInstancesRequestRequestTypeDef,
 )
 
-from materialize import errors
-from materialize import git
-from materialize import ui
-from materialize import ssh
+from materialize import errors, git, ssh, ui
 
 SPEAKER = ui.speaker("scratch> ")
 ROOT = os.environ["MZ_ROOT"]

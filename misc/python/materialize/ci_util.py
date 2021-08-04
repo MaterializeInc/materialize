@@ -9,9 +9,9 @@
 
 """Utility functions only useful in CI."""
 
-from materialize import mzbuild
-from materialize import spawn
 from pathlib import Path
+
+from materialize import mzbuild, spawn
 
 
 def acquire_materialized(repo: mzbuild.Repository, out: Path) -> None:

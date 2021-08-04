@@ -15,9 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any, List
 
-from materialize import git
-from materialize import mzbuild
-from materialize import ui
+from materialize import git, mzbuild, ui
 
 
 def main() -> int:

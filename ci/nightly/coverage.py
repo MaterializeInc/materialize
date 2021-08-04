@@ -19,11 +19,11 @@ For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_pipeline` below.
 """
 
-from pathlib import Path
-import yaml
 import sys
+from pathlib import Path
 
 import materialize.cli.mzcompose
+import yaml
 
 
 def main() -> int:

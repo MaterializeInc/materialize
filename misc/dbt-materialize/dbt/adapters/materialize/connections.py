@@ -14,16 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import psycopg2
-
-from dbt.adapters.postgres import PostgresConnectionManager
-from dbt.adapters.postgres import PostgresCredentials
+from dataclasses import dataclass
+from typing import Optional
 
 import dbt.exceptions
-from dataclasses import dataclass
+import psycopg2
 from dbt import flags
+from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 from dbt.logger import GLOBAL_LOGGER as logger
-from typing import Optional
 
 
 @dataclass

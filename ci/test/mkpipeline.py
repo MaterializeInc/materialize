@@ -19,18 +19,17 @@ For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_pipeline` below.
 """
 
-from collections import OrderedDict
-from materialize import mzbuild
-from materialize import mzcompose
-from materialize import spawn
-from materialize import git
-from pathlib import Path
-from tempfile import TemporaryFile
-from typing import Any, Iterable, List, Set, Sequence
 import os
 import subprocess
 import sys
+from collections import OrderedDict
+from pathlib import Path
+from tempfile import TemporaryFile
+from typing import Any, Iterable, List, Sequence, Set
+
 import yaml
+
+from materialize import git, mzbuild, mzcompose, spawn
 
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so

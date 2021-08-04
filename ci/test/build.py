@@ -9,20 +9,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import boto3
 import os
 from pathlib import Path
 
+import boto3
 import humanize
 
-from materialize import errors
-from materialize import cargo
-from materialize import ci_util
-from materialize import deb
-from materialize import git
-from materialize import mzbuild
-from materialize import spawn
-from ..deploy.deploy_util import apt_materialized_path, APT_BUCKET
+from materialize import cargo, ci_util, deb, errors, git, mzbuild, spawn
+
+from ..deploy.deploy_util import APT_BUCKET, apt_materialized_path
 
 
 def main() -> None:

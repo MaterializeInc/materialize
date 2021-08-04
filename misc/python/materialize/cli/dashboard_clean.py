@@ -19,13 +19,12 @@ our cruft.
 
 
 import json
+import os
 import re
 import sys
-import os
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import click
-
 
 LOAD_TEST_LABELS = [
     r'''environment=~\"$env\"''',

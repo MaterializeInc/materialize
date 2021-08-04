@@ -14,9 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dbt.adapters.postgres import PostgresAdapter
-from dbt.adapters.postgres import PostgresColumn
 from dbt.adapters.materialize import MaterializeConnectionManager
+from dbt.adapters.postgres import PostgresAdapter, PostgresColumn
 
 MATERIALIZE_GET_COLUMNS_MACRO_NAME = "materialize_get_columns"
 MATERIALIZE_CONVERT_COLUMNS_MACRO_NAME = "sql_convert_columns_in_relation"
