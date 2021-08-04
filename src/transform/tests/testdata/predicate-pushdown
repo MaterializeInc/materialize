@@ -122,3 +122,101 @@ build apply=PredicatePushdown
 | | implementation = Unimplemented
 ----
 ----
+
+# extract_equal_or_both_null
+
+build apply=PredicatePushdown
+(filter
+  (join
+    [(get x)
+     (get x)]
+    [])
+  [(call_binary or
+     (call_binary and (call_unary is_null #0) (call_unary is_null #2))
+     (call_binary eq #0 (call_binary add_int_64 #2 1))
+    )])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 (#2 + 1))
+| | implementation = Unimplemented
+----
+----
+
+build apply=PredicatePushdown
+(filter
+  (join
+    [(get x)
+     (get x)]
+    [])
+  [(call_binary or
+     (call_binary and (call_unary is_null #0) (call_unary is_null (call_binary add_int_64 #2 1)))
+     (call_binary eq #0 (call_binary add_int_64 #2 1))
+    )])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 (#2 + 1))
+| | implementation = Unimplemented
+----
+----
+
+build apply=PredicatePushdown
+(filter
+  (join
+    [(get x)
+     (get x)]
+    [])
+  [(call_binary or
+     (call_binary and (call_unary is_null #0) (call_binary and (call_unary is_null #2) (call_unary is_null #0)))
+     (call_binary eq #0 #2)
+    )])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Unimplemented
+----
+----
+
+build apply=PredicatePushdown
+(filter
+  (join
+    [(get x)
+     (get x)]
+    [])
+  [(call_binary or
+     (call_binary and (call_unary is_null #0) (call_binary and (call_unary is_null #2) (call_unary is_null #0)))
+     (call_binary eq #0 (call_binary add_int_64 #2 1))
+    )])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 (#2 + 1))
+| | implementation = Unimplemented
+----
+----
