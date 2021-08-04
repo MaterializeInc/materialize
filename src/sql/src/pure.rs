@@ -28,9 +28,9 @@ use repr::strconv;
 use sql_parser::ast::{
     display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
     CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrSeed, DbzMode, Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem,
-    SetExpr, Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
-    WithOption, WithOptionValue,
+    CsrConnector, CsrSeed, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema, Query, Raw,
+    RawName, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins,
+    UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql_parser::parser::parse_columns;
 
@@ -443,44 +443,10 @@ async fn purify_source_format_single(
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
-            AvroSchema::CsrUrl {
-                url,
-                seed,
-                with_options: ccsr_options,
-            } => {
-                let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
-                    topic
-                } else {
-                    bail!("Confluent Schema Registry is only supported with Kafka sources")
-                };
-                if seed.is_none() {
-                    let url = url.parse()?;
-
-                    let ccsr_config = task::block_in_place(|| {
-                        kafka_util::generate_ccsr_client_config(
-                            url,
-                            &connector_options,
-                            normalize::options(ccsr_options),
-                        )
-                    })?;
-
-                    let Schema {
-                        key_schema,
-                        value_schema,
-                        ..
-                    } = get_remote_avro_schema(ccsr_config, topic.clone()).await?;
-                    if matches!(envelope, Envelope::Debezium(DbzMode::Upsert))
-                        && key_schema.is_none()
-                    {
-                        bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
-                    }
-                    *seed = Some(CsrSeed {
-                        key_schema,
-                        value_schema,
-                    });
-                }
+            AvroSchema::Csr { csr_connector } => {
+                purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
             }
-            AvroSchema::Schema {
+            AvroSchema::InlineSchema {
                 schema: sql_parser::ast::Schema::File(path),
                 with_options,
             } => {
@@ -499,21 +465,28 @@ async fn purify_source_format_single(
                         value: Some(WithOptionValue::Value(Value::Boolean(true))),
                     });
                 }
-                *schema = AvroSchema::Schema {
+                *schema = AvroSchema::InlineSchema {
                     schema: sql_parser::ast::Schema::Inline(file_schema),
                     with_options: with_options.clone(),
                 };
             }
             _ => {}
         },
-        Format::Protobuf { schema, .. } => {
-            if let sql_parser::ast::Schema::File(path) = schema {
-                let descriptors = tokio::fs::read(path).await?;
-                let mut buf = String::new();
-                strconv::format_bytes(&mut buf, &descriptors);
-                *schema = sql_parser::ast::Schema::Inline(buf);
+        Format::Protobuf(schema) => match schema {
+            ProtobufSchema::Csr { .. } => {
+                // todo@jldlaughlin: enable when CSR protobuf schemas are accepted!
+                // purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
+                unsupported!("confluent schema registry protobuf schemas");
             }
-        }
+            ProtobufSchema::InlineSchema { schema, .. } => {
+                if let sql_parser::ast::Schema::File(path) = schema {
+                    let descriptors = tokio::fs::read(path).await?;
+                    let mut buf = String::new();
+                    strconv::format_bytes(&mut buf, &descriptors);
+                    *schema = sql_parser::ast::Schema::Inline(buf);
+                }
+            }
+        },
         Format::Csv {
             header_row,
             delimiter,
@@ -541,6 +514,52 @@ async fn purify_source_format_single(
     Ok(())
 }
 
+async fn purify_csr_connector(
+    connector: &mut CreateSourceConnector,
+    connector_options: &BTreeMap<String, String>,
+    envelope: &Envelope,
+    csr_connector: &mut CsrConnector<Raw>,
+) -> Result<(), anyhow::Error> {
+    let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
+        topic
+    } else {
+        bail!("Confluent Schema Registry is only supported with Kafka sources")
+    };
+
+    let CsrConnector {
+        url,
+        seed,
+        with_options: ccsr_options,
+    } = csr_connector;
+    if seed.is_none() {
+        let url = url.parse()?;
+
+        let ccsr_config = task::block_in_place(|| {
+            kafka_util::generate_ccsr_client_config(
+                url,
+                &connector_options,
+                normalize::options(ccsr_options),
+            )
+        })?;
+
+        let Schema {
+            key_schema,
+            value_schema,
+            ..
+        } = get_remote_csr_schema(ccsr_config, topic.clone()).await?;
+        if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) && key_schema.is_none() {
+            bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+        }
+
+        *seed = Some(CsrSeed {
+            key_schema,
+            value_schema,
+        })
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct Schema {
     pub key_schema: Option<String>,
@@ -549,7 +568,7 @@ pub struct Schema {
     pub confluent_wire_format: bool,
 }
 
-async fn get_remote_avro_schema(
+async fn get_remote_csr_schema(
     schema_registry_config: ccsr::ClientConfig,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {

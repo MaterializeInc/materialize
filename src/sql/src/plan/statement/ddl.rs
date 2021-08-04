@@ -49,9 +49,10 @@ use crate::ast::{
     CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
     CreateSourceConnector, CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
-    CreateViewsStatement, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, ObjectType, Raw, SqlOption, Statement,
-    UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    CreateViewsStatement, CsrConnector, DataType, DbzMode, DropDatabaseStatement,
+    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
+    ObjectType, ProtobufSchema, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
+    ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -735,7 +736,7 @@ pub fn plan_create_source(
             // this and the related code in `get_encoding` into internal errors.
             CreateSourceConnector::Kafka { .. } => match format {
                 CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
-                CreateSourceFormat::Bare(Format::Avro(AvroSchema::CsrUrl { .. })) => {
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr { .. })) => {
                     SourceEnvelope::Upsert
                 }
                 _ => unsupported!(format!("upsert requires a key/value format: {:?}", format)),
@@ -965,7 +966,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
             } = match schema {
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
-                AvroSchema::Schema {
+                AvroSchema::InlineSchema {
                     schema: sql_parser::ast::Schema::Inline(schema),
                     with_options,
                 } => {
@@ -984,16 +985,19 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                             .unwrap_or(true),
                     }
                 }
-                AvroSchema::Schema {
+                AvroSchema::InlineSchema {
                     schema: sql_parser::ast::Schema::File(_),
                     ..
                 } => {
                     unreachable!("File schema should already have been inlined")
                 }
-                AvroSchema::CsrUrl {
-                    url,
-                    seed,
-                    with_options: ccsr_options,
+                AvroSchema::Csr {
+                    csr_connector:
+                        CsrConnector {
+                            url,
+                            seed,
+                            with_options: ccsr_options,
+                        },
                 } => {
                     let url: Url = url.parse()?;
                     let kafka_options =
@@ -1038,22 +1042,27 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 })
             }
         }
-        Format::Protobuf {
-            message_name,
-            schema,
-        } => {
-            let descriptors = match schema {
-                sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-                sql_parser::ast::Schema::File(_) => {
-                    unreachable!("File schema should already have been inlined")
-                }
-            };
+        Format::Protobuf(schema) => match schema {
+            ProtobufSchema::Csr { .. } => {
+                unsupported!("confluent schema registry protobuf schemas");
+            }
+            ProtobufSchema::InlineSchema {
+                message_name,
+                schema,
+            } => {
+                let descriptors = match schema {
+                    sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
+                    sql_parser::ast::Schema::File(_) => {
+                        unreachable!("File schema should already have been inlined")
+                    }
+                };
 
-            DataEncoding::Protobuf(ProtobufEncoding {
-                descriptors,
-                message_name: message_name.to_owned(),
-            })
-        }
+                DataEncoding::Protobuf(ProtobufEncoding {
+                    descriptors,
+                    message_name: message_name.to_owned(),
+                })
+            }
+        },
         Format::Regex(regex) => {
             let regex = Regex::new(&regex)?;
             DataEncoding::Regex(RegexEncoding { regex })
@@ -1273,10 +1282,13 @@ fn kafka_sink_builder(
     let config_options = kafka_util::extract_config(with_options)?;
 
     let format = match format {
-        Some(Format::Avro(AvroSchema::CsrUrl {
-            url,
-            seed,
-            with_options,
+        Some(Format::Avro(AvroSchema::Csr {
+            csr_connector:
+                CsrConnector {
+                    url,
+                    seed,
+                    with_options,
+                },
         })) => {
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
@@ -1320,10 +1332,13 @@ fn kafka_sink_builder(
             topic,
             topic_format,
         }) => match topic_format {
-            Some(Format::Avro(AvroSchema::CsrUrl {
-                url,
-                seed,
-                with_options,
+            Some(Format::Avro(AvroSchema::Csr {
+                csr_connector:
+                    CsrConnector {
+                        url,
+                        seed,
+                        with_options,
+                    },
             })) => {
                 if seed.is_some() {
                     bail!("SEED option does not make sense with sinks");
