@@ -1,0 +1,514 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/7471.
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+# Item No1 - fixpoint issue
+
+query T multiline
+EXPLAIN SELECT FROM t1 JOIN t1 a2 ON EXISTS ( SELECT FROM t1 WHERE f1 > ( SELECT agg2 FROM ( SELECT COUNT( TRUE ) agg2 FROM ( SELECT FROM t1 RIGHT JOIN t1 ON TRUE WHERE TRUE AND a2.f2 = ANY ( SELECT agg1 FROM ( SELECT f2 agg1 FROM ( SELECT MAX( TRUE ) FROM t1 ) JOIN ( SELECT AVG ( f2 ) f2 FROM t1 ) ON 5 NOT IN ( 1 , f2 ) ) ) ) ) ) )
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#3)
+
+%3 =
+| Get %2 (l0)
+| Distinct group=(#3)
+| ArrangeBy ()
+
+%4 =
+| Get materialize.public.t1 (u1)
+
+%5 = Let l1 =
+| Join %3 %4
+| | implementation = Differential %4 %3.()
+| | demand = (#0, #1)
+
+%6 = Let l2 =
+| Get %5 (l1)
+| Distinct group=(#0)
+
+%7 =
+| Get %6 (l2)
+| Filter (#0 != 5)
+| ArrangeBy ()
+
+%8 =
+| Get materialize.public.t1 (u1)
+
+%9 = Let l3 =
+| Join %7 %8
+| | implementation = Differential %8 %7.()
+| | demand = (#0..#2)
+
+%10 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%11 = Let l4 =
+| Join %10 %9
+| | implementation = Differential %9 %10.()
+| | demand = (#2..#4)
+
+%12 =
+| Get %11 (l4)
+| Project (#2, #0, #1, #3, #4)
+
+%13 =
+| Get %11 (l4)
+| Distinct group=(#2, #3, #4)
+| Negate
+
+%14 =
+| Get %9 (l3)
+| Distinct group=(#0, #1, #2)
+
+%15 =
+| Union %13 %14
+| ArrangeBy (#0, #1, #2)
+
+%16 =
+| Join %15 %9 (= #0 #3) (= #1 #4) (= #2 #5)
+| | implementation = Differential %9 %15.(#0, #1, #2)
+| | demand = (#0)
+| Map null, null
+| Project (#0, #6, #7, #1, #2)
+
+%17 = Let l5 =
+| Union %12 %16
+
+%18 = Let l6 =
+| Get %17 (l5)
+| Distinct group=(#0)
+
+%19 =
+| Get %18 (l6)
+| ArrangeBy ()
+
+%20 =
+| Get materialize.public.t1 (u1)
+
+%21 = Let l7 =
+| Join %19 %20
+| | implementation = Differential %20 %19.()
+| | demand = (#0)
+| Reduce group=(#0)
+| | agg dummy(dummy)
+
+%22 =
+| Get %21 (l7)
+| Negate
+| Project (#0)
+
+%23 =
+| Union %22 %18
+| Map null
+
+%24 =
+| Union %21 %23
+| ArrangeBy (#0)
+
+%25 =
+| Get %18 (l6)
+| ArrangeBy ()
+
+%26 =
+| Get materialize.public.t1 (u1)
+
+%27 =
+| Join %25 %26
+| | implementation = Differential %26 %25.()
+| | demand = (#0, #2)
+| Reduce group=(#0)
+| | agg sum(#2)
+| | agg count(true)
+| Map (#1 / i64tof64(if (#2 = 0) then {null} else {#2}))
+| Filter (#0 = #3), (#3 != 5)
+| ArrangeBy (#0)
+
+%28 = Let l8 =
+| Join %17 %24 %27 (= #0 #5 #7)
+| | implementation = Differential %17 %24.(#0) %27.(#0)
+| | demand = (#0)
+| Reduce group=(#0)
+| | agg count(true)
+
+%29 =
+| Get %28 (l8)
+| Negate
+| Project (#0)
+
+%30 =
+| Union %29 %6
+| Map 0
+
+%31 =
+| Union %28 %30
+| ArrangeBy (#0)
+
+%32 =
+| Join %5 %31 (= #0 #3)
+| | implementation = Differential %5 %31.(#0)
+| | demand = (#0, #1, #4)
+| Filter (#1 > i64tof64(#4))
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%33 =
+| Join %2 %32 (= #3 #4)
+| | implementation = Differential %2 %32.(#0)
+| | demand = ()
+| Project ()
+
+EOF
+
+query T multiline
+EXPLAIN SELECT FROM t1 JOIN t1 a2 ON EXISTS ( SELECT FROM t1 WHERE f1 > ( SELECT agg2 FROM ( SELECT COUNT( TRUE ) agg2 FROM ( SELECT FROM t1 RIGHT JOIN t1 ON TRUE WHERE TRUE AND a2.f2 = ANY ( SELECT agg1 FROM ( SELECT f2 agg1 FROM ( SELECT AVG ( f2 ) f2 FROM t1 ) WHERE 5 != f2 ) ) ) ) ) )
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#3)
+
+%3 =
+| Get %2 (l0)
+| Distinct group=(#3)
+| ArrangeBy ()
+
+%4 =
+| Get materialize.public.t1 (u1)
+
+%5 = Let l1 =
+| Join %3 %4
+| | implementation = Differential %4 %3.()
+| | demand = (#0, #1)
+
+%6 = Let l2 =
+| Get %5 (l1)
+| Distinct group=(#0)
+
+%7 =
+| Get %6 (l2)
+| Filter (#0 != 5)
+| ArrangeBy ()
+
+%8 =
+| Get materialize.public.t1 (u1)
+
+%9 = Let l3 =
+| Join %7 %8
+| | implementation = Differential %8 %7.()
+| | demand = (#0..#2)
+
+%10 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%11 = Let l4 =
+| Join %10 %9
+| | implementation = Differential %9 %10.()
+| | demand = (#2..#4)
+
+%12 =
+| Get %11 (l4)
+| Project (#2, #0, #1, #3, #4)
+
+%13 =
+| Get %11 (l4)
+| Distinct group=(#2, #3, #4)
+| Negate
+
+%14 =
+| Get %9 (l3)
+| Distinct group=(#0, #1, #2)
+
+%15 =
+| Union %13 %14
+| ArrangeBy (#0, #1, #2)
+
+%16 =
+| Join %15 %9 (= #0 #3) (= #1 #4) (= #2 #5)
+| | implementation = Differential %9 %15.(#0, #1, #2)
+| | demand = (#0)
+| Map null, null
+| Project (#0, #6, #7, #1, #2)
+
+%17 = Let l5 =
+| Union %12 %16
+
+%18 =
+| Get %17 (l5)
+| Distinct group=(#0)
+| ArrangeBy ()
+
+%19 =
+| Get materialize.public.t1 (u1)
+
+%20 =
+| Join %18 %19
+| | implementation = Differential %19 %18.()
+| | demand = (#0, #2)
+| Reduce group=(#0)
+| | agg sum(#2)
+| | agg count(true)
+| Map (#1 / i64tof64(if (#2 = 0) then {null} else {#2}))
+| Filter (#0 = #3), (#3 != 5)
+| ArrangeBy (#0)
+
+%21 = Let l6 =
+| Join %17 %20 (= #0 #5)
+| | implementation = Differential %17 %20.(#0)
+| | demand = (#0)
+| Reduce group=(#0)
+| | agg count(true)
+
+%22 =
+| Get %21 (l6)
+| Negate
+| Project (#0)
+
+%23 =
+| Union %22 %6
+| Map 0
+
+%24 =
+| Union %21 %23
+| ArrangeBy (#0)
+
+%25 =
+| Join %5 %24 (= #0 #3)
+| | implementation = Differential %5 %24.(#0)
+| | demand = (#0, #1, #4)
+| Filter (#1 > i64tof64(#4))
+| Distinct group=(#0)
+| ArrangeBy (#0)
+
+%26 =
+| Join %2 %25 (= #3 #4)
+| | implementation = Differential %2 %25.(#0)
+| | demand = ()
+| Project ()
+
+EOF
+
+# query T multiline
+# EXPLAIN SELECT FROM ( SELECT AVG ( f2 ) f2 FROM t1 ) a1 , t1 a2 WHERE a1.f2 = a2.f2 AND a2.f2 = a2.f2 + a2.f2 AND a2.f2 IN ( SELECT agg2 FROM ( SELECT 0 agg2 FROM t1 LEFT JOIN t2 ON TRUE ) );
+# ----
+# EOF
+
+# Item No2 - constant plan
+
+query T multiline
+EXPLAIN SELECT DISTINCT MAX ( TRUE ) FROM ( SELECT a2.f1 , 0 f2 FROM t1 a2 ) a1 LEFT JOIN ( SELECT COUNT ( TRUE ) f1 FROM t1 LEFT JOIN t2 a2 ON NULL WHERE TRUE AND a2.f1 = a2.f1 ) a2 ON NOT f2 < a2.f1 + a1.f1 WHERE f2 + a2.f1 + 9 = a1.f1 AND TRUE;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 9), (0 >= (0 + #0))
+| Distinct group=()
+
+%1 =
+| Get %0 (l0)
+| Map true
+
+%2 =
+| Get %0 (l0)
+| Negate
+
+%3 =
+| Constant ()
+
+%4 =
+| Union %2 %3
+| Map null
+
+%5 =
+| Union %1 %4
+| Distinct group=(#0)
+
+EOF
+
+query I
+SELECT DISTINCT MAX ( TRUE ) FROM ( SELECT a2.f1 , 0 f2 FROM t1 a2 ) a1 LEFT JOIN ( SELECT COUNT ( TRUE ) f1 FROM t1 LEFT JOIN t2 a2 ON NULL WHERE TRUE AND a2.f1 = a2.f1 ) a2 ON NOT f2 < a2.f1 + a1.f1 WHERE f2 + a2.f1 + 9 = a1.f1 AND TRUE;
+----
+NULL
+
+# Item No3
+
+query T multiline
+EXPLAIN SELECT FROM t1 a1 LEFT JOIN t2 ON TRUE WHERE a1 IS NULL;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter isnull(record_create(#0, #1))
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t2 (u3)
+
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0, #1)
+
+%4 =
+| Get %3 (l1)
+| Distinct group=(#0, #1)
+| Negate
+
+%5 =
+| Get %0 (l0)
+| Distinct group=(#0, #1)
+
+%6 =
+| Union %4 %5
+| ArrangeBy (#0, #1)
+
+%7 =
+| Join %6 %0 (= #0 #2) (= #1 #3)
+| | implementation = Differential %0 %6.(#0, #1)
+| | demand = ()
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%8 =
+| Union %3 %7
+| Project ()
+
+EOF
+
+# Item No4 - redundant predicate
+
+statement ok
+CREATE INDEX t1i1 ON t1(f1);
+
+statement ok
+CREATE INDEX t1i2 ON t1(f2, f1);
+
+statement ok
+CREATE INDEX t2i1 ON t2(f1);
+
+statement ok
+CREATE INDEX i2i2 ON t2(f2, f1);
+
+query T multiline
+EXPLAIN SELECT FROM t2 a1 LEFT JOIN t2 a2 ON 5 > a2.f2 WHERE TRUE AND a1.f1 = a2.f2;
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (5 > #1)
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0)
+| Filter (5 > #0)
+| Project ()
+
+EOF
+
+# Item No5 - cross join - worked around by running PredicatePushdown before PredicatePullup, to fix join equivalences
+query T multiline
+EXPLAIN SELECT FROM ( SELECT 1, 2 FROM t2 a1 , t1 a2 WHERE a1.f2 != a2.f1 AND a1.f1 + 1 = a2.f1 AND EXISTS ( SELECT FROM t1 ) ) a1;
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| Filter (#1 != (#0 + 1))
+
+%1 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.t1 (u1)
+| Distinct group=()
+| ArrangeBy ()
+
+%3 =
+| Join %0 %1 %2 (= #2 (#0 + 1))
+| | implementation = Differential %0 %2.() %1.(#0)
+| | demand = (#2)
+| Filter !(isnull(#2))
+| Project ()
+
+EOF
+
+# Item No6 - missing !isnull(#0) on %0
+query T multiline
+EXPLAIN SELECT FROM ( SELECT a1.f1 , MAX ( a1.f2 ) f2 FROM t1 a1 GROUP BY 1 ) a1 LEFT JOIN t2 a2 ON a1.f1 + a2.f2 > 5 WHERE a2.f1 > 1 AND a1.f1 IS NOT NULL
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Reduce group=(#0)
+| | agg dummy(dummy)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 > 1)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0, #3)
+| Filter ((#0 + #3) > 5)
+| Project ()
+
+EOF
+
+# Item No7 - constant plan
+statement ok
+CREATE TABLE t3(f1 integer);
+
+query T multiline
+EXPLAIN SELECT * FROM t3 AS a1 LEFT JOIN t3 AS a2 ON a1.f1 = a2.f1 WHERE a1.f1 = 72 and a2.f1 = 64;
+----
+%0 =
+| Get materialize.public.t3 (u9)
+| Filter (#0 = 64), (#0 = 72)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t3 (u9)
+| Filter (#0 = 64), (#0 = 72)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0, #1)
+
+EOF
