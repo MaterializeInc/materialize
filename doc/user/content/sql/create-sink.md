@@ -70,7 +70,8 @@ Field | Value | Description
 ------|-------|------------
 `ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
 `ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
-`ssl_key_password` | `text` | Your SSL key's password, if any.
+`ssl_key_password` | `text` | Your SSL key's password, if any. <br/><br/>This option stores the password in Materialize's on-disk catalog. For an alternative, use `ssl_key_password_env`.
+`ssl_key_password_env` | `text` | Use the value stored in the named environment variable as the value for `ssl_key_password`. <br/><br/>This option does not store the password on-disk in Materialize's catalog, but requires the environment variable's presence to boot Materialize.
 `ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
 #### Kerberos `WITH` options
@@ -83,7 +84,9 @@ Field | Value | Description
 ------|-------|------------
 `sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
 `sasl_username` | `text` | Required if `sasl_mechanisms` is `PLAIN`.
-`sasl_password` | `text` | Required if `sasl_mechanisms` is `PLAIN`.
+`sasl_password` | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br /><br />This option stores the password in Materialize's on-disk catalog. For an alternative, use `sasl_password_env`.
+`sasl_password_env` | `text` | Use the value stored in the named environment variable as the value for `sasl_password`. <br /><br />This option does not store the password on-disk in Materialize's catalog, but requires
+the environment variable's presence to boot Materialize.
 `sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
 `sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
 `sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.
