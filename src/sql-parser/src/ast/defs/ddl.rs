@@ -57,6 +57,9 @@ impl_display!(Schema);
 pub enum AvroSchema<T: AstInfo> {
     CsrUrl {
         url: String,
+        /// The initial key, value schemas of a source. The `seed` schemas are used when loading
+        /// items from the Catalog to determine the shape of a source. Future schemas should be
+        /// fetched.
         seed: Option<CsrSeed>,
         with_options: Vec<SqlOption<T>>,
     },
