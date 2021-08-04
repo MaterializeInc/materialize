@@ -16,8 +16,8 @@
 //! `Value`s are easily converted to and from [`repr::Datum`]s. See, for
 //! example, the [`values_from_row`] function.
 
-#![deny(clippy::as_conversions)]
-#![deny(missing_docs)]
+#![warn(clippy::as_conversions)]
+#![warn(missing_docs)]
 
 mod format;
 mod types;

@@ -63,7 +63,7 @@
 //!
 //! [`Plan`]: crate::plan::Plan
 
-#![deny(missing_debug_implementations)]
+#![warn(missing_debug_implementations)]
 
 macro_rules! unsupported {
     ($feature:expr) => {

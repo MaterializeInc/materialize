@@ -18,8 +18,8 @@
 //! The crate also contains the beginnings of whole-dataflow optimization,
 //! which uses the same analyses but spanning multiple dataflow elements.
 
-#![forbid(missing_docs)]
-#![deny(missing_debug_implementations)]
+#![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 use std::collections::HashMap;
 use std::error::Error;
