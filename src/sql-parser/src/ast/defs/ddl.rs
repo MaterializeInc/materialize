@@ -24,6 +24,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use enum_kinds::EnumKind;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
 
@@ -361,8 +363,9 @@ impl AstDisplay for DbzMode {
 }
 impl_display!(DbzMode);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Connector<T: AstInfo> {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(ConnectorType)]
+pub enum CreateSourceConnector {
     File {
         path: String,
         compression: Compression,
@@ -371,7 +374,6 @@ pub enum Connector<T: AstInfo> {
         broker: String,
         topic: String,
         key: Option<Vec<Ident>>,
-        consistency: Option<KafkaConsistency<T>>,
     },
     Kinesis {
         arn: String,
@@ -403,10 +405,10 @@ pub enum Connector<T: AstInfo> {
     },
 }
 
-impl<T: AstInfo> AstDisplay for Connector<T> {
+impl AstDisplay for CreateSourceConnector {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Connector::File { path, compression } => {
+            CreateSourceConnector::File { path, compression } => {
                 f.write_str("FILE '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
@@ -415,7 +417,103 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                     f.write_node(compression);
                 }
             }
-            Connector::Kafka {
+            CreateSourceConnector::Kafka { broker, topic, key } => {
+                f.write_str("KAFKA BROKER '");
+                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("'");
+                f.write_str(" TOPIC '");
+                f.write_node(&display::escape_single_quote_string(topic));
+                f.write_str("'");
+                if let Some(key) = key.as_ref() {
+                    f.write_str(" KEY (");
+                    f.write_node(&display::comma_separated(&key));
+                    f.write_str(")");
+                }
+            }
+            CreateSourceConnector::Kinesis { arn } => {
+                f.write_str("KINESIS ARN '");
+                f.write_node(&display::escape_single_quote_string(arn));
+                f.write_str("'");
+            }
+            CreateSourceConnector::AvroOcf { path } => {
+                f.write_str("AVRO OCF '");
+                f.write_node(&display::escape_single_quote_string(path));
+                f.write_str("'");
+            }
+            CreateSourceConnector::S3 {
+                key_sources,
+                pattern,
+                compression,
+            } => {
+                f.write_str("S3 DISCOVER OBJECTS");
+                if let Some(pattern) = pattern {
+                    f.write_str(" MATCHING '");
+                    f.write_str(&display::escape_single_quote_string(pattern));
+                    f.write_str("'");
+                }
+                f.write_str(" USING");
+                f.write_node(&display::comma_separated(key_sources));
+                if compression != &Default::default() {
+                    f.write_str(" COMPRESSION ");
+                    f.write_node(compression);
+                }
+            }
+            CreateSourceConnector::Postgres {
+                conn,
+                publication,
+                slot,
+            } => {
+                f.write_str("POSTGRES CONNECTION '");
+                f.write_str(&display::escape_single_quote_string(conn));
+                f.write_str("' PUBLICATION '");
+                f.write_str(&display::escape_single_quote_string(publication));
+                if let Some(slot) = slot {
+                    f.write_str("' SLOT '");
+                    f.write_str(&display::escape_single_quote_string(slot));
+                }
+                f.write_str("'");
+            }
+            CreateSourceConnector::PubNub {
+                subscribe_key,
+                channel,
+            } => {
+                f.write_str("PUBNUB SUBSCRIBE KEY '");
+                f.write_str(&display::escape_single_quote_string(subscribe_key));
+                f.write_str("' CHANNEL '");
+                f.write_str(&display::escape_single_quote_string(channel));
+                f.write_str("'");
+            }
+        }
+    }
+}
+impl_display!(CreateSourceConnector);
+
+impl<T: AstInfo> From<&CreateSinkConnector<T>> for ConnectorType {
+    fn from(connector: &CreateSinkConnector<T>) -> ConnectorType {
+        match connector {
+            CreateSinkConnector::Kafka { .. } => ConnectorType::Kafka,
+            CreateSinkConnector::AvroOcf { .. } => ConnectorType::AvroOcf,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(CreateSinkConnectorKind)]
+pub enum CreateSinkConnector<T: AstInfo> {
+    Kafka {
+        broker: String,
+        topic: String,
+        key: Option<Vec<Ident>>,
+        consistency: Option<KafkaConsistency<T>>,
+    },
+    /// Avro Object Container File
+    AvroOcf { path: String },
+}
+
+impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSinkConnector::Kafka {
                 broker,
                 topic,
                 key,
@@ -436,63 +534,15 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                     f.write_node(consistency);
                 }
             }
-            Connector::Kinesis { arn } => {
-                f.write_str("KINESIS ARN '");
-                f.write_node(&display::escape_single_quote_string(arn));
-                f.write_str("'");
-            }
-            Connector::AvroOcf { path } => {
+            CreateSinkConnector::AvroOcf { path } => {
                 f.write_str("AVRO OCF '");
                 f.write_node(&display::escape_single_quote_string(path));
-                f.write_str("'");
-            }
-            Connector::S3 {
-                key_sources,
-                pattern,
-                compression,
-            } => {
-                f.write_str("S3 DISCOVER OBJECTS");
-                if let Some(pattern) = pattern {
-                    f.write_str(" MATCHING '");
-                    f.write_str(&display::escape_single_quote_string(pattern));
-                    f.write_str("'");
-                }
-                f.write_str(" USING");
-                f.write_node(&display::comma_separated(key_sources));
-                if compression != &Default::default() {
-                    f.write_str(" COMPRESSION ");
-                    f.write_node(compression);
-                }
-            }
-            Connector::Postgres {
-                conn,
-                publication,
-                slot,
-            } => {
-                f.write_str("POSTGRES CONNECTION '");
-                f.write_str(&display::escape_single_quote_string(conn));
-                f.write_str("' PUBLICATION '");
-                f.write_str(&display::escape_single_quote_string(publication));
-                if let Some(slot) = slot {
-                    f.write_str("' SLOT '");
-                    f.write_str(&display::escape_single_quote_string(slot));
-                }
-                f.write_str("'");
-            }
-            Connector::PubNub {
-                subscribe_key,
-                channel,
-            } => {
-                f.write_str("PUBNUB SUBSCRIBE KEY '");
-                f.write_str(&display::escape_single_quote_string(subscribe_key));
-                f.write_str("' CHANNEL '");
-                f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
             }
         }
     }
 }
-impl_display_t!(Connector);
+impl_display_t!(CreateSinkConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaConsistency<T: AstInfo> {

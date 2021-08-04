@@ -85,7 +85,7 @@ use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, Datum, Diff, RelationDesc, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
-    Connector, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    ConnectorType, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
     FetchStatement, Ident, ObjectType, Raw, Statement,
 };
@@ -3910,32 +3910,38 @@ pub fn describe(
 }
 
 fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
-    let (ty, connector, with_options) = match stmt {
+    let (source_or_sink, typ, with_options) = match stmt {
         Statement::CreateSource(CreateSourceStatement {
             connector,
             with_options,
             ..
-        }) => ("source", connector, with_options),
+        }) => ("source", ConnectorType::from(connector), with_options),
         Statement::CreateSink(CreateSinkStatement {
             connector,
             with_options,
             ..
-        }) => ("sink", connector, with_options),
+        }) => ("sink", ConnectorType::from(connector), with_options),
         _ => return Ok(()),
     };
-    match connector {
+    match typ {
         // File sources and sinks are prohibited in safe mode because they allow
         // reading ƒrom and writing to arbitrary files on disk.
-        Connector::File { .. } => {
-            return Err(CoordError::SafeModeViolation(format!("file {}", ty)));
+        ConnectorType::File => {
+            return Err(CoordError::SafeModeViolation(format!(
+                "file {}",
+                source_or_sink
+            )));
         }
-        Connector::AvroOcf { .. } => {
-            return Err(CoordError::SafeModeViolation(format!("Avro OCF {}", ty)));
+        ConnectorType::AvroOcf => {
+            return Err(CoordError::SafeModeViolation(format!(
+                "Avro OCF {}",
+                source_or_sink
+            )));
         }
         // Kerberos-authenticated Kafka sources and sinks are prohibited in
         // safe mode because librdkafka will blindly execute the string passed
         // as `sasl_kerberos_kinit_cmd`.
-        Connector::Kafka { .. } => {
+        ConnectorType::Kafka => {
             // It's too bad that we have to reinvent so much of librdkafka's
             // option parsing and hardcode some of its defaults here. But there
             // isn't an obvious alternative; asking librdkafka about its =
@@ -3957,7 +3963,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
             {
                 return Err(CoordError::SafeModeViolation(format!(
                     "Kerberos-authenticated Kafka {}",
-                    ty,
+                    source_or_sink,
                 )));
             }
         }

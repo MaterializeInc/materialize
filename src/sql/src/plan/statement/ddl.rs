@@ -45,12 +45,12 @@ use sql_parser::ast::{CreateSourceFormat, KeyConstraint};
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
-    CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement,
-    DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, KafkaConsistency, ObjectType, Raw, SqlOption, Statement,
+    ColumnOption, Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
+    CreateSourceConnector, CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
+    CreateViewsStatement, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, ObjectType, Raw, SqlOption, Statement,
     UnresolvedObjectName, Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
@@ -408,12 +408,12 @@ pub fn plan_create_source(
         },
         None => scx.catalog.config().timestamp_frequency,
     };
-    if !matches!(connector, Connector::Kafka { .. }) && key_envelope.is_present() {
+    if !matches!(connector, CreateSourceConnector::Kafka { .. }) && key_envelope.is_present() {
         unsupported!("INCLUDE KEY with non-Kafka sources");
     }
 
     let (external_connector, encoding, key_envelope) = match connector {
-        Connector::Kafka { broker, topic, .. } => {
+        CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
             consistency = match with_options.remove("consistency_topic") {
@@ -483,7 +483,7 @@ pub fn plan_create_source(
 
             (connector, encoding, key_envelope)
         }
-        Connector::Kinesis { arn, .. } => {
+        CreateSourceConnector::Kinesis { arn, .. } => {
             let arn: ARN = arn
                 .parse()
                 .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
@@ -507,7 +507,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
             (connector, encoding, KeyEnvelope::None)
         }
-        Connector::File { path, compression } => {
+        CreateSourceConnector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -529,7 +529,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
             (connector, encoding, KeyEnvelope::None)
         }
-        Connector::S3 {
+        CreateSourceConnector::S3 {
             key_sources,
             pattern,
             compression,
@@ -571,7 +571,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
             (connector, encoding, KeyEnvelope::None)
         }
-        Connector::Postgres {
+        CreateSourceConnector::Postgres {
             conn,
             publication,
             slot,
@@ -589,7 +589,7 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
             (connector, encoding, KeyEnvelope::None)
         }
-        Connector::PubNub {
+        CreateSourceConnector::PubNub {
             subscribe_key,
             channel,
         } => {
@@ -607,7 +607,7 @@ pub fn plan_create_source(
                 KeyEnvelope::None,
             )
         }
-        Connector::AvroOcf { path, .. } => {
+        CreateSourceConnector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -733,7 +733,7 @@ pub fn plan_create_source(
             //
             // TODO(bwm): move key/value canonicalization entirely into the purify step, and turn
             // this and the related code in `get_encoding` into internal errors.
-            Connector::Kafka { .. } => match format {
+            CreateSourceConnector::Kafka { .. } => match format {
                 CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
                 CreateSourceFormat::Bare(Format::Avro(AvroSchema::CsrUrl { .. })) => {
                     SourceEnvelope::Upsert
@@ -743,7 +743,7 @@ pub fn plan_create_source(
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
         sql_parser::ast::Envelope::CdcV2 => {
-            if let Connector::AvroOcf { .. } = connector {
+            if let CreateSourceConnector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
                 unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
@@ -1533,8 +1533,7 @@ pub fn plan_create_sink(
 
     let desc = from.desc()?;
     let key_indices = match &connector {
-        Connector::File { .. } => None,
-        Connector::Kafka { key, .. } => {
+        CreateSinkConnector::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
                 let key = key
                     .into_iter()
@@ -1571,11 +1570,7 @@ pub fn plan_create_sink(
                 None
             }
         }
-        Connector::Kinesis { .. } => None,
-        Connector::AvroOcf { .. } => None,
-        Connector::S3 { .. } => None,
-        Connector::Postgres { .. } => None,
-        Connector::PubNub { .. } => None,
+        CreateSinkConnector::AvroOcf { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -1608,8 +1603,7 @@ pub fn plan_create_sink(
     let root_user_dependencies = get_root_dependencies(scx, &depends_on);
 
     let connector_builder = match connector {
-        Connector::File { .. } => unsupported!("file sinks"),
-        Connector::Kafka {
+        CreateSinkConnector::Kafka {
             broker,
             topic,
             consistency,
@@ -1626,13 +1620,9 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => {
+        CreateSinkConnector::AvroOcf { path } => {
             avro_ocf_sink_builder(format, path, suffix_nonce, value_desc)?
         }
-        Connector::S3 { .. } => unsupported!("S3 sinks"),
-        Connector::Postgres { .. } => unsupported!("Postgres sinks"),
-        Connector::PubNub { .. } => unsupported!("PubNub sinks"),
     };
 
     if !with_options.is_empty() {
