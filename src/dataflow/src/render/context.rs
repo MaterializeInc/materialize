@@ -526,7 +526,9 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
         let mut work: usize = 0;
         let mut session = output.session(&self.capability);
         if let Some(key) = key {
-            self.cursor.seek_key(&self.batch, key);
+            if self.cursor.get_key(&self.batch) != Some(key) {
+                self.cursor.seek_key(&self.batch, key);
+            }
             if self.cursor.get_key(&self.batch) == Some(key) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
