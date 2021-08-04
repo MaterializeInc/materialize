@@ -165,8 +165,8 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::map::Map),
                 Box::new(crate::fusion::filter::Filter),
                 Box::new(crate::fusion::project::Project),
-                Box::new(crate::fusion::join::Join),
                 Box::new(crate::inline_let::InlineLet),
+                Box::new(crate::fusion::join::Join),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
@@ -196,13 +196,12 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::redundant_join::RedundantJoin),
                 // Cleanup after PredicatePullup
                 Box::new(crate::predicate_pushdown::PredicatePushdown),
-                // Remove empty Filter nodes left behind by predicate pushdown.
-                // This should run before redundant join to ensure that key info
-                // is correct.
-                Box::new(crate::fusion::filter::Filter),
+                // Lifts the information `col = literal`
+                Box::new(crate::column_knowledge::ColumnKnowledge),
                 // Lifts the information `!isnull(col)`
                 Box::new(crate::nonnullable::NonNullable),
-                Box::new(crate::update_let::UpdateLet),
+                // Remove empty Filter nodes left behind by predicate pushdown.
+                Box::new(crate::fusion::filter::Filter),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can

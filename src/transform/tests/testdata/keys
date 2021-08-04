@@ -65,7 +65,7 @@ steps format=types
 ====
 No change: TopKElision, NonNullRequirements
 ====
-Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, PredicatePushdown, Filter, NonNullable, UpdateLet, RedundantJoin, PredicatePullup, UpdateLet, RedundantJoin, PredicatePushdown, Filter, NonNullable, UpdateLet, FoldConstants { limit: Some(10000) }, UpdateLet] }], limit: 100 }:
+Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, InlineLet, Join, Reduce, Union, UnionBranchCancellation, PredicatePushdown, Filter, NonNullable, UpdateLet, RedundantJoin, PredicatePullup, UpdateLet, RedundantJoin, PredicatePushdown, ColumnKnowledge, NonNullable, Filter, FoldConstants { limit: Some(10000) }, UpdateLet] }], limit: 100 }:
 %0 =
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
@@ -75,7 +75,7 @@ Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtract
 | | keys = ((#0), (#1))
 
 ====
-No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, PredicatePushdown, Filter, NonNullable, UpdateLet, RedundantJoin, PredicatePullup, UpdateLet, RedundantJoin, PredicatePushdown, Filter, NonNullable, UpdateLet, FoldConstants { limit: Some(10000) }, UpdateLet] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, PredicatePushdown, Filter, NonNullable, UpdateLet, RedundantJoin, PredicatePullup, UpdateLet, RedundantJoin, PredicatePushdown, Filter, NonNullable, UpdateLet, FoldConstants { limit: Some(10000) }, UpdateLet] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants { limit: Some(10000) }
+No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, InlineLet, Join, Reduce, Union, UnionBranchCancellation, PredicatePushdown, Filter, NonNullable, UpdateLet, RedundantJoin, PredicatePullup, UpdateLet, RedundantJoin, PredicatePushdown, ColumnKnowledge, NonNullable, Filter, FoldConstants { limit: Some(10000) }, UpdateLet] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, InlineLet, Join, Reduce, Union, UnionBranchCancellation, PredicatePushdown, Filter, NonNullable, UpdateLet, RedundantJoin, PredicatePullup, UpdateLet, RedundantJoin, PredicatePushdown, ColumnKnowledge, NonNullable, Filter, FoldConstants { limit: Some(10000) }, UpdateLet] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants { limit: Some(10000) }
 ====
 Final:
 %0 =
