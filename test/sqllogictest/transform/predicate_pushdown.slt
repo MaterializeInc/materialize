@@ -159,3 +159,58 @@ SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND t1.f2 = t2.f2 AND t1.f1 + t2.f2 = t
 | Project (#0, #1, #0, #1)
 
 EOF
+
+# #7684 avoidable cross joins
+query T multiline
+EXPLAIN
+select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null);
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u7)
+
+%2 =
+| Join %0 %1 (= #0 (#2 + 1))
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0..#3)
+
+EOF
+
+query T multiline
+EXPLAIN
+select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) is null);
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u7)
+
+%2 =
+| Join %0 %1 (= #0 (#2 + 1))
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0..#3)
+
+EOF
+
+query T multiline
+EXPLAIN
+select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) is null);
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| ArrangeBy ((#0 + 1))
+
+%1 =
+| Get materialize.public.t2 (u7)
+
+%2 =
+| Join %0 %1 (= #2 (#0 + 1))
+| | implementation = Differential %1 %0.((#0 + 1))
+| | demand = (#0..#3)
+
+EOF
