@@ -152,6 +152,7 @@ mod tests {
             )),
             "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
             "ReductionPushdown" => Ok(Box::new(transform::reduction_pushdown::ReductionPushdown)),
+            "RedundantJoin" => Ok(Box::new(transform::redundant_join::RedundantJoin)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
