@@ -202,6 +202,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             }
         };
 
+        self.id_mapping.retain(|(name, _)| name != &id_str);
+
         // TODO: actually physically delete the future and trace batches.
         let future = self.futures.remove(&mapping.1);
         let trace = self.traces.remove(&mapping.1);
@@ -322,7 +324,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
         desc: &Range<SeqNo>,
     ) -> Result<(), Error> {
-        if cfg!(any(debug, test)) {
+        if cfg!(any(debug_assertions, test)) {
             // Sanity check that all received sequence numbers fall within the stated
             // [lower, upper) range
             for (seqno, _, _, _) in &updates {

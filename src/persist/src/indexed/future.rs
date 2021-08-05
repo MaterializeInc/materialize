@@ -161,7 +161,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
                 batch.desc
             )));
         }
-        if cfg!(any(debug, test)) {
+        if cfg!(any(debug_assertions, test)) {
             // Batches being appended to this future come from data being
             // drained out of the buffer. Indexed should have prevented this
             // write to the buffer, so this should never happen. Hopefully any
