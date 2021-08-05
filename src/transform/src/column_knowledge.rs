@@ -139,7 +139,7 @@ impl ColumnKnowledge {
                         }
                     }
                     if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not,
+                        func: UnaryFunc::Not(func::Not),
                         expr,
                     } = predicate
                     {

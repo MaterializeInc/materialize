@@ -14,6 +14,7 @@ use proc_macro2::TokenTree;
 use serde_json::Value;
 
 use expr::explain::ViewExplanation;
+use expr::func::Not;
 use expr::*;
 use lowertest::*;
 use ore::result::ResultExt;
@@ -35,7 +36,7 @@ gen_reflect_info_func!(
         MirRelationExpr,
         JoinImplementation
     ],
-    [AggregateExpr, ColumnOrder, ColumnType, RelationType]
+    [AggregateExpr, ColumnOrder, ColumnType, RelationType, Not]
 );
 
 lazy_static! {

@@ -183,7 +183,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
         // Otherwise, replace every instance of `p` in every other predicate
         // with `true`.
         if let MirScalarExpr::CallUnary {
-            func: UnaryFunc::Not,
+            func: UnaryFunc::Not(func::Not),
             expr,
         } = &predicate_to_apply
         {
@@ -246,7 +246,7 @@ fn replace_subexpr_and_reduce(
                     {
                         if negation == *l_func && l_expr1 == r_expr1 && l_expr2 == r_expr2 {
                             *e = MirScalarExpr::CallUnary {
-                                func: UnaryFunc::Not,
+                                func: UnaryFunc::Not(func::Not),
                                 expr: Box::new(replace_with.clone()),
                             };
                             changed = true;
@@ -265,7 +265,7 @@ fn replace_subexpr_and_reduce(
 /// Returns the inner operand if the given predicate is an IS NOT NULL expression.
 fn is_not_null(predicate: &MirScalarExpr) -> Option<MirScalarExpr> {
     if let MirScalarExpr::CallUnary {
-        func: UnaryFunc::Not,
+        func: UnaryFunc::Not(func::Not),
         expr,
     } = &predicate
     {

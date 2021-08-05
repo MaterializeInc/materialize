@@ -239,7 +239,7 @@ fn plan_dbz_flatten_one(
         input: Box::new(HirRelationExpr::Filter {
             input: Box::new(input),
             predicates: vec![HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not,
+                func: UnaryFunc::Not(func::Not),
                 expr: Box::new(HirScalarExpr::CallUnary {
                     func: UnaryFunc::IsNull,
                     expr: Box::new(HirScalarExpr::Column(ColumnRef {

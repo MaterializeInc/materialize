@@ -411,7 +411,7 @@ impl MirRelationExpr {
                     predicate.non_null_requirements(&mut nonnull_required_columns);
                     // Test for explicit checks that a column is non-null.
                     if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not,
+                        func: UnaryFunc::Not(scalar_func::Not),
                         expr,
                     } = predicate
                     {
