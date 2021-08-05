@@ -35,4 +35,6 @@ pub struct Config<'a> {
     pub now: ore::now::NowFn,
     /// Handle to persistence runtime and feature configuration.
     pub persist: PersisterWithConfig,
+    // Whether or not to skip catalog migrations
+    pub skip_migrations: bool,
 }

@@ -834,18 +834,19 @@ impl Catalog {
                 _ => (),
             }
         }
-
-        let last_seen_version = catalog.storage().get_catalog_content_version()?;
-        crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
-            Error::new(ErrorKind::FailedMigration {
-                last_seen_version,
-                this_version: catalog.config.build_info.version,
-                cause: e.to_string(),
-            })
-        })?;
-        catalog
-            .storage()
-            .set_catalog_content_version(catalog.config.build_info.version)?;
+        if !config.skip_migrations {
+            let last_seen_version = catalog.storage().get_catalog_content_version()?;
+            crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
+                Error::new(ErrorKind::FailedMigration {
+                    last_seen_version,
+                    this_version: catalog.config.build_info.version,
+                    cause: e.to_string(),
+                })
+            })?;
+            catalog
+                .storage()
+                .set_catalog_content_version(catalog.config.build_info.version)?;
+        }
 
         let mut storage = catalog.storage();
         let tx = storage.transaction()?;
@@ -919,6 +920,10 @@ impl Catalog {
     /// Opens the catalog at `path` with parameters set appropriately for debug
     /// contexts, like in tests.
     ///
+    /// WARNING! This function can arbitrarily fail because it does not make any
+    /// effort to adjust the catalog's contents' structure or semantics to the
+    /// currently running version, i.e. it does not apply any migrations.
+    ///
     /// This function should not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
@@ -933,6 +938,7 @@ impl Catalog {
             timestamp_frequency: Duration::from_secs(1),
             now,
             persist: PersistConfig::disabled().init()?,
+            skip_migrations: true,
         })?;
         Ok(catalog)
     }
