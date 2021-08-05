@@ -244,7 +244,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
 
                 // Sanity check that the modified list of batches satisfies
                 // all invariants.
-                if cfg!(any(debug, test)) {
+                if cfg!(any(debug_assertions, test)) {
                     self.meta().validate()?;
                 }
 
