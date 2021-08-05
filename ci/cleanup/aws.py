@@ -86,8 +86,11 @@ def clean_up_ec2() -> None:
         f"Terminating scratch ec2 instances whose age exceeds the deletion time (default lifespan: {scratch.MAX_AGE})"
     )
     olds = [i["InstanceId"] for i in scratch.get_old_instances()]
-    print(f"Instances to delete: {olds}")
-    boto3.client("ec2").terminate_instances(InstanceIds=olds)
+    if olds:
+        print(f"Instances to delete: {olds}")
+        boto3.client("ec2").terminate_instances(InstanceIds=olds)
+    else:
+        print("No instances to delete")
 
 
 def main() -> None:
