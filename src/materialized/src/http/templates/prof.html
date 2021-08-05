@@ -19,15 +19,14 @@
       <button name="action" value="dump_file">Download heap profile</button>
       <button name="action" value="dump_symbolicated_file">Download symbolicated heap profile</button>
       <button name="action" value="mem_fg">Visualize heap profile (flamegraph)</button>
-      <button name="action" value="dump_stats">Download stats</button>
     </form>
   {% when None %}
       <p>Jemalloc profiling enabled but inactive.</p>
       <form method="post">
         <button type="submit" name="action" value="activate">Activate</button>
-        <button name="action" value="dump_stats">Download stats</button>
       </form>
   {% endmatch %}
+  <a href="prof?dump_stats">Download stats</a>
 {% when crate::http::prof::MemProfilingStatus::Disabled %}
     <p>Jemalloc profiling is not available.</p>
     {% if std::env::consts::OS == "macos" %}
