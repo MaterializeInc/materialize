@@ -14,7 +14,8 @@ syntax.
 
 Write:
 * an enum as `(variant_in_snake_case field1 field2 .. fieldn)`
-* a struct as `(field1 field2 .. fieldn)`
+* a struct with arguments as `(field1 field2 .. fieldn)`
+* a struct with no arguments as the empty string.
 * a `Vec` as `[elem1 elem2 .. elemn]`
 * a tuple as `{elem1 elem2 .. elemn}`
 * `None` or `null` as `null`

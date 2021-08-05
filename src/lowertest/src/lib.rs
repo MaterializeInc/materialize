@@ -119,9 +119,14 @@ where
         .ok_or_else(|| format!("Empty spec for type {}", type_name))
 }
 
-/// Converts the next `TokenTree` in the stream into deserializable JSON.
+/// Converts the next part of the stream into JSON deserializable into an object
+/// of type `type_name`.
 ///
-/// Returns `None` if end of stream has been reached.
+/// If the object is a zero-arg struct, this method will return
+/// `Ok(Some("null"))` without looking at the stream.
+///
+/// Otherwise, it will try to convert the next `TokenTree` in the stream.
+/// If end of stream has been reached, this method returns `Ok(None)`
 ///
 /// The JSON string should be deserializable into an object of type
 /// `type_name`.
@@ -131,7 +136,8 @@ where
 ///   unless it is a unit enum, in which case it can also be represented as
 ///   `enum_variant_snake_case`. Enums can have optional arguments, which should
 ///   all come at the end.
-/// * A struct is represented as `(<arg1> <arg2> ..)`
+/// * A struct is represented as `(<arg1> <arg2> ..)`, unless it has no
+///   arguments, in which case it is represented by the empty string.
 /// * A vec or tuple is represented as `[<elem1> <elem2> ..]`
 /// * None/null is represented as `null`
 /// * true (resp. false) is represented as `true` (resp. `false`)
@@ -151,6 +157,11 @@ where
     I: Iterator<Item = TokenTree>,
 {
     let type_name = &normalize_type_name(type_name);
+    if let Some((_, f_types)) = rti.struct_dict.get(&type_name[..]) {
+        if f_types.is_empty() {
+            return Ok(Some("null".to_string()));
+        }
+    }
     if let Some(first_arg) = stream_iter.next() {
         // If the type refers to an enum or struct defined by us, go to a
         // special branch that allows reuse of code paths for the
@@ -611,7 +622,11 @@ where
         return result;
     }
     if let Some((names, types)) = rti.struct_dict.get(&type_name[..]) {
-        format!("({})", from_json_fields(json, names, types, rti, ctx))
+        if types.is_empty() {
+            "".to_string()
+        } else {
+            format!("({})", from_json_fields(json, names, types, rti, ctx))
+        }
     } else if let Some(enum_dict) = rti.enum_dict.get(&type_name[..]) {
         match json {
             // A unit enum in JSON is `"variant"`. In the spec it is `variant`.
