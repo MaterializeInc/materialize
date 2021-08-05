@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use expr::{EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::{ColumnType, RelationType, ScalarType};
 use repr::{Datum, Row};
 

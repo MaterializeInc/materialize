@@ -23,7 +23,8 @@ use repr::{ColumnType, Datum, Diff, RelationType, Row};
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::{
-    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr, UnaryFunc,
+    func as scalar_func, DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId,
+    MirScalarExpr, UnaryFunc,
 };
 
 pub mod canonicalize;

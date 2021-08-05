@@ -33,6 +33,7 @@ serde_json = "1.0.67"
 sha-1 = "0.9.8"
 sha2 = "0.9.6"
 uncased = "0.9.6"
+paste = "1"
 
 [dev-dependencies]
 datadriven = "0.6.0"

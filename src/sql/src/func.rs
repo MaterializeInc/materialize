@@ -21,6 +21,7 @@ use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
+use expr::func;
 use ore::collections::CollectionExt;
 use pgrepr::oid;
 use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};

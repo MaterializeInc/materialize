@@ -28,7 +28,7 @@ use std::iter;
 use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use expr::LocalId;
+use expr::{func as expr_func, LocalId};
 use itertools::Itertools;
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};

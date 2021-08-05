@@ -10,7 +10,7 @@
 //! Utility functions to transform parts of a single `MirRelationExpr`
 //! into canonical form.
 
-use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
+use crate::{func, BinaryFunc, MirScalarExpr, UnaryFunc};
 use repr::{Datum, RelationType, ScalarType};
 
 /// Canonicalize equivalence classes of a join.

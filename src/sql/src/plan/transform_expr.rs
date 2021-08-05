@@ -14,6 +14,7 @@ use std::mem;
 
 use lazy_static::lazy_static;
 
+use expr::func;
 use repr::{ColumnType, RelationType, ScalarType};
 
 use crate::plan::expr::{

@@ -77,7 +77,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+use expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use itertools::Itertools;
 use repr::{Datum, ScalarType};
 

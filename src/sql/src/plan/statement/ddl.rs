@@ -34,7 +34,7 @@ use dataflow_types::{
     PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
     SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
 };
-use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
+use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
