@@ -202,6 +202,8 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             }
         };
 
+        self.id_mapping.retain(|(name, _)| name != &id_str);
+
         // TODO: actually physically delete the future and trace batches.
         let future = self.futures.remove(&mapping.1);
         let trace = self.traces.remove(&mapping.1);
