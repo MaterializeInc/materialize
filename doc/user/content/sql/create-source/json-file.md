@@ -16,6 +16,10 @@ This document details how to connect Materialize to a JSON-formatted local text 
 
 {{< diagram "create-source-json.svg" >}}
 
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
 {{% create-source/syntax-details connector="file" formats="json-bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples

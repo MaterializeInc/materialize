@@ -17,6 +17,10 @@ This document details how to connect Materialize to a text–formatted
 
 {{< diagram "create-source-pubnub-text.svg" >}}
 
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
 {{% create-source/syntax-details connector="pubnub" formats="text" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples

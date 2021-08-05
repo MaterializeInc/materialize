@@ -23,9 +23,13 @@ streams.
 
 {{< diagram "create-source-csv-kinesis.svg" >}}
 
-### key_constraint
+#### `key_constraint`
 
 {{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 {{% create-source/syntax-details connector="kinesis" formats="csv" envelopes="append-only" keyConstraint=true %}}
 
