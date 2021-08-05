@@ -49,11 +49,13 @@ def multi_json(s: str) -> List[Dict[Any, Any]]:
     return result
 
 
+# Sane defaults for internal Materialize use in the scratch account
+DEFAULT_SUBNET_ID = "subnet-0b47df5733387582b"
+DEFAULT_SG_ID = "sg-0f2d62ae0f39f93cc"
+DEFAULT_INSTPROF_NAME = "ssm-instance-profile"
+
+
 def main() -> None:
-    # Sane defaults for internal Materialize use in the scratch account
-    DEFAULT_SUBNET_ID = "subnet-0b47df5733387582b"
-    DEFAULT_SG_ID = "sg-0f2d62ae0f39f93cc"
-    DEFAULT_INSTPROF_NAME = "ssm-instance-profile"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--subnet-id", type=str, default=DEFAULT_SUBNET_ID)
