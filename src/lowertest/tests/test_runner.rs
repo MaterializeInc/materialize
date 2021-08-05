@@ -20,6 +20,9 @@ mod tests {
     use serde_json::Value;
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
+    struct ZeroArg;
+
+    #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
     struct SingleUnnamedArg(Box<f64>);
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzStructReflect)]
@@ -56,8 +59,11 @@ mod tests {
         SingleUnnamedField(SingleUnnamedArg),
         SingleUnnamedField2(Vec<i64>),
         SingleUnnamedField3(MultiNamedArg),
+        SingleUnnamedZeroArgField(ZeroArg),
         MultiUnnamedFields(MultiUnnamedArg, MultiNamedArg, Box<TestEnum>),
         MultiUnnamedFields2(OptionalArg, FirstArgEnum, #[serde(default)] String),
+        MultiUnnamedZeroArgFields(ZeroArg, ZeroArg),
+        MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg),
         Unit,
     }
 
@@ -65,6 +71,7 @@ mod tests {
         produce_rti,
         [TestEnum],
         [
+            ZeroArg,
             SingleUnnamedArg,
             OptionalArg,
             MultiUnnamedArg,

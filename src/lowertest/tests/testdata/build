@@ -134,3 +134,33 @@ build
 (multi_unnamed_fields_2 true (unit "baz"))
 ----
 Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "baz" }, ""))
+
+build
+(single_unnamed_zero_arg_field)
+----
+Some(SingleUnnamedZeroArgField(ZeroArg))
+
+build
+single_unnamed_zero_arg_field
+----
+Some(SingleUnnamedZeroArgField(ZeroArg))
+
+build
+(multi_unnamed_zero_arg_fields)
+----
+Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg))
+
+build
+multi_unnamed_zero_arg_fields
+----
+Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg))
+
+build
+(multi_unnamed_fields_first_zero_arg true)
+----
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (0.0, 0))))
+
+build
+(multi_unnamed_fields_first_zero_arg (true [3.14 2]))
+----
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (3.14, 2))))
