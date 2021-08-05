@@ -252,13 +252,6 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         unsafe { abomonation::encode(&entry, &mut entry_bytes) }
             .expect("write to Vec is infallible");
         let seqno = self.buf.write_sync(entry_bytes)?;
-        for (id, updates) in entry.updates.iter() {
-            if let Some(listen_fns) = self.listeners.get(id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
-                }
-            }
-        }
         Ok(seqno)
     }
 
@@ -377,6 +370,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// seal frontier into the trace and does any necessary resulting eviction
     /// work to remove uneccessary batches.
     fn drain_future(&mut self) -> Result<(), Error> {
+        let mut updates_by_id = vec![];
         for (id, trace) in self.traces.iter_mut() {
             // If this future is already properly sealed then we don't need
             // to do anything.
@@ -393,7 +387,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
             let desc = Description::new(
                 trace_upper,
-                seal,
+                seal.clone(),
                 Antichain::from_elem(Timestamp::minimum()),
             );
             if PartialOrder::less_equal(desc.upper(), desc.lower()) {
@@ -411,6 +405,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
             // Trace batches are required to be sorted and consolidated by ((k, v), t)
             differential_dataflow::consolidation::consolidate_updates(&mut updates);
+            updates_by_id.push((*id, seal, updates.clone()));
 
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
@@ -426,6 +421,16 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
         self.blob.set_meta(self.serialize_meta())?;
+
+        for (id, seal, updates) in updates_by_id {
+            if let Some(listen_fns) = self.listeners.get(&id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Records(updates.clone()));
+                    listen_fn(ListenEvent::Sealed(seal[0]));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -482,32 +487,19 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
-        match self.blob.set_meta(self.serialize_meta()) {
-            ok @ Ok(_) => {
-                // Notify listeners now that the seal has been committed to
-                // durable storage.
-                for id in ids.iter() {
-                    if let Some(listen_fns) = self.listeners.get(id) {
-                        for listen_fn in listen_fns.iter() {
-                            listen_fn(ListenEvent::Sealed(seal_ts));
-                        }
-                    }
-                }
+        if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
+            // Revert in-memory state back to its previous version so that
+            // things are consistent between the durably persisted version
+            // and the in-memory version.
+            for (id, seal) in prev {
+                let trace = self.traces.get_mut(&id).expect("trace known to exist");
 
-                ok
+                trace.update_seal(seal);
             }
-            error @ Err(_) => {
-                // Revert in-memory state back to its previous version so that
-                // things are consistent between the durably persisted version
-                // and the in-memory version.
-                for (id, seal) in prev {
-                    let trace = self.traces.get_mut(&id).expect("trace known to exist");
 
-                    trace.update_seal(seal);
-                }
-
-                error
-            }
+            Err(e)
+        } else {
+            Ok(())
         }
     }
 
@@ -742,16 +734,6 @@ mod tests {
         assert_eq!(future.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![]);
 
-        // Verify that the listener got a copy of the writes.
-        let listen_received = {
-            let mut buf = Vec::new();
-            while let Ok(x) = listen_rx.try_recv() {
-                buf.push(x);
-            }
-            buf
-        };
-        assert_eq!(listen_received, updates);
-
         // After a step, it's all moved into the future part of the index.
         i.step()?;
         assert_eq!(i.snapshot(id)?.read_to_end(), updates);
@@ -779,6 +761,16 @@ mod tests {
         assert_eq!(buf.read_to_end(), vec![]);
         assert_eq!(future.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
+
+        // Verify that the listener got a copy of the writes.
+        let listen_received = {
+            let mut buf = Vec::new();
+            while let Ok(x) = listen_rx.try_recv() {
+                buf.push(x);
+            }
+            buf
+        };
+        assert_eq!(listen_received, updates);
 
         // Can advance compaction frontier to a time that has already been sealed
         i.allow_compaction(id, 2)?;
