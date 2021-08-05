@@ -572,6 +572,14 @@ pub const MZ_KAFKA_BROKER_RTT: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3033),
 };
 
+pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_operator_reachability",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Timely(TimelyLog::Reachability),
+    id: GlobalId::System(3034),
+    index_id: GlobalId::System(3035),
+};
+
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_keys",
@@ -1329,6 +1337,7 @@ lazy_static! {
             Builtin::Type(&TYPE_VARCHAR),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
+            Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
             Builtin::Log(&MZ_DATAFLOW_CHANNELS),
             Builtin::Log(&MZ_SCHEDULING_ELAPSED),
             Builtin::Log(&MZ_SCHEDULING_HISTOGRAM),

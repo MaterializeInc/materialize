@@ -300,6 +300,7 @@ mz_arrangement_sharing
 mz_arrangement_sizes
 mz_dataflow_channels
 mz_dataflow_operator_addresses
+mz_dataflow_operator_reachability
 mz_dataflow_operators
 mz_kafka_broker_rtt
 mz_kafka_consumer_partitions
@@ -321,6 +322,7 @@ mz_arrangement_sharing               system true          volatile
 mz_arrangement_sizes                 system true          volatile
 mz_dataflow_channels                 system true          volatile
 mz_dataflow_operator_addresses       system true          volatile
+mz_dataflow_operator_reachability    system true          volatile
 mz_dataflow_operators                system true          volatile
 mz_kafka_broker_rtt                  system true          volatile
 mz_kafka_consumer_partitions         system true          volatile
@@ -457,7 +459,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-41
+42
 
 > SHOW VIEWS FROM mz_catalog
 mz_catalog_names
