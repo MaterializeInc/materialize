@@ -606,8 +606,10 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
                 res.fill(step_res.and_then(|_| write_res));
             }
             Cmd::Seal(ids, ts, res) => {
-                let r = self.indexed.seal(ids, ts);
-                res.fill(r);
+                let seal_res = self.indexed.seal(ids, ts);
+                // TODO: Move this to a Cmd::Tick or something.
+                let step_res = self.indexed.step();
+                res.fill(step_res.and_then(|_| seal_res));
             }
             Cmd::AllowCompaction(id, ts, res) => {
                 let r = self.indexed.allow_compaction(id, ts);
