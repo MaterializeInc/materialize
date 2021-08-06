@@ -25,6 +25,6 @@ unicode-width = "0.1.8"
 anyhow = "1.0.42"
 ore = { path = "../ore" }
 phf = { version = "0.9.0", features = ["uncased"] }
-phf_codegen = { version = "0.9.0" }
+phf_codegen = { version = "0.9.1" }
 uncased = "0.9.6"
 walkabout = { path = "../walkabout" }
