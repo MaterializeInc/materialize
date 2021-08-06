@@ -949,7 +949,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#9d33cda130421c7c391c2fb9d89c55e8d5752c1f"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c29b8a354441a5bf2c1005c5f77d25b7e216bc02"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1004,7 +1004,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#9d33cda130421c7c391c2fb9d89c55e8d5752c1f"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c29b8a354441a5bf2c1005c5f77d25b7e216bc02"
 dependencies = [
  "abomonation",
  "abomonation_derive",
