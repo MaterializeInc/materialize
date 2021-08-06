@@ -3509,6 +3509,7 @@ pub async fn serve(
         timestamp_frequency,
         now: system_time,
         persist,
+        skip_migrations: false,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
@@ -3686,6 +3687,7 @@ pub fn serve_debug(
         timestamp_frequency: Duration::from_millis(1),
         now: get_debug_timestamp,
         persist: persist.clone(),
+        skip_migrations: false,
     })
     .unwrap();
 

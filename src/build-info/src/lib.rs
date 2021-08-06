@@ -13,7 +13,7 @@
 //! from any layer of the stack.
 
 /// Build information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildInfo {
     /// The version number of the build.
     pub version: &'static str,
@@ -30,8 +30,8 @@ pub struct BuildInfo {
 /// Intended for use in contexts where getting the correct build information is
 /// impossible or unnecessary, like in tests.
 pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
-    version: "",
-    sha: "",
+    version: "0.0.0+dummy",
+    sha: "0000000000000000000000000000000000000000",
     time: "",
     target_triple: "",
 };
