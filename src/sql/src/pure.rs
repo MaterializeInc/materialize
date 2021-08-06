@@ -29,7 +29,8 @@ use sql_parser::ast::{
     display::AstDisplay, AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement,
     CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrSeed, DbzMode,
     Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem, SetExpr, Statement,
-    TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
+    TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    WithOptionValue,
 };
 use sql_parser::parser::parse_columns;
 
@@ -470,6 +471,20 @@ async fn purify_format_single(
                 with_options,
             } => {
                 let file_schema = tokio::fs::read_to_string(path).await?;
+                // Explicitly inject `confluent_wire_format = true`, if unset.
+                // This, in combination with the catalog migration that sets
+                // this option to true for sources created before this option
+                // existed, will make it easy to flip the default to `false`
+                // in the future, if we like.
+                if !with_options
+                    .iter()
+                    .any(|option| option.key.as_str() == "confluent_wire_format")
+                {
+                    with_options.push(WithOption {
+                        key: Ident::new("confluent_wire_format"),
+                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                    });
+                }
                 *schema = AvroSchema::Schema {
                     schema: sql_parser::ast::Schema::Inline(file_schema),
                     with_options: with_options.clone(),

@@ -13,9 +13,10 @@ use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateTableStatement, CreateTypeStatement,
-    CreateViewStatement, DataType, Function, Ident, Raw, RawName, Statement, TableFactor,
-    UnresolvedObjectName, ViewDefinition,
+    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceFormat,
+    CreateSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
+    DataType, Format, Function, Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
 
@@ -56,6 +57,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     rewrite_items(&tx, |stmt| {
         ast_rewrite_type_references_0_6_1(stmt)?;
         ast_use_pg_catalog_0_7_1(stmt)?;
+        ast_insert_default_confluent_wire_format_0_7_1(stmt)?;
         Ok(())
     })?;
     // Then, load up a temporary catalog with the rewritten items, and perform
@@ -91,6 +93,39 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+// Insert default value for confluent_wire_format.
+//
+// This PR introduced a new `WITH` options block attached to the inline schema
+// clause. Previously-created versions of this object must have no options
+// specified, so we explicitly set them to their existing behavior, which is
+// now described by `confluent_wire_format = true`.
+//
+// This gives us flexibility to change the default to `false` in the future,
+// if desired.
+fn ast_insert_default_confluent_wire_format_0_7_1(
+    stmt: &mut sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    match stmt {
+        Statement::CreateSource(CreateSourceStatement {
+            format:
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Schema {
+                    ref mut with_options,
+                    ..
+                })),
+            ..
+        }) => {
+            if with_options.is_empty() {
+                with_options.push(WithOption {
+                    key: Ident::new("confluent_wire_format"),
+                    value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                })
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
 
 // Rewrites all function references to have `pg_catalog` qualification; this
 // is necessary to support resolving all built-in functions to the catalog.
