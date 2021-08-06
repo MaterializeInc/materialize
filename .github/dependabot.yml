@@ -9,3 +9,9 @@ updates:
   open-pull-requests-limit: 10
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
+- package-ecosystem: pip
+  directory: /misc/dbt-materialize
+  schedule:
+    interval: daily
+  reviewers: [MaterializeInc/dependency-czars]
+  labels: [A-dependencies]
