@@ -724,8 +724,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("single_stream"),
-            MemBlob::new("single_stream"),
+            MemBuffer::new_no_reentrance("single_stream"),
+            MemBlob::new_no_reentrance("single_stream"),
         )?;
         let id = i.register("0", "()", "()")?;
 
@@ -809,8 +809,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("batch_sorting"),
-            MemBlob::new("batch_sorting"),
+            MemBuffer::new_no_reentrance("batch_sorting"),
+            MemBlob::new_no_reentrance("batch_sorting"),
         )?;
         let id = i.register("0", "", "")?;
 
@@ -837,8 +837,8 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new("batch_consolidation"),
-            MemBlob::new("batch_consolidation"),
+            MemBuffer::new_no_reentrance("batch_consolidation"),
+            MemBlob::new_no_reentrance("batch_consolidation"),
         )?;
         let id = i.register("0", "", "")?;
 
@@ -867,8 +867,8 @@ mod tests {
     #[test]
     fn batch_future_empty() -> Result<(), Box<dyn Error>> {
         let mut i = Indexed::new(
-            MemBuffer::new("batch_future_empty"),
-            MemBlob::new("batch_future_empty"),
+            MemBuffer::new_no_reentrance("batch_future_empty"),
+            MemBlob::new_no_reentrance("batch_future_empty"),
         )?;
         let id = i.register("0", "", "")?;
 
@@ -897,8 +897,8 @@ mod tests {
     #[test]
     fn drain_buf_validate() -> Result<(), IndexedError> {
         let mut i = Indexed::new(
-            MemBuffer::new("drain_buf_validate"),
-            MemBlob::new("drain_buf_validate"),
+            MemBuffer::new_no_reentrance("drain_buf_validate"),
+            MemBlob::new_no_reentrance("drain_buf_validate"),
         )?;
         let id = i.register("0", "", "")?;
 
@@ -945,7 +945,10 @@ mod tests {
     // non-adjacent seqno boundaries (which violates our invariants).
     #[test]
     fn regression_non_sequential_future_batches() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(MemBuffer::new("lock"), MemBlob::new("lock"))?;
+        let mut i = Indexed::new(
+            MemBuffer::new_no_reentrance("lock"),
+            MemBlob::new_no_reentrance("lock"),
+        )?;
 
         // First is some stream is registered, written to, and step'd, moving
         // seqno 0..X into future. Then a second stream is registered, written
@@ -974,7 +977,10 @@ mod tests {
 
     #[test]
     fn test_destroy() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(MemBuffer::new("destroy"), MemBlob::new("destroy"))?;
+        let mut i = Indexed::new(
+            MemBuffer::new_no_reentrance("destroy"),
+            MemBlob::new_no_reentrance("destroy"),
+        )?;
 
         let _ = i.register("stream", "", "")?;
 
@@ -1006,8 +1012,8 @@ mod tests {
     #[test]
     fn codec_mismatch() -> Result<(), IndexedError> {
         let mut i = Indexed::new(
-            MemBuffer::new("codec_mismatch"),
-            MemBlob::new("codec_mismatch"),
+            MemBuffer::new_no_reentrance("codec_mismatch"),
+            MemBlob::new_no_reentrance("codec_mismatch"),
         )?;
 
         let _ = i.register("stream", "key", "val")?;

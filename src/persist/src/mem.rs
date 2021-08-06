@@ -17,30 +17,30 @@ use ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient};
-use crate::storage::{Blob, Buffer, SeqNo};
+use crate::storage::{Blob, Buffer, LockInfo, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableBuffer, UnreliableHandle};
 
 struct MemBufferCore {
     seqno: Range<SeqNo>,
     dataz: Vec<Vec<u8>>,
-    lock: Option<String>,
+    lock: Option<LockInfo>,
 }
 
 impl MemBufferCore {
-    fn new(lock_info: &str) -> Self {
+    fn new(lock_info: LockInfo) -> Self {
         MemBufferCore {
             seqno: SeqNo(0)..SeqNo(0),
             dataz: Vec::new(),
-            lock: Some(lock_info.to_string()),
+            lock: Some(lock_info),
         }
     }
 
-    fn open(&mut self, lock_info: &str) -> Result<(), Error> {
-        if let Some(lock) = &self.lock {
-            return Err(format!("buffer is already open: {}", lock).into());
+    fn open(&mut self, new_lock: LockInfo) -> Result<(), Error> {
+        if let Some(existing) = &self.lock {
+            let _ = new_lock.check_reentrant_for(&"MemBuffer", existing.to_string().as_bytes())?;
         }
 
-        self.lock = Some(lock_info.to_string());
+        self.lock = Some(new_lock);
 
         Ok(())
     }
@@ -109,14 +109,23 @@ pub struct MemBuffer {
 
 impl MemBuffer {
     /// Constructs a new, empty MemBuffer.
-    pub fn new(lock_info: &str) -> Self {
-        Self {
+    pub fn new(lock_info: LockInfo) -> Self {
+        MemBuffer {
             core: Arc::new(Mutex::new(MemBufferCore::new(lock_info))),
         }
     }
 
+    /// Constructs a new, empty MemBuffer with a unique reentrance id.
+    ///
+    /// Helper for tests that don't care about locking reentrance (which is most
+    /// of them).
+    #[cfg(test)]
+    pub fn new_no_reentrance(lock_info_details: &str) -> Self {
+        Self::new(LockInfo::new_no_reentrance(lock_info_details.to_owned()))
+    }
+
     /// Open a pre-existing MemBuffer.
-    fn open(core: Arc<Mutex<MemBufferCore>>, lock_info: &str) -> Result<Self, Error> {
+    fn open(core: Arc<Mutex<MemBufferCore>>, lock_info: LockInfo) -> Result<Self, Error> {
         core.lock()?.open(lock_info)?;
         Ok(Self { core })
     }
@@ -156,23 +165,23 @@ impl Buffer for MemBuffer {
 
 struct MemBlobCore {
     dataz: HashMap<String, Vec<u8>>,
-    lock: Option<String>,
+    lock: Option<LockInfo>,
 }
 
 impl MemBlobCore {
-    fn new(lock_info: &str) -> Self {
+    fn new(lock_info: LockInfo) -> Self {
         MemBlobCore {
             dataz: HashMap::new(),
-            lock: Some(lock_info.to_string()),
+            lock: Some(lock_info),
         }
     }
 
-    fn open(&mut self, lock_info: &str) -> Result<(), Error> {
-        if let Some(lock) = &self.lock {
-            return Err(format!("blob is already open: {}", lock).into());
+    fn open(&mut self, new_lock: LockInfo) -> Result<(), Error> {
+        if let Some(existing) = &self.lock {
+            let _ = new_lock.check_reentrant_for(&"MemBlob", existing.to_string().as_bytes())?;
         }
 
-        self.lock = Some(lock_info.to_string());
+        self.lock = Some(new_lock);
 
         Ok(())
     }
@@ -214,14 +223,23 @@ pub struct MemBlob {
 
 impl MemBlob {
     /// Constructs a new, empty MemBlob.
-    pub fn new(lock_info: &str) -> Self {
+    pub fn new(lock_info: LockInfo) -> Self {
         MemBlob {
             core: Arc::new(Mutex::new(MemBlobCore::new(lock_info))),
         }
     }
 
+    /// Constructs a new, empty MemBlob with a unique reentrance id.
+    ///
+    /// Helper for tests that don't care about locking reentrance (which is most
+    /// of them).
+    #[cfg(test)]
+    pub fn new_no_reentrance(lock_info_details: &str) -> Self {
+        Self::new(LockInfo::new_no_reentrance(lock_info_details.to_owned()))
+    }
+
     /// Open a pre-existing MemBlob.
-    fn open(core: Arc<Mutex<MemBlobCore>>, lock_info: &str) -> Result<Self, Error> {
+    fn open(core: Arc<Mutex<MemBlobCore>>, lock_info: LockInfo) -> Result<Self, Error> {
         core.lock()?.open(lock_info)?;
         Ok(Self { core })
     }
@@ -268,7 +286,7 @@ impl MemRegistry {
         }
     }
 
-    fn buffer(&mut self, path: &str, lock_info: &str) -> Result<MemBuffer, Error> {
+    fn buffer(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBuffer, Error> {
         if let Some(buf) = self.buf_by_path.get(path) {
             MemBuffer::open(buf.clone(), lock_info)
         } else {
@@ -278,7 +296,7 @@ impl MemRegistry {
         }
     }
 
-    fn blob(&mut self, path: &str, lock_info: &str) -> Result<MemBlob, Error> {
+    fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
         if let Some(blob) = self.blob_by_path.get(path) {
             MemBlob::open(blob.clone(), lock_info)
         } else {
@@ -291,7 +309,8 @@ impl MemRegistry {
 
     /// Open a [RuntimeClient] associated with `path`.
     pub fn open(&mut self, path: &str, lock_info: &str) -> Result<RuntimeClient, Error> {
-        let buffer = self.buffer(path, lock_info)?;
+        let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
+        let buffer = self.buffer(path, lock_info.clone())?;
         let blob = self.blob(path, lock_info)?;
         runtime::start(buffer, blob)
     }
@@ -303,7 +322,8 @@ impl MemRegistry {
         lock_info: &str,
         unreliable: UnreliableHandle,
     ) -> Result<RuntimeClient, Error> {
-        let buffer = self.buffer(path, lock_info)?;
+        let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
+        let buffer = self.buffer(path, lock_info.clone())?;
         let buffer = UnreliableBuffer::from_handle(buffer, unreliable.clone());
         let blob = self.blob(path, lock_info)?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
@@ -320,12 +340,14 @@ mod tests {
     #[test]
     fn mem_buffer() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        buffer_impl_test(move |path| registry.buffer(path, "buffer_impl_test"))
+        buffer_impl_test(move |t| {
+            registry.buffer(t.path, (t.reentrance_id, "buffer_impl_test").into())
+        })
     }
 
     #[test]
     fn mem_blob() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        blob_impl_test(move |path| registry.blob(path, "blob_impl_test"))
+        blob_impl_test(move |t| registry.blob(t.path, (t.reentrance_id, "blob_impl_test").into()))
     }
 }

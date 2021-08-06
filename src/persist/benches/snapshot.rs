@@ -16,7 +16,7 @@ use persist::file::{FileBlob, FileBuffer};
 use persist::indexed::encoding::Id;
 use persist::indexed::{Indexed, Snapshot};
 use persist::mem::{MemBlob, MemBuffer};
-use persist::storage::{Blob, Buffer};
+use persist::storage::{Blob, Buffer, LockInfo};
 
 fn read_full_snapshot<U: Buffer, L: Blob>(
     index: &Indexed<U, L>,
@@ -83,7 +83,8 @@ where
 pub fn bench_mem_snapshots(c: &mut Criterion) {
     bench_indexed_snapshots(c, "mem", |path| {
         let name = format!("snapshot_bench_{}", path);
-        Indexed::new(MemBuffer::new(&name), MemBlob::new(&name))
+        let lock_info = LockInfo::new_no_reentrance(name);
+        Indexed::new(MemBuffer::new(lock_info.clone()), MemBlob::new(lock_info))
     });
 }
 
@@ -96,9 +97,9 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
         let blob_dir = temp_dir
             .path()
             .join(format!("snapshot_bench_blob_{}", path));
-        let lock_info = "snapshot_bench";
+        let lock_info = LockInfo::new_no_reentrance("snapshot_bench".to_owned());
         Indexed::new(
-            FileBuffer::new(buffer_dir, lock_info)?,
+            FileBuffer::new(buffer_dir, lock_info.clone())?,
             FileBlob::new(blob_dir, lock_info)?,
         )
     });

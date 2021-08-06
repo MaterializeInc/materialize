@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn append_ts_lower_invariant() {
-        let mut blob = BlobCache::new(MemBlob::new("append_ts_lower_invariant"));
+        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("append_ts_lower_invariant"));
         let mut f = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(2),
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn future_evict() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new("future_evict"));
+        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("future_evict"));
         let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn future_snapshot() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new("future_snapshot"));
+        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("future_snapshot"));
         let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn future_batch_trim() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new("future_batch_trim"));
+        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("future_batch_trim"));
         let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),

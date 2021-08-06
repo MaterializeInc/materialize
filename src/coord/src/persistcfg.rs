@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use persist::error::Error;
 use persist::indexed::encoding::Id;
+use persist::storage::LockInfo;
 use repr::Row;
 use serde::Serialize;
 
@@ -37,11 +38,13 @@ pub struct PersistConfig {
     /// extremely experimental and should not even be tried by users. It's
     /// initially here for end-to-end testing.
     pub system_table_enabled: bool,
-    /// Information stored in the "lock" files created by the buffer and blob to
-    /// ensure that they are exclusive writers to those locations. This should
-    /// contain whatever information might be useful to investigating an
-    /// unexpected lock file (e.g. hostname and materialize version of the
-    /// creating process).
+    /// The reentrance id described in the docs for [LockInfo].
+    pub lock_reentrance_id: String,
+    /// Unstructured information stored in the "lock" files created by the
+    /// buffer and blob to ensure that they are exclusive writers to those
+    /// locations. This should contain whatever information might be useful to
+    /// investigating an unexpected lock file (e.g. hostname and materialize
+    /// version of the creating process).
     pub lock_info: String,
 }
 
@@ -53,6 +56,7 @@ impl PersistConfig {
             user_table_enabled: false,
             system_table_enabled: false,
             lock_info: Default::default(),
+            lock_reentrance_id: Default::default(),
         }
     }
 
@@ -61,10 +65,11 @@ impl PersistConfig {
     /// persistence features are disabled.
     pub fn init(&self) -> Result<PersisterWithConfig, anyhow::Error> {
         let persister = if self.user_table_enabled || self.system_table_enabled {
-            let buffer = FileBuffer::new(&self.buffer_path, &self.lock_info)
+            let lock_info = LockInfo::new(self.lock_reentrance_id.clone(), self.lock_info.clone())?;
+            let buffer = FileBuffer::new(&self.buffer_path, lock_info.clone())
                 .map_err(|err| anyhow!("{}", err))?;
-            let blob = FileBlob::new(&self.blob_path, &self.lock_info)
-                .map_err(|err| anyhow!("{}", err))?;
+            let blob =
+                FileBlob::new(&self.blob_path, lock_info).map_err(|err| anyhow!("{}", err))?;
             let persister = runtime::start(buffer, blob).map_err(|err| anyhow!("{}", err))?;
             Some(persister)
         } else {

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Blob, Buffer, SeqNo};
+use crate::storage::{Blob, Buffer, LockInfo, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
 /// most recently truncated sequence number for [FileBuffer].
@@ -61,17 +61,12 @@ impl FileBuffer {
     /// Additionally, the metadata about the last truncated sequence number is stored in a
     /// metadata file, which only ever contains a single 64 bit unsigned integer (also little-endian)
     /// that indicates the most recently truncated offset (ie all offsets less than this are truncated).
-    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: &str) -> Result<Self, Error> {
+    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: LockInfo) -> Result<Self, Error> {
         let base_dir = base_dir.as_ref();
         fs::create_dir_all(&base_dir)?;
         {
-            let lockfile_path = Self::lockfile_path(&base_dir);
-            let mut lockfile = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(lockfile_path)?;
-            lockfile.write_all(lock_info.as_bytes())?;
-            lockfile.sync_all()?;
+            // TODO: flock this for good measure?
+            let _ = file_storage_lock(&Self::lockfile_path(&base_dir), lock_info)?;
         }
         let buffer_path = Self::buffer_path(&base_dir);
         let mut buffer_file = OpenOptions::new()
@@ -289,17 +284,11 @@ impl FileBlob {
     /// The contents of `lock_info` are stored in the LOCK file and should
     /// include anything that would help debug an unexpected LOCK file, such as
     /// version, ip, worker number, etc.
-    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: &str) -> Result<Self, Error> {
+    pub fn new<P: AsRef<Path>>(base_dir: P, lock_info: LockInfo) -> Result<Self, Error> {
         let base_dir = base_dir.as_ref();
         fs::create_dir_all(&base_dir)?;
         {
-            let lockfile_path = Self::lockfile_path(&base_dir);
-            let mut lockfile = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(lockfile_path)?;
-            lockfile.write_all(lock_info.as_bytes())?;
-            lockfile.sync_all()?;
+            let _ = file_storage_lock(&Self::lockfile_path(&base_dir), lock_info)?;
         }
         Ok(FileBlob {
             base_dir: Some(base_dir.to_path_buf()),
@@ -359,6 +348,27 @@ impl Blob for FileBlob {
     }
 }
 
+fn file_storage_lock(lockfile_path: &Path, new_lock: LockInfo) -> Result<File, Error> {
+    // TODO: flock this for good measure? There's all sorts of tricky edge cases
+    // here when this gets called concurrently, and we'll have the same issues
+    // when we add an s3 impl of Blob. Revisit this in a principled way.
+    let mut lockfile = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lockfile_path)?;
+    let _ = new_lock.check_reentrant_for(&lockfile_path, &mut lockfile)?;
+    // Overwrite the data and then truncate the length if necessary. Truncating
+    // first could produce a race condition where the file looks empty to a
+    // process concurrently trying to lock it.
+    lockfile.seek(SeekFrom::Start(0))?;
+    let contents = new_lock.to_string().into_bytes();
+    lockfile.write_all(&contents)?;
+    lockfile.set_len(u64::cast_from(contents.len()))?;
+    lockfile.sync_all()?;
+    Ok(lockfile)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::storage::tests::{blob_impl_test, buffer_impl_test};
@@ -368,18 +378,47 @@ mod tests {
     #[test]
     fn file_blob() -> Result<(), Error> {
         let temp_dir = tempfile::tempdir()?;
-        blob_impl_test(move |idx| {
-            let instance_dir = temp_dir.path().join(idx);
-            FileBlob::new(instance_dir, &"file_blob_test")
+        blob_impl_test(move |t| {
+            let instance_dir = temp_dir.path().join(t.path);
+            FileBlob::new(instance_dir, (t.reentrance_id, "file_blob_test").into())
         })
     }
 
     #[test]
     fn file_buffer() -> Result<(), Error> {
         let temp_dir = tempfile::tempdir()?;
-        buffer_impl_test(move |idx| {
-            let instance_dir = temp_dir.path().join(idx);
-            FileBuffer::new(instance_dir, &"file_buffer_test")
+        buffer_impl_test(move |t| {
+            let instance_dir = temp_dir.path().join(t.path);
+            FileBuffer::new(instance_dir, (t.reentrance_id, "file_buffer_test").into())
         })
+    }
+
+    #[test]
+    fn file_storage_lock_reentrance() -> Result<(), Error> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join("file_storage_lock_reentrance");
+
+        // Sanity check that overwriting the contents with shorter contents as
+        // well as with longer contents both work.
+        let _f1 = file_storage_lock(
+            &path,
+            LockInfo::new("reentrance0".to_owned(), "foo".repeat(5))?,
+        )?;
+        assert_eq!(fs::read_to_string(&path)?, "reentrance0\nfoofoofoofoofoo");
+        let _f2 = file_storage_lock(
+            &path,
+            LockInfo::new("reentrance0".to_owned(), "foo".to_owned())?,
+        )?;
+        assert_eq!(fs::read_to_string(&path)?, "reentrance0\nfoo");
+        let _f3 = file_storage_lock(
+            &path,
+            LockInfo::new("reentrance0".to_owned(), "foo".repeat(3))?,
+        )?;
+        assert_eq!(fs::read_to_string(&path)?, "reentrance0\nfoofoofoo");
+
+        drop(_f1);
+        drop(_f2);
+        drop(_f3);
+        Ok(())
     }
 }
