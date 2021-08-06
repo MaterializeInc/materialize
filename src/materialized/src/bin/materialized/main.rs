@@ -44,6 +44,7 @@ use lazy_static::lazy_static;
 use log::info;
 use ore::cgroup::{detect_memory_limit, MemoryLimit};
 use ore::metric;
+use ore::metrics::ThirdPartyMetric;
 use ore::metrics::{IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
@@ -92,6 +93,22 @@ struct Args {
     /// (cloud.materialize.com), but may be useful in other contexts as well.
     #[structopt(long, hidden = true)]
     safe: bool,
+
+    /// The address on which metrics visible to "third parties" get exposed.
+    ///
+    /// These metrics are structured to allow an infrastructure provider to monitor an installation
+    /// without needing access to more sensitive data, like names of sources/sinks.
+    ///
+    /// This address is never served TLS-encrypted or authenticated, and while only "non-sensitive"
+    /// metrics are served from it, care should be taken to not expose the listen address to the
+    /// public internet or other unauthorized parties.
+    #[structopt(
+        long,
+        hidden = true,
+        value_name = "HOST:PORT",
+        env = "MZ_THIRD_PARTY_METRICS_ADDR"
+    )]
+    third_party_metrics_listen_addr: Option<SocketAddr>,
 
     /// Enable persistent tables. Has to be used with --experimental.
     #[structopt(long, hidden = true)]
@@ -428,11 +445,12 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             // otherwise.
             .add_directive("panic=error".parse().unwrap());
 
-        let log_message_counter: IntCounterVec = metrics_registry.register(metric!(
-            name: "mz_log_message_total",
-            help: "The number of log messages produced by this materialized instance",
-            var_labels: ["severity"],
-        ));
+        let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
+            .register_third_party_visible(metric!(
+                name: "mz_log_message_total",
+                help: "The number of log messages produced by this materialized instance",
+                var_labels: ["severity"],
+            ));
 
         match args.log_file.as_deref() {
             Some("stderr") => {
@@ -616,6 +634,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
         listen_addr: args.listen_addr,
+        third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
         tls,
         data_directory,
         symbiosis_url: args.symbiosis,

@@ -55,7 +55,10 @@ pub use prometheus::{
 };
 
 mod delete_on_drop;
+mod third_party_metric;
+
 pub use delete_on_drop::*;
+pub use third_party_metric::*;
 
 /// Define a metric for use in materialize.
 #[macro_export]
@@ -86,6 +89,7 @@ macro_rules! metric {
 #[derive(Debug, Clone)]
 pub struct MetricsRegistry {
     inner: Registry,
+    third_party: Registry,
 }
 
 impl MetricsRegistry {
@@ -93,6 +97,7 @@ impl MetricsRegistry {
     pub fn new() -> Self {
         MetricsRegistry {
             inner: Registry::new(),
+            third_party: Registry::new(),
         }
     }
 
@@ -104,6 +109,26 @@ impl MetricsRegistry {
         let collector = M::make_collector(opts);
         self.inner.register(Box::new(collector.clone())).unwrap();
         collector
+    }
+
+    /// Register a metric that can be scraped from both the "normal" registry, as well as the
+    /// registry that is accessible to third parties (like cloud providers and infrastructure
+    /// orchestrators).
+    ///
+    /// Take care to vet metrics that are visible to third parties: metrics containing sensitive
+    /// information as labels (e.g. source/sink names or other user-defined identifiers), or
+    /// "traffic" type labels can lead to information getting exposed that users might not be
+    /// comfortable sharing.
+    pub fn register_third_party_visible<M>(&self, opts: prometheus::Opts) -> ThirdPartyMetric<M>
+    where
+        M: MakeCollector,
+    {
+        let collector = M::make_collector(opts);
+        self.inner.register(Box::new(collector.clone())).unwrap();
+        self.third_party
+            .register(Box::new(collector.clone()))
+            .unwrap();
+        ThirdPartyMetric { inner: collector }
     }
 
     /// Register a pre-defined prometheus collector.
@@ -118,6 +143,13 @@ impl MetricsRegistry {
     /// See also [`prometheus::Registry::gather`].
     pub fn gather(&self) -> Vec<MetricFamily> {
         self.inner.gather()
+    }
+
+    /// Gather all the metrics from the metrics registry that's visible to third parties.
+    ///
+    /// See also [`prometheus::Registry::gather`].
+    pub fn gather_third_party_visible(&self) -> Vec<MetricFamily> {
+        self.third_party.gather()
     }
 }
 
@@ -184,3 +216,6 @@ impl MakeCollector for HistogramVec {
         .expect("defining a histogram vec")
     }
 }
+
+#[cfg(test)]
+mod tests;
