@@ -1263,3 +1263,10 @@ query B
 SELECT 'abc'::char(3) ~~ 'abc'::char(4);
 ----
 true
+
+# Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-893343138
+
+query T
+SELECT 'a'::char(3) = 'a '::varchar(3);
+----
+true

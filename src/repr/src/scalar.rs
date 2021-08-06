@@ -974,8 +974,14 @@ impl<'a> ScalarType {
                     custom_name: name_b,
                 },
             ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
-            (String, VarChar { .. }) | (VarChar { .. }, String) => true,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
+        }
+    }
+
+    pub fn is_string_like(&self) -> bool {
+        match self {
+            ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => true,
+            _ => false,
         }
     }
 }

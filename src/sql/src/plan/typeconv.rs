@@ -266,9 +266,21 @@ lazy_static! {
                 let length = to_type.unwrap_char_varchar_length();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
             }),
+            (Char, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
 
             // VARCHAR
             (VarChar, String) => Implicit: CastVarCharToString,
+            (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
+            (VarChar, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
 
             // RECORD
             (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
@@ -533,8 +545,8 @@ pub fn guess_best_common_type(
         .iter()
         .max_by_key(|scalar_type| match scalar_type {
             // TypeCategory::String
-            ScalarType::Char { .. } => 0,
-            ScalarType::VarChar { .. } => 1,
+            ScalarType::VarChar { .. } => 0,
+            ScalarType::Char { .. } => 1,
             ScalarType::String => 2,
             // TypeCategory::Numeric
             ScalarType::Int16 => 3,
@@ -712,14 +724,12 @@ where
     // we refactor this function to approximately use the function selection
     // infrastructure, this is probably the fewest LOC change.
     match (&cast_from, cast_to) {
-        // Pass through char to char
-        (s @ Char { .. }, d @ Char { .. }) => cast_inner(s, d, expr),
         // Rewrite from char, varchar as from string
-        (Char { .. }, dest) | (VarChar { .. }, dest) if dest != &ScalarType::String => {
+        (Char { .. } | VarChar { .. }, dest) if !dest.is_string_like() => {
             cast_inner(&String, dest, expr)
         }
         // If to is char or varchar, use intermediate string expression.
-        (source, dest @ Char { .. }) | (source, dest @ VarChar { .. }) => {
+        (source, dest @ Char { .. } | dest @ VarChar { .. }) if !source.is_string_like() => {
             let source_to_str_expr = cast_inner(source, &String, expr)?;
             cast_inner(&String, dest, source_to_str_expr)
         }

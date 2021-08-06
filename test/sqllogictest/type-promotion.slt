@@ -284,6 +284,18 @@ EXPLAIN RAW PLAN FOR
 
 EOF
 
+# Check that varchar promotes to char
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT 'a'::char < 'a'::varchar;
+----
+%0 =
+| Constant ()
+| Map (strtochar("a") < strtochar(strtovarchar("a")))
+
+EOF
+
+
 # Check that char promotes to text
 query T multiline
 EXPLAIN RAW PLAN FOR
@@ -295,14 +307,13 @@ EXPLAIN RAW PLAN FOR
 
 EOF
 
-# Check that cast from varchar to str unnecessary
 query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::varchar < 'a'::text;
 ----
 %0 =
 | Constant ()
-| Map (strtovarchar("a") < "a")
+| Map (varchartostr(strtovarchar("a")) < "a")
 
 EOF
 
@@ -313,7 +324,7 @@ EXPLAIN RAW PLAN FOR
 ----
 %0 =
 | Constant ()
-| Map coalesce(chartostr(strtochar("a")), strtovarchar("a"), "a")
+| Map coalesce(chartostr(strtochar("a")), varchartostr(strtovarchar("a")), "a")
 
 EOF
 
