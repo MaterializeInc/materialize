@@ -69,9 +69,8 @@ $ kafka-ingest format=protobuf topic=messages message=struct timestamp=1
 
 $ kafka-create-topic topic=corrupted-messages
 
-$ kafka-ingest format=protobuf topic=corrupted-messages message=struct timestamp=1 corrupt-values=true
-{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
-{"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+$ kafka-ingest format=bytes topic=corrupted-messages timestamp=1
+garbage
 
 ! SELECT * from corrupted_proto_messages
 Decode error: Text: protobuf deserialization error: Deserializing into rust object: protobuf error
