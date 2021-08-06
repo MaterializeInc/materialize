@@ -9,32 +9,24 @@
 
 #[cfg(test)]
 mod tests {
-    use lowertest::tokenize;
+    use lowertest::{deserialize_optional, tokenize, GenericTestDeserializeContext};
+    use ore::str::separated;
     use repr::ScalarType;
-    use repr_test_util::{
-        datum_to_test_spec, get_datum_from_str, get_scalar_type_or_default, unquote_string,
-    };
+    use repr_test_util::*;
 
     fn build_datum(s: &str) -> Result<String, String> {
-        // 1) Convert test spec to the datum.
-        let s = s.trim();
-        let (litval, scalar_type) = if s.starts_with('"') {
-            s.split_at(
-                s[1..]
-                    .rfind(|c| '"' == c)
-                    .map(|i| i + 2)
-                    .unwrap_or_else(|| s.len()),
-            )
-        } else {
-            s.split_at(
-                s.find(|c| [' ', '\t', '\n'].contains(&c))
-                    .unwrap_or_else(|| s.len()),
-            )
-        };
-        let scalar_type = build_scalar_type_inner(litval, scalar_type)?;
-        let unquoted_litval = unquote_string(&litval, &scalar_type);
-        let datum = get_datum_from_str(&unquoted_litval[..], &scalar_type)?;
-        // 2) It should be possible to convert the datum back to the test spec.
+        // 1) Convert test spec to the row containing the datum.
+        let mut stream_iter = tokenize(s)?.into_iter();
+        let litval = extract_literal_string(
+            &stream_iter.next().ok_or_else(|| "Empty test")?,
+            &mut stream_iter,
+        )?
+        .unwrap();
+        let scalar_type = get_scalar_type_or_default(&litval[..], &mut stream_iter)?;
+        let row = test_spec_to_row(std::iter::once((&litval[..], &scalar_type)))?;
+        // 2) It should be possible to unpack the row and then convert the datum
+        // back to the test spec.
+        let datum = row.unpack_first();
         let roundtrip_s = datum_to_test_spec(datum);
         if roundtrip_s != litval {
             Err(format!(
@@ -46,12 +38,49 @@ mod tests {
         }
     }
 
-    fn build_scalar_type(s: &str) -> Result<ScalarType, String> {
-        build_scalar_type_inner("", s)
+    fn build_row(s: &str) -> Result<String, String> {
+        let mut stream_iter = tokenize(s)?.into_iter();
+        let litvals = parse_vec_of_literals(
+            &stream_iter
+                .next()
+                .ok_or_else(|| "Empty row spec".to_string())?,
+        )?;
+        let scalar_types: Option<Vec<ScalarType>> = deserialize_optional(
+            &mut stream_iter,
+            "Vec<ScalarType>",
+            &RTI,
+            &mut GenericTestDeserializeContext::default(),
+        )?;
+        let scalar_types = if let Some(scalar_types) = scalar_types {
+            scalar_types
+        } else {
+            litvals
+                .iter()
+                .map(|l| get_scalar_type_or_default(l, &mut std::iter::empty()))
+                .collect::<Result<Vec<_>, String>>()?
+        };
+        let row = test_spec_to_row(litvals.iter().map(|s| &s[..]).zip(scalar_types.iter()))?;
+        let roundtrip_litvals = row
+            .unpack()
+            .into_iter()
+            .map(|d| datum_to_test_spec(d))
+            .collect::<Vec<_>>();
+        if roundtrip_litvals != litvals {
+            Err(format!(
+                "Round trip failed. Old spec: [{}]. New spec: [{}].",
+                separated(" ", litvals),
+                separated(" ", roundtrip_litvals)
+            ))
+        } else {
+            Ok(format!(
+                "{}",
+                separated("\n", row.unpack().into_iter().map(|d| format!("{:?}", d)))
+            ))
+        }
     }
 
-    fn build_scalar_type_inner(litval: &str, s: &str) -> Result<ScalarType, String> {
-        get_scalar_type_or_default(litval, &mut tokenize(s)?.into_iter())
+    fn build_scalar_type(s: &str) -> Result<ScalarType, String> {
+        get_scalar_type_or_default("", &mut tokenize(s)?.into_iter())
     }
 
     #[test]
@@ -64,6 +93,10 @@ mod tests {
                         Err(err) => format!("error: {}\n", err),
                     },
                     "build-datum" => match build_datum(&s.input) {
+                        Ok(result) => format!("{}\n", result),
+                        Err(err) => format!("error: {}\n", err),
+                    },
+                    "build-row" => match build_row(&s.input) {
                         Ok(result) => format!("{}\n", result),
                         Err(err) => format!("error: {}\n", err),
                     },

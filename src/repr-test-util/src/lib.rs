@@ -21,13 +21,13 @@ use lowertest::{
 };
 use ore::str::StrExt;
 use repr::adt::numeric::Numeric;
-use repr::{ColumnType, Datum, ScalarType};
+use repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 
 /* #region Generate information required to construct arbitrary `ScalarType`*/
 gen_reflect_info_func!(produce_rti, [ScalarType], [ColumnType]);
 
 lazy_static! {
-    static ref RTI: ReflectedTypeInfo = produce_rti();
+    pub static ref RTI: ReflectedTypeInfo = produce_rti();
 }
 
 /* #endregion */
@@ -47,58 +47,60 @@ where
     })
 }
 
-/// Constructs a `Datum` from `litval` and `littyp`.
+/// Constructs a `Row` from a sequence of `litval` and `littyp`.
 ///
 /// See [get_scalar_type_or_default] for creating a `ScalarType`.
 ///
-/// Because Datums do not own their strings, if `littyp` is
-/// `ScalarType::String`, make sure that `litval` has already
-/// been unquoted by [unquote_string].
-///
-/// Generally, `litval` can be parsed into a Datum in the manner you would
+/// Generally, each `litval` can be parsed into a Datum in the manner you would
 /// imagine. Exceptions:
 /// * A Timestamp should be in the format `"\"%Y-%m-%d %H:%M:%S%.f\""` or
 ///   `"\"%Y-%m-%d %H:%M:%S\""`
-pub fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Datum<'a>, String> {
-    if litval == "null" {
-        return Ok(Datum::Null);
-    }
-    match littyp {
-        ScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
-        ScalarType::Numeric { .. } => Ok(Datum::from(parse_litval::<Numeric>(litval, "Numeric")?)),
-        ScalarType::Int16 => Ok(Datum::from(parse_litval::<i16>(litval, "i16")?)),
-        ScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
-        ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
-        ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
-        ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
-        ScalarType::String => Ok(Datum::from(litval)),
-        ScalarType::Timestamp => {
-            let datetime = if litval.contains('.') {
-                NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S%.f\"")
-            } else {
-                NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S\"")
-            };
-            Ok(Datum::from(datetime.map_err(|e| {
-                format!("Error while parsing NaiveDateTime: {}", e)
-            })?))
-        }
-        _ => Err(format!("Unsupported literal type {:?}", littyp)),
-    }
-}
-
-/// Changes `"\"foo\""` to `"foo"` if scalar type is String
-pub fn unquote_string(litval: &str, littyp: &ScalarType) -> String {
-    if littyp == &ScalarType::String {
-        lowertest::unquote(litval)
-    } else {
-        litval.to_string()
-    }
-}
-
-/// Convert a Datum to a String such that [get_datum_from_str] can convert the
-/// String back into the same Datum.
 ///
-/// Currently supports only Datums supported by [get_datum_from_str].
+/// Not all types are supported yet. Currently supported types:
+/// * string, bool, timestamp
+/// * all flavors of numeric types
+pub fn test_spec_to_row<'a, I>(datum_iter: I) -> Result<Row, String>
+where
+    I: Iterator<Item = (&'a str, &'a ScalarType)>,
+{
+    let temp_storage = RowArena::new();
+    Row::try_pack(datum_iter.map(|(litval, littyp)| {
+        if litval == "null" {
+            Ok(Datum::Null)
+        } else {
+            match littyp {
+                ScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
+                ScalarType::Numeric { .. } => {
+                    Ok(Datum::from(parse_litval::<Numeric>(litval, "Numeric")?))
+                }
+                ScalarType::Int16 => Ok(Datum::from(parse_litval::<i16>(litval, "i16")?)),
+                ScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
+                ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
+                ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
+                ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
+                ScalarType::String => Ok(Datum::from(
+                    temp_storage.push_string(lowertest::unquote(litval)),
+                )),
+                ScalarType::Timestamp => {
+                    let datetime = if litval.contains('.') {
+                        NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S%.f\"")
+                    } else {
+                        NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S\"")
+                    };
+                    Ok(Datum::from(datetime.map_err(|e| {
+                        format!("Error while parsing NaiveDateTime: {}", e)
+                    })?))
+                }
+                _ => Err(format!("Unsupported literal type {:?}", littyp)),
+            }
+        }
+    }))
+}
+
+/// Convert a Datum to a String such that [test_spec_to_row] can convert the
+/// String back into a row containing the same Datum.
+///
+/// Currently supports only Datums supported by [test_spec_to_row].
 pub fn datum_to_test_spec(datum: Datum) -> String {
     let result = format!("{}", datum);
     match datum {
@@ -142,5 +144,79 @@ where
                 Ok(ScalarType::Int64)
             }
         }
+    }
+}
+
+/// If the stream starts with a sequence of tokens that can be parsed as a datum,
+/// return those tokens as one string.
+///
+/// Sequences of tokens that can be parsed as a datum:
+/// * A Literal token, which is anything in quotations or a positive number
+/// * An null, false, or true Ident token
+/// * Punct(-) + a literal token
+///
+/// If the stream starts with a sequence of tokens that can be parsed as a
+/// datum, 1) returns Ok(Some(..)) 2) advances the stream to the first token
+/// that is not part of the sequence.
+/// If the stream does not start with tokens that can be parsed as a datum:
+/// * Return Ok(None) if `rest_of_stream` has not been advanced.
+/// * Returns Err(..) otherwise.
+pub fn extract_literal_string<I>(
+    first_arg: &TokenTree,
+    rest_of_stream: &mut I,
+) -> Result<Option<String>, String>
+where
+    I: Iterator<Item = TokenTree>,
+{
+    match first_arg {
+        TokenTree::Ident(ident) => {
+            if ["true", "false", "null"].contains(&&ident.to_string()[..]) {
+                Ok(Some(ident.to_string()))
+            } else {
+                Ok(None)
+            }
+        }
+        TokenTree::Literal(literal) => Ok(Some(literal.to_string())),
+        TokenTree::Punct(punct) if punct.as_char() == '-' => {
+            match rest_of_stream.next() {
+                Some(TokenTree::Literal(literal)) => {
+                    Ok(Some(format!("{}{}", punct.as_char(), literal.to_string())))
+                }
+                None => Ok(None),
+                // Must error instead of handling the tokens using default
+                // behavior since `stream_iter` has advanced.
+                Some(other) => Err(format!(
+                    "{}{:?} is not a valid literal",
+                    punct.as_char(),
+                    other
+                )),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Parse a token as a vec of strings that can be parsed as datums in a row.
+///
+/// The token is assumed to be of the form `[datum1 datum2 .. datumn]`.
+pub fn parse_vec_of_literals(token: &TokenTree) -> Result<Vec<String>, String> {
+    match token {
+        TokenTree::Group(group) => {
+            let mut inner_iter = group.stream().into_iter();
+            let mut result = Vec::new();
+            while let Some(symbol) = inner_iter.next() {
+                match extract_literal_string(&symbol, &mut inner_iter)? {
+                    Some(dat) => result.push(dat),
+                    None => {
+                        return Err(format!("{:?} cannot be interpreted as a literal.", symbol));
+                    }
+                }
+            }
+            Ok(result)
+        }
+        invalid => Err(format!(
+            "{:?} cannot be parsed as a vec of literals",
+            invalid
+        )),
     }
 }

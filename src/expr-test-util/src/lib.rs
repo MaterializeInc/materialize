@@ -18,7 +18,7 @@ use expr::*;
 use lowertest::*;
 use ore::result::ResultExt;
 use ore::str::separated;
-use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
+use repr::{ColumnType, RelationType, Row, ScalarType};
 use repr_test_util::*;
 
 gen_reflect_info_func!(
@@ -190,10 +190,9 @@ impl MirScalarExprDeserializeContext {
         match extract_literal_string(&first_arg, rest_of_stream)? {
             Some(litval) => {
                 let littyp = get_scalar_type_or_default(&litval[..], rest_of_stream)?;
-                let unquoted = unquote_string(&litval[..], &littyp);
-                Ok(Some(MirScalarExpr::literal_ok(
-                    get_datum_from_str(&unquoted[..], &littyp)?,
-                    littyp,
+                Ok(Some(MirScalarExpr::Literal(
+                    Ok(test_spec_to_row(std::iter::once((&litval[..], &littyp)))?),
+                    littyp.nullable(matches!(&litval[..], "null")),
                 )))
             }
             None => Ok(None),
@@ -335,36 +334,15 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         let mut rows = Vec::new();
         match raw_rows {
             TokenTree::Group(group) => {
-                let mut row_iter = group.stream().into_iter().peekable();
-                while row_iter.peek().is_some() {
-                    match row_iter.next() {
-                        Some(TokenTree::Group(group)) => {
-                            let mut inner_iter = group.stream().into_iter();
-                            let mut parsed_data = Vec::new();
-                            while let Some(symbol) = inner_iter.next() {
-                                match extract_literal_string(&symbol, &mut inner_iter)? {
-                                    Some(dat) => parsed_data.push(dat),
-                                    None => {
-                                        return Err(format!(
-                                            "{:?} cannot be interpreted as a literal.",
-                                            symbol
-                                        ));
-                                    }
-                                }
-                            }
-                            let row = parsed_data
-                                .iter()
-                                .zip(&typ.column_types)
-                                .map(|(dat, col_typ)| {
-                                    get_datum_from_str(&dat[..], &col_typ.scalar_type)
-                                })
-                                .collect::<Result<Vec<Datum>, String>>()?;
-                            rows.push((Row::pack_slice(&row), 1));
-                        }
-                        invalid => {
-                            return Err(format!("invalid row spec for constant {:?}", invalid))
-                        }
-                    }
+                let mut inner_iter = group.stream().into_iter();
+                while let Some(token) = inner_iter.next() {
+                    let row = test_spec_to_row(
+                        parse_vec_of_literals(&token)?
+                            .iter()
+                            .zip(&typ.column_types)
+                            .map(|(dat, col_typ)| (&dat[..], &col_typ.scalar_type)),
+                    )?;
+                    rows.push((row, 1));
                 }
             }
             invalid => return Err(format!("invalid rows spec for constant {:?}", invalid)),
@@ -634,40 +612,5 @@ impl Scope {
 
     fn iter(&self) -> impl Iterator<Item = (&String, &RelationType)> {
         self.objects.iter().map(|(s, (_, typ))| (s, typ))
-    }
-}
-
-fn extract_literal_string<I>(
-    first_arg: &TokenTree,
-    rest_of_stream: &mut I,
-) -> Result<Option<String>, String>
-where
-    I: Iterator<Item = TokenTree>,
-{
-    match first_arg {
-        TokenTree::Ident(ident) => {
-            if ["true", "false", "null"].contains(&&ident.to_string()[..]) {
-                Ok(Some(ident.to_string()))
-            } else {
-                Ok(None)
-            }
-        }
-        TokenTree::Literal(literal) => Ok(Some(literal.to_string())),
-        TokenTree::Punct(punct) if punct.as_char() == '-' => {
-            match rest_of_stream.next() {
-                Some(TokenTree::Literal(literal)) => {
-                    Ok(Some(format!("{}{}", punct.as_char(), literal.to_string())))
-                }
-                None => Ok(None),
-                // Must error instead of handling the tokens using default
-                // behavior since `stream_iter` has advanced.
-                Some(other) => Err(format!(
-                    "{}{:?} is not a valid literal",
-                    punct.as_char(),
-                    other
-                )),
-            }
-        }
-        _ => Ok(None),
     }
 }

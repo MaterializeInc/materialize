@@ -1,0 +1,27 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+build-row
+[1 1 2 "\"quoted\" string" "2022-10-20 21:34:54"] [int32 numeric float32 string timestamp]
+----
+Int32(1)
+Numeric(OrderedDecimal(1))
+Float32(OrderedFloat(2.0))
+String("\"quoted\" string")
+Timestamp(2022-10-20T21:34:54)
+
+build-row
+["string" 1 2.1 true false null]
+----
+String("string")
+Int64(1)
+Float64(OrderedFloat(2.1))
+True
+False
+Null
