@@ -75,7 +75,43 @@ Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtract
 | | keys = ((#0), (#1))
 
 ====
-No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants { limit: Some(10000) }
+No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project
+====
+Applied RelationCSE:
+%0 = Let l0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+
+%1 = Let l1 =
+| Get %0 (l0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+| Project (#0..#2, #0..#2)
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+
+%2 =
+| Get %1 (l1)
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+
+====
+Applied InlineLet:
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+| Project (#0..#2, #0..#2)
+| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
+| | keys = ((#0), (#1))
+
+====
+No change: UpdateLet, FoldConstants { limit: Some(10000) }
 ====
 Final:
 %0 =
