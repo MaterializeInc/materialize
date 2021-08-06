@@ -630,9 +630,8 @@ mod tests {
         // We don't expose reading the seal directly, so hack it a bit here by
         // verifying that we can't re-seal at the same timestamp (which is
         // disallowed).
-        let expected_seal_err = Err(Error::from("invalid batch bounds: Description { lower: Antichain { elements: [2] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }"));
-        assert_eq!(c1s1.seal(2).recv(), expected_seal_err);
-        assert_eq!(c1s2.seal(2).recv(), expected_seal_err);
+        assert_eq!(c1s1.seal(2).recv(), Err(Error::from("invalid seal for Id(0): 2 not in advance of current seal frontier Antichain { elements: [2] }")));
+        assert_eq!(c1s2.seal(2).recv(), Err(Error::from("invalid seal for Id(1): 2 not in advance of current seal frontier Antichain { elements: [2] }")));
 
         // Cannot write to streams not specified during construction.
         let (c1s3, _) = client1.create_or_load("3")?;
