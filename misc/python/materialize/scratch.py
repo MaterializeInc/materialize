@@ -12,6 +12,7 @@
 import asyncio
 import os
 import shlex
+import tempfile
 from datetime import datetime, timedelta, timezone
 from subprocess import CalledProcessError
 from typing import Dict, List, NamedTuple, Optional
@@ -24,7 +25,7 @@ from mypy_boto3_ec2.type_defs import (
     RunInstancesRequestRequestTypeDef,
 )
 
-from materialize import errors, git, ssh, ui
+from materialize import errors, git, spawn, ssh, ui
 
 SPEAKER = ui.speaker("scratch> ")
 ROOT = os.environ["MZ_ROOT"]
@@ -131,7 +132,9 @@ async def run_ssm(i: Instance, commands: List[str], timeout: int = 60) -> Comman
     )
 
 
-async def setup(i: Instance, subnet_id: Optional[str], local_pub_key: str) -> None:
+async def setup(
+    i: Instance, subnet_id: Optional[str], local_pub_key: str, identity_file: str
+) -> None:
     def is_ready(i: Instance) -> bool:
         return bool(
             i.public_ip_address and i.state and i.state.get("Name") == "running"
@@ -175,7 +178,12 @@ async def setup(i: Instance, subnet_id: Optional[str], local_pub_key: str) -> No
     done = False
     async for remaining in ui.async_timeout_loop(180, 5):
         try:
-            ssh.runv(["[", "-f", "/DONE", "]"], "ubuntu", i.public_ip_address)
+            ssh.runv(
+                ["[", "-f", "/DONE", "]"],
+                "ubuntu",
+                i.public_ip_address,
+                identity_file=identity_file,
+            )
             done = True
             break
         except CalledProcessError:
@@ -186,28 +194,32 @@ async def setup(i: Instance, subnet_id: Optional[str], local_pub_key: str) -> No
             "Instance did not finish setup in a reasonable amount of time"
         )
 
-    mkrepo(i)
+    mkrepo(i, identity_file)
 
 
-def mkrepo(i: Instance) -> None:
+def mkrepo(i: Instance, identity_file: str) -> None:
     """Create a Materialize repository on the remote ec2 instance and push the present repository to it."""
     ssh.runv(
         ["git", "init", "--bare", "/home/ubuntu/materialize/.git"],
         "ubuntu",
         i.public_ip_address,
+        identity_file=identity_file,
     )
     os.chdir(ROOT)
+    os.environ["GIT_SSH_COMMAND"] = f"ssh -i {identity_file}"
     git.push(f"ubuntu@{i.public_ip_address}:~/materialize/.git")
     head_rev = git.rev_parse("HEAD")
     ssh.runv(
         ["git", "-C", "/home/ubuntu/materialize", "config", "core.bare", "false"],
         "ubuntu",
         i.public_ip_address,
+        identity_file=identity_file,
     )
     ssh.runv(
         ["git", "-C", "/home/ubuntu/materialize", "checkout", head_rev],
         "ubuntu",
         i.public_ip_address,
+        identity_file=identity_file,
     )
 
 
@@ -221,9 +233,11 @@ class MachineDesc(NamedTuple):
 
 
 async def setup_all(
-    instances: List[Instance], subnet_id: str, local_pub_key: str
+    instances: List[Instance], subnet_id: str, local_pub_key: str, identity_file: str
 ) -> None:
-    await asyncio.gather(*(setup(i, subnet_id, local_pub_key) for i in instances))
+    await asyncio.gather(
+        *(setup(i, subnet_id, local_pub_key, identity_file) for i in instances)
+    )
 
 
 def launch_cluster(
@@ -252,11 +266,18 @@ def launch_cluster(
         for d in descs
     ]
 
-    with open(f"{os.environ['HOME']}/.ssh/id_rsa.pub") as pk:
+    # Generate temporary ssh key for running commands remotely
+    tmpdir = tempfile.TemporaryDirectory()
+
+    identity_file = f"{tmpdir.name}/id_rsa"
+    spawn.runv(["ssh-keygen", "-t", "rsa", "-N", "", "-f", identity_file])
+    with open(f"{tmpdir.name}/id_rsa.pub") as pk:
         local_pub_key = pk.read().strip()
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(setup_all(instances, subnet_id, local_pub_key))
+    loop.run_until_complete(
+        setup_all(instances, subnet_id, local_pub_key, identity_file)
+    )
     loop.close()
 
     hosts_str = "".join(
@@ -268,6 +289,7 @@ def launch_cluster(
             [f"echo {shlex.quote(hosts_str)} | sudo tee -a /etc/hosts"],
             "ubuntu",
             i.public_ip_address,
+            identity_file=identity_file,
         )
 
     for (i, d) in zip(instances, descs):
@@ -287,8 +309,10 @@ def launch_cluster(
                 ],
                 "ubuntu",
                 i.public_ip_address,
+                identity_file=identity_file,
             )
 
+    tmpdir.cleanup()
     return instances
 
 
