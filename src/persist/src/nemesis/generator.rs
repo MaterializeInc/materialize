@@ -51,7 +51,10 @@ impl GeneratorConfig {
 
 impl Default for GeneratorConfig {
     fn default() -> Self {
-        Self::all_operations()
+        let mut ops = Self::all_operations();
+        // TODO: Re-enable this once it's not flaky.
+        ops.allow_compaction_weight = 0;
+        ops
     }
 }
 
