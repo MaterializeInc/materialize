@@ -130,13 +130,13 @@ say "launching materialized-golden071"
 launch_materialized golden071
 
 say "adding golden071 features to golden060 catalog"
-testdrive --no-reset <<'EOF'
+testdrive --kafka-addr kafka:9092 --no-reset <<'EOF'
 # Checks a view with a CTE.
 > CREATE MATERIALIZED VIEW v AS WITH u AS (SELECT * FROM real_time_src) SELECT * from u;
 EOF
 
 say "creating Kafka source with metrics disabled"
-testdrive --no-reset <<'EOF'
+testdrive --kafka-addr kafka:9092 --no-reset <<'EOF'
 # Copy schema from above, golden010 catalog doesn't support statistics_interval_ms
 $ set schema={
     "type": "record",
@@ -178,7 +178,7 @@ say "launching materialized-edge with golden catalog"
 launch_materialized edge --log-file=stderr
 
 say "validating edge state"
-testdrive --no-reset <<EOF
+testdrive --kafka-addr kafka:9092 --no-reset <<EOF
 > SELECT * FROM real_time
 a  b  c
 --------
