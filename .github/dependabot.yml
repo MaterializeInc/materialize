@@ -12,6 +12,17 @@ updates:
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
+    # dbt hardly changes, so this isn't too onerous and cuts down the latency
+    # of releasing a new version of dbt-materialize when a new version of
+    # dbt drops.
     interval: daily
+  reviewers: [MaterializeInc/dependency-czars]
+  labels: [A-dependencies]
+- package-ecosystem: pip
+  directory: /misc/python
+  schema:
+    interval: weekly
+    day: sunday
+    time: "22:00"
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
