@@ -97,7 +97,7 @@ prof = { path = "../prof", features = ["jemalloc"] }
 tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] , git = "https://github.com/MaterializeInc/jemallocator" }
 
 [dev-dependencies]
-assert_cmd = "1.0.8"
+assert_cmd = "2.0.0"
 bytes = "1.0.1"
 coordtest = { path = "../coordtest" }
 datadriven = "0.6.0"
