@@ -82,7 +82,7 @@ use expr::{
 use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
+use repr::{ColumnName, Datum, Diff, RelationDesc, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     Connector, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
@@ -2270,13 +2270,9 @@ impl Coordinator {
                                     persist: Some(persist),
                                     ..
                                 }) => {
-                                    let updates = rows
+                                    let updates: Vec<((Row, ()), Timestamp, Diff)> = rows
                                         .into_iter()
-                                        .map(|(row, diff)| {
-                                            let mut encoded_row = Vec::new();
-                                            row.encode(&mut encoded_row);
-                                            ((encoded_row, ()), timestamp, diff)
-                                        })
+                                        .map(|(row, diff)| ((row, ()), timestamp, diff))
                                         .collect();
                                     persist_streams.push(&persist.write_handle);
                                     persist_updates
@@ -3142,13 +3138,9 @@ impl Coordinator {
                 }
             });
             if let Some(persist) = persist {
-                let updates: Vec<((Vec<u8>, ()), u64, isize)> = updates
+                let updates: Vec<((Row, ()), Timestamp, Diff)> = updates
                     .into_iter()
-                    .map(|u| {
-                        let mut encoded_row = Vec::new();
-                        u.row.encode(&mut encoded_row);
-                        ((encoded_row, ()), timestamp, u.diff)
-                    })
+                    .map(|u| ((u.row, ()), timestamp, u.diff))
                     .collect();
                 // Persistence of system table inserts is best effort, so throw
                 // away the response and ignore any errors. We do, however,

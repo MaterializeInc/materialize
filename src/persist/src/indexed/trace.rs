@@ -12,7 +12,6 @@
 //!
 //! This is directly a persistent analog of [differential_dataflow::trace::Trace].
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::trace::Description;
@@ -24,7 +23,6 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobTraceBatchMeta, BlobTraceMeta};
 use crate::indexed::{BlobTraceBatch, Id, Snapshot};
 use crate::storage::Blob;
-use crate::Data;
 
 /// A persistent, compacting data structure containing `(Key, Value, Time,
 /// Diff)` entries indexed by `(key, value, time)`.
@@ -70,7 +68,7 @@ use crate::Data;
 /// - The compaction levels across the list of batches in a trace are weakly decreasing
 ///   (non-increasing) when iterating from oldest to most recent time intervals.
 /// - TODO: Space usage.
-pub struct BlobTrace<K, V> {
+pub struct BlobTrace {
     id: Id,
     // The next ID used to assign a Blob key for this trace.
     next_blob_id: u64,
@@ -82,10 +80,9 @@ pub struct BlobTrace<K, V> {
     // The frontier the trace has been sealed up to.
     seal: Antichain<u64>,
     batches: Vec<BlobTraceBatchMeta>,
-    _phantom: PhantomData<(K, V)>,
 }
 
-impl<K: Data, V: Data> BlobTrace<K, V> {
+impl BlobTrace {
     /// Returns a BlobTrace re-instantiated with the previously serialized
     /// state.
     pub fn new(meta: BlobTraceMeta) -> Self {
@@ -95,7 +92,6 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
             since: meta.since,
             seal: meta.seal,
             batches: meta.batches,
-            _phantom: PhantomData,
         }
     }
 
@@ -161,8 +157,8 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
     /// updates to this trace.
     pub fn append<L: Blob>(
         &mut self,
-        batch: BlobTraceBatch<K, V>,
-        blob: &mut BlobCache<K, V, L>,
+        batch: BlobTraceBatch,
+        blob: &mut BlobCache<L>,
     ) -> Result<(), Error> {
         if &self.ts_upper() != batch.desc.lower() {
             return Err(Error::from(format!(
@@ -185,10 +181,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
     }
 
     /// Returns a consistent read of all the updates contained in this trace.
-    pub fn snapshot<L: Blob>(
-        &self,
-        blob: &BlobCache<K, V, L>,
-    ) -> Result<TraceSnapshot<K, V>, Error> {
+    pub fn snapshot<L: Blob>(&self, blob: &BlobCache<L>) -> Result<TraceSnapshot, Error> {
         let ts_upper = self.ts_upper();
         let mut updates = Vec::with_capacity(self.batches.len());
         for meta in self.batches.iter() {
@@ -203,7 +196,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
         &mut self,
         first: &BlobTraceBatchMeta,
         second: &BlobTraceBatchMeta,
-        blob: &mut BlobCache<K, V, L>,
+        blob: &mut BlobCache<L>,
     ) -> Result<BlobTraceBatchMeta, Error> {
         if first.desc.upper() != second.desc.lower() {
             return Err(Error::from(format!(
@@ -257,7 +250,7 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
     /// Take one step towards compacting the trace.
     ///
     /// Returns true if the trace was modified, false otherwise.
-    pub fn step<L: Blob>(&mut self, blob: &mut BlobCache<K, V, L>) -> Result<bool, Error> {
+    pub fn step<L: Blob>(&mut self, blob: &mut BlobCache<L>) -> Result<bool, Error> {
         // TODO: should we remember our position in this list?
         for i in 1..self.batches.len() {
             if (self.batches[i - 1].level == self.batches[i].level)
@@ -307,14 +300,14 @@ impl<K: Data, V: Data> BlobTrace<K, V> {
 
 /// A consistent snapshot of the data currently in a persistent [BlobTrace].
 #[derive(Debug)]
-pub struct TraceSnapshot<K, V> {
+pub struct TraceSnapshot {
     /// An open upper bound on the times of contained updates.
     pub ts_upper: Antichain<u64>,
-    updates: Vec<Arc<BlobTraceBatch<K, V>>>,
+    updates: Vec<Arc<BlobTraceBatch>>,
 }
 
-impl<K: Clone, V: Clone> Snapshot<K, V> for TraceSnapshot<K, V> {
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         if let Some(batch) = self.updates.pop() {
             buf.extend(batch.updates.iter().cloned());
             return true;
@@ -333,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_allow_compaction() -> Result<(), Error> {
-        let mut t: BlobTrace<String, String> = BlobTrace::new(BlobTraceMeta {
+        let mut t: BlobTrace = BlobTrace::new(BlobTraceMeta {
             id: Id(0),
             batches: vec![BlobTraceBatchMeta {
                 key: "key1".to_string(),
@@ -383,7 +376,7 @@ mod tests {
                 Antichain::from_elem(1),
                 Antichain::from_elem(0),
             ),
-            updates: vec![(("k".to_string(), "v".to_string()), 0, 1)],
+            updates: vec![(("k".into(), "v".into()), 0, 1)],
         };
 
         assert_eq!(t.append(batch, &mut blob), Ok(()));
@@ -393,7 +386,7 @@ mod tests {
                 Antichain::from_elem(3),
                 Antichain::from_elem(0),
             ),
-            updates: vec![(("k".to_string(), "v".to_string()), 2, 1)],
+            updates: vec![(("k".into(), "v".into()), 2, 1)],
         };
         assert_eq!(t.append(batch, &mut blob), Ok(()));
 
@@ -403,7 +396,7 @@ mod tests {
                 Antichain::from_elem(9),
                 Antichain::from_elem(0),
             ),
-            updates: vec![(("k".to_string(), "v".to_string()), 5, 1)],
+            updates: vec![(("k".into(), "v".into()), 5, 1)],
         };
         assert_eq!(t.append(batch, &mut blob), Ok(()));
 
@@ -440,8 +433,8 @@ mod tests {
         assert_eq!(
             updates,
             vec![
-                (("k".to_string(), "v".to_string()), 3, 2),
-                (("k".to_string(), "v".to_string()), 5, 1)
+                (("k".into(), "v".into()), 3, 2),
+                (("k".into(), "v".into()), 5, 1)
             ]
         );
 

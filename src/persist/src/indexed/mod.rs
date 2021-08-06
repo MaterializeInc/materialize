@@ -29,11 +29,11 @@ use crate::error::Error;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{
     BlobFutureBatch, BlobFutureMeta, BlobMeta, BlobTraceBatch, BlobTraceMeta, BufferEntry, Id,
+    StreamRegistration,
 };
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
-use crate::Data;
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
@@ -69,22 +69,22 @@ use crate::Data;
 /// that they are no longer needed. This would make them immediately available
 /// for indexed use, instead of the current situation, which is more complicated
 /// to reason about.
-pub struct Indexed<K, V, U: Buffer, L: Blob> {
+pub struct Indexed<U: Buffer, L: Blob> {
     next_stream_id: Id,
     futures_seqno_upper: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
     // and this representation is optimized for the metadata serialization path,
     // which is less rare.
-    id_mapping: Vec<(String, Id)>,
-    graveyard: Vec<(String, Id)>,
+    id_mapping: Vec<StreamRegistration>,
+    graveyard: Vec<StreamRegistration>,
     buf: U,
-    blob: BlobCache<K, V, L>,
-    futures: HashMap<Id, BlobFuture<K, V>>,
-    traces: HashMap<Id, BlobTrace<K, V>>,
-    listeners: HashMap<Id, Vec<ListenFn<K, V>>>,
+    blob: BlobCache<L>,
+    futures: HashMap<Id, BlobFuture>,
+    traces: HashMap<Id, BlobTrace>,
+    listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
 }
 
-impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
+impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// Returns a new Indexed, initializing each Future and Trace with the
     /// existing data for them in the blob storage, if any.
     pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
@@ -150,19 +150,43 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// stream name, returning the corresponding internal stream id.
     ///
     /// This method is idempotent: ids may be registered multiple times.
-    pub fn register(&mut self, id_str: &str) -> Result<Id, Error> {
-        if self.graveyard.iter().any(|(s, _)| s == &id_str) {
+    pub fn register(
+        &mut self,
+        id_str: &str,
+        key_codec_name: &str,
+        val_codec_name: &str,
+    ) -> Result<Id, Error> {
+        if self.graveyard.iter().any(|r| r.name == id_str) {
             return Err(Error::from(format!(
                 "invalid registration: stream {} already destroyed",
                 id_str
             )));
         }
-        let id = self.id_mapping.iter().find(|(s, _)| s == &id_str);
+        let id = self.id_mapping.iter().find(|s| s.name == id_str);
         let id = match id {
-            Some((_, id)) => *id,
+            Some(s) => {
+                if key_codec_name != s.key_codec_name {
+                    return Err(Error::from(format!(
+                        "invalid registration: key codec mismatch {} vs previous {}",
+                        key_codec_name, s.key_codec_name
+                    )));
+                }
+                if val_codec_name != s.val_codec_name {
+                    return Err(Error::from(format!(
+                        "invalid registration: val codec mismatch {} vs previous {}",
+                        val_codec_name, s.val_codec_name
+                    )));
+                }
+                s.id
+            }
             None => {
                 let id = self.next_stream_id;
-                self.id_mapping.push((id_str.to_owned(), id));
+                self.id_mapping.push(StreamRegistration {
+                    name: id_str.to_owned(),
+                    id,
+                    key_codec_name: key_codec_name.to_owned(),
+                    val_codec_name: val_codec_name.to_owned(),
+                });
                 self.next_stream_id = Id(id.0 + 1);
                 id
             }
@@ -182,15 +206,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// true if the stream was destroyed from this call, and false if it was
     /// already destroyed.
     pub fn destroy(&mut self, id_str: &str) -> Result<bool, Error> {
-        if self
-            .graveyard
-            .iter()
-            .any(|(destroyed_name, _)| destroyed_name == &id_str)
-        {
+        if self.graveyard.iter().any(|r| r.name == id_str) {
             return Ok(false);
         }
 
-        let mapping = self.id_mapping.iter().find(|(name, _)| name == &id_str);
+        let mapping = self.id_mapping.iter().find(|r| r.name == id_str);
 
         let mapping = match mapping {
             Some(mapping) => mapping.clone(),
@@ -202,11 +222,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             }
         };
 
-        self.id_mapping.retain(|(name, _)| name != &id_str);
+        self.id_mapping.retain(|r| r.name != id_str);
 
         // TODO: actually physically delete the future and trace batches.
-        let future = self.futures.remove(&mapping.1);
-        let trace = self.traces.remove(&mapping.1);
+        let future = self.futures.remove(&mapping.id);
+        let trace = self.traces.remove(&mapping.id);
 
         // Sanity check that we actually removed the future and trace for this
         // stream.
@@ -234,7 +254,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     /// with the given id.
     pub fn write_sync(
         &mut self,
-        updates: Vec<(Id, Vec<((K, V), u64, isize)>)>,
+        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
     ) -> Result<SeqNo, Error> {
         for (id, updates) in updates.iter() {
             let sealed_frontier = self.sealed_frontier(*id)?;
@@ -259,10 +279,11 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
 
     /// Atomically moves all writes currently in the buffer into the future.
     fn drain_buf(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (K, V), u64, isize)>> = HashMap::new();
+        let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (Vec<u8>, Vec<u8>), u64, isize)>> =
+            HashMap::new();
         let desc = self.buf.snapshot(|seqno, buf| {
             let mut buf = buf.to_vec();
-            let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry<K, V>>(&mut buf) }
+            let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry>(&mut buf) }
                 .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
             if !remaining.is_empty() {
                 return Err(format!("invalid buffer entry").into());
@@ -323,7 +344,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     fn drain_buf_inner(
         &mut self,
         id: Id,
-        mut updates: Vec<(SeqNo, (K, V), u64, isize)>,
+        mut updates: Vec<(SeqNo, (Vec<u8>, Vec<u8>), u64, isize)>,
         desc: &Range<SeqNo>,
     ) -> Result<(), Error> {
         if cfg!(any(debug_assertions, test)) {
@@ -535,7 +556,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     ///
     /// The caller is responsible for updating META after they've finished
     /// updating futures.
-    fn append_future(&mut self, id: Id, batch: BlobFutureBatch<K, V>) -> Result<(), Error> {
+    fn append_future(&mut self, id: Id, batch: BlobFutureBatch) -> Result<(), Error> {
         let future = self
             .futures
             .get_mut(&id)
@@ -559,7 +580,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     }
 
     /// Returns a [Snapshot] for the given id.
-    pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot<K, V>, Error> {
+    pub fn snapshot(&self, id: Id) -> Result<IndexedSnapshot, Error> {
         let future = self
             .futures
             .get(&id)
@@ -579,7 +600,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
             let seqno = self
                 .buf
                 .snapshot(|seqno, buf| {
-                    let entry: Abomonated<BufferEntry<K, V>, Vec<u8>> =
+                    let entry: Abomonated<BufferEntry, Vec<u8>> =
                         unsafe { Abomonated::new(buf.to_owned()) }
                             .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
                     for (entry_id, updates) in entry.updates.iter() {
@@ -601,7 +622,7 @@ impl<K: Data, V: Data, U: Buffer, L: Blob> Indexed<K, V, U, L> {
     //
     // TODO: Finish the naming bikeshed for this. Other options so far include
     // tail, subscribe, tee, inspect, and capture.
-    pub fn listen(&mut self, id: Id, listen_fn: ListenFn<K, V>) -> Result<(), Error> {
+    pub fn listen(&mut self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>) -> Result<(), Error> {
         // Verify that id has been registered.
         let _ = self.sealed_frontier(id)?;
         self.listeners.entry(id).or_default().push(listen_fn);
@@ -625,6 +646,10 @@ pub type ListenFn<K, V> = Box<dyn Fn(ListenEvent<K, V>) + Send>;
 
 /// An isolated, consistent read of previously written (Key, Value, Time, Diff)
 /// updates.
+//
+// TODO: This <K, V> allows Snapshot to be generic over both IndexedSnapshot
+// (and friends) and DecodedSnapshot, but does that get us anything? Does
+// Snapshot even get us anything over regular Iterator?
 pub trait Snapshot<K, V> {
     /// A partial read of the data in the snapshot.
     ///
@@ -649,10 +674,10 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 /// A consistent snapshot of the data currently in a [Buffer].
 #[derive(Debug)]
-struct BufferSnapshot<K, V>(SeqNo, Vec<((K, V), u64, isize)>);
+struct BufferSnapshot(SeqNo, Vec<((Vec<u8>, Vec<u8>), u64, isize)>);
 
-impl<K, V> Snapshot<K, V> for BufferSnapshot<K, V> {
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+impl Snapshot<Vec<u8>, Vec<u8>> for BufferSnapshot {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         buf.extend(self.1.drain(..));
         false
     }
@@ -660,13 +685,9 @@ impl<K, V> Snapshot<K, V> for BufferSnapshot<K, V> {
 
 /// A consistent snapshot of all data currently stored for an id.
 #[derive(Debug)]
-pub struct IndexedSnapshot<K, V>(
-    BufferSnapshot<K, V>,
-    FutureSnapshot<K, V>,
-    TraceSnapshot<K, V>,
-);
+pub struct IndexedSnapshot(BufferSnapshot, FutureSnapshot, TraceSnapshot);
 
-impl<K, V> IndexedSnapshot<K, V> {
+impl IndexedSnapshot {
     /// Returns the SeqNo at which this snapshot was run.
     ///
     /// All writes assigned a seqno < this are included.
@@ -675,8 +696,8 @@ impl<K, V> IndexedSnapshot<K, V> {
     }
 }
 
-impl<K: Clone, V: Clone> Snapshot<K, V> for IndexedSnapshot<K, V> {
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         self.0.read(buf) || self.1.read(buf) || self.2.read(buf)
     }
 }
@@ -691,22 +712,22 @@ mod tests {
 
     use super::*;
 
-    fn record_with_seqno(seqno: u64) -> (SeqNo, (String, String), u64, isize) {
-        (SeqNo(seqno), ("".to_string(), "".to_string()), 1, 1)
+    fn record_with_seqno(seqno: u64) -> (SeqNo, (Vec<u8>, Vec<u8>), u64, isize) {
+        (SeqNo(seqno), ("".into(), "".into()), 1, 1)
     }
 
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".to_string(), "".to_string()), 1, 1),
-            (("2".to_string(), "".to_string()), 2, 1),
+            (("1".into(), "".into()), 1, 1),
+            (("2".into(), "".into()), 2, 1),
         ];
 
         let mut i = Indexed::new(
             MemBuffer::new("single_stream"),
             MemBlob::new("single_stream"),
         )?;
-        let id = i.register("0")?;
+        let id = i.register("0", "()", "()")?;
 
         // Empty things are empty.
         let IndexedSnapshot(buf, future, trace) = i.snapshot(id)?;
@@ -716,7 +737,7 @@ mod tests {
 
         // Register a listener for writes.
         let (listen_tx, listen_rx) = mpsc::channel();
-        let listen_fn: ListenFn<String, String> = Box::new(move |e| match e {
+        let listen_fn: ListenFn<Vec<u8>, Vec<u8>> = Box::new(move |e| match e {
             ListenEvent::Records(records) => {
                 for ((k, v), ts, diff) in records.iter() {
                     listen_tx
@@ -783,15 +804,15 @@ mod tests {
     #[test]
     fn batch_sorting() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".to_string(), "".to_string()), 2, 1),
-            (("2".to_string(), "".to_string()), 1, 1),
+            (("1".into(), "".into()), 2, 1),
+            (("2".into(), "".into()), 1, 1),
         ];
 
         let mut i = Indexed::new(
             MemBuffer::new("batch_sorting"),
             MemBlob::new("batch_sorting"),
         )?;
-        let id = i.register("0")?;
+        let id = i.register("0", "", "")?;
 
         // Write the data and move it into the future part of the index, which
         // orders it within each batch by time. It's not, so this will fire a
@@ -811,15 +832,15 @@ mod tests {
     #[test]
     fn batch_consolidation() -> Result<(), Box<dyn Error>> {
         let updates = vec![
-            (("1".to_string(), "".to_string()), 1, 1),
-            (("1".to_string(), "".to_string()), 1, 1),
+            (("1".into(), "".into()), 1, 1),
+            (("1".into(), "".into()), 1, 1),
         ];
 
         let mut i = Indexed::new(
             MemBuffer::new("batch_consolidation"),
             MemBlob::new("batch_consolidation"),
         )?;
-        let id = i.register("0")?;
+        let id = i.register("0", "", "")?;
 
         // Write the data and move it into the future part of the index, which
         // consolidates updates to identical ((k, v), t). Since the writes are
@@ -849,7 +870,7 @@ mod tests {
             MemBuffer::new("batch_future_empty"),
             MemBlob::new("batch_future_empty"),
         )?;
-        let id = i.register("0")?;
+        let id = i.register("0", "", "")?;
 
         // Write an empty set of updates and try to move it into the future part
         // of the index.
@@ -857,15 +878,15 @@ mod tests {
         i.step()?;
 
         // Sending updates with dif = 0.
-        let updates = vec![(("1".to_string(), "".to_string()), 1, 0)];
+        let updates = vec![(("1".into(), "".into()), 1, 0)];
         i.write_sync(vec![(id, updates)])?;
         i.step()?;
 
         // Now try again with a set of updates that consolidates down to the empty
         // set.
         let updates = vec![
-            (("1".to_string(), "".to_string()), 1, 2),
-            (("1".to_string(), "".to_string()), 1, -2),
+            (("1".into(), "".into()), 1, 2),
+            (("1".into(), "".into()), 1, -2),
         ];
 
         i.write_sync(vec![(id, updates)])?;
@@ -879,7 +900,7 @@ mod tests {
             MemBuffer::new("drain_buf_validate"),
             MemBlob::new("drain_buf_validate"),
         )?;
-        let id = i.register("0")?;
+        let id = i.register("0", "", "")?;
 
         // Normal case (equals lower)
         assert_eq!(
@@ -935,17 +956,17 @@ mod tests {
         // This caused a violation of our invariants (which are checked in tests
         // and debug mode), so we just need the following to run without error
         // to verify the fix.
-        let s1 = i.register("s1")?;
-        i.write_sync(vec![(s1, vec![(((), ()), 0, 1)])])?;
+        let s1 = i.register("s1", "", "")?;
+        i.write_sync(vec![(s1, vec![(("".into(), "".into()), 0, 1)])])?;
         i.step()?;
-        let s2 = i.register("s2")?;
-        i.write_sync(vec![(s2, vec![(((), ()), 1, 1)])])?;
+        let s2 = i.register("s2", "", "")?;
+        i.write_sync(vec![(s2, vec![(("".into(), "".into()), 1, 1)])])?;
         i.step()?;
 
         // The second flavor is similar. If we then write to the first stream
         // again and step, it is then missing X..Y. (A stream not written to
         // between two step calls doesn't get a batch.)
-        i.write_sync(vec![(s1, vec![(((), ()), 2, 1)])])?;
+        i.write_sync(vec![(s1, vec![(("".into(), "".into()), 2, 1)])])?;
         i.step()?;
 
         Ok(())
@@ -953,10 +974,9 @@ mod tests {
 
     #[test]
     fn test_destroy() -> Result<(), IndexedError> {
-        let mut i: Indexed<String, String, _, _> =
-            Indexed::new(MemBuffer::new("destroy"), MemBlob::new("destroy"))?;
+        let mut i = Indexed::new(MemBuffer::new("destroy"), MemBlob::new("destroy"))?;
 
-        let _ = i.register("stream")?;
+        let _ = i.register("stream", "", "")?;
 
         // Normal case: destroy registered stream.
         assert_eq!(i.destroy("stream"), Ok(true));
@@ -974,9 +994,40 @@ mod tests {
 
         // Creating a previously destroyed stream.
         assert_eq!(
-            i.register("stream"),
+            i.register("stream", "", ""),
             Err(IndexedError::from(
                 "invalid registration: stream stream already destroyed"
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn codec_mismatch() -> Result<(), IndexedError> {
+        let mut i = Indexed::new(
+            MemBuffer::new("codec_mismatch"),
+            MemBlob::new("codec_mismatch"),
+        )?;
+
+        let _ = i.register("stream", "key", "val")?;
+
+        // Normal case: registration uses same key and value codec.
+        let _ = i.register("stream", "key", "val")?;
+
+        // Different key codec
+        assert_eq!(
+            i.register("stream", "nope", "val"),
+            Err(IndexedError::from(
+                "invalid registration: key codec mismatch nope vs previous key"
+            ))
+        );
+
+        // Different val codec
+        assert_eq!(
+            i.register("stream", "key", "nope"),
+            Err(IndexedError::from(
+                "invalid registration: val codec mismatch nope vs previous val"
             ))
         );
 

@@ -15,15 +15,15 @@ use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::{ActivateCapability, Concat, Map, UnorderedInput};
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
-use timely::Data;
+use timely::Data as TimelyData;
 
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
-use crate::operators;
 use crate::pfuture::Future;
 use crate::storage::SeqNo;
+use crate::{operators, Codec};
 
 /// A persistent equivalent of [UnorderedInput].
-pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
+pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: TimelyData> {
     /// A persistent equivalent of [UnorderedInput::new_unordered_input].
     fn new_persistent_unordered_input(
         &mut self,
@@ -41,7 +41,7 @@ pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: Data> {
 impl<G, K> PersistentUnorderedInput<G, K> for G
 where
     G: Scope<Timestamp = u64>,
-    K: Data,
+    K: TimelyData + Codec,
 {
     fn new_persistent_unordered_input(
         &mut self,
@@ -75,12 +75,12 @@ where
 }
 
 /// A persistent equivalent of [UnorderedHandle].
-pub struct PersistentUnorderedHandle<K: Data> {
+pub struct PersistentUnorderedHandle<K: TimelyData> {
     write: Box<StreamWriteHandle<K, ()>>,
     handle: UnorderedHandle<u64, (K, u64, isize)>,
 }
 
-impl<K: Data> PersistentUnorderedHandle<K> {
+impl<K: TimelyData> PersistentUnorderedHandle<K> {
     /// A persistent equivalent of [UnorderedHandle::session].
     pub fn session<'b>(
         &'b mut self,
@@ -106,7 +106,7 @@ pub struct PersistentUnorderedSession<'b, K: timely::Data> {
     >,
 }
 
-impl<'b, K: timely::Data> PersistentUnorderedSession<'b, K> {
+impl<'b, K: timely::Data + Codec> PersistentUnorderedSession<'b, K> {
     /// Transmits a single record after synchronously persisting it.
     pub fn give(&mut self, data: (K, u64, isize)) -> Future<SeqNo> {
         let r = self.write.write(&[((data.0.clone(), ()), data.1, data.2)]);
@@ -248,12 +248,12 @@ mod tests {
     fn error_stream() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable::<(), ()>("1", "error_stream", unreliable.clone())?;
+        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let token = p.create_or_load("error_stream").unwrap();
+                let token = p.create_or_load::<(), ()>("error_stream").unwrap();
                 let (_, _, err_stream) = scope.new_persistent_unordered_input(token);
                 err_stream.capture()
             })

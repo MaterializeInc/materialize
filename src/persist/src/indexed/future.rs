@@ -10,7 +10,6 @@
 //! A persistent, compacting data structure of `(Key, Value, Time, Diff)`
 //! updates, indexed by time.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use timely::progress::Antichain;
@@ -21,7 +20,6 @@ use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{BlobFutureBatchMeta, BlobFutureMeta};
 use crate::indexed::{BlobFutureBatch, Id, Snapshot};
 use crate::storage::{Blob, SeqNo};
-use crate::Data;
 
 /// A persistent, compacting data structure containing `(Key, Value, Time,
 /// Diff)` entries indexed by `(time, key, value)`.
@@ -61,7 +59,7 @@ use crate::Data;
 /// - All entries are after or equal to some time frontier and less than some
 ///   SeqNo.
 /// - TODO: Space usage.
-pub struct BlobFuture<K, V> {
+pub struct BlobFuture {
     id: Id,
     // The next id used to assign a Blob key for this future.
     next_blob_id: u64,
@@ -69,10 +67,9 @@ pub struct BlobFuture<K, V> {
     // strictly before that time gets moved into the trace.
     ts_lower: Antichain<u64>,
     batches: Vec<BlobFutureBatchMeta>,
-    _phantom: PhantomData<(K, V)>,
 }
 
-impl<K: Data, V: Data> BlobFuture<K, V> {
+impl BlobFuture {
     /// Returns a BlobFuture re-instantiated with the previously serialized
     /// state.
     pub fn new(meta: BlobFutureMeta) -> Self {
@@ -81,7 +78,6 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
             next_blob_id: meta.next_blob_id,
             ts_lower: meta.ts_lower,
             batches: meta.batches,
-            _phantom: PhantomData,
         }
     }
 
@@ -117,8 +113,8 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
     /// The input batch is expected to satisfy all [BlobFutureBatch] invariants.
     fn write_batch<L: Blob>(
         &mut self,
-        batch: BlobFutureBatch<K, V>,
-        blob: &mut BlobCache<K, V, L>,
+        batch: BlobFutureBatch,
+        blob: &mut BlobCache<L>,
     ) -> Result<BlobFutureBatchMeta, Error> {
         let key = self.new_blob_key();
         let desc = batch.desc.clone();
@@ -151,8 +147,8 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
     /// updates to this future.
     pub fn append<L: Blob>(
         &mut self,
-        batch: BlobFutureBatch<K, V>,
-        blob: &mut BlobCache<K, V, L>,
+        batch: BlobFutureBatch,
+        blob: &mut BlobCache<L>,
     ) -> Result<(), Error> {
         if batch.desc.lower() != &self.seqno_upper() {
             return Err(Error::from(format!(
@@ -188,8 +184,8 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
         &self,
         ts_lower: Antichain<u64>,
         ts_upper: Antichain<u64>,
-        blob: &BlobCache<K, V, L>,
-    ) -> Result<FutureSnapshot<K, V>, Error> {
+        blob: &BlobCache<L>,
+    ) -> Result<FutureSnapshot, Error> {
         if PartialOrder::less_than(&ts_upper, &ts_lower) {
             return Err(Error::from(format!(
                 "invalid snapshot request: ts_upper {:?} is less than ts_lower {:?}",
@@ -247,7 +243,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
     fn trim<L: Blob>(
         &mut self,
         batch: BlobFutureBatchMeta,
-        blob: &mut BlobCache<K, V, L>,
+        blob: &mut BlobCache<L>,
     ) -> Result<BlobFutureBatchMeta, Error> {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.ts_lower.less_equal(&batch.ts_upper));
@@ -272,7 +268,7 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
     /// Take one step towards shrinking the representation of this future.
     ///
     /// Returns true if the trace was modified, false otherwise.
-    pub fn step<L: Blob>(&mut self, blob: &mut BlobCache<K, V, L>) -> Result<bool, Error> {
+    pub fn step<L: Blob>(&mut self, blob: &mut BlobCache<L>) -> Result<bool, Error> {
         self.evict();
 
         for (idx, batch) in self.batches.iter_mut().enumerate() {
@@ -291,18 +287,18 @@ impl<K: Data, V: Data> BlobFuture<K, V> {
 
 /// A consistent snapshot of the data currently in a persistent [BlobFuture].
 #[derive(Debug)]
-pub struct FutureSnapshot<K, V> {
+pub struct FutureSnapshot {
     /// An open upper bound on the seqnos of contained updates.
     pub seqno_upper: Antichain<SeqNo>,
     /// A closed lower bound on the times of contained updates.
     pub ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     pub ts_upper: Antichain<u64>,
-    updates: Vec<Arc<BlobFutureBatch<K, V>>>,
+    updates: Vec<Arc<BlobFutureBatch>>,
 }
 
-impl<K: Clone, V: Clone> Snapshot<K, V> for FutureSnapshot<K, V> {
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+impl Snapshot<Vec<u8>, Vec<u8>> for FutureSnapshot {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         if let Some(batch) = self.updates.pop() {
             let updates = batch
                 .updates
@@ -326,20 +322,16 @@ mod tests {
     use super::*;
 
     // Generate a list of ((k, v), t, 1) updates at all of the specified times.
-    fn future_updates(update_times: Vec<u64>) -> Vec<((String, String), u64, isize)> {
+    fn future_updates(update_times: Vec<u64>) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
         update_times
             .into_iter()
-            .map(|t| (("k".to_string(), "v".to_string()), t, 1))
+            .map(|t| (("k".into(), "v".into()), t, 1))
             .collect()
     }
 
     // Generate a future batch spanning the specified sequence numbers with
     // updates at the specified times.
-    fn future_batch(
-        lower: u64,
-        upper: u64,
-        update_times: Vec<u64>,
-    ) -> BlobFutureBatch<String, String> {
+    fn future_batch(lower: u64, upper: u64, update_times: Vec<u64>) -> BlobFutureBatch {
         BlobFutureBatch {
             desc: Description::new(
                 Antichain::from_elem(SeqNo(lower)),
@@ -353,9 +345,7 @@ mod tests {
     // Read future batch metadata into a structure that can be asserted against.
     //
     // TODO: Revisit Antichain / Eq to see if we can do something better here.
-    fn future_batch_meta<K: Data, V: Data>(
-        future: &BlobFuture<K, V>,
-    ) -> Vec<(String, (SeqNo, SeqNo, SeqNo), (u64, u64))> {
+    fn future_batch_meta(future: &BlobFuture) -> Vec<(String, (SeqNo, SeqNo, SeqNo), (u64, u64))> {
         future
             .batches
             .iter()
@@ -374,12 +364,12 @@ mod tests {
     }
 
     // Attempt to read every update in `future` at times in [lo, hi)
-    fn slurp_from<K: Data, V: Data, L: Blob>(
-        future: &BlobFuture<K, V>,
-        blob: &BlobCache<K, V, L>,
+    fn slurp_from<L: Blob>(
+        future: &BlobFuture,
+        blob: &BlobCache<L>,
         lo: u64,
         hi: Option<u64>,
-    ) -> Result<Vec<((K, V), u64, isize)>, Error> {
+    ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
         let hi = hi.map_or_else(|| Antichain::new(), |e| Antichain::from_elem(e));
         let snapshot = future.snapshot(Antichain::from_elem(lo), hi, &blob)?;
         let updates = snapshot.read_to_end();
@@ -403,7 +393,7 @@ mod tests {
                 Antichain::from_elem(SeqNo(1)),
                 Antichain::from_elem(SeqNo(0)),
             ),
-            updates: vec![(("k".to_string(), "v".to_string()), 1, 1)],
+            updates: vec![(("k".into(), "v".into()), 1, 1)],
         };
         assert_eq!(
             f.append(batch, &mut blob),
@@ -419,14 +409,14 @@ mod tests {
                 Antichain::from_elem(SeqNo(1)),
                 Antichain::from_elem(SeqNo(0)),
             ),
-            updates: vec![(("k".to_string(), "v".to_string()), 2, 1)],
+            updates: vec![(("k".into(), "v".into()), 2, 1)],
         };
         assert_eq!(f.append(batch, &mut blob), Ok(()));
     }
 
     #[test]
     fn truncate_regress() {
-        let mut f: BlobFuture<String, String> = BlobFuture::new(BlobFutureMeta {
+        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(2),
             batches: vec![],
@@ -444,7 +434,7 @@ mod tests {
     #[test]
     fn future_evict() -> Result<(), Error> {
         let mut blob = BlobCache::new(MemBlob::new("future_evict"));
-        let mut f: BlobFuture<String, String> = BlobFuture::new(BlobFutureMeta {
+        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
@@ -504,7 +494,7 @@ mod tests {
     #[test]
     fn future_snapshot() -> Result<(), Error> {
         let mut blob = BlobCache::new(MemBlob::new("future_snapshot"));
-        let mut f: BlobFuture<String, String> = BlobFuture::new(BlobFutureMeta {
+        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
@@ -513,8 +503,8 @@ mod tests {
 
         // Construct a batch holding updates for times [3, 5].
         let updates = vec![
-            (("k".to_string(), "v".to_string()), 3, 1),
-            (("k".to_string(), "v".to_string()), 5, 1),
+            (("k".into(), "v".into()), 3, 1),
+            (("k".into(), "v".into()), 5, 1),
         ];
         let batch = BlobFutureBatch {
             desc: Description::new(
@@ -558,7 +548,7 @@ mod tests {
     #[test]
     fn future_batch_trim() -> Result<(), Error> {
         let mut blob = BlobCache::new(MemBlob::new("future_batch_trim"));
-        let mut f: BlobFuture<String, String> = BlobFuture::new(BlobFutureMeta {
+        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
@@ -567,9 +557,9 @@ mod tests {
 
         // Construct a batch holding updates for times [0, 2].
         let updates = vec![
-            (("k".to_string(), "v".to_string()), 0, 1),
-            (("k".to_string(), "v".to_string()), 1, 1),
-            (("k".to_string(), "v".to_string()), 2, 1),
+            (("k".into(), "v".into()), 0, 1),
+            (("k".into(), "v".into()), 1, 1),
+            (("k".into(), "v".into()), 2, 1),
         ];
         let batch = BlobFutureBatch {
             desc: Description::new(
