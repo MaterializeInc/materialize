@@ -2616,22 +2616,9 @@ dependencies = [
 
 [[package]]
 name = "paste"
-version = "0.1.18"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45ca20c77d80be666aef2b45486da86238fabe33e38306bd3118fe4af33fa880"
-dependencies = [
- "paste-impl",
- "proc-macro-hack",
-]
-
-[[package]]
-name = "paste-impl"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d95a7db200b97ef370c8e6de0088252f7e0dfff7d047a28528e47456c0fc98b6"
-dependencies = [
- "proc-macro-hack",
-]
+checksum = "acbf547ad0c65e31259204bd90935776d1c693cec2f4ff7abb7a1bbbd40dfe58"
 
 [[package]]
 name = "pdqselect"
@@ -4420,8 +4407,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.1"
-source = "git+https://github.com/MaterializeInc/jemallocator#f10172b8b6785e11d0e368f85434feda9dadde7d"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb833c46ecbf8b6daeccb347cefcabf9c1beb5c9b0f853e1cec45632d9963e69"
 dependencies = [
  "libc",
  "paste",
@@ -4430,8 +4418,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.1+5.2.1-patched"
-source = "git+https://github.com/MaterializeInc/jemallocator#f10172b8b6785e11d0e368f85434feda9dadde7d"
+version = "0.4.2+5.2.1-patched.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5844e429d797c62945a566f8da4e24c7fe3fbd5d6617fd8bf7a0b7dc1ee0f22e"
 dependencies = [
  "cc",
  "fs_extra",
@@ -4441,7 +4430,8 @@ dependencies = [
 [[package]]
 name = "tikv-jemallocator"
 version = "0.4.1"
-source = "git+https://github.com/MaterializeInc/jemallocator#f10172b8b6785e11d0e368f85434feda9dadde7d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c14a5a604eb8715bc5785018a37d00739b180bcf609916ddf4393d33d49ccdf"
 dependencies = [
  "libc",
  "tikv-jemalloc-sys",
