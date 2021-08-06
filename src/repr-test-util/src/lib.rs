@@ -27,7 +27,7 @@ use repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 gen_reflect_info_func!(produce_rti, [ScalarType], [ColumnType]);
 
 lazy_static! {
-    static ref RTI: ReflectedTypeInfo = produce_rti();
+    pub static ref RTI: ReflectedTypeInfo = produce_rti();
 }
 
 /* #endregion */
