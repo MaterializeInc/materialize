@@ -4212,13 +4212,12 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.19.2"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e7de153d0438a648bb71e06e300e54fc641685e96af96d49b843f43172d341c"
+checksum = "0af066e6272f2175c1783cfc2ebf3e2d8dfe2c182b00677fdeccbf8291af83fb"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",
- "doc-comment",
  "libc",
  "ntapi",
  "once_cell",
