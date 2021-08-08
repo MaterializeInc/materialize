@@ -11,7 +11,7 @@ itertools = "0.10.1"
 lazy_static = "1.4.0"
 log = "0.4.13"
 ore = { path = "../ore"}
-phf = { version = "0.9.0", features = ["uncased"] }
+phf = { version = "0.9.1", features = ["uncased"] }
 repr = { path = "../repr" }
 stacker = "0.1.14"
 uncased = "0.9.6"
@@ -24,7 +24,7 @@ unicode-width = "0.1.8"
 [build-dependencies]
 anyhow = "1.0.42"
 ore = { path = "../ore" }
-phf = { version = "0.9.0", features = ["uncased"] }
-phf_codegen = { version = "0.9.0" }
+phf = { version = "0.9.1", features = ["uncased"] }
+phf_codegen = { version = "0.9.1" }
 uncased = "0.9.6"
 walkabout = { path = "../walkabout" }
