@@ -31,7 +31,11 @@ The JSON objects describing individual machines in the cluster have the followin
 * **size_gb**: The available storage space of the root disk, in gigabytes
 * **tags**: A dictionary of additional tags to apply to the machine.
 
-## Initial login
+## Initial setup
+
+Materialize employees may follow the initial setup to gain access to our AWS accounts, as described [here](https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md).
+
+## Logging in
 
 Materialize employees will need to log in to our scratch AWS account, via SSO, in order to spin up load tests.
 
@@ -51,7 +55,7 @@ This will need to be repeated periodically, as the credentials expire every 12 h
 
 ## Example
 
-To run our suite of release load tests, log in as described above, and then run:
+To run our suite of release load tests, run the initial setup and log in as described above, and then run:
 
 ```
 bin/scratch < misc/load-tests/release.json
