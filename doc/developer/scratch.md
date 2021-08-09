@@ -33,7 +33,7 @@ The JSON objects describing individual machines in the cluster have the followin
 
 ## Initial setup
 
-Materialize employees may follow the initial setup to gain access to our AWS accounts, as described [here](https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md).
+Materialize employees should follow the initial setup to gain CLI/API access to our AWS accounts, as described [here](https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md).
 
 ## Logging in
 
