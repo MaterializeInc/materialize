@@ -20,7 +20,7 @@ updates:
   labels: [A-dependencies]
 - package-ecosystem: pip
   directory: /misc/python
-  schema:
+  schedule:
     interval: weekly
     day: sunday
     time: "22:00"
