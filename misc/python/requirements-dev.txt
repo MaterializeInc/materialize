@@ -5,7 +5,7 @@ humanize==3.11.0
 isort==5.9.3
 mypy==0.910
 pdoc3==0.8.1
-pytest==5.4.2
+pytest==6.2.4
 requests==2.23.0
 types-PyMYSQL==1.0.2
 types-PyYAML==5.4.6
