@@ -15,7 +15,6 @@ use ore::{
     metric,
     metrics::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec},
 };
-use serde_variant::to_variant_name;
 
 use super::{Command, CommandKind, PendingPeek};
 
@@ -107,16 +106,9 @@ impl CommandsProcessedMetrics {
         CommandsProcessedMetrics {
             cache: CommandKind::into_enum_iter().map(|_| 0).collect(),
             counters: CommandKind::into_enum_iter()
-                .map(|kind| {
-                    commands_processed_metric
-                        .with_label_values(&[worker, Self::seq_command_label(kind)])
-                })
+                .map(|kind| commands_processed_metric.with_label_values(&[worker, kind.name()]))
                 .collect(),
         }
-    }
-
-    fn seq_command_label(command: CommandKind) -> &'static str {
-        to_variant_name(&command).expect("Failed to convert enum with only unit variants")
     }
 
     fn observe(&mut self, command: CommandKind) {

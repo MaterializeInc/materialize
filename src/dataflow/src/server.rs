@@ -172,6 +172,29 @@ pub enum Command {
     Shutdown,
 }
 
+impl CommandKind {
+    /// Returns the name of the command kind.
+    fn name(self) -> &'static str {
+        match self {
+            CommandKind::AddSourceTimestamping => "add_source_timestamping",
+            CommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
+            CommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
+            CommandKind::AllowCompaction => "allow_compaction",
+            CommandKind::CancelPeek => "cancel_peek",
+            CommandKind::CreateDataflows => "create_dataflows",
+            CommandKind::DropIndexes => "drop_indexes",
+            CommandKind::DropSinks => "drop_sinks",
+            CommandKind::DropSourceTimestamping => "drop_source_timestamping",
+            CommandKind::DropSources => "drop_sources",
+            CommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
+            CommandKind::EnableLogging => "enable_logging",
+            CommandKind::Insert => "insert",
+            CommandKind::Peek => "peek",
+            CommandKind::Shutdown => "shutdown",
+        }
+    }
+}
+
 /// Information from timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Response {
