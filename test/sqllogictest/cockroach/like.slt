@@ -431,3 +431,8 @@ true
 
 query error unterminated escape sequence in LIKE
 SELECT 'a' LIKE '\'
+
+# Test massive LIKE patterns:
+
+query error LIKE pattern exceeds maximum length
+SELECT 'x' LIKE repeat('x', 367416)
