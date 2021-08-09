@@ -1615,7 +1615,14 @@ lazy_static! {
             //
             // https://www.postgresql.org/docs/current/functions-json.html
             "to_jsonb" => Scalar {
-                params!(Any) => Operation::unary(|ecx, e| Ok(typeconv::to_jsonb(ecx, e))), 3787;
+                params!(Any) => Operation::unary(|ecx, e| {
+                    // TODO(#7572): remove this
+                    let e = match ecx.scalar_type(&e) {
+                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar { length }),
+                        _ => e,
+                    };
+                    Ok(typeconv::to_jsonb(ecx, e))
+                }), 3787;
             },
             "to_timestamp" => Scalar {
                 params!(Float64) => UnaryFunc::ToTimestamp, 1158;
@@ -1706,6 +1713,11 @@ lazy_static! {
             },
             "jsonb_agg" => Aggregate {
                 params!(Any) => Operation::unary(|ecx, e| {
+                    // TODO(#7572): remove this
+                    let e = match ecx.scalar_type(&e) {
+                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar { length }),
+                        _ => e,
+                    };
                     // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
                     // needs to have *some* identity input), but the semantics
                     // of the SQL function require that `Datum::Null` is treated
@@ -1721,6 +1733,16 @@ lazy_static! {
             },
             "jsonb_object_agg" => Aggregate {
                 params!(Any, Any) => Operation::binary(|ecx, key, val| {
+                    // TODO(#7572): remove this
+                    let key = match ecx.scalar_type(&key) {
+                        ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar { length }),
+                        _ => key,
+                    };
+                    let val = match ecx.scalar_type(&val) {
+                        ScalarType::Char { length } => val.call_unary(UnaryFunc::PadChar { length }),
+                        _ => val,
+                    };
+
                     let key = typeconv::to_string(ecx, key);
                     let val = typeconv::to_jsonb(ecx, val);
                     let e = HirScalarExpr::CallVariadic {
