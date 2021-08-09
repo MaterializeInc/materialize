@@ -835,7 +835,6 @@ dependencies = [
  "rusoto_sqs",
  "serde",
  "serde_json",
- "serde_variant",
  "tempfile",
  "timely",
  "tokio",
@@ -3815,15 +3814,6 @@ dependencies = [
  "form_urlencoded",
  "itoa",
  "ryu",
- "serde",
-]
-
-[[package]]
-name = "serde_variant"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60c53d80400dbb87d4b422c3396145fa5736b13ebfed5c62105b7dc8d1cba5cf"
-dependencies = [
  "serde",
 ]
 
