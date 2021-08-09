@@ -2706,6 +2706,14 @@ impl Coordinator {
         // a larger timestamp and block, perhaps the user should intervene).
         let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
 
+        if !unmaterialized_source_ids.is_empty() {
+            coord_bail!(
+                "Unable to automatically determine a timestamp for your query; \
+                this can happen if your query depends on non-materialized sources.\n\
+                For more details, see https://materialize.com/s/non-materialized-error"
+            );
+        }
+
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
         // and does not depend on the transitive sources.
@@ -2721,13 +2729,6 @@ impl Coordinator {
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                if !unmaterialized_source_ids.is_empty() {
-                    coord_bail!(
-                        "Unable to automatically determine a timestamp for your query; \
-                        this can happen if your query depends on non-materialized sources.\n\
-                        For more details, see https://materialize.com/s/non-materialized-error"
-                    );
-                }
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
