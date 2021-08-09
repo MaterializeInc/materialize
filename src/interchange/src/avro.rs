@@ -20,7 +20,7 @@ pub use envelope_cdc_v2 as cdc_v2;
 pub use self::decode::{Decoder, DiffPair};
 pub use self::encode::{
     encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
-    AvroEncoder, AvroSchemaGenerator,
+    AvroEncoder, AvroSchemaGenerator, GenerateAvroSchema,
 };
 pub use self::envelope_debezium::{DebeziumDecodeState, DebeziumDeduplicationStrategy};
 pub use self::schema::{

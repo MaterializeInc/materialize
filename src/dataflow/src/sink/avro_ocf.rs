@@ -20,7 +20,7 @@ use timely::dataflow::Scope;
 
 use dataflow_types::{AvroOcfSinkConnector, SinkDesc};
 use expr::GlobalId;
-use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
+use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator, GenerateAvroSchema};
 use repr::{Diff, RelationDesc, Row, Timestamp};
 use timely::dataflow::scopes::Child;
 
@@ -90,7 +90,7 @@ fn avro_ocf<G>(
         v
     });
     let (schema, columns) = {
-        let schema_generator = AvroSchemaGenerator::new(None, desc, false);
+        let schema_generator = <AvroSchemaGenerator as GenerateAvroSchema>::new(None, desc, false);
         let schema = schema_generator.value_writer_schema().clone();
         let columns = schema_generator.value_columns().to_vec();
         (schema, columns)

@@ -42,7 +42,7 @@ use dataflow_types::{
     KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
 };
 use expr::GlobalId;
-use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator};
+use interchange::avro::{self, AvroEncoder, AvroSchemaGenerator, GenerateAvroSchema};
 use interchange::encode::Encode;
 use ore::cast::CastFrom;
 use repr::{Datum, Diff, RelationDesc, Row, Timestamp};
@@ -587,8 +587,11 @@ where
             key_schema_id,
             value_schema_id,
         }) => {
-            let schema_generator =
-                AvroSchemaGenerator::new(key_desc, value_desc, connector.consistency.is_some());
+            let schema_generator = <AvroSchemaGenerator as GenerateAvroSchema>::new(
+                key_desc,
+                value_desc,
+                connector.consistency.is_some(),
+            );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
                 stream,

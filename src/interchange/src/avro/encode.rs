@@ -121,6 +121,22 @@ fn encode_message_unchecked(
     buf
 }
 
+pub trait GenerateAvroSchema {
+    fn new(
+        key_desc: Option<RelationDesc>,
+        value_desc: RelationDesc,
+        include_transaction: bool,
+    ) -> Self;
+
+    fn value_writer_schema(&self) -> &Schema;
+
+    fn value_columns(&self) -> &[(ColumnName, ColumnType)];
+
+    fn key_writer_schema(&self) -> Option<&Schema>;
+
+    fn key_columns(&self) -> Option<&[(ColumnName, ColumnType)]>;
+}
+
 /// Generates key and value Avro schemas
 pub struct AvroSchemaGenerator {
     value_columns: Vec<(ColumnName, ColumnType)>,
@@ -128,8 +144,8 @@ pub struct AvroSchemaGenerator {
     writer_schema: Schema,
 }
 
-impl AvroSchemaGenerator {
-    pub fn new(
+impl GenerateAvroSchema for AvroSchemaGenerator {
+    fn new(
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
         include_transaction: bool,
@@ -175,19 +191,19 @@ impl AvroSchemaGenerator {
         }
     }
 
-    pub fn value_writer_schema(&self) -> &Schema {
+    fn value_writer_schema(&self) -> &Schema {
         &self.writer_schema
     }
 
-    pub fn value_columns(&self) -> &[(ColumnName, ColumnType)] {
+    fn value_columns(&self) -> &[(ColumnName, ColumnType)] {
         &self.value_columns
     }
 
-    pub fn key_writer_schema(&self) -> Option<&Schema> {
+    fn key_writer_schema(&self) -> Option<&Schema> {
         self.key_info.as_ref().map(|KeyInfo { schema, .. }| schema)
     }
 
-    pub fn key_columns(&self) -> Option<&[(ColumnName, ColumnType)]> {
+    fn key_columns(&self) -> Option<&[(ColumnName, ColumnType)]> {
         self.key_info
             .as_ref()
             .map(|KeyInfo { columns, .. }| columns.as_slice())
