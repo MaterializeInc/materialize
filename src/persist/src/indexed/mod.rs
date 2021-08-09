@@ -541,6 +541,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             .traces
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let prev = trace.meta();
         let since = Antichain::from_elem(since);
 
         trace.allow_compaction(since)?;
@@ -548,7 +549,20 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         //
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())
+        if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
+            let trace = self
+                .traces
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+
+            // Revert in-memory state back to its previous version so that
+            // things are consistent between the durably persisted version
+            // and the in-memory version.
+            *trace = BlobTrace::new(prev);
+            Err(e)
+        } else {
+            Ok(())
+        }
     }
 
     /// Appends the given `batch` to the future for `id`, writing the data into
