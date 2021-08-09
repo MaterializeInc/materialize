@@ -1270,15 +1270,16 @@ lazy_static! {
                         bail!("No function matches the given name and argument types. \
                         You might need to add explicit type casts.")
                     }
-                   let mut exprs = vec![];
+                    let mut exprs = vec![];
                     for expr in cexprs {
-                        if ecx.scalar_type(&expr) == ScalarType::Bool {
+                        exprs.push(match ecx.scalar_type(&expr) {
                             // concat uses nonstandard bool -> string casts
                             // to match historical baggage in PostgreSQL.
-                            exprs.push(expr.call_unary(UnaryFunc::CastBoolToStringNonstandard));
-                        } else {
-                            exprs.push(typeconv::to_string(ecx, expr));
-                        }
+                            ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard),
+                            // TODO(#7572): remove call to PadChar
+                            ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar { length }),
+                            _ => typeconv::to_string(ecx, expr)
+                        });
                     }
                     Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
                 }), 3058;

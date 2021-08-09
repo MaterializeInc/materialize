@@ -1294,3 +1294,15 @@ query T
 SELECT to_jsonb('a'::char(10))
 ----
 "a         "
+
+# Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-895057022
+
+query T
+SELECT CONCAT('a'::char(3), 'b'::text, 'c');
+----
+a  bc
+
+query T
+SELECT CONCAT('a'::text, 'b'::char(3), 'c');
+----
+ab  c
