@@ -66,6 +66,9 @@ Wrap your release notes at the 80 character mark.
 - Add [`reuse_topic`](/sql/create-sink/#enabling-topic-reuse-after-restart) as
   a beta feature for Kafka Sinks. This allows re-using the output topic across
   restarts of Materialize.
+  
+- Support passing in secrets to Materialize via environment variables
+  using WITH options.
 
 {{% version-header v0.8.3 %}}
 - The `MZ_LOG` environment variable is no longer recognized. Setting the log
