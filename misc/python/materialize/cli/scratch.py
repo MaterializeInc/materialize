@@ -14,6 +14,7 @@ import random
 import sys
 from typing import Any, Dict, List
 
+import boto3
 from materialize.scratch import MachineDesc, launch_cluster
 from prettytable import PrettyTable
 
@@ -50,6 +51,10 @@ def multi_json(s: str) -> List[Dict[Any, Any]]:
     return result
 
 
+def whoami() -> str:
+    return boto3.client("sts").get_caller_identity()["UserId"].split(":")[1]
+
+
 # Sane defaults for internal Materialize use in the scratch account
 DEFAULT_SUBNET_ID = "subnet-0b47df5733387582b"
 DEFAULT_SG_ID = "sg-0f2d62ae0f39f93cc"
@@ -57,7 +62,6 @@ DEFAULT_INSTPROF_NAME = "ssm-instance-profile"
 
 
 def main() -> None:
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--subnet-id", type=str, default=DEFAULT_SUBNET_ID)
     parser.add_argument("--key-name", type=str, required=False)
@@ -78,6 +82,8 @@ def main() -> None:
             )
 
     check_required_vars()
+
+    extra_tags["LaunchedBy"] = whoami()
 
     descs = [
         MachineDesc(
