@@ -1,7 +1,7 @@
 click==8.0.1
 pg8000==1.15.2
 PyMySQL==0.9.3
-pyyaml==5.4
+pyyaml==5.4.1
 semver==3.0.0-dev.2
 toml==0.10.2
 typing-extensions==3.10.0.0
