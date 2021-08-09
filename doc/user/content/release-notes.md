@@ -84,6 +84,9 @@ Wrap your release notes at the 80 character mark.
   ([documentation](/sql/create-source/avro-kafka)). The `UPSERT FORMAT ..`
   syntax will be removed in a future release.
 
+- Add `WITH` options to read from environment variables for SSL and SASL
+  passwords. {{% gh 7467 %}}
+
 {{% version-header v0.8.2 %}}
 
 - Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
