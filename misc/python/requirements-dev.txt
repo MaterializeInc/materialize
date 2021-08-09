@@ -3,7 +3,7 @@ boto3==1.17.46
 boto3-stubs[ec2,kinesis,s3,sqs,ssm]==1.18.13
 humanize==2.3.0
 isort==5.9.3
-mypy==0.800
+mypy==0.910
 pdoc3==0.8.1
 pytest==5.4.2
 requests==2.23.0
