@@ -21,8 +21,9 @@ updates:
 - package-ecosystem: pip
   directory: /misc/python
   schedule:
-    interval: weekly
-    day: sunday
+    # These dependencies get baked into the CI builder image, which we don't
+    # want to rebuild more often than we need to.
+    interval: monthly
     time: "22:00"
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
