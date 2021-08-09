@@ -2799,18 +2799,15 @@ impl Coordinator {
         // a larger timestamp and block, perhaps the user should intervene).
         let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
 
-        if !unmaterialized_source_ids.is_empty() {
-            coord_bail!(
-                "Unable to automatically determine a timestamp for your query; \
-                this can happen if your query depends on non-materialized sources.\n\
-                For more details, see https://materialize.com/s/non-materialized-error"
-            );
-        }
-
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
         // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
+        let mut since = self.indexes.least_valid_since(index_ids.iter().cloned());
+        since.join_assign(
+            &self
+                .sources
+                .least_valid_since(unmaterialized_source_ids.iter().cloned()),
+        );
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
@@ -2822,6 +2819,14 @@ impl Coordinator {
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
+                if !unmaterialized_source_ids.is_empty() {
+                    coord_bail!(
+                        "Unable to automatically determine a timestamp for your query; \
+                        this can happen if your query depends on non-materialized sources.\n\
+                        For more details, see https://materialize.com/s/non-materialized-error"
+                    );
+                }
+
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
@@ -2875,17 +2880,23 @@ impl Coordinator {
         if since.less_equal(&timestamp) {
             Ok((timestamp, index_ids))
         } else {
-            let invalid = index_ids
-                .iter()
-                .filter(|id| {
-                    !self
-                        .indexes
-                        .since_of(id)
-                        .expect("id not found")
-                        .less_equal(&timestamp)
-                })
-                .map(|id| (id, self.indexes.since_of(id)))
-                .collect::<Vec<_>>();
+            let invalid_indexes = index_ids.iter().filter_map(|id| {
+                let since = self.indexes.since_of(id).expect("id not found");
+                if since.less_equal(&timestamp) {
+                    None
+                } else {
+                    Some(since)
+                }
+            });
+            let invalid_sources = unmaterialized_source_ids.iter().filter_map(|id| {
+                let since = self.sources.since_of(id).expect("id not found");
+                if since.less_equal(&timestamp) {
+                    None
+                } else {
+                    Some(since)
+                }
+            });
+            let invalid = invalid_indexes.chain(invalid_sources).collect::<Vec<_>>();
             coord_bail!(
                 "Timestamp ({}) is not valid for all inputs: {:?}",
                 timestamp,
