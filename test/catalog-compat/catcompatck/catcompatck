@@ -171,14 +171,40 @@ $ set schema={
   FROM real_time_src_no_stats
 EOF
 
+say "adding table with char column"
+testdrive --kafka-addr kafka:9092 --no-reset <<'EOF'
+# Prior to v0.9.1 char references essentially aliased `text`, despite being its
+# own entry in the catalog. The typmod value was also ignored.
+> CREATE TABLE str_cols (a pg_catalog.char, b pg_catalog.char(1))
+
+> SHOW CREATE TABLE str_cols
+Table "Create Table"
+--------------------
+materialize.public.str_cols "CREATE TABLE \"materialize\".\"public\".\"str_cols\" (\"a\" \"pg_catalog\".\"char\", \"b\" \"pg_catalog\".\"char\"(1))"
+
+> INSERT INTO str_cols VALUES ('abc', 'de'), ('uv', 'wxyz');
+
+> SELECT a, b FROM str_cols ORDER BY a;
+a b
+--------
+abc de
+uv  wxyz
+EOF
+
 say "killing materialized-golden071"
 kill_materialized
 
 say "launching materialized-edge with golden catalog"
 launch_materialized edge --log-file=stderr
 
-say "validating edge state"
-testdrive --kafka-addr kafka:9092 --no-reset <<EOF
+# We use the final migration test twice, so any CREATE statement should use the
+# IF NOT EXISTS version.
+final_test=$(cat <<EOF
+# NOTE(benesch): if/when tables persist their input data, we won't need to
+# reinsert data here.
+> INSERT INTO t (a) VALUES (42)
+> INSERT INTO str_cols VALUES ('abc', 'de'), ('uv', 'wxyz');
+
 > SELECT * FROM real_time
 a  b  c
 --------
@@ -187,9 +213,6 @@ a  b  c
 3  1  31
 1  2  12
 
-# NOTE(benesch): if/when tables persist their input data, we won't need to
-# reinsert data here.
-> INSERT INTO t (a) VALUES (42)
 > SELECT * FROM t
 42  def
 
@@ -208,4 +231,45 @@ a  b
 count
 -----
 2
+
+# Check that str_cols successfully migrated to a text type
+> SHOW CREATE TABLE str_cols
+Table "Create Table"
+--------------------
+materialize.public.str_cols "CREATE TABLE \"materialize\".\"public\".\"str_cols\" (\"a\" \"pg_catalog\".\"text\", \"b\" \"pg_catalog\".\"text\")"
+
+> SELECT a, b FROM str_cols ORDER BY a;
+a b
+--------
+abc de
+uv  wxyz
+
+# Check that char w/o typmod now behaves as char(1) in Postgres
+> CREATE TABLE IF NOT EXISTS char_col (a pg_catalog.char)
+> SHOW CREATE TABLE char_col
+Table "Create Table"
+--------------------
+materialize.public.char_col "CREATE TABLE \"materialize\".\"public\".\"char_col\" (\"a\" \"pg_catalog\".\"char\")"
+
+> INSERT INTO char_col VALUES ('abc'::pg_catalog.char), ('wxyz'::pg_catalog.char);
+
+> SELECT a FROM char_col ORDER BY a;
+a
+----
+a
+w
+
 EOF
+)
+
+say "validating edge state"
+testdrive --kafka-addr kafka:9092 --no-reset <<<"$final_test"
+
+say "killing materialized-edge"
+kill_materialized
+
+say "launching materialized-edge with golden catalog"
+launch_materialized edge --log-file=stderr
+
+say "validating edge state again to ensure migration idempotency"
+testdrive --kafka-addr kafka:9092 --no-reset <<<"$final_test"

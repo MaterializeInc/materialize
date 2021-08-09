@@ -537,6 +537,7 @@ dependencies = [
  "repr",
  "rusoto_kinesis",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sql",
