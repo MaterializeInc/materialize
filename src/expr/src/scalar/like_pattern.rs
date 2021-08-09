@@ -64,5 +64,12 @@ pub fn build_regex(pattern: &str, flags: &str) -> Result<Regex, EvalError> {
             _ => return Err(EvalError::InvalidRegexFlag(f)),
         }
     }
-    Ok(regex.build().expect("regex constructed to be valid"))
+    match regex.build() {
+        Ok(regex) => Ok(regex),
+        Err(regex::Error::CompiledTooBig(_)) => Err(EvalError::LikePatternTooLong),
+        Err(e) => Err(EvalError::Internal(format!(
+            "build_regex produced invalid regex: {}",
+            e
+        ))),
+    }
 }

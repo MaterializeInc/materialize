@@ -1035,6 +1035,7 @@ pub enum EvalError {
     ComplexOutOfRange(String),
     MultipleRowsFromSubquery,
     Undefined(String),
+    LikePatternTooLong,
 }
 
 impl fmt::Display for EvalError {
@@ -1115,6 +1116,9 @@ impl fmt::Display for EvalError {
             }
             EvalError::Undefined(s) => {
                 write!(f, "{} is undefined", s)
+            }
+            EvalError::LikePatternTooLong => {
+                write!(f, "LIKE pattern exceeds maximum length")
             }
         }
     }
