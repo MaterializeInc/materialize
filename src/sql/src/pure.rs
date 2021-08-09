@@ -338,7 +338,7 @@ pub fn purify(
                                 name: view_name,
                                 columns: columns.iter().map(|c| c.name.clone()).collect(),
                                 with_options: vec![],
-                                query: query,
+                                query,
                             });
                         }
                         *definitions = CreateViewsDefinitions::Literal(views);
