@@ -1393,6 +1393,7 @@ lazy_static! {
             },
             "length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
+                // bpcharlen is redundant with automatic coercion to string, 1318.
                 params!(String) => UnaryFunc::CharLength, 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
             },
@@ -1678,6 +1679,8 @@ lazy_static! {
                 params!(Float32) => AggregateFunc::MaxFloat32, 2119;
                 params!(Float64) => AggregateFunc::MaxFloat64, 2120;
                 params!(String) => AggregateFunc::MaxString, 2129;
+                // TODO(#7572): make this its own function
+                params!(Char) => AggregateFunc::MaxString, 2244;
                 params!(Date) => AggregateFunc::MaxDate, 2122;
                 params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126;
                 params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127;
@@ -1691,6 +1694,8 @@ lazy_static! {
                 params!(Float32) => AggregateFunc::MinFloat32, 2135;
                 params!(Float64) => AggregateFunc::MinFloat64, 2136;
                 params!(String) => AggregateFunc::MinString, 2145;
+                // TODO(#7572): make this its own function
+                params!(Char) => AggregateFunc::MinString, 2245;
                 params!(Date) => AggregateFunc::MinDate, 2138;
                 params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;

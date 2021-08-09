@@ -1270,3 +1270,21 @@ query T
 SELECT 'a'::char(3) = 'a '::varchar(3);
 ----
 true
+
+# Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-895061714
+
+statement ok
+CREATE TABLE char_col (a char(10));
+
+statement ok
+INSERT INTO char_col VALUES ('a'), ('bc'), ('def');
+
+query T
+SELECT max(a)::text FROM char_col
+----
+def
+
+query I
+SELECT octet_length(max(a)) FROM char_col
+----
+10
