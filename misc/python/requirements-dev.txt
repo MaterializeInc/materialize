@@ -6,7 +6,7 @@ isort==5.9.3
 mypy==0.910
 pdoc3==0.8.1
 pytest==5.4.2
-requests==2.23.0
+requests==2.26.0
 types-PyMYSQL==1.0.2
 types-PyYAML==5.4.6
 types-requests==2.25.6
