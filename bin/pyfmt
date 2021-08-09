@@ -14,4 +14,4 @@
 set -euo pipefail
 
 "$(dirname "$0")"/pyactivate --dev -m black --target-version py36 . "$@"
-"$(dirname "$0")"/pyactivate --dev -m isort --profile black .
+"$(dirname "$0")"/pyactivate --dev -m isort --profile black -l 88 .
