@@ -4,4 +4,4 @@ PyMySQL==0.9.3
 pyyaml==5.4
 semver==3.0.0-dev.2
 toml==0.10.2
-typing-extensions==3.7.4.2
+typing-extensions==3.10.0.0
