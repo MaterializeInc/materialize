@@ -641,6 +641,9 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             system_table_enabled,
             lock_reentrance_id,
             lock_info,
+            // TODO: this time is hardcoded for now, but eventually we
+            // will want to expose it as a CLI / per-stream option.
+            step_interval: Some(Duration::from_millis(100)),
         }
     };
 

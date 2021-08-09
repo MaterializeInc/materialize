@@ -17,6 +17,7 @@ use ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient};
+use crate::indexed::IndexedConfig;
 use crate::storage::{Blob, Buffer, LockInfo, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableBuffer, UnreliableHandle};
 
@@ -312,7 +313,7 @@ impl MemRegistry {
         let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
         let buffer = self.buffer(path, lock_info.clone())?;
         let blob = self.blob(path, lock_info)?;
-        runtime::start(buffer, blob)
+        runtime::start(buffer, blob, IndexedConfig::default())
     }
 
     /// Open a [RuntimeClient] with unreliable storage associated with `path`.
@@ -327,7 +328,7 @@ impl MemRegistry {
         let buffer = UnreliableBuffer::from_handle(buffer, unreliable.clone());
         let blob = self.blob(path, lock_info)?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(buffer, blob)
+        runtime::start(buffer, blob, IndexedConfig::default())
     }
 }
 

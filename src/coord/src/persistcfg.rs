@@ -10,6 +10,7 @@
 //! Materialize-specific persistence configuration.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use persist::error::Error;
@@ -21,6 +22,7 @@ use serde::Serialize;
 use expr::GlobalId;
 use persist::file::{FileBlob, FileBuffer};
 use persist::indexed::runtime::{self, MultiWriteHandle, RuntimeClient, StreamWriteHandle};
+use persist::indexed::IndexedConfig;
 
 /// Configuration of the persistence runtime and features.
 #[derive(Clone, Debug)]
@@ -46,6 +48,10 @@ pub struct PersistConfig {
     /// investigating an unexpected lock file (e.g. hostname and materialize
     /// version of the creating process).
     pub lock_info: String,
+    /// How frequently the persistence runtime attempts to move data into the
+    /// maintained index representation in blob storage. When None, the persistence
+    /// runtime will attempt to do so after every command.
+    pub step_interval: Option<Duration>,
 }
 
 impl PersistConfig {
@@ -55,6 +61,7 @@ impl PersistConfig {
             blob_path: Default::default(),
             user_table_enabled: false,
             system_table_enabled: false,
+            step_interval: None,
             lock_info: Default::default(),
             lock_reentrance_id: Default::default(),
         }
@@ -70,7 +77,11 @@ impl PersistConfig {
                 .map_err(|err| anyhow!("{}", err))?;
             let blob =
                 FileBlob::new(&self.blob_path, lock_info).map_err(|err| anyhow!("{}", err))?;
-            let persister = runtime::start(buffer, blob).map_err(|err| anyhow!("{}", err))?;
+            let config = IndexedConfig {
+                step_interval: self.step_interval,
+            };
+            let persister =
+                runtime::start(buffer, blob, config).map_err(|err| anyhow!("{}", err))?;
             Some(persister)
         } else {
             None

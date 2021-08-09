@@ -14,6 +14,7 @@ use crate::error::Error;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
+use crate::indexed::IndexedConfig;
 use crate::nemesis::{
     AllowCompactionReq, Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq,
     SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteRes,
@@ -168,7 +169,9 @@ mod tests {
             let buf = UnreliableBuffer::from_handle(buf, unreliable.clone());
             let blob = FileBlob::new(blob_dir, ("reentrance0", "direct_file").into())?;
             let blob = UnreliableBlob::from_handle(blob, unreliable);
-            runtime::start(buf, blob)
+            // TODO: use a more realistic configuration that allows for some delay
+            // between when writes are submitted and moved to blob storage.
+            runtime::start(buf, blob, IndexedConfig::default())
         })
         .expect("initial start failed");
         // TODO: At the moment, running this for 100 steps takes a bit over a

@@ -252,14 +252,19 @@ mod tests {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
+        let (_, read) = p.create_or_load::<(), ()>("1")?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
-            worker.dataflow(|scope| {
-                let (_, read) = p.create_or_load::<(), ()>("1").unwrap();
+            let recv = worker.dataflow(|scope| {
                 let (_, err_stream) = scope.persisted_source(&read);
                 err_stream.capture()
-            })
+            });
+
+            unreliable.make_available();
+            let (write, _) = p.create_or_load::<(), ()>("1").unwrap();
+            write.seal(1).recv().expect("seal was successful");
+            recv
         });
 
         let actual = recv
@@ -268,11 +273,14 @@ mod tests {
             .flat_map(|(_, xs)| xs.into_iter())
             .collect::<Vec<_>>();
 
-        let expected = vec![(
-            "replaying persisted data: unavailable: buffer snapshot".to_string(),
-            0,
-            1,
-        )];
+        let expected = vec![
+            (
+                "replaying persisted data: unavailable: buffer snapshot".to_string(),
+                0,
+                1,
+            ),
+            ("unavailable: buffer snapshot".to_string(), 0, 1),
+        ];
         assert_eq!(actual, expected);
 
         Ok(())

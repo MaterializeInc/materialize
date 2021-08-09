@@ -23,7 +23,7 @@ use log;
 
 use crate::error::Error;
 use crate::indexed::encoding::Id;
-use crate::indexed::{Indexed, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
+use crate::indexed::{Indexed, IndexedConfig, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
 use crate::pfuture::{Future, FutureHandle};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Codec;
@@ -50,12 +50,12 @@ enum Cmd {
 // TODO: At the moment, this runs IO and heavy cpu work in a single thread.
 // Move this work out into whatever async runtime the user likes, via something
 // like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
-pub fn start<U, L>(buf: U, blob: L) -> Result<RuntimeClient, Error>
+pub fn start<U, L>(buf: U, blob: L, config: IndexedConfig) -> Result<RuntimeClient, Error>
 where
     U: Buffer + Send + 'static,
     L: Blob + Send + 'static,
 {
-    let indexed = Indexed::new(buf, blob)?;
+    let indexed = Indexed::new(buf, blob, config)?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
     let runtime_f = move || {
@@ -586,6 +586,10 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
                 return false;
             }
         };
+
+        // Maybe take a step towards advancing data through [Indexed].
+        let step_res = self.indexed.step();
+
         match cmd {
             Cmd::Stop(res) => {
                 res.fill(self.indexed.close());
@@ -593,35 +597,31 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
             }
             Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
                 let r = self.indexed.register(&id, key_codec_name, val_codec_name);
-                res.fill(r);
+                res.fill(step_res.and_then(|_| r));
             }
             Cmd::Destroy(id, res) => {
                 let r = self.indexed.destroy(&id);
-                res.fill(r);
+                res.fill(step_res.and_then(|_| r));
             }
             Cmd::Write(updates, res) => {
                 let write_res = self.indexed.write_sync(updates);
-                // TODO: Move this to a Cmd::Tick or something.
-                let step_res = self.indexed.step();
                 res.fill(step_res.and_then(|_| write_res));
             }
             Cmd::Seal(ids, ts, res) => {
                 let seal_res = self.indexed.seal(ids, ts);
-                // TODO: Move this to a Cmd::Tick or something.
-                let step_res = self.indexed.step();
                 res.fill(step_res.and_then(|_| seal_res));
             }
             Cmd::AllowCompaction(id, ts, res) => {
                 let r = self.indexed.allow_compaction(id, ts);
-                res.fill(r);
+                res.fill(step_res.and_then(|_| r));
             }
             Cmd::Snapshot(id, res) => {
                 let r = self.indexed.snapshot(id);
-                res.fill(r);
+                res.fill(step_res.and_then(|_| r));
             }
             Cmd::Listen(id, listen_fn, res) => {
                 let r = self.indexed.listen(id, listen_fn);
-                res.fill(r);
+                res.fill(step_res.and_then(|_| r));
             }
         }
         return true;
@@ -643,7 +643,7 @@ mod tests {
 
         let buffer = MemBuffer::new_no_reentrance("runtime");
         let blob = MemBlob::new_no_reentrance("runtime");
-        let mut runtime = start(buffer, blob)?;
+        let mut runtime = start(buffer, blob, IndexedConfig::default())?;
 
         let (write, meta) = runtime.create_or_load("0")?;
         write.write(&data).recv()?;
@@ -667,7 +667,7 @@ mod tests {
 
         let buffer = MemBuffer::new_no_reentrance("concurrent");
         let blob = MemBlob::new_no_reentrance("concurrent");
-        let client1 = start(buffer, blob)?;
+        let client1 = start(buffer, blob, IndexedConfig::default())?;
         let _ = client1.create_or_load::<String, String>("0")?;
 
         // Everything is still running after client1 is dropped.

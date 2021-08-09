@@ -249,11 +249,11 @@ mod tests {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
+        let token = p.create_or_load::<(), ()>("error_stream")?;
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let token = p.create_or_load::<(), ()>("error_stream").unwrap();
                 let (_, _, err_stream) = scope.new_persistent_unordered_input(token);
                 err_stream.capture()
             })

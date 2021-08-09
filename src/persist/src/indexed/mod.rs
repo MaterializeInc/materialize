@@ -19,6 +19,7 @@ pub mod trace;
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use abomonation::abomonated::Abomonated;
 use differential_dataflow::trace::Description;
@@ -82,12 +83,24 @@ pub struct Indexed<U: Buffer, L: Blob> {
     futures: HashMap<Id, BlobFuture>,
     traces: HashMap<Id, BlobTrace>,
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
+    step_interval: Option<Duration>,
+    last_step: Instant,
+}
+
+/// Configuration options for [Indexed].
+#[derive(Default)]
+pub struct IndexedConfig {
+    /// How frequently to drain items from [Buffer] into blob storage.
+    /// When this option is None every call to step will attempt to drain items
+    /// from buffer into future, and from future into trace. Otherwise, we will
+    /// only attempt to move data once per specified interval.
+    pub step_interval: Option<Duration>,
 }
 
 impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// Returns a new Indexed, initializing each Future and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
+    pub fn new(mut buf: U, blob: L, config: IndexedConfig) -> Result<Self, Error> {
         let mut blob = BlobCache::new(blob);
         let meta = blob
             .get_meta()
@@ -127,6 +140,8 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             futures,
             traces,
             listeners: HashMap::new(),
+            step_interval: config.step_interval,
+            last_step: Instant::now(),
         };
         Ok(indexed)
     }
@@ -245,9 +260,22 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// smarts about waiting to call it only after there have been some writes),
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<(), Error> {
-        self.drain_buf()?;
-        self.drain_future()
+        let now = Instant::now();
+
+        let step = if let Some(step_interval) = self.step_interval {
+            now.duration_since(self.last_step) > step_interval
+        } else {
+            true
+        };
+
+        if step {
+            self.last_step = now;
+            self.drain_buf()?;
+            self.drain_future()?;
+        }
+
         // TODO: Incrementally compact future.
+        Ok(())
     }
 
     /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
@@ -730,6 +758,14 @@ mod tests {
         (SeqNo(seqno), ("".into(), "".into()), 1, 1)
     }
 
+    fn new_indexed(lock_info: &str) -> Result<Indexed<MemBuffer, MemBlob>, IndexedError> {
+        Indexed::new(
+            MemBuffer::new_no_reentrance(lock_info),
+            MemBlob::new_no_reentrance(lock_info),
+            IndexedConfig::default(),
+        )
+    }
+
     #[test]
     fn single_stream() -> Result<(), Box<dyn Error>> {
         let updates = vec![
@@ -737,10 +773,7 @@ mod tests {
             (("2".into(), "".into()), 2, 1),
         ];
 
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("single_stream"),
-            MemBlob::new_no_reentrance("single_stream"),
-        )?;
+        let mut i = new_indexed("single_stream")?;
         let id = i.register("0", "()", "()")?;
 
         // Empty things are empty.
@@ -822,10 +855,7 @@ mod tests {
             (("2".into(), "".into()), 1, 1),
         ];
 
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("batch_sorting"),
-            MemBlob::new_no_reentrance("batch_sorting"),
-        )?;
+        let mut i = new_indexed("batch_sorting")?;
         let id = i.register("0", "", "")?;
 
         // Write the data and move it into the future part of the index, which
@@ -850,10 +880,7 @@ mod tests {
             (("1".into(), "".into()), 1, 1),
         ];
 
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("batch_consolidation"),
-            MemBlob::new_no_reentrance("batch_consolidation"),
-        )?;
+        let mut i = new_indexed("batch_consolidation")?;
         let id = i.register("0", "", "")?;
 
         // Write the data and move it into the future part of the index, which
@@ -880,10 +907,7 @@ mod tests {
 
     #[test]
     fn batch_future_empty() -> Result<(), Box<dyn Error>> {
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("batch_future_empty"),
-            MemBlob::new_no_reentrance("batch_future_empty"),
-        )?;
+        let mut i = new_indexed("batch_future_empty")?;
         let id = i.register("0", "", "")?;
 
         // Write an empty set of updates and try to move it into the future part
@@ -910,10 +934,7 @@ mod tests {
 
     #[test]
     fn drain_buf_validate() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("drain_buf_validate"),
-            MemBlob::new_no_reentrance("drain_buf_validate"),
-        )?;
+        let mut i = new_indexed("drain_buf_validate")?;
         let id = i.register("0", "", "")?;
 
         // Normal case (equals lower)
@@ -959,10 +980,7 @@ mod tests {
     // non-adjacent seqno boundaries (which violates our invariants).
     #[test]
     fn regression_non_sequential_future_batches() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("lock"),
-            MemBlob::new_no_reentrance("lock"),
-        )?;
+        let mut i = new_indexed("lock")?;
 
         // First is some stream is registered, written to, and step'd, moving
         // seqno 0..X into future. Then a second stream is registered, written
@@ -991,10 +1009,7 @@ mod tests {
 
     #[test]
     fn test_destroy() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("destroy"),
-            MemBlob::new_no_reentrance("destroy"),
-        )?;
+        let mut i = new_indexed("destroy")?;
 
         let _ = i.register("stream", "", "")?;
 
@@ -1025,10 +1040,7 @@ mod tests {
 
     #[test]
     fn codec_mismatch() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("codec_mismatch"),
-            MemBlob::new_no_reentrance("codec_mismatch"),
-        )?;
+        let mut i = new_indexed("codec_mismatch")?;
 
         let _ = i.register("stream", "key", "val")?;
 

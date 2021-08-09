@@ -328,7 +328,8 @@ impl Blob for FileBlob {
             OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(file_path)?
+                .open(&file_path)
+                .map_err(|e| format!("unable to create file blob at {:?}: {:}", file_path, e))?
         };
         file.write_all(&value[..])?;
         file.sync_all()?;
