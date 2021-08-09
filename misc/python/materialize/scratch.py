@@ -44,14 +44,13 @@ def launch(
     security_group_id: str,
     instance_profile: Optional[str],
     nonce: str,
+    delete_after: int,
 ) -> Instance:
     """Launch and configure an ec2 instance with the given properties."""
 
     if display_name:
         tags["Name"] = display_name
-    tags["scratch-delete-after"] = str(
-        datetime.now(timezone.utc).timestamp() + MAX_AGE.total_seconds()
-    )
+    tags["scratch-delete-after"] = str(delete_after)
     tags["nonce"] = nonce
     tags["git_ref"] = git.describe()
 
@@ -207,8 +206,11 @@ def mkrepo(i: Instance, identity_file: str) -> None:
     )
     os.chdir(ROOT)
     os.environ["GIT_SSH_COMMAND"] = f"ssh -i {identity_file}"
-    git.push(f"ubuntu@{i.public_ip_address}:~/materialize/.git")
     head_rev = git.rev_parse("HEAD")
+    git.push(
+        f"ubuntu@{i.public_ip_address}:~/materialize/.git",
+        f"refs/heads/scratch_{head_rev}",
+    )
     ssh.runv(
         ["git", "-C", "/home/ubuntu/materialize", "config", "core.bare", "false"],
         "ubuntu",
@@ -248,8 +250,13 @@ def launch_cluster(
     security_group_id: str,
     instance_profile: Optional[str],
     extra_tags: Dict[str, str],
+    delete_after: Optional[int] = None,  # Unix timestamp. By default, one week from now
 ) -> List[Instance]:
     """Launch a cluster of instances with a given nonce"""
+    if not delete_after:
+        delete_after = int(
+            datetime.now(timezone.utc).timestamp() + MAX_AGE.total_seconds()
+        )
     instances = [
         launch(
             key_name=key_name,
@@ -262,6 +269,7 @@ def launch_cluster(
             security_group_id=security_group_id,
             instance_profile=instance_profile,
             nonce=nonce,
+            delete_after=delete_after,
         )
         for d in descs
     ]
