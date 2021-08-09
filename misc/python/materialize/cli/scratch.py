@@ -15,6 +15,7 @@ import sys
 from typing import Any, Dict, List
 
 from materialize.scratch import MachineDesc, launch_cluster
+from prettytable import PrettyTable
 
 
 def check_required_vars() -> None:
@@ -101,14 +102,17 @@ def main() -> None:
         instance_profile,
         extra_tags,
     )
-    print(
-        "launched instances: {}".format(
-            [
-                f"{d.name} (instance id: {i.instance_id}, ip: {i.public_ip_address})"
-                for (i, d) in zip(instances, descs)
-            ]
-        )
+
+    print("Launched instances:")
+    pt = PrettyTable()
+    pt.field_names = ["Name", "Instance ID", "Public IP Address"]
+    pt.add_rows(
+        [
+            [f"{nonce}-{d.name}", i.instance_id, i.public_ip_address]
+            for (i, d) in zip(instances, descs)
+        ]
     )
+    print(pt)
 
 
 if __name__ == "__main__":
