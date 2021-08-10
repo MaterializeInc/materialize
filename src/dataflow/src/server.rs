@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use timely::progress::reachability::logging::TrackerEvent;
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
@@ -374,12 +375,15 @@ where
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
         let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
+        let r_linked = std::rc::Rc::new(EventLink::new());
+        let mut r_logger = BatchLogger::new(r_linked.clone(), granularity_ms);
         let d_linked = std::rc::Rc::new(EventLink::new());
         let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
         let m_linked = std::rc::Rc::new(EventLink::new());
         let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
         let mut t_traces = HashMap::new();
+        let mut r_traces = HashMap::new();
         let mut d_traces = HashMap::new();
         let mut m_traces = HashMap::new();
 
@@ -389,6 +393,11 @@ where
                 &mut self.timely_worker,
                 logging,
                 t_linked.clone(),
+            ));
+            r_traces.extend(logging::reachability::construct(
+                &mut self.timely_worker,
+                logging,
+                r_linked.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
@@ -408,6 +417,49 @@ where
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
                 t_logger.publish_batch(time, data)
             }),
+        );
+
+        self.timely_worker.log_register().insert_logger(
+            "timely/reachability",
+            Logger::new(
+                now,
+                unix,
+                self.timely_worker.index(),
+                move |time, data: &mut Vec<(Duration, usize, TrackerEvent)>| {
+                    let mut massaged_source_updates = Vec::new();
+                    for event in data.iter() {
+                        match &event.2 {
+                            TrackerEvent::SourceUpdate(update) => {
+                                for u in update.updates.iter() {
+                                    let massaged = (
+                                        update.tracker_id.clone(),
+                                        u.0.clone(),
+                                        u.1.clone(),
+                                        "source".to_owned(),
+                                        format!("{:?}", u.2),
+                                        u.3.clone() as isize,
+                                    );
+                                    massaged_source_updates.push((event.0, event.1, massaged));
+                                }
+                            }
+                            TrackerEvent::TargetUpdate(update) => {
+                                for u in update.updates.iter() {
+                                    let massaged = (
+                                        update.tracker_id.clone(),
+                                        u.0.clone(),
+                                        u.1.clone(),
+                                        "target".to_owned(),
+                                        format!("{:?}", u.2),
+                                        u.3.clone() as isize,
+                                    );
+                                    massaged_source_updates.push((event.0, event.1, massaged));
+                                }
+                            }
+                        }
+                    }
+                    r_logger.publish_batch(time, &mut massaged_source_updates)
+                },
+            ),
         );
 
         self.timely_worker.log_register().insert_logger(
@@ -446,6 +498,11 @@ where
                 logging,
                 t_linked,
             ));
+            r_traces.extend(logging::reachability::construct(
+                &mut self.timely_worker,
+                logging,
+                r_linked,
+            ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
@@ -460,6 +517,14 @@ where
 
         // Install traces as maintained indexes
         for (log, (_, trace)) in t_traces {
+            let id = logging.active_logs[&log];
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone()));
+            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+        }
+        for (log, (_, trace)) in r_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
@@ -493,6 +558,9 @@ where
     /// materialized can terminate cleanly.
     fn shutdown_logging(&mut self) {
         self.timely_worker.log_register().remove("timely");
+        self.timely_worker
+            .log_register()
+            .remove("timely/reachability");
         self.timely_worker
             .log_register()
             .remove("differential/arrange");

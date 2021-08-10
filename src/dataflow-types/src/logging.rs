@@ -39,6 +39,7 @@ pub enum TimelyLog {
     Addresses,
     Parks,
     Messages,
+    Reachability,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +133,22 @@ impl LogVariant {
                 .with_named_column("sent", ScalarType::Int64.nullable(false))
                 .with_named_column("received", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
+
+            LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
+                .with_named_column(
+                    "address",
+                    ScalarType::List {
+                        element_type: Box::new(ScalarType::Int64),
+                        custom_oid: None,
+                    }
+                    .nullable(false),
+                )
+                .with_named_column("port", ScalarType::Int64.nullable(false))
+                .with_named_column("worker", ScalarType::Int64.nullable(false))
+                .with_named_column("update_type", ScalarType::String.nullable(false))
+                .with_named_column("timestamp", ScalarType::String.nullable(false))
+                .with_named_column("count", ScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1, 2, 4]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
                 .with_named_column("operator", ScalarType::Int64.nullable(false))
@@ -252,6 +269,7 @@ impl LogVariant {
                     vec![(0, 0), (2, 2)],
                 ),
             ],
+            LogVariant::Timely(TimelyLog::Reachability) => vec![],
             LogVariant::Differential(DifferentialLog::Arrangement) => vec![(
                 LogVariant::Timely(TimelyLog::Operates),
                 vec![(0, 0), (1, 1)],

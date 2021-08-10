@@ -11,6 +11,7 @@
 
 pub mod differential;
 pub mod materialized;
+pub mod reachability;
 pub mod timely;
 
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
