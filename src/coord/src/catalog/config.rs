@@ -40,4 +40,6 @@ pub struct Config<'a> {
     pub skip_migrations: bool,
     // The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
+    // Whether or not to prevent user indexes from being considered for use
+    pub disable_user_indexes: bool,
 }

@@ -2034,7 +2034,7 @@ lazy_static! {
                 ), oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID;
             },
             "mz_is_materialized" => Scalar {
-                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1)"),
+                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1 AND enabled)"),
                     oid::FUNC_MZ_IS_MATERIALIZED_OID;
             },
             "mz_render_typemod" => Scalar {

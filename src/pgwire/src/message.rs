@@ -349,6 +349,7 @@ impl ErrorResponse {
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             CoordError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
+            CoordError::TableWithoutIndexes(..) => SqlState::INTERNAL_ERROR,
             CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,

@@ -48,6 +48,8 @@ pub enum CoordError {
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
+    /// The named table has no active indexes to support the operation.
+    TableWithoutIndexes(String),
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
@@ -154,6 +156,13 @@ impl fmt::Display for CoordError {
             }
             CoordError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
+            }
+            CoordError::TableWithoutIndexes(table) => {
+                write!(
+                    f,
+                    "cannot access {} because it has no indexes enabled",
+                    table
+                )
             }
             CoordError::SqlCatalog(e) => e.fmt(f),
             CoordError::TailOnlyTransaction => {

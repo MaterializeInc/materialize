@@ -57,10 +57,10 @@ non-temporary items cannot depend on temporary item
 > CREATE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v
 
 > SHOW INDEXES FROM foo
- on_name    key_name         seq_in_index  column_name  expression  nullable
----------------------------------------------------------------------------
- foo        foo_primary_idx  1             column1      <null>      false
- foo        foo_primary_idx  2             column2      <null>      false
+ on_name    key_name         seq_in_index  column_name  expression  nullable  enabled
+-------------------------------------------------------------------------------------
+ foo        foo_primary_idx  1             column1      <null>      false     true
+ foo        foo_primary_idx  2             column2      <null>      false     true
 
 ! CREATE TEMP MATERIALIZED VIEW foo AS SELECT * FROM v
 catalog item 'foo' already exists
@@ -117,10 +117,10 @@ catalog item 'temp_t' already exists
 > INSERT INTO temp_t VALUES (1, 'testing')
 
 > SHOW INDEXES FROM temp_t
- on_name    key_name            seq_in_index  column_name  expression  nullable
----------------------------------------------------------------------------
- temp_t     temp_t_primary_idx  1             a            <null>      true
- temp_t     temp_t_primary_idx  2             b            <null>      false
+ on_name    key_name            seq_in_index  column_name  expression  nullable enabled
+---------------------------------------------------------------------------------------
+ temp_t     temp_t_primary_idx  1             a            <null>      true     true
+ temp_t     temp_t_primary_idx  2             b            <null>      false    true
 
 > DROP TABLE temp_t
 
