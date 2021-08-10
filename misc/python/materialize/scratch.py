@@ -24,12 +24,57 @@ from mypy_boto3_ec2.type_defs import (
     InstanceTypeDef,
     RunInstancesRequestRequestTypeDef,
 )
+from prettytable import PrettyTable
 
 from materialize import errors, git, spawn, ssh, ui
 
 SPEAKER = ui.speaker("scratch> ")
 ROOT = os.environ["MZ_ROOT"]
 MAX_AGE = timedelta(weeks=1)
+
+
+def tags(i: Instance) -> Dict[str, str]:
+    return {t["Key"]: t["Value"] for t in i.tags}
+
+
+def name(tags: Dict[str, str]) -> Optional[str]:
+    return tags.get("Name")
+
+
+def launched_by(tags: Dict[str, str]) -> Optional[str]:
+    return tags.get("LaunchedBy")
+
+
+def delete_after(tags: Dict[str, str]) -> Optional[datetime]:
+    unix = tags.get("scratch-delete-after")
+    if not unix:
+        return None
+    unix = int(float(unix))
+    return datetime.fromtimestamp(unix)
+
+
+def print_instances(ists: List[Instance]) -> None:
+    pt = PrettyTable()
+    pt.field_names = [
+        "Name",
+        "Instance ID",
+        "Public IP Address",
+        "Launched By",
+        "Delete After",
+    ]
+    pt.add_rows(
+        [
+            [
+                name(tags),
+                i.instance_id,
+                i.public_ip_address,
+                launched_by(tags),
+                delete_after(tags),
+            ]
+            for (i, tags) in [(i, tags(i)) for i in ists]
+        ]
+    )
+    print(pt)
 
 
 def launch(
@@ -93,6 +138,7 @@ def launch(
     if instance_profile:
         kwargs["IamInstanceProfile"] = {"Name": instance_profile}
     i = boto3.resource("ec2").create_instances(**kwargs)[0]
+    print(i.tags)
 
     return i
 
