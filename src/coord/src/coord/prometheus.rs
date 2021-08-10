@@ -7,49 +7,44 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A task that scrapes materialized's prometheus metrics and sends them to our logging tables.
+//! A helper that scrapes materialized's prometheus metrics and produces
+//! updates for the mz_metrics table.
 
-use std::{
-    collections::HashMap,
-    convert::TryInto,
-    thread,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::pin::Pin;
 
-use chrono::NaiveDateTime;
-use ore::metrics::MetricsRegistry;
+use anyhow::anyhow;
+use chrono::{DateTime, Utc};
+use futures::stream::{self, Stream, StreamExt};
 use prometheus::proto::MetricType;
-use repr::{Datum, Diff, Row, Timestamp};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::{self, Duration};
+use tokio_stream::wrappers::IntervalStream;
 
-use crate::catalog::{builtin::BuiltinTable, BuiltinTableUpdate};
+use ore::metrics::MetricsRegistry;
+use ore::now;
+use repr::{Datum, Diff, Row};
 
-use super::Message;
-use super::{
-    catalog::builtin::{MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS},
-    TimestampedUpdate,
+use crate::catalog::builtin::{
+    BuiltinTable, MZ_PROMETHEUS_HISTOGRAMS, MZ_PROMETHEUS_METRICS, MZ_PROMETHEUS_READINGS,
 };
+use crate::catalog::BuiltinTableUpdate;
+use crate::coord::{LoggingConfig, Message, TimestampedUpdate};
 
-/// Scrapes the prometheus registry in a regular interval and submits a batch of metric data to a
-/// logging worker, to be inserted into a table.
+/// Scrapes the prometheus registry when asked and produces a batch of metric
+/// data that can be inserted into the built-in `mz_metrics` table.
 pub struct Scraper {
-    interval: Duration,
+    interval: Option<Duration>,
     retain_for: u64,
     registry: MetricsRegistry,
-    command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
-    internal_tx: UnboundedSender<super::Message>,
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum ScraperMessage {
-    Shutdown,
+    metadata: HashMap<Row, u64>,
 }
 
 fn convert_metrics_to_value_rows<
     'a,
     M: IntoIterator<Item = &'a prometheus::proto::MetricFamily>,
 >(
-    timestamp: NaiveDateTime,
+    timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
     let mut row_packer = Row::default();
@@ -87,7 +82,7 @@ fn convert_metrics_to_histogram_rows<
     'a,
     M: IntoIterator<Item = &'a prometheus::proto::MetricFamily>,
 >(
-    timestamp: NaiveDateTime,
+    timestamp: DateTime<Utc>,
     families: M,
 ) -> (Vec<Row>, Vec<Row>) {
     let mut row_packer = Row::default();
@@ -132,116 +127,143 @@ fn metric_family_metadata(family: &prometheus::proto::MetricFamily) -> Row {
     ])
 }
 
+fn add_expiring_update(
+    table: &BuiltinTable,
+    updates: Vec<Row>,
+    retain_for: u64,
+    out: &mut Vec<TimestampedUpdate>,
+) {
+    // TODO: Make this send both records in the same message so we can
+    // persist them atomically. Otherwise, we may end up with permanent
+    // orphans if a restart/crash happens at the wrong time.
+    let id = table.id;
+    out.push(TimestampedUpdate {
+        updates: updates
+            .iter()
+            .cloned()
+            .map(|row| BuiltinTableUpdate { id, row, diff: 1 })
+            .collect(),
+        timestamp_offset: 0,
+    });
+    out.push(TimestampedUpdate {
+        updates: updates
+            .iter()
+            .cloned()
+            .map(|row| BuiltinTableUpdate { id, row, diff: -1 })
+            .collect(),
+        timestamp_offset: retain_for,
+    });
+}
+
+fn add_metadata_update<'a, I: IntoIterator<Item = Row>>(
+    updates: I,
+    diff: Diff,
+    retain_for: u64,
+    out: &mut Vec<TimestampedUpdate>,
+) {
+    let id = MZ_PROMETHEUS_METRICS.id;
+    out.push(TimestampedUpdate {
+        updates: updates
+            .into_iter()
+            .map(|row| BuiltinTableUpdate { id, row, diff })
+            .collect(),
+        timestamp_offset: retain_for,
+    });
+}
+
 impl Scraper {
+    /// Constructs a new metrics scraper for the specified registry.
+    ///
+    /// The logging configuration specifies what metrics to scrape and how long
+    /// to retain them for. If the logging configuration is none, scraping is
+    /// disabled.
     pub fn new(
-        interval: Duration,
-        retain_for: Duration,
+        logging_config: Option<&LoggingConfig>,
         registry: MetricsRegistry,
-        command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
-        internal_tx: UnboundedSender<super::Message>,
-    ) -> Self {
-        let retain_for = retain_for.as_millis() as u64;
-        Scraper {
+    ) -> Result<Scraper, anyhow::Error> {
+        let (interval, retain_for) = match logging_config {
+            Some(config) => {
+                let interval = Some(config.granularity);
+                let retain_for = u64::try_from(config.retain_readings_for.as_millis())
+                    .map_err(|_| anyhow!("scraper retention duration does not fit in an i64"))?;
+                (interval, retain_for)
+            }
+            None => (None, 0),
+        };
+        Ok(Scraper {
             interval,
             retain_for,
             registry,
-            command_rx,
-            internal_tx,
+            metadata: HashMap::new(),
+        })
+    }
+
+    /// Produces a stream that yields a `Message::ScrapeMetrics` at the desired
+    /// scrape frequency.
+    ///
+    /// If the scraper is disabled, this stream will yield no items.
+    pub fn tick_stream(&self) -> Pin<Box<dyn Stream<Item = Message> + Send>> {
+        match self.interval {
+            None => stream::empty().boxed(),
+            Some(interval) => IntervalStream::new(time::interval(interval))
+                .map(|_| Message::ScrapeMetrics)
+                .boxed(),
         }
     }
 
-    /// Run forever: Scrape the metrics registry once per interval, telling the coordinator to
-    /// insert the values and meta-info in internal tables.
-    pub fn run(&mut self) {
-        let mut metadata: HashMap<Row, u64> = HashMap::new();
-        loop {
-            thread::sleep(self.interval);
-            let now: Timestamp = UNIX_EPOCH
-                .elapsed()
-                .expect("system clock is recent enough")
-                .as_millis()
-                .try_into()
-                .expect("materialized is younger than 550M years.");
-            if let Ok(cmd) = self.command_rx.try_recv() {
-                match cmd {
-                    ScraperMessage::Shutdown => return,
-                }
-            }
+    /// Scrapes the metrics once, producing a batch of updates that should be
+    /// inserted into the `mz_metrics` table.
+    pub fn scrape_once(&mut self) -> Vec<TimestampedUpdate> {
+        let now = now::system_time();
+        let timestamp = now::to_datetime(now);
 
-            let timestamp = NaiveDateTime::from_timestamp(0, 0)
-                + chrono::Duration::from_std(Duration::from_millis(now))
-                    .expect("Couldn't convert timestamps");
-            let metric_fams = self.registry.gather();
+        let metric_fams = self.registry.gather();
 
-            let (value_readings, meta_value) =
-                convert_metrics_to_value_rows(timestamp, metric_fams.iter());
-            self.send_expiring_update(&MZ_PROMETHEUS_READINGS, value_readings);
+        let mut out = vec![];
 
-            let (histo_readings, meta_histo) =
-                convert_metrics_to_histogram_rows(timestamp, metric_fams.iter());
-            self.send_expiring_update(&MZ_PROMETHEUS_HISTOGRAMS, histo_readings);
+        let (value_readings, meta_value) =
+            convert_metrics_to_value_rows(timestamp, metric_fams.iter());
+        add_expiring_update(
+            &MZ_PROMETHEUS_READINGS,
+            value_readings,
+            self.retain_for,
+            &mut out,
+        );
 
-            // Find any metric metadata we need to add:
-            let missing = meta_value
-                .into_iter()
-                .chain(meta_histo.into_iter())
-                .filter(|metric| {
-                    metadata
-                        .insert(metric.clone(), now + self.retain_for)
-                        .is_none()
-                });
-            self.send_metadata_update(missing, 1);
+        let (histo_readings, meta_histo) =
+            convert_metrics_to_histogram_rows(timestamp, metric_fams.iter());
+        add_expiring_update(
+            &MZ_PROMETHEUS_HISTOGRAMS,
+            histo_readings,
+            self.retain_for,
+            &mut out,
+        );
 
-            // Expire any that can now go (I would love HashMap.drain_filter here):
-            self.send_metadata_update(
-                metadata
-                    .iter()
-                    .filter(|(_, &retention)| retention <= now)
-                    .map(|(row, _)| row)
-                    .cloned(),
-                -1,
-            );
-            metadata.retain(|_, &mut retention| retention > now);
-        }
-    }
+        // Find any metric metadata we need to add:
+        let retain_for = self.retain_for;
+        let missing = meta_value
+            .into_iter()
+            .chain(meta_histo.into_iter())
+            .filter(|metric| {
+                self.metadata
+                    .insert(metric.clone(), now + retain_for)
+                    .is_none()
+            });
+        add_metadata_update(missing, 1, retain_for, &mut out);
 
-    fn send_expiring_update(&self, table: &BuiltinTable, updates: Vec<Row>) {
-        // TODO: Make this send both records in the same message so we can
-        // persist them atomically. Otherwise, we may end up with permanent
-        // orphans if a restart/crash happens at the wrong time.
-        let id = table.id;
-        self.internal_tx
-            .send(Message::InsertBuiltinTableUpdates(TimestampedUpdate {
-                updates: updates
-                    .iter()
-                    .cloned()
-                    .map(|row| BuiltinTableUpdate { id, row, diff: 1 })
-                    .collect(),
-                timestamp_offset: 0,
-            }))
-            .expect("Sending positive metric reading messages");
-        self.internal_tx
-            .send(Message::InsertBuiltinTableUpdates(TimestampedUpdate {
-                updates: updates
-                    .iter()
-                    .cloned()
-                    .map(|row| BuiltinTableUpdate { id, row, diff: -1 })
-                    .collect(),
-                timestamp_offset: self.retain_for,
-            }))
-            .expect("Sending metric reading retraction messages");
-    }
+        // Expire any that can now go (I would love HashMap.drain_filter here):
+        add_metadata_update(
+            self.metadata
+                .iter()
+                .filter(|(_, &retention)| retention <= now)
+                .map(|(row, _)| row)
+                .cloned(),
+            -1,
+            retain_for,
+            &mut out,
+        );
+        self.metadata.retain(|_, &mut retention| retention > now);
 
-    fn send_metadata_update<I: IntoIterator<Item = Row>>(&self, updates: I, diff: Diff) {
-        let id = MZ_PROMETHEUS_METRICS.id;
-        self.internal_tx
-            .send(Message::InsertBuiltinTableUpdates(TimestampedUpdate {
-                updates: updates
-                    .into_iter()
-                    .map(|row| BuiltinTableUpdate { id, row, diff })
-                    .collect(),
-                timestamp_offset: self.retain_for,
-            }))
-            .expect("Sending metric metadata message");
+        out
     }
 }

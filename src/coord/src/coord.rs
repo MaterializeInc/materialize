@@ -45,9 +45,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use self::prometheus::{Scraper, ScraperMessage};
 use anyhow::{anyhow, Context};
-use build_info::DUMMY_BUILD_INFO;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
@@ -55,19 +53,16 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use ore::metrics::MetricsRegistry;
-use ore::retry::Retry;
 use rand::Rng;
-use repr::adt::numeric;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use build_info::BuildInfo;
+use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use dataflow::{TimestampBindingFeedback, WorkerFeedback};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
@@ -79,9 +74,12 @@ use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
+use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
+use ore::retry::Retry;
 use ore::str::StrExt;
-use ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
+use repr::adt::numeric;
 use repr::{ColumnName, Datum, Diff, RelationDesc, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
@@ -103,6 +101,7 @@ use sql::plan::{
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
+use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState, Table};
 use crate::client::{Client, Handle};
@@ -131,7 +130,7 @@ pub enum Message {
     AdvanceSourceTimestamp(AdvanceSourceTimestamp),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
-    InsertBuiltinTableUpdates(TimestampedUpdate),
+    ScrapeMetrics,
     Shutdown,
 }
 
@@ -216,7 +215,7 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Channel to communicate source status updates to the timestamper thread.
     ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
-    metric_scraper_tx: Option<std::sync::mpsc::Sender<ScraperMessage>>,
+    metric_scraper: Scraper,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -490,13 +489,20 @@ impl Coordinator {
         cmd_rx: mpsc::UnboundedReceiver<Command>,
         feedback_rx: mpsc::UnboundedReceiver<dataflow::Response>,
         _timestamper_thread_handle: JoinOnDropHandle<()>,
-        _metric_thread_handle: Option<JoinOnDropHandle<()>>,
     ) {
+        let (drain_trigger, drain_tripwire) = oneshot::channel::<()>();
+
         let cmd_stream = UnboundedReceiverStream::new(cmd_rx)
             .map(Message::Command)
             .chain(stream::once(future::ready(Message::Shutdown)));
 
         let feedback_stream = UnboundedReceiverStream::new(feedback_rx).map(Message::Worker);
+
+        let metric_scraper_stream = self
+            .metric_scraper
+            .tick_stream()
+            .take_until(drain_tripwire)
+            .boxed();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -504,6 +510,7 @@ impl Coordinator {
             // external commands (`cmd_stream`).
             UnboundedReceiverStream::new(internal_cmd_rx).boxed(),
             feedback_stream.boxed(),
+            metric_scraper_stream,
             cmd_stream.boxed(),
         ]);
 
@@ -516,8 +523,7 @@ impl Coordinator {
                 Message::AdvanceSourceTimestamp(advance) => {
                     self.message_advance_source_timestamp(advance)
                 }
-                Message::InsertBuiltinTableUpdates(update) => self
-                    .send_builtin_table_updates_at_offset(update.timestamp_offset, update.updates),
+                Message::ScrapeMetrics => self.message_scrape_metrics(),
                 Message::Shutdown => {
                     self.message_shutdown();
                     break;
@@ -531,6 +537,7 @@ impl Coordinator {
 
         // Cleanly drain any pending messages from the worker before shutting
         // down.
+        drop(drain_trigger);
         drop(self.internal_cmd_tx);
         while messages.next().await.is_some() {}
     }
@@ -765,9 +772,6 @@ impl Coordinator {
     }
 
     fn message_shutdown(&mut self) {
-        self.metric_scraper_tx
-            .as_ref()
-            .map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
         self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
         self.broadcast(dataflow::Command::Shutdown);
     }
@@ -777,6 +781,12 @@ impl Coordinator {
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
         self.broadcast(dataflow::Command::AdvanceSourceTimestamp { id, update });
+    }
+
+    fn message_scrape_metrics(&mut self) {
+        for update in self.metric_scraper.scrape_once() {
+            self.send_builtin_table_updates_at_offset(update.timestamp_offset, update.updates);
+        }
     }
 
     fn message_command(&mut self, cmd: Command) {
@@ -3529,33 +3539,7 @@ pub async fn serve(
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
-    let (metric_scraper_handle, metric_scraper_tx) = if let Some(LoggingConfig {
-        granularity,
-        retain_readings_for,
-        ..
-    }) = logging
-    {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut scraper = Scraper::new(
-            granularity,
-            retain_readings_for,
-            metrics_registry.clone(),
-            rx,
-            internal_cmd_tx.clone(),
-        );
-        let executor = TokioHandle::current();
-        let scraper_thread_handle = thread::Builder::new()
-            .name("scraper".to_string())
-            .spawn(move || {
-                let _executor_guard = executor.enter();
-                scraper.run();
-            })
-            .unwrap()
-            .join_on_drop();
-        (Some(scraper_thread_handle), Some(tx))
-    } else {
-        (None, None)
-    };
+    let metric_scraper = Scraper::new(logging.as_ref(), metrics_registry.clone())?;
 
     // Spawn timestamper after any fallible operations so that if bootstrap fails we still
     // tell it to shut down.
@@ -3598,7 +3582,7 @@ pub async fn serve(
                 logging_enabled: logging.is_some(),
                 internal_cmd_tx,
                 ts_tx: ts_tx.clone(),
-                metric_scraper_tx: metric_scraper_tx.clone(),
+                metric_scraper,
                 closed_up_to: 1,
                 read_lower_bound: 1,
                 last_op_was_read: false,
@@ -3627,7 +3611,6 @@ pub async fn serve(
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if !ok {
-                metric_scraper_tx.map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
                 // Tell the timestamper thread to shut down.
                 ts_tx.send(TimestampMessage::Shutdown).unwrap();
                 // Explicitly drop the timestamper handle here so we can wait for
@@ -3641,7 +3624,6 @@ pub async fn serve(
                 cmd_rx,
                 feedback_rx,
                 timestamper_thread_handle,
-                metric_scraper_handle,
             ))
         })
         .unwrap();
@@ -3705,7 +3687,7 @@ pub fn serve_debug(
         timely_worker: timely::WorkerConfig::default(),
         experimental_mode: true,
         now: get_debug_timestamp,
-        metrics_registry,
+        metrics_registry: metrics_registry.clone(),
         persist: persist.persister,
         feedback_tx,
     })
@@ -3759,7 +3741,7 @@ pub fn serve_debug(
             logging_enabled: false,
             internal_cmd_tx,
             ts_tx,
-            metric_scraper_tx: None,
+            metric_scraper: Scraper::new(None, metrics_registry).unwrap(),
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,
@@ -3781,7 +3763,6 @@ pub fn serve_debug(
             cmd_rx,
             feedback_rx,
             timestamper_thread_handle,
-            None,
         ))
     })
     .join_on_drop();
