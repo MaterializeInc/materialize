@@ -361,30 +361,6 @@ class Composition:
             stderr=subprocess.PIPE if capture else 2,
         )
 
-    def inspect_volumes(self, volumes: Container[str]) -> Iterable[Dict[str, Any]]:
-        """
-        Return the JSON from `docker inspect` for each volume with the given compose name
-
-        There is no explicit documentation of the structure of the returned
-        fields, but you can see them in the docker core repo:
-        https://github.com/moby/moby/blob/91dc595e9648318/api/types/types.go#L345-L379
-        """
-        actual_volumes = spawn.capture(
-            ["docker", "volume", "ls", "--format", "{{ .Name }}"], unicode=True
-        ).splitlines()
-        metadata = spawn.capture(
-            ["docker", "inspect", "-f", "{{json .}}", *actual_volumes]
-        )
-        for line in metadata.splitlines():
-            info = json.loads(line)
-            # Labels may be present and null or not present
-            labels = info.get("Labels")
-            if (
-                labels is not None
-                and labels.get("com.docker.compose.volume") in volumes
-            ):
-                yield info
-
     def find_host_ports(self, service: str) -> List[str]:
         """Find all ports open on the host for a given service"""
         # Parsing the output of `docker-compose ps` directly is fraught, as the
@@ -743,18 +719,8 @@ class RemoveVolumesStep(WorkflowStep):
             raise errors.BadSpec(f"volumes should be a list, got: {self._volumes}")
 
     def run(self, workflow: Workflow) -> None:
-        volumes = [
-            v["Name"] for v in workflow.composition.inspect_volumes(self._volumes)
-        ]
-        if len(volumes) != len(self._volumes):
-            raise errors.Failed(
-                f"Unable to find correct number of volumes, found: {volumes}"
-            )
-        try:
-            spawn.runv(["docker", "volume", "rm", *volumes])
-        except subprocess.CalledProcessError:
-            msg = ", ".join(self._volumes)
-            raise errors.Failed(f"ERROR: unable to remove volumes: {msg}")
+        volumes = (f"{workflow.composition.name}_{v}" for v in self._volumes)
+        spawn.runv(["docker", "volume", "rm", *volumes])
 
 
 @Steps.register("wait-for-postgres")
