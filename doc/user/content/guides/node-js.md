@@ -1,6 +1,6 @@
 ---
 title: "Node.js and Materialize"
-description: "Reference and examples on using a Node.js application to connect, insert data, manage, and read data from Materialize."
+description: "Use Node.js to connect, insert, manage, query and stream from Materialize."
 weight: 10
 menu:
   main:
@@ -55,7 +55,7 @@ main();
 
 ## Stream
 
-To take full  advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
 
 To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query.
 
@@ -124,7 +124,7 @@ client.connect((err, client) => {
 
 Querying Materialize is identical to querying a traditional PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 Query a view `my_view` with a select statement:
 
