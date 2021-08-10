@@ -293,6 +293,8 @@ pub struct Source {
     pub connector: SourceConnector,
     pub bare_desc: RelationDesc,
     pub desc: RelationDesc,
+    #[serde(skip_serializing)]
+    pub status: Status,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -303,6 +305,8 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    #[serde(skip_serializing)]
+    pub status: Status,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -318,6 +322,8 @@ pub struct View {
     pub desc: RelationDesc,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    #[serde(skip_serializing)]
+    pub status: Status,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -327,6 +333,8 @@ pub struct Index {
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    #[serde(skip_serializing)]
+    pub status: Status,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -381,6 +389,30 @@ impl Volatility {
             Volatility::Nonvolatile => "nonvolatile",
             Volatility::Unknown => "unknown",
         }
+    }
+}
+
+/// The status of an item in the catalog.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Status {
+    /// The item has been successfully created but is not available for querying.
+    Created,
+    /// The item is available for querying.
+    Available,
+}
+
+impl Status {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Status::Created => "created",
+            Status::Available => "available",
+        }
+    }
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Status::Created
     }
 }
 
@@ -522,6 +554,17 @@ impl CatalogItem {
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
             }
+        }
+    }
+
+    /// Returns the [`Status`] of this item.
+    pub fn status(&self) -> Status {
+        match self {
+            CatalogItem::Source(source) => source.status.clone(),
+            CatalogItem::View(view) => view.status.clone(),
+            CatalogItem::Index(index) => index.status.clone(),
+            CatalogItem::Sink(sink) => sink.status.clone(),
+            _ => Status::Available,
         }
     }
 }
@@ -708,6 +751,7 @@ impl Catalog {
                             },
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
+                            status: Default::default(),
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -735,6 +779,7 @@ impl Catalog {
                             ),
                             conn_id: None,
                             depends_on: vec![log.id],
+                            status: Default::default(),
                         }),
                     );
                 }
@@ -785,6 +830,7 @@ impl Catalog {
                             create_sql: index_sql,
                             conn_id: None,
                             depends_on: vec![table.id],
+                            status: Default::default(),
                         }),
                     );
                 }
@@ -1953,6 +1999,7 @@ impl Catalog {
                     connector: source.connector,
                     bare_desc: source.bare_desc,
                     desc: transformed_desc,
+                    status: Default::default(),
                 })
             }
             Plan::CreateView(CreateViewPlan {
@@ -1967,6 +2014,7 @@ impl Catalog {
                     desc,
                     conn_id: None,
                     depends_on,
+                    status: Default::default(),
                 })
             }
             Plan::CreateIndex(CreateIndexPlan {
@@ -1977,6 +2025,7 @@ impl Catalog {
                 keys: index.keys,
                 conn_id: None,
                 depends_on,
+                status: Default::default(),
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -1990,6 +2039,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
+                status: Default::default(),
             }),
             Plan::CreateType(CreateTypePlan {
                 typ, depends_on, ..
@@ -2125,6 +2175,11 @@ impl Catalog {
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
         }
+    }
+
+    /// Returns the [`Status`] of the item identifier by `id`.
+    pub fn status(&self, id: &GlobalId) -> Status {
+        self.get_by_id(id).item().status()
     }
 
     /// Serializes the catalog's in-memory state.

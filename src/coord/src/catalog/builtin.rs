@@ -691,7 +691,8 @@ lazy_static! {
             .with_named_column("oid", ScalarType::Oid.nullable(false))
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("on_id", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("volatility", ScalarType::String.nullable(false))
+            .with_named_column("status", ScalarType::String.nullable(false)),
         id: GlobalId::System(4015),
         index_id: GlobalId::System(4016),
         persistent: false,
@@ -730,7 +731,8 @@ lazy_static! {
             .with_named_column("schema_id", ScalarType::Int64.nullable(false))
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("connector_type", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("volatility", ScalarType::String.nullable(false))
+            .with_named_column("status", ScalarType::String.nullable(false)),
         id: GlobalId::System(4021),
         index_id: GlobalId::System(4022),
         persistent: false,
@@ -744,7 +746,8 @@ lazy_static! {
             .with_named_column("schema_id", ScalarType::Int64.nullable(false))
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("connector_type", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("volatility", ScalarType::String.nullable(false))
+            .with_named_column("status", ScalarType::String.nullable(false)),
         id: GlobalId::System(4023),
         index_id: GlobalId::System(4024),
         persistent: false,
@@ -757,7 +760,8 @@ lazy_static! {
             .with_named_column("oid", ScalarType::Oid.nullable(false))
             .with_named_column("schema_id", ScalarType::Int64.nullable(false))
             .with_named_column("name", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("volatility", ScalarType::String.nullable(false))
+            .with_named_column("status", ScalarType::String.nullable(false)),
         id: GlobalId::System(4025),
         index_id: GlobalId::System(4026),
         persistent: false,

@@ -37,18 +37,18 @@ Unable to automatically determine a timestamp for your query; this can happen if
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW FULL VIEWS
-name        type     materialized  volatility
----------------------------------------------
-data_view   user     false         unknown
-test1       user     true          unknown
+name        type     materialized  volatility  status
+-----------------------------------------------------
+data_view   user     false         unknown     created
+test1       user     true          unknown     created
 
 > SHOW MATERIALIZED VIEWS
 test1
 
 > SHOW FULL MATERIALIZED VIEWS
-name     type  volatility
--------------------------
-test1    user  unknown
+name     type  volatility  status
+---------------------------------
+test1    user  unknown     created
 
 > SELECT * FROM test1
 b  sum
@@ -167,9 +167,9 @@ catalog item 'materialize.public.idx1' is an index and so cannot be depended upo
 > DROP INDEX test5_primary_idx
 
 > SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized  volatility
----------------------------------------------
-test5       user     true          unknown
+name        type     materialized  volatility  status
+-----------------------------------------------------
+test5       user     true          unknown     created
 
 > SELECT * from test5
 b  c
@@ -188,9 +188,9 @@ b  c
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
 
 > SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized  volatility
----------------------------------------------
-test5       user     false         unknown
+name        type     materialized  volatility  status
+-----------------------------------------------------
+test5       user     false         unknown     created
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.
@@ -319,15 +319,15 @@ name
 mat_data
 
 > SHOW FULL SOURCES
-name     type materialized  volatility
---------------------------------------
-data     user false         unknown
-mat_data user true          unknown
+name     type materialized  volatility  status
+----------------------------------------------
+data     user false         unknown     created
+mat_data user true          unknown     created
 
 > SHOW FULL MATERIALIZED SOURCES
-name     type  volatility
--------------------------
-mat_data user  unknown
+name     type  volatility  status
+---------------------------------
+mat_data user  unknown     created
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

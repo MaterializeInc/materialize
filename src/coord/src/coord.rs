@@ -1799,6 +1799,7 @@ impl Coordinator {
                 connector: source.connector,
                 bare_desc: source.bare_desc,
                 desc: transformed_desc,
+                status: Default::default(),
             };
             let source_id = self.catalog.allocate_id()?;
             let source_oid = self.catalog.allocate_oid()?;
@@ -1887,6 +1888,7 @@ impl Coordinator {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
+                status: Default::default(),
             }),
         };
         match self.catalog_transact(vec![op]) {
@@ -1957,6 +1959,7 @@ impl Coordinator {
                 None
             },
             depends_on,
+            status: Default::default(),
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2072,6 +2075,7 @@ impl Coordinator {
             on: index.on,
             conn_id: None,
             depends_on,
+            status: Default::default(),
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -3816,6 +3820,7 @@ fn auto_generate_primary_idx(
             .collect(),
         conn_id,
         depends_on,
+        status: Default::default(),
     }
 }
 

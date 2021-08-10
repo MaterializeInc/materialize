@@ -174,6 +174,7 @@ impl Catalog {
                 Datum::String(name),
                 Datum::String(source.connector.name()),
                 Datum::String(self.is_volatile(id).as_str()),
+                Datum::String(self.status(&id).as_str()),
             ]),
             diff,
         }]
@@ -195,6 +196,7 @@ impl Catalog {
                 Datum::Int64(schema_id),
                 Datum::String(name),
                 Datum::String(self.is_volatile(id).as_str()),
+                Datum::String(self.status(&id).as_str()),
             ]),
             diff,
         }]
@@ -255,6 +257,7 @@ impl Catalog {
                     Datum::String(name),
                     Datum::String(connector.name()),
                     Datum::String(self.is_volatile(id).as_str()),
+                    Datum::String(self.status(&id).as_str()),
                 ]),
                 diff,
             });
@@ -287,6 +290,7 @@ impl Catalog {
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
+                Datum::String(self.status(&id).as_str()),
             ]),
             diff,
         });
