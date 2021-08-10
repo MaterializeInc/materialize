@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 import argparse
+import os
 
 # Sane defaults for internal Materialize use in the scratch account
 DEFAULT_SUBNET_ID = "subnet-0b47df5733387582b"

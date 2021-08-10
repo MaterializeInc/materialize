@@ -15,7 +15,8 @@ from materialize.cli.scratch import check_required_vars
 from materialize.scratch import launched_by, print_instances, tags, whoami
 from mypy_boto3_ec2.service_resource import Instance
 
-def configure_parser(parser: argparse.ArgumentParser):
+
+def configure_parser(parser: argparse.ArgumentParser) -> None:
     check_required_vars()
     parser.add_argument(
         "who",
@@ -24,6 +25,7 @@ def configure_parser(parser: argparse.ArgumentParser):
         default=[whoami()],
     )
     parser.add_argument("--all", help="Show all instances", action="store_true")
+
 
 def run(args: argparse.Namespace) -> None:
     filter: Callable[[Instance], bool] = (
