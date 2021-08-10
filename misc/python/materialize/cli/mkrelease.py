@@ -147,9 +147,9 @@ def incorporate_inner(
 def finish(create_branch: Optional[str], affect_remote: bool) -> None:
     """Create the final non-rc tag and a branch to incorporate into the repo"""
     tag = get_latest_tag(fetch=True)
-    if not tag.prerelease or "-rc" not in tag.prerelease:
+    if not tag.prerelease or not tag.prerelease.startswith("rc"):
         click.confirm(
-            "This version: {tag} doesn't look like a prerelease, "
+            f"This version: {tag} doesn't look like a prerelease, "
             "are you sure you want to continue?",
             abort=True,
         )
