@@ -57,12 +57,10 @@ impl_display!(Schema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema<T: AstInfo> {
-    CsrUrl {
-        url: String,
-        seed: Option<CsrSeed>,
-        with_options: Vec<SqlOption<T>>,
+    Csr {
+        csr_connector: CsrConnector<T>,
     },
-    Schema {
+    InlineSchema {
         schema: Schema,
         with_options: Vec<WithOption>,
     },
@@ -71,28 +69,14 @@ pub enum AvroSchema<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for AvroSchema<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::CsrUrl {
-                url,
-                seed,
-                with_options,
-            } => {
-                f.write_str("CONFLUENT SCHEMA REGISTRY '");
-                f.write_node(&display::escape_single_quote_string(url));
-                f.write_str("'");
-                if let Some(seed) = seed {
-                    f.write_str(" ");
-                    f.write_node(seed);
-                }
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
-                    f.write_str(")");
-                }
+            Self::Csr { csr_connector } => {
+                f.write_node(csr_connector);
             }
-            Self::Schema {
+            Self::InlineSchema {
                 schema,
                 with_options,
             } => {
+                f.write_str("USING ");
                 schema.fmt(f);
                 if !with_options.is_empty() {
                     f.write_str(" WITH (");
@@ -104,6 +88,62 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
     }
 }
 impl_display_t!(AvroSchema);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ProtobufSchema<T: AstInfo> {
+    Csr {
+        csr_connector: CsrConnector<T>,
+    },
+    InlineSchema {
+        message_name: String,
+        schema: Schema,
+    },
+}
+
+impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Csr { csr_connector } => {
+                f.write_node(csr_connector);
+            }
+            Self::InlineSchema {
+                message_name,
+                schema,
+            } => {
+                f.write_str("MESSAGE '");
+                f.write_node(&display::escape_single_quote_string(message_name));
+                f.write_str("' USING ");
+                f.write_str(schema);
+            }
+        }
+    }
+}
+impl_display_t!(ProtobufSchema);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrConnector<T: AstInfo> {
+    pub url: String,
+    pub seed: Option<CsrSeed>,
+    pub with_options: Vec<SqlOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConnector<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
+        f.write_node(&display::escape_single_quote_string(&self.url));
+        f.write_str("'");
+        if let Some(seed) = &self.seed {
+            f.write_str(" ");
+            f.write_node(seed);
+        }
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CsrConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -183,10 +223,7 @@ impl_display_t!(CreateSourceFormat);
 pub enum Format<T: AstInfo> {
     Bytes,
     Avro(AvroSchema<T>),
-    Protobuf {
-        message_name: String,
-        schema: Schema,
-    },
+    Protobuf(ProtobufSchema<T>),
     Regex(String),
     Csv {
         header_row: bool,
@@ -275,17 +312,12 @@ impl<T: AstInfo> AstDisplay for Format<T> {
         match self {
             Self::Bytes => f.write_str("BYTES"),
             Self::Avro(inner) => {
-                f.write_str("AVRO USING ");
+                f.write_str("AVRO ");
                 f.write_node(inner);
             }
-            Self::Protobuf {
-                message_name,
-                schema,
-            } => {
-                f.write_str("PROTOBUF MESSAGE '");
-                f.write_node(&display::escape_single_quote_string(message_name));
-                f.write_str("' USING ");
-                f.write_str(schema);
+            Self::Protobuf(inner) => {
+                f.write_str("PROTOBUF ");
+                f.write_node(inner);
             }
             Self::Regex(regex) => {
                 f.write_str("REGEX '");

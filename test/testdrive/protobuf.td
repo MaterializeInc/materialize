@@ -95,3 +95,9 @@ $ kafka-ingest format=protobuf topic=messages-partitioned message=struct timesta
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-partitioned-${testdrive.seed}'
   WITH (start_offset=[1,0])
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+
+! CREATE MATERIALIZED SOURCE protomessages_partitioned FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-partitioned-${testdrive.seed}'
+  WITH (start_offset=[1,0])
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+confluent schema registry protobuf schemas not yet supported

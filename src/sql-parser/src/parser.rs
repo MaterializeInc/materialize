@@ -1450,14 +1450,7 @@ impl<'a> Parser<'a> {
             self.expect_keyword(USING)?;
             Format::Avro(self.parse_avro_schema()?)
         } else if self.parse_keyword(PROTOBUF) {
-            self.expect_keyword(MESSAGE)?;
-            let message_name = self.parse_literal_string()?;
-            self.expect_keyword(USING)?;
-            let schema = self.parse_schema()?;
-            Format::Protobuf {
-                message_name,
-                schema,
-            }
+            Format::Protobuf(self.parse_protobuf_schema()?)
         } else if self.parse_keyword(REGEX) {
             let regex = self.parse_literal_string()?;
             Format::Regex(regex)
@@ -1503,38 +1496,8 @@ impl<'a> Parser<'a> {
 
     fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
-            let url = self.parse_literal_string()?;
-
-            let seed = if self.parse_keyword(SEED) {
-                let key_schema = if self.parse_keyword(KEY) {
-                    self.expect_keyword(SCHEMA)?;
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
-                self.expect_keywords(&[VALUE, SCHEMA])?;
-                let value_schema = self.parse_literal_string()?;
-                Some(CsrSeed {
-                    key_schema,
-                    value_schema,
-                })
-            } else {
-                None
-            };
-
-            // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
-            // accept `WITH (...)` here.
-            let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-                self.parse_opt_with_sql_options()?
-            } else {
-                vec![]
-            };
-
-            AvroSchema::CsrUrl {
-                url,
-                seed,
-                with_options,
-            }
+            let csr_connector = self.parse_csr_connector()?;
+            AvroSchema::Csr { csr_connector }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
             let schema = self.parse_schema()?;
@@ -1546,7 +1509,7 @@ impl<'a> Parser<'a> {
             } else {
                 vec![]
             };
-            AvroSchema::Schema {
+            AvroSchema::InlineSchema {
                 schema,
                 with_options,
             }
@@ -1558,6 +1521,62 @@ impl<'a> Parser<'a> {
             );
         };
         Ok(avro_schema)
+    }
+
+    fn parse_protobuf_schema(&mut self) -> Result<ProtobufSchema<Raw>, ParserError> {
+        if self.parse_keywords(&[USING, CONFLUENT, SCHEMA, REGISTRY]) {
+            let csr_connector = self.parse_csr_connector()?;
+            Ok(ProtobufSchema::Csr { csr_connector })
+        } else if self.parse_keyword(MESSAGE) {
+            let message_name = self.parse_literal_string()?;
+            self.expect_keyword(USING)?;
+            let schema = self.parse_schema()?;
+            Ok(ProtobufSchema::InlineSchema {
+                message_name,
+                schema,
+            })
+        } else {
+            return self.expected(
+                self.peek_pos(),
+                "CONFLUENT SCHEMA REGISTRY or MESSSAGE",
+                self.peek_token(),
+            );
+        }
+    }
+
+    fn parse_csr_connector(&mut self) -> Result<CsrConnector<Raw>, ParserError> {
+        let url = self.parse_literal_string()?;
+
+        let seed = if self.parse_keyword(SEED) {
+            let key_schema = if self.parse_keyword(KEY) {
+                self.expect_keyword(SCHEMA)?;
+                Some(self.parse_literal_string()?)
+            } else {
+                None
+            };
+            self.expect_keywords(&[VALUE, SCHEMA])?;
+            let value_schema = self.parse_literal_string()?;
+            Some(CsrSeed {
+                key_schema,
+                value_schema,
+            })
+        } else {
+            None
+        };
+
+        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+        // accept `WITH (...)` here.
+        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+            self.parse_opt_with_sql_options()?
+        } else {
+            vec![]
+        };
+
+        Ok(CsrConnector {
+            url,
+            seed,
+            with_options,
+        })
     }
 
     fn parse_schema(&mut self) -> Result<Schema, ParserError> {

@@ -15,8 +15,8 @@ use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
     AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceFormat,
     CreateSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
-    DataType, Format, Function, Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName,
-    Value, ViewDefinition, WithOption, WithOptionValue,
+    CsrConnector, DataType, Format, Function, Ident, Raw, RawName, SqlOption, Statement,
+    TableFactor, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
 
@@ -109,7 +109,7 @@ fn ast_insert_default_confluent_wire_format_0_7_1(
     match stmt {
         Statement::CreateSource(CreateSourceStatement {
             format:
-                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Schema {
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::InlineSchema {
                     ref mut with_options,
                     ..
                 })),
@@ -119,6 +119,24 @@ fn ast_insert_default_confluent_wire_format_0_7_1(
                 with_options.push(WithOption {
                     key: Ident::new("confluent_wire_format"),
                     value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                })
+            }
+        }
+        Statement::CreateSource(CreateSourceStatement {
+            format:
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr {
+                    csr_connector:
+                        CsrConnector {
+                            ref mut with_options,
+                            ..
+                        },
+                })),
+            ..
+        }) => {
+            if with_options.is_empty() {
+                with_options.push(SqlOption::Value {
+                    name: Ident::new("confluent_wire_format"),
+                    value: Value::Boolean(true),
                 })
             }
         }
