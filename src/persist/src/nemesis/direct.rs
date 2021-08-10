@@ -164,9 +164,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir creation failed");
         let direct = Direct::new(move |unreliable| {
             let (buf_dir, blob_dir) = (temp_dir.path().join("buf"), temp_dir.path().join("blob"));
-            let buf = FileBuffer::new(buf_dir, "direct_file")?;
+            let buf = FileBuffer::new(buf_dir, ("reentrance0", "direct_file").into())?;
             let buf = UnreliableBuffer::from_handle(buf, unreliable.clone());
-            let blob = FileBlob::new(blob_dir, "direct_file")?;
+            let blob = FileBlob::new(blob_dir, ("reentrance0", "direct_file").into())?;
             let blob = UnreliableBlob::from_handle(blob, unreliable);
             runtime::start(buf, blob)
         })

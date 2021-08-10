@@ -169,7 +169,8 @@ mod tests {
 
     #[test]
     fn buffer() {
-        let (mut buffer, mut handle) = UnreliableBuffer::new(MemBuffer::new("unreliable"));
+        let (mut buffer, mut handle) =
+            UnreliableBuffer::new(MemBuffer::new_no_reentrance("unreliable"));
 
         // Initially starts reliable.
         assert!(buffer.write_sync(vec![]).is_ok());
@@ -191,7 +192,7 @@ mod tests {
 
     #[test]
     fn blob() {
-        let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new("unreliable"));
+        let (mut blob, mut handle) = UnreliableBlob::new(MemBlob::new_no_reentrance("unreliable"));
 
         // Initially starts reliable.
         assert!(blob.set("a", b"1".to_vec(), true).is_ok());

@@ -48,6 +48,7 @@ use ore::metrics::ThirdPartyMetric;
 use ore::metrics::{IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
+use uuid::Uuid;
 
 use self::tracing::MetricsRecorderLayer;
 use materialized::TlsMode;
@@ -621,6 +622,9 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         } else {
             false
         };
+        // TODO: Hook this up to the catalog cluster_id or something to actually
+        // enable reentrance.
+        let lock_reentrance_id = Uuid::new_v4().to_string();
         let lock_info = format!(
             "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
             mz_version = materialized::BUILD_INFO.human_version(),
@@ -635,6 +639,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             blob_path: data_directory.join("persist").join("blob"),
             user_table_enabled,
             system_table_enabled,
+            lock_reentrance_id,
             lock_info,
         }
     };

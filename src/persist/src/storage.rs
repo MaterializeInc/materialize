@@ -9,7 +9,10 @@
 
 //! Abstractions over files, cloud storage, etc used in persistence.
 
+use std::fmt;
+use std::io::Read;
 use std::ops::Range;
+use std::str::FromStr;
 
 use abomonation_derive::Abomonation;
 
@@ -79,14 +82,132 @@ pub trait Blob {
     fn close(&mut self) -> Result<bool, Error>;
 }
 
+/// The partially structured information stored in an exclusive-writer lock.
+///
+/// To allow for restart without operator intervention in situations where we've
+/// crashed and are unable to cleanly unlock (s3 has no flock equivalent, for
+/// example), this supports reentrance. We define the "same" process as any that
+/// have the same reentrance id, which is an opaque user-provided string.
+///
+/// This, in essence, delegates the problem of ensuring writer-exclusivity to
+/// the persist user, which may have access to better (possibly distributed)
+/// locking primitives than we do.
+///
+/// Concretely, MZ Cloud will initially depend on the exclusivity of attaching
+/// an EBS volume. We'll store the reentrant_id somewhere on the EBS volume that
+/// holds the catalog. Any process that starts and has access to this volume is
+/// guaranteed that the previous machine is no longer available and thus the
+/// previous mz process is no longer running. Similarly, a second process cannot
+/// accidentally start up pointed at the same storage locations because it will
+/// not have the reentrant_id available.
+///
+/// Violating writer-exclusivity will cause undefined behavior including data
+/// loss. It's always correct, and MUCH safer, to provide a random reentrant_id
+/// here (e.g. a UUID). It will simply require operator intervention to verify
+/// that the previous process is no longer running in the event of a crash and
+/// to confirm this by manually removing the previous lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockInfo {
+    reentrance_id: String,
+    details: String,
+}
+
+impl LockInfo {
+    /// Returns a new LockInfo from its component parts.
+    ///
+    /// Errors if reentrance_id contains a newline.
+    pub fn new(reentrance_id: String, details: String) -> Result<Self, Error> {
+        if reentrance_id.contains('\n') {
+            return Err(Error::from(format!(
+                "reentrance_id cannot contain newlines got:\n{}",
+                reentrance_id
+            )));
+        }
+        Ok(LockInfo {
+            reentrance_id,
+            details,
+        })
+    }
+
+    /// Constructs a new, empty LockInfo with a unique reentrance id.
+    ///
+    /// Helper for tests that don't care about locking reentrance (which is most
+    /// of them).
+    pub fn new_no_reentrance(details: String) -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let reentrance_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string();
+        Self::new(reentrance_id, details).expect("reentrance_id was valid")
+    }
+
+    /// Returns Ok if this lock information represents a process that may
+    /// proceed in the presence of some existing lock.
+    pub fn check_reentrant_for<D: fmt::Debug, R: Read>(
+        &self,
+        location: &D,
+        mut existing: R,
+    ) -> Result<(), Error> {
+        let mut existing_contents = String::new();
+        existing.read_to_string(&mut existing_contents)?;
+        if existing_contents.is_empty() {
+            // Even if reentrant_id and details are both empty, we'll still have
+            // a "\n" in the serialized representation, so it's safe to treat
+            // empty as meaning no lock.
+            return Ok(());
+        }
+        let existing = Self::from_str(&existing_contents)?;
+        if self.reentrance_id == existing.reentrance_id {
+            Ok(())
+        } else {
+            Err(Error::from(format!(
+                "location {:?} was already_locked:\n{}",
+                location, existing
+            )))
+        }
+    }
+}
+
+impl fmt::Display for LockInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        f.write_str(&self.reentrance_id)?;
+        f.write_str("\n")?;
+        f.write_str(&self.details)?;
+        Ok(())
+    }
+}
+
+impl FromStr for LockInfo {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (reentrance_id, details) = s
+            .split_once("\n")
+            .ok_or_else(|| Error::from(format!("invalid LOCK format: {}", s)))?;
+        LockInfo::new(reentrance_id.to_owned(), details.to_owned())
+    }
+}
+
+#[cfg(test)]
+impl From<(&str, &str)> for LockInfo {
+    fn from(x: (&str, &str)) -> Self {
+        let (reentrance_id, details) = x;
+        LockInfo {
+            reentrance_id: reentrance_id.to_owned(),
+            details: details.to_owned(),
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::ops::RangeInclusive;
 
     use crate::error::Error;
-    use crate::storage::Blob;
-    use crate::storage::Buffer;
-    use crate::storage::SeqNo;
+
+    use super::*;
 
     fn slurp<U: Buffer>(buf: &U) -> Result<Vec<Vec<u8>>, Error> {
         let mut entries = Vec::new();
@@ -97,7 +218,12 @@ pub mod tests {
         Ok(entries)
     }
 
-    pub fn buffer_impl_test<U: Buffer, F: FnMut(&str) -> Result<U, Error>>(
+    pub struct PathAndReentranceId<'a> {
+        pub path: &'a str,
+        pub reentrance_id: &'a str,
+    }
+
+    pub fn buffer_impl_test<U: Buffer, F: FnMut(PathAndReentranceId<'_>) -> Result<U, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
         let entries = vec![
@@ -110,14 +236,32 @@ pub mod tests {
         let sub_entries =
             |r: RangeInclusive<usize>| -> Vec<Vec<u8>> { entries[r].iter().cloned().collect() };
 
-        let mut buf0 = new_fn("0")?;
+        let _ = new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance0",
+        })?;
 
         // We can create a second buffer writing to a different place.
-        let _ = new_fn("1")?;
+        let _ = new_fn(PathAndReentranceId {
+            path: "path1",
+            reentrance_id: "reentrance0",
+        })?;
+
+        // We're allowed to open the place if the node_id matches. In this
+        // scenario, the previous process using the buffer has crashed and
+        // orphaned the lock.
+        let mut buf0 = new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance0",
+        })?;
 
         // But the buffer impl prevents us from opening the same place for
-        // writing twice.
-        assert!(new_fn("0").is_err());
+        // writing twice if the node_id doesn't match.
+        assert!(new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance1",
+        })
+        .is_err());
 
         // Empty writer is empty.
         assert!(slurp(&buf0)?.is_empty());
@@ -156,11 +300,17 @@ pub mod tests {
         assert_eq!(buf0.close(), Ok(false));
 
         // But we can reopen it and use it.
-        let mut buf0 = new_fn("0")?;
+        let mut buf0 = new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance0",
+        })?;
         assert_eq!(buf0.write_sync(entries[3].clone())?, SeqNo(3));
         assert_eq!(slurp(&buf0)?, sub_entries(3..=3));
         assert_eq!(buf0.close(), Ok(true));
-        let mut buf0 = new_fn("0")?;
+        let mut buf0 = new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance0",
+        })?;
         assert_eq!(buf0.write_sync(entries[4].clone())?, SeqNo(4));
         assert_eq!(slurp(&buf0)?, sub_entries(3..=4));
         assert_eq!(buf0.close(), Ok(true));
@@ -168,21 +318,39 @@ pub mod tests {
         Ok(())
     }
 
-    pub fn blob_impl_test<L: Blob, F: FnMut(&str) -> Result<L, Error>>(
+    pub fn blob_impl_test<L: Blob, F: FnMut(PathAndReentranceId<'_>) -> Result<L, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
         // let sub_entries =
         //     |r: RangeInclusive<usize>| -> Vec<Vec<u8>> { entries[r].iter().cloned().collect() };
 
-        let mut blob0 = new_fn("0")?;
+        let _ = new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance0",
+        })?;
 
         // We can create a second blob writing to a different place.
-        let _ = new_fn("1")?;
+        let _ = new_fn(PathAndReentranceId {
+            path: "path1",
+            reentrance_id: "reentrance0",
+        })?;
+
+        // We're allowed to open the place if the node_id matches. In this
+        // scenario, the previous process using the blob has crashed and
+        // orphaned the lock.
+        let mut blob0 = new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance0",
+        })?;
 
         // But the blob impl prevents us from opening the same place for
         // writing twice.
-        assert!(new_fn("0").is_err());
+        assert!(new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance1",
+        })
+        .is_err());
 
         // Empty key is empty.
         assert_eq!(blob0.get("k0")?, None);
@@ -206,8 +374,39 @@ pub mod tests {
         assert_eq!(blob0.close(), Ok(false));
 
         // But we can reopen it and use it.
-        let blob0 = new_fn("0")?;
+        let blob0 = new_fn(PathAndReentranceId {
+            path: "path0",
+            reentrance_id: "reentrance0",
+        })?;
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn lock_info() -> Result<(), Error> {
+        // Invalid reentrance_id.
+        assert_eq!(
+            LockInfo::new("foo\n".to_string(), "bar".to_string()),
+            Err("reentrance_id cannot contain newlines got:\nfoo\n".into())
+        );
+
+        // Roundtrip-able through the display format.
+        let l = LockInfo::new("foo".to_owned(), "bar".to_owned())?;
+        assert_eq!(l.to_string(), "foo\nbar");
+        assert_eq!(l.to_string().parse::<LockInfo>()?, l);
+
+        // Reentrance
+        assert_eq!(
+            LockInfo::new("foo".to_owned(), "".to_owned())?
+                .check_reentrant_for(&"", l.to_string().as_bytes()),
+            Ok(())
+        );
+        assert_eq!(
+            LockInfo::new("baz".to_owned(), "".to_owned())?
+                .check_reentrant_for(&"", l.to_string().as_bytes()),
+            Err("location \"\" was already_locked:\nfoo\nbar".into())
+        );
 
         Ok(())
     }

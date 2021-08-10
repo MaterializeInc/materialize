@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn trace_compact() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new("trace_compact"));
+        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("trace_compact"));
         let mut t = BlobTrace::new(BlobTraceMeta::new(Id(0)));
         t.update_seal(10);
 
