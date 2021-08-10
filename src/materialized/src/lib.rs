@@ -13,31 +13,25 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use compile_time_run::run_command_str;
 use coord::PersistConfig;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use ore::metrics::ThirdPartyMetric;
-use ore::{
-    cgroup::{detect_memory_limit, MemoryLimit},
-    metric,
-    metrics::{Gauge, MetricsRegistry, UIntGauge, UIntGaugeVec},
-};
-use sysinfo::{ProcessorExt, SystemExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 
 use build_info::BuildInfo;
 use coord::LoggingConfig;
+use ore::metrics::MetricsRegistry;
 
 use crate::mux::Mux;
+use crate::server_metrics::Metrics;
 
 mod http;
 mod mux;
@@ -177,95 +171,6 @@ pub struct TelemetryConfig {
     pub interval: Duration,
 }
 
-/// Global metrics for the materialized server
-#[derive(Debug, Clone)]
-pub struct Metrics {
-    /// The number of workers active in the system.
-    worker_count: UIntGaugeVec,
-
-    /// The number of seconds that the system has been running.
-    uptime: Gauge,
-
-    /// The amount of time we spend gathering metrics in prometheus endpoints.
-    request_metrics_gather: UIntGauge,
-
-    /// The amount of time we spend encoding metrics in prometheus endpoints.
-    request_metrics_encode: UIntGauge,
-
-    /// The amount of time we spend gathering metrics in prometheus endpoints.
-    third_party_request_metrics_gather: UIntGauge,
-
-    /// The amount of time we spend encoding metrics in prometheus endpoints.
-    third_party_request_metrics_encode: UIntGauge,
-}
-
-impl Metrics {
-    fn register_with(registry: &MetricsRegistry) -> Self {
-        let mut system = sysinfo::System::new();
-        system.refresh_system();
-
-        let request_metrics: ThirdPartyMetric<UIntGaugeVec> = registry.register_third_party_visible(metric!(
-            name: "mz_server_scrape_metrics_times",
-            help: "how long it took to gather metrics, used for very low frequency high accuracy measures",
-            var_labels: ["action"],
-        ));
-        let memory_limit = detect_memory_limit().unwrap_or_else(|| MemoryLimit {
-            max: None,
-            swap_max: None,
-        });
-        let memory_max_str = match memory_limit.max {
-            Some(max) => (max / 1024).to_string(),
-            None => "None".to_owned(),
-        };
-        let swap_max_str = match memory_limit.swap_max {
-            Some(max) => (max / 1024).to_string(),
-            None => "None".to_owned(),
-        };
-        Self {
-            worker_count: registry.register(metric!(
-                name: "mz_server_metadata_timely_worker_threads",
-                help: "number of timely worker threads",
-                var_labels: ["count"],
-            )),
-            uptime: registry.register(metric!(
-                name: "mz_server_metadata_seconds",
-                help: "server metadata, value is uptime",
-                const_labels: {
-                    "build_time" => BUILD_INFO.time,
-                    "version" => BUILD_INFO.version,
-                    "build_sha" => BUILD_INFO.sha,
-                    "os" => &os_info::get().to_string(),
-                    "ncpus_logical" => &num_cpus::get().to_string(),
-                    "ncpus_physical" => &num_cpus::get_physical().to_string(),
-                    "cpu0" => &{
-                        match &system.processors().get(0) {
-                            None => "<unknown>".to_string(),
-                            Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
-                        }
-                    },
-                    "memory_total" => &system.total_memory().to_string(),
-                    "memory_limit" => memory_max_str,
-                    "swap_limit" => swap_max_str
-                },
-            )),
-            request_metrics_gather: request_metrics
-                .third_party_metric_with_label_values(&["gather"]),
-            request_metrics_encode: request_metrics
-                .third_party_metric_with_label_values(&["encode"]),
-            third_party_request_metrics_encode: request_metrics
-                .third_party_metric_with_label_values(&["gather_third_party"]),
-            third_party_request_metrics_gather: request_metrics
-                .third_party_metric_with_label_values(&["encode_third_party"]),
-        }
-    }
-
-    fn update_uptime(&self, start_time: Instant) {
-        let uptime = start_time.elapsed();
-        let (secs, milli_part) = (uptime.as_secs() as f64, uptime.subsec_millis() as f64);
-        self.uptime.set(secs + milli_part / 1_000.0);
-    }
-}
-
 /// Start a `materialized` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let workers = config.workers;
@@ -307,14 +212,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             (Some(pgwire_tls), Some(http_tls))
         }
     };
-    let metrics_registry = config.metrics_registry;
-    let metrics = Metrics::register_with(&metrics_registry);
-
-    // Set this metric once so that it shows up in the metric export.
-    metrics
-        .worker_count
-        .with_label_values(&[&workers.to_string()])
-        .set(workers.try_into().unwrap());
 
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
@@ -335,22 +232,20 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
-        metrics_registry: metrics_registry.clone(),
+        metrics_registry: config.metrics_registry.clone(),
         persist,
     })
     .await?;
 
+    // Register metrics.
+    let mut metrics_registry = config.metrics_registry;
+    let metrics =
+        Metrics::register_with(&mut metrics_registry, workers, coord_handle.start_instant());
+
     // Listen on the third-party metrics port if we are configured for it.
     if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
         tokio::spawn({
-            let metrics_registry = metrics_registry.clone();
-            let metrics = metrics.clone();
-
-            let server = http::ThirdPartyServer::new(
-                coord_handle.start_instant(),
-                metrics_registry,
-                metrics,
-            );
+            let server = http::ThirdPartyServer::new(metrics_registry.clone(), metrics.clone());
             async move {
                 server.serve(third_party_addr).await;
             }
@@ -375,9 +270,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         mux.add_handler(http::Server::new(http::Config {
             tls: http_tls,
             coord_client: coord_client.clone(),
-            start_time: coord_handle.start_instant(),
-            metrics_registry: metrics_registry.clone(),
-            global_metrics: metrics.clone(),
+            metrics_registry: metrics_registry,
+            global_metrics: metrics,
         }));
         async move {
             // TODO(benesch): replace with `listener.incoming()` if that is
@@ -385,17 +279,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             let mut incoming = TcpListenerStream::new(listener);
             mux.serve(incoming.by_ref().take_until(drain_tripwire))
                 .await;
-        }
-    });
-
-    tokio::spawn({
-        let start_time = coord_handle.start_instant();
-        let frequency = config.introspection_frequency;
-        async move {
-            loop {
-                metrics.update_uptime(start_time);
-                tokio::time::sleep(frequency).await;
-            }
         }
     });
 

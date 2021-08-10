@@ -27,12 +27,12 @@ use crate::server_metrics::PromMetric;
 struct StatusTemplate<'a> {
     version: &'a str,
     query_count: u64,
-    start_time: Instant,
+    uptime_seconds: f64,
     metrics: Vec<&'a PromMetric<'a>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum MetricsVariant {
+pub enum MetricsVariant {
     Regular,
     ThirdPartyVisible,
 }
@@ -70,65 +70,39 @@ impl MetricsVariant {
 
 /// Call [`prometheus::gather`], ensuring that all our metrics are up to date
 fn load_prom_metrics(
-    start_time: Instant,
     registry: &MetricsRegistry,
     variant: MetricsVariant,
     global_metrics: &Metrics,
 ) -> Vec<prometheus::proto::MetricFamily> {
     let before_gather = Instant::now();
-    global_metrics.update_uptime(start_time);
     let result = variant.gather_from(registry);
-
     variant.set_gather_duration_metric(global_metrics, &before_gather);
     result
 }
 
 /// Serves metrics from the selected metrics registry variant.
-pub(crate) fn serve_prometheus_endpoint(
-    start_time: Instant,
+pub fn handle_prometheus(
+    _: Request<Body>,
     registry: &MetricsRegistry,
     global_metrics: &Metrics,
     variant: MetricsVariant,
 ) -> Result<Response<Body>, anyhow::Error> {
-    let metric_families = load_prom_metrics(start_time, registry, variant, global_metrics);
+    let metric_families = load_prom_metrics(registry, variant, global_metrics);
     let mut buffer = Vec::new();
     let encoder = prometheus::TextEncoder::new();
     let start = Instant::now();
     encoder.encode(&metric_families, &mut buffer)?;
     variant.set_encode_duration_metric(global_metrics, &start);
-
     Ok(Response::new(Body::from(buffer)))
-}
-
-/// Serves the user's metrics to the mux-ed HTTP server on the default service port.
-pub fn handle_prometheus(
-    _: Request<Body>,
-    _: &mut coord::SessionClient,
-    start_time: Instant,
-    registry: &MetricsRegistry,
-    global_metrics: &Metrics,
-) -> Result<Response<Body>, anyhow::Error> {
-    serve_prometheus_endpoint(
-        start_time,
-        registry,
-        global_metrics,
-        MetricsVariant::Regular,
-    )
 }
 
 pub fn handle_status(
     _: Request<Body>,
     _: &mut coord::SessionClient,
-    start_time: Instant,
     registry: &MetricsRegistry,
     global_metrics: &Metrics,
 ) -> Result<Response<Body>, anyhow::Error> {
-    let metric_families = load_prom_metrics(
-        start_time,
-        registry,
-        MetricsVariant::Regular,
-        global_metrics,
-    );
+    let metric_families = load_prom_metrics(registry, MetricsVariant::Regular, global_metrics);
 
     let desired_metrics = {
         let mut s = BTreeSet::new();
@@ -139,6 +113,7 @@ pub fn handle_status(
         s
     };
 
+    let mut uptime_seconds = 0.0;
     let mut metrics = BTreeMap::new();
     for metric in &metric_families {
         let converted = PromMetric::from_metric_family(metric);
@@ -151,9 +126,12 @@ pub fn handle_status(
                                 metrics.insert(name.to_string(), m);
                             }
                         }
-                        PromMetric::Gauge { name, .. } => {
+                        PromMetric::Gauge { name, value, .. } => {
                             if desired_metrics.contains(name) {
                                 metrics.insert(name.to_string(), m);
+                            }
+                            if name == "mz_server_metadata_seconds" {
+                                uptime_seconds = value;
                             }
                         }
                         PromMetric::Histogram {
@@ -196,7 +174,7 @@ pub fn handle_status(
     Ok(util::template_response(StatusTemplate {
         version: BUILD_INFO.version,
         query_count,
-        start_time,
+        uptime_seconds,
         metrics: metrics.values().collect(),
     }))
 }

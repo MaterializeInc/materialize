@@ -15,7 +15,6 @@
 
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::time::Instant;
 
 use futures::future::TryFutureExt;
 use hyper::{service, Body, Method, Request, Response, StatusCode};
@@ -31,6 +30,7 @@ use coord::session::Session;
 use ore::future::OreFutureExt;
 use ore::netio::SniffedStream;
 
+use crate::http::metrics::MetricsVariant;
 use crate::Metrics;
 
 mod catalog;
@@ -57,7 +57,6 @@ fn sniff_tls(buf: &[u8]) -> bool {
 pub struct Config {
     pub tls: Option<TlsConfig>,
     pub coord_client: coord::Client,
-    pub start_time: Instant,
     pub metrics_registry: MetricsRegistry,
     pub global_metrics: Metrics,
 }
@@ -78,7 +77,6 @@ pub enum TlsMode {
 pub struct Server {
     tls: Option<TlsConfig>,
     coord_client: coord::Client,
-    start_time: Instant,
     metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
 }
@@ -88,7 +86,6 @@ impl Server {
         Server {
             tls: config.tls,
             coord_client: config.coord_client,
-            start_time: config.start_time,
             metrics_registry: config.metrics_registry,
             global_metrics: config.global_metrics,
         }
@@ -153,7 +150,6 @@ impl Server {
         let svc = service::service_fn(move |req| {
             let user = user.clone();
             let coord_client = self.coord_client.clone();
-            let start_time = self.start_time;
             let metrics_registry = self.metrics_registry.clone();
             let global_metrics = self.global_metrics.clone();
             let future = async move {
@@ -178,15 +174,13 @@ impl Server {
                     (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
                     (&Method::GET, "/metrics") => metrics::handle_prometheus(
                         req,
-                        &mut coord_client,
-                        start_time,
                         &metrics_registry,
                         &global_metrics,
+                        MetricsVariant::Regular,
                     ),
                     (&Method::GET, "/status") => metrics::handle_status(
                         req,
                         &mut coord_client,
-                        start_time,
                         &metrics_registry,
                         &global_metrics,
                     ),
@@ -241,19 +235,13 @@ impl Server {
 
 #[derive(Clone)]
 pub struct ThirdPartyServer {
-    start_time: Instant,
     metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
 }
 
 impl ThirdPartyServer {
-    pub fn new(
-        start_time: Instant,
-        metrics_registry: MetricsRegistry,
-        global_metrics: Metrics,
-    ) -> Self {
+    pub fn new(metrics_registry: MetricsRegistry, global_metrics: Metrics) -> Self {
         Self {
-            start_time,
             metrics_registry,
             global_metrics,
         }
@@ -290,8 +278,8 @@ impl hyper::service::Service<Request<Body>> for ThirdPartyServer {
             "/metrics" => Box::pin({
                 let server = self.clone();
                 async move {
-                    match metrics::serve_prometheus_endpoint(
-                        server.start_time,
+                    match metrics::handle_prometheus(
+                        req,
                         &server.metrics_registry,
                         &server.global_metrics,
                         metrics::MetricsVariant::ThirdPartyVisible,
