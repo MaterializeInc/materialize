@@ -182,7 +182,7 @@ You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
 #### Enabling topic reuse after restart
 
-{{< beta v0.8.4 />}}
+{{< beta v0.9.0 />}}
 
 By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead, Materialize must be able to reconstruct the prior history of the sinked object and all objects on which it is dependent--that is, events must have replayable timestamps--and must ensure that no other processes write to the output topic.
 
