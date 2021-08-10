@@ -32,6 +32,7 @@ use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use persist::error::Error as PersistError;
+use persist::indexed::runtime::RuntimeClient as PersistClient;
 use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -584,8 +585,17 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub fn open(config: &Config) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub fn open(
+        config: &Config,
+    ) -> Result<(Catalog, Vec<BuiltinTableUpdate>, Option<PersistClient>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
+
+        // This is somewhat incorrect in a services/multi-node world. The
+        // reentrance id should be per-node not per-cluster. This is also an odd
+        // place to be booting the persistence system. But both of these are
+        // fine for now.
+        let persist = config.persist.init(cluster_id)?;
+        let persister = persist.persister.clone();
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
@@ -610,7 +620,7 @@ impl Catalog {
                 timestamp_frequency: config.timestamp_frequency,
                 now: config.now,
             },
-            persist: config.persist.clone(),
+            persist,
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
@@ -875,7 +885,7 @@ impl Catalog {
             builtin_table_updates.push(catalog.pack_role_update(role_name, 1));
         }
 
-        Ok((catalog, builtin_table_updates))
+        Ok((catalog, builtin_table_updates, persister))
     }
 
     /// Takes a catalog which only has items in its on-disk storage ("unloaded")
@@ -929,7 +939,7 @@ impl Catalog {
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
     pub fn open_debug(path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
-        let (catalog, _) = Self::open(&Config {
+        let (catalog, _, _) = Self::open(&Config {
             path,
             enable_logging: true,
             experimental_mode: None,
@@ -938,7 +948,7 @@ impl Catalog {
             num_workers: 0,
             timestamp_frequency: Duration::from_secs(1),
             now,
-            persist: PersistConfig::disabled().init()?,
+            persist: PersistConfig::disabled(),
             skip_migrations: true,
         })?;
         Ok(catalog)

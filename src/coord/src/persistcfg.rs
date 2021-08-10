@@ -11,7 +11,6 @@
 
 use std::path::PathBuf;
 
-use anyhow::anyhow;
 use persist::error::Error;
 use persist::indexed::encoding::Id;
 use persist::storage::LockInfo;
@@ -21,6 +20,7 @@ use serde::Serialize;
 use expr::GlobalId;
 use persist::file::{FileBlob, FileBuffer};
 use persist::indexed::runtime::{self, MultiWriteHandle, RuntimeClient, StreamWriteHandle};
+use uuid::Uuid;
 
 /// Configuration of the persistence runtime and features.
 #[derive(Clone, Debug)]
@@ -38,8 +38,6 @@ pub struct PersistConfig {
     /// extremely experimental and should not even be tried by users. It's
     /// initially here for end-to-end testing.
     pub system_table_enabled: bool,
-    /// The reentrance id described in the docs for [LockInfo].
-    pub lock_reentrance_id: String,
     /// Unstructured information stored in the "lock" files created by the
     /// buffer and blob to ensure that they are exclusive writers to those
     /// locations. This should contain whatever information might be useful to
@@ -56,21 +54,19 @@ impl PersistConfig {
             user_table_enabled: false,
             system_table_enabled: false,
             lock_info: Default::default(),
-            lock_reentrance_id: Default::default(),
         }
     }
 
     /// Initializes the persistence runtime and returns a clone-able handle for
     /// interacting with it. Returns None and does not start the runtime if all
     /// persistence features are disabled.
-    pub fn init(&self) -> Result<PersisterWithConfig, anyhow::Error> {
+    pub fn init(&self, catalog_id: Uuid) -> Result<PersisterWithConfig, Error> {
         let persister = if self.user_table_enabled || self.system_table_enabled {
-            let lock_info = LockInfo::new(self.lock_reentrance_id.clone(), self.lock_info.clone())?;
-            let buffer = FileBuffer::new(&self.buffer_path, lock_info.clone())
-                .map_err(|err| anyhow!("{}", err))?;
-            let blob =
-                FileBlob::new(&self.blob_path, lock_info).map_err(|err| anyhow!("{}", err))?;
-            let persister = runtime::start(buffer, blob).map_err(|err| anyhow!("{}", err))?;
+            let lock_reentrance_id = catalog_id.to_string();
+            let lock_info = LockInfo::new(lock_reentrance_id, self.lock_info.clone())?;
+            let buffer = FileBuffer::new(&self.buffer_path, lock_info.clone())?;
+            let blob = FileBlob::new(&self.blob_path, lock_info)?;
+            let persister = runtime::start(buffer, blob)?;
             Some(persister)
         } else {
             None
