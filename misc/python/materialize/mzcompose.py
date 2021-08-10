@@ -33,6 +33,7 @@ from typing import (
     Any,
     Callable,
     Collection,
+    Container,
     Dict,
     Iterable,
     List,
@@ -703,6 +704,23 @@ class RemoveServicesStep(WorkflowStep):
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
             raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
+
+
+@Steps.register("remove-volumes")
+class RemoveVolumesStep(WorkflowStep):
+    """
+    Params:
+      volumes: List of volume names
+    """
+
+    def __init__(self, *, volumes: List[str]) -> None:
+        self._volumes = volumes
+        if not isinstance(self._volumes, list):
+            raise errors.BadSpec(f"volumes should be a list, got: {self._volumes}")
+
+    def run(self, workflow: Workflow) -> None:
+        volumes = (f"{workflow.composition.name}_{v}" for v in self._volumes)
+        spawn.runv(["docker", "volume", "rm", *volumes])
 
 
 @Steps.register("wait-for-postgres")

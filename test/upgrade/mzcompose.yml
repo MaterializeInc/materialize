@@ -130,8 +130,18 @@ mzworkflows:
         command: --materialized-url=postgres://materialize@materialized-current:6875 check-from-@(${TESTS})-*.td
 
       - step: remove-services
-        services: [materialized-current, materialized-previous, schema-registry, kafka, zookeeper, postgres]
+        services:
+          - materialized-current
+          - materialized-previous
+          - testdrive-svc
+          - schema-registry
+          - kafka
+          - zookeeper
+          - postgres
         destroy_volumes: true
+
+      - step: remove-volumes
+        volumes: [mzdata, tmp]
 
 services:
 #
