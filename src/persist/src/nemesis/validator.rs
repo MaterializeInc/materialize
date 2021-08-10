@@ -70,7 +70,8 @@ impl Validator {
             Res::AllowCompaction(req, res) => self.step_allow_compaction(s.req_id, req, res),
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
             Res::ReadSnapshot(req, res) => self.step_read_snapshot(s.req_id, req, res),
-            Res::Restart(res) => self.step_restart(s.req_id, res),
+            Res::Start(res) => self.step_start(s.req_id, res),
+            Res::Stop(res) => self.step_stop(s.req_id, res),
             Res::StorageUnavailable => {
                 self.storage_available = false;
             }
@@ -203,18 +204,25 @@ impl Validator {
         }
     }
 
-    fn step_restart(&mut self, req_id: ReqId, res: Result<(), Error>) {
-        // The semantics of Req::Restart are pretty blunt. It unconditionally
-        // stops the currently running persister and then attempts to start a
-        // new one. If the storage is down, the new one won't be able to read
-        // metadata and will fail to start. This will cause all operations on
-        // the persister to fail until it gets another Req::Restart with storage
-        // available. This ends up being a pretty uninteresting state to test,
-        // but it's not clear what else we should do. Perhaps we should rework
-        // the weights so that StorageAvailable and Restart are both much more
-        // likely while the runtime is down.
+    fn step_start(&mut self, req_id: ReqId, res: Result<(), Error>) {
+        // The semantics of Req::Start are pretty blunt. It unconditionally
+        // attempts to start a new persister. If the storage is down, the new
+        // one won't be able to read metadata and will fail to start. This will
+        // cause all operations on the persister to fail until it gets another
+        // Req::Start with storage available. This ends up being a pretty
+        // uninteresting state to test, so we filter out everything but start
+        // and storage_available when the runtime is not available.
         let should_succeed = self.storage_available;
         self.check_success(req_id, &res, should_succeed);
         self.runtime_available = res.is_ok();
+    }
+
+    fn step_stop(&mut self, req_id: ReqId, res: Result<(), Error>) {
+        // Stop is a no-op if the runtime is already down (and so will succeed).
+        // Otherwise, it will succeed if it can cleanly release locks, which
+        // requires the storage to be available.
+        let should_succeed = !self.runtime_available || self.storage_available;
+        self.check_success(req_id, &res, should_succeed);
+        self.runtime_available = false;
     }
 }

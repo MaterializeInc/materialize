@@ -121,7 +121,8 @@ pub enum Req {
     AllowCompaction(AllowCompactionReq),
     TakeSnapshot(TakeSnapshotReq),
     ReadSnapshot(ReadSnapshotReq),
-    Restart,
+    Start,
+    Stop,
     StorageUnavailable,
     StorageAvailable,
 }
@@ -133,7 +134,8 @@ pub enum Res {
     AllowCompaction(AllowCompactionReq, Result<(), Error>),
     TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
     ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
-    Restart(Result<(), Error>),
+    Start(Result<(), Error>),
+    Stop(Result<(), Error>),
     StorageUnavailable,
     StorageAvailable,
 }

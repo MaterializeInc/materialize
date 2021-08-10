@@ -38,7 +38,8 @@ impl Runtime for Direct {
             }
             Req::TakeSnapshot(req) => Res::TakeSnapshot(req.clone(), self.take_snapshot(req)),
             Req::ReadSnapshot(req) => Res::ReadSnapshot(req.clone(), self.read_snapshot(req)),
-            Req::Restart => Res::Restart(self.restart()),
+            Req::Start => Res::Start(self.start()),
+            Req::Stop => Res::Stop(self.stop()),
             Req::StorageUnavailable => {
                 self.unreliable.make_unavailable();
                 Res::StorageUnavailable
@@ -129,13 +130,16 @@ impl Direct {
         })
     }
 
-    fn restart(&mut self) -> Result<(), Error> {
-        let stop_res = self.persister.stop();
+    fn start(&mut self) -> Result<(), Error> {
         // The handles from the previous persister cannot be used after stop.
         self.streams.clear();
         let persister = (self.start_fn)(self.unreliable.clone())?;
         self.persister = persister;
-        stop_res
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), Error> {
+        self.persister.stop()
     }
 }
 

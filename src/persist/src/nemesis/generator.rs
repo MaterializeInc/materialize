@@ -28,7 +28,8 @@ pub struct GeneratorConfig {
     pub allow_compaction_weight: u32,
     pub take_snapshot_weight: u32,
     pub read_snapshot_weight: u32,
-    pub restart_weight: u32,
+    pub start_weight: u32,
+    pub stop_weight: u32,
     pub storage_unavailable: u32,
     pub storage_available: u32,
 }
@@ -42,7 +43,8 @@ impl GeneratorConfig {
             allow_compaction_weight: 1,
             take_snapshot_weight: 1,
             read_snapshot_weight: 1,
-            restart_weight: 1,
+            start_weight: 1,
+            stop_weight: 1,
             storage_unavailable: 1,
             storage_available: 1,
         }
@@ -61,6 +63,7 @@ impl Default for GeneratorConfig {
 }
 
 struct GeneratorState {
+    running: bool,
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
     snap_id: SnapshotId,
@@ -71,6 +74,7 @@ struct GeneratorState {
 impl Default for GeneratorState {
     fn default() -> Self {
         GeneratorState {
+            running: true,
             seal_frontier: HashMap::new(),
             since_frontier: HashMap::new(),
             snap_id: SnapshotId(0),
@@ -87,7 +91,8 @@ enum ReqGenerator {
     AllowCompaction,
     TakeSnapshot,
     ReadSnapshot,
-    Restart,
+    Stop,
+    Start,
     StorageUnavailable,
     StorageAvailable,
 }
@@ -204,7 +209,14 @@ impl ReqGenerator {
             ReqGenerator::AllowCompaction => ReqGenerator::allow_compaction(rng, state),
             ReqGenerator::TakeSnapshot => ReqGenerator::take_snapshot(rng, state),
             ReqGenerator::ReadSnapshot => ReqGenerator::read_snapshot(rng, state),
-            ReqGenerator::Restart => Req::Restart,
+            ReqGenerator::Start => {
+                state.running = state.storage_available;
+                Req::Start
+            }
+            ReqGenerator::Stop => {
+                state.running = false;
+                Req::Stop
+            }
             ReqGenerator::StorageUnavailable => {
                 state.storage_available = false;
                 Req::StorageUnavailable
@@ -243,46 +255,46 @@ impl Generator {
     // - ReadSnapshot can only apply if we have previously taken a snapshot but
     //   not consumed (read) it yet.
     fn fill_relevant(&mut self, relevant: &mut Vec<(u32, ReqGenerator)>) {
-        let req_weights = [
-            (
+        let only_when_running = vec![
+            Some((
                 self.config.write_unsealed_weight,
-                Some(ReqGenerator::WriteUnsealed),
-            ),
-            (
-                self.config.write_sealed_weight,
-                Some(ReqGenerator::WriteSealed)
-                    .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
-            ),
-            (self.config.seal_weight, Some(ReqGenerator::Seal)),
-            (
+                ReqGenerator::WriteUnsealed,
+            )),
+            Some((self.config.write_sealed_weight, ReqGenerator::WriteSealed))
+                .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
+            Some((self.config.seal_weight, ReqGenerator::Seal)),
+            Some((
                 self.config.allow_compaction_weight,
-                Some(ReqGenerator::AllowCompaction),
-            ),
-            (
-                self.config.take_snapshot_weight,
-                Some(ReqGenerator::TakeSnapshot),
-            ),
-            (
-                self.config.read_snapshot_weight,
-                Some(ReqGenerator::ReadSnapshot)
-                    .filter(|_| !self.state.outstanding_snaps.is_empty()),
-            ),
-            (self.config.restart_weight, Some(ReqGenerator::Restart)),
-            (
+                ReqGenerator::AllowCompaction,
+            )),
+            Some((self.config.take_snapshot_weight, ReqGenerator::TakeSnapshot)),
+            Some((self.config.read_snapshot_weight, ReqGenerator::ReadSnapshot))
+                .filter(|_| !self.state.outstanding_snaps.is_empty()),
+            Some((self.config.stop_weight, ReqGenerator::Stop)).filter(|_| self.state.running),
+            Some((
                 self.config.storage_unavailable,
-                Some(ReqGenerator::StorageUnavailable).filter(|_| self.state.storage_available),
-            ),
-            (
-                self.config.storage_available,
-                Some(ReqGenerator::StorageAvailable)
-                    .filter(|_| self.state.storage_available == false),
-            ),
+                ReqGenerator::StorageUnavailable,
+            ))
+            .filter(|_| self.state.storage_available),
         ];
-        for (weight, req) in req_weights {
-            if let Some(req) = req {
-                relevant.push((weight, req));
-            }
+        let also_when_not_running = vec![
+            Some((
+                self.config.storage_available,
+                ReqGenerator::StorageAvailable,
+            ))
+            .filter(|_| self.state.storage_available == false),
+            Some((self.config.start_weight, ReqGenerator::Start))
+                .filter(|_| self.state.running == false),
+        ];
+
+        // Most operations just error if the runtime is down and this is fairly
+        // uninteresting to test. Maximize our time spent by focusing on
+        // operations that help get the runtime started (Start,
+        // StorageAvailable) if it's not.
+        if self.state.running {
+            relevant.extend(only_when_running.into_iter().flatten());
         }
+        relevant.extend(also_when_not_running.into_iter().flatten());
     }
 
     fn gen(&mut self) -> Option<Input> {
@@ -322,6 +334,23 @@ mod tests {
 
     use super::*;
 
+    // Sanity check that we don't generate uninteresting traffic (like writes)
+    // while the runtime isn't up. The only thing we should generate when the
+    // runtime is down is making storage available and starting.
+    #[test]
+    fn operations_while_runtime_down() {
+        let (seed, config) = (0, GeneratorConfig::all_operations());
+        let mut g = Generator::new(seed, config);
+        for _ in 0..100 {
+            g.state.running = false;
+            let input = g.gen().expect("some input should always be available");
+            match input.req {
+                Req::Start | Req::StorageAvailable => {}
+                r => panic!("unexpected req type: {:?}", r),
+            }
+        }
+    }
+
     // Generate random inputs until we've seen each type at least N times. This
     // both verifies that the config returned by `all_operations()` in fact
     // contains all operations as well as verifies that Generator actually
@@ -354,8 +383,11 @@ mod tests {
             Req::ReadSnapshot(_) => {
                 counts.read_snapshot_weight += 1;
             }
-            Req::Restart => {
-                counts.restart_weight += 1;
+            Req::Start => {
+                counts.start_weight += 1;
+            }
+            Req::Stop => {
+                counts.stop_weight += 1;
             }
             Req::StorageUnavailable => {
                 counts.storage_unavailable += 1;
@@ -372,7 +404,8 @@ mod tests {
             allow_compaction_weight: 0,
             take_snapshot_weight: 0,
             read_snapshot_weight: 0,
-            restart_weight: 0,
+            start_weight: 0,
+            stop_weight: 0,
             storage_unavailable: 0,
             storage_available: 0,
         };
