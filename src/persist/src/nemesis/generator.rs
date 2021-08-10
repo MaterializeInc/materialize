@@ -9,7 +9,8 @@
 
 use std::collections::HashMap;
 
-use rand::prelude::{IteratorRandom, SliceRandom, SmallRng};
+use rand::distributions::WeightedIndex;
+use rand::prelude::{Distribution, IteratorRandom, SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
 
@@ -69,6 +70,10 @@ struct GeneratorState {
     snap_id: SnapshotId,
     outstanding_snaps: HashMap<SnapshotId, String>,
     storage_available: bool,
+    streams: Vec<String>,
+    stream_weights: WeightedIndex<u32>,
+    keys: Vec<String>,
+    key_weights: WeightedIndex<u32>,
 }
 
 impl Default for GeneratorState {
@@ -80,7 +85,22 @@ impl Default for GeneratorState {
             snap_id: SnapshotId(0),
             outstanding_snaps: HashMap::new(),
             storage_available: true,
+            // TODO: Allow for a dynamic number of streams and keys
+            streams: ('a'..='e').map(|x| x.to_string()).collect(),
+            stream_weights: WeightedIndex::new(&[9, 5, 3, 1, 1]).expect("weights are valid"),
+            keys: ('a'..='e').map(|x| x.to_string()).collect(),
+            key_weights: WeightedIndex::new(&[9, 5, 3, 1, 1]).expect("weights are valid"),
         }
+    }
+}
+
+impl GeneratorState {
+    fn rng_stream(&self, rng: &mut SmallRng) -> String {
+        self.streams[self.stream_weights.sample(rng)].clone()
+    }
+
+    fn rng_key(&self, rng: &mut SmallRng) -> String {
+        self.keys[self.key_weights.sample(rng)].clone()
     }
 }
 
@@ -97,22 +117,10 @@ enum ReqGenerator {
     StorageAvailable,
 }
 
-fn rng_stream(rng: &mut SmallRng) -> String {
-    // TODO: Compute this from some WeightedIndex with configurable weights
-    // defaulting to zipfian.
-    rng.gen_range('a'..'e').to_string()
-}
-
-fn rng_key(rng: &mut SmallRng) -> String {
-    // TODO: Compute this from some WeightedIndex with configurable weights
-    // defaulting to zipfian.
-    rng.gen_range('a'..'e').to_string()
-}
-
 impl ReqGenerator {
     fn write_unsealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
-        let key = rng_key(rng);
+        let stream = state.rng_stream(rng);
+        let key = state.rng_key(rng);
         let stream_sealed_ts = state
             .seal_frontier
             .get(&stream)
@@ -133,7 +141,7 @@ impl ReqGenerator {
     }
 
     fn write_sealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let key = rng_key(rng);
+        let key = state.rng_key(rng);
         let (stream, ts) = state
             .seal_frontier
             .iter()
@@ -150,7 +158,7 @@ impl ReqGenerator {
     }
 
     fn seal(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
+        let stream = state.rng_stream(rng);
         let stream_sealed_ts = state
             .seal_frontier
             .get(&stream)
@@ -161,7 +169,7 @@ impl ReqGenerator {
     }
 
     fn allow_compaction(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
+        let stream = state.rng_stream(rng);
         let ts = {
             let base = if rng.gen_bool(0.5) {
                 state
@@ -183,7 +191,7 @@ impl ReqGenerator {
     }
 
     fn take_snapshot(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
+        let stream = state.rng_stream(rng);
         let snap = SnapshotId(state.snap_id.0);
         state.snap_id = SnapshotId(snap.0 + 1);
         state.outstanding_snaps.insert(snap, stream.clone());

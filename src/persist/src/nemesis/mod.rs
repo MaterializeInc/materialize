@@ -67,7 +67,6 @@
 // - Impl of Runtime with Timely workers running in processes
 // - Storage (buffer/blob) with variable latency/slow requests
 // - Vary key size
-// - Non-uniform (zipfian) distribution of keys (any other distributions?)
 // - Deleting streams
 // - Atomic multi-stream writes
 
