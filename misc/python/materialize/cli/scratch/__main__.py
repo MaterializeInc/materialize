@@ -11,36 +11,30 @@ import argparse
 import types
 from typing import Callable, NamedTuple
 
+from materialize.cli.scratch import create, mine
 
-class Subcommand(NamedTuple):
-    configure_parser: Callable[[argparse.ArgumentParser], None]
-    name: str
-    run: Callable[[argparse.Namespace], None]
-
-
-def subcommand_from_module(m: types.ModuleType) -> Subcommand:
-    return Subcommand(m.configure_parser, m.__name__.split(".")[-1], m.run)  # type: ignore
+from materialize import errors
 
 
 def main() -> None:
     from materialize.cli.scratch import create, mine
 
-    modules = [subcommand_from_module(m) for m in [create, mine]]
-
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand")
-    for m in modules:
-        s = subparsers.add_parser(m.name)
-        m.configure_parser(s)
-        s.set_defaults(mod=m)
+    for name, configure, run in [
+        ("create", create.configure_parser, create.run),
+        ("mine", mine.configure_parser, mine.run),
+    ]:
+        s = subparsers.add_parser(name)
+        configure(s)
+        s.set_defaults(run=run)
 
     args = parser.parse_args()
     # TODO - Pass `required=True` to parser.add_subparsers once we support 3.7
-    if not "mod" in args:
-        print("Must specify a command")
-        return
+    if not "run" in args:
+        raise errors.BadSpec("Must specify a command")
 
-    args.mod.run(args)
+    args.run(args)
 
 
 if __name__ == "__main__":
