@@ -25,6 +25,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         default=[whoami()],
     )
     parser.add_argument("--all", help="Show all instances", action="store_true")
+    parser.add_argument("--output-format", choices=["table", "csv"], default="table")
 
 
 def run(args: argparse.Namespace) -> None:
@@ -34,4 +35,4 @@ def run(args: argparse.Namespace) -> None:
 
     ists = [i for i in boto3.resource("ec2").instances.all() if filter(i)]
 
-    print_instances(ists)
+    print_instances(ists, args.output_format)
