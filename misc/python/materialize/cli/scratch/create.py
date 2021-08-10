@@ -15,16 +15,13 @@ import sys
 from typing import Any, Dict, List
 
 import boto3
+from materialize.cli.scratch import (
+    DEFAULT_INSTPROF_NAME,
+    DEFAULT_SG_ID,
+    DEFAULT_SUBNET_ID,
+    check_required_vars,
+)
 from materialize.scratch import MachineDesc, launch_cluster, print_instances, whoami
-
-
-def check_required_vars() -> None:
-    """Set reasonable default values for the
-    environment variables necessary to interact with AWS."""
-    if not os.environ.get("AWS_PROFILE"):
-        os.environ["AWS_PROFILE"] = "mz-scratch-admin"
-    if not os.environ.get("AWS_DEFAULT_REGION"):
-        os.environ["AWS_DEFAULT_REGION"] = "us-east-2"
 
 
 def multi_json(s: str) -> List[Dict[Any, Any]]:
@@ -48,12 +45,6 @@ def multi_json(s: str) -> List[Dict[Any, Any]]:
             result.append(obj)
 
     return result
-
-
-# Sane defaults for internal Materialize use in the scratch account
-DEFAULT_SUBNET_ID = "subnet-0b47df5733387582b"
-DEFAULT_SG_ID = "sg-0f2d62ae0f39f93cc"
-DEFAULT_INSTPROF_NAME = "ssm-instance-profile"
 
 
 def main() -> None:

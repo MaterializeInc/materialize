@@ -9,6 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# scratch-create -- create a cluster of scratch instances
+# scratch-mine -- list the scratch instances created by a particular user
 
-exec "$(dirname "$0")"/pyactivate --dev -m materialize.cli.scratch.create "$@"
+exec "$(dirname "$0")"/pyactivate --dev -m materialize.cli.scratch.mine "$@"
