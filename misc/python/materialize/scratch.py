@@ -10,8 +10,10 @@
 """Utilities for launching and interacting with scratch EC2 instances."""
 
 import asyncio
+import csv
 import os
 import shlex
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from subprocess import CalledProcessError
@@ -53,28 +55,35 @@ def delete_after(tags: Dict[str, str]) -> Optional[datetime]:
     return datetime.fromtimestamp(unix)
 
 
-def print_instances(ists: List[Instance]) -> None:
-    pt = PrettyTable()
-    pt.field_names = [
+def print_instances(ists: List[Instance], format: str) -> None:
+    field_names = [
         "Name",
         "Instance ID",
         "Public IP Address",
         "Launched By",
         "Delete After",
     ]
-    pt.add_rows(
+    rows = [
         [
-            [
-                name(tags),
-                i.instance_id,
-                i.public_ip_address,
-                launched_by(tags),
-                delete_after(tags),
-            ]
-            for (i, tags) in [(i, tags(i)) for i in ists]
+            name(tags),
+            i.instance_id,
+            i.public_ip_address,
+            launched_by(tags),
+            delete_after(tags),
         ]
-    )
-    print(pt)
+        for (i, tags) in [(i, tags(i)) for i in ists]
+    ]
+    if format == "table":
+        pt = PrettyTable()
+        pt.field_names = field_names
+        pt.add_rows(rows)
+        print(pt)
+    elif format == "csv":
+        w = csv.writer(sys.stdout)
+        w.writerow(field_names)
+        w.writerows(rows)
+    else:
+        raise RuntimeError("Unknown format passed to print_instances")
 
 
 def launch(

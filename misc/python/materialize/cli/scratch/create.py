@@ -54,6 +54,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--extra-tags", type=str, required=False)
     parser.add_argument("--instance-profile", type=str, default=DEFAULT_INSTPROF_NAME)
     parser.add_argument("--no-instance-profile", action="store_const", const=True)
+    parser.add_argument("--output-format", choices=["table", "csv"], default="table")
 
 
 def run(args: argparse.Namespace) -> None:
@@ -97,4 +98,4 @@ def run(args: argparse.Namespace) -> None:
     )
 
     print("Launched instances:")
-    print_instances(instances)
+    print_instances(instances, args.output_format)
