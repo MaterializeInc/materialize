@@ -330,3 +330,89 @@ canonicalize
 ----
 !(isnull(#1))
 (!(isnull(#3)) || (#0 < #2))
+
+canonicalize-join
+[[#0 #0 #3] [(call_binary add_int32 #0 #0) (call_binary add_int32 #3 #3)]]
+----
+[#0 #3]
+
+canonicalize-join
+[[#0 #3 #3] [(call_binary add_int32 #0 #0) #1] [(call_binary add_int32 #3 #3) #2]]
+----
+[#0 #3]
+[#1 #2 (#0 + #0)]
+
+canonicalize-join
+[
+    [#0 #3]
+    [#1
+        (call_binary add_int32 (call_binary add_int32 #0 #0) #0)
+        (call_binary add_int32 (call_binary add_int32 #2 #2) #1)
+        (call_binary add_int32
+            (call_binary add_int32 #2 #2)
+            (call_binary add_int32 (call_binary add_int32 #3 #3) #3))
+        (call_binary add_int32 (call_binary add_int32 #3 #3) #3)
+    ]
+]
+----
+[#0 #3]
+[#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
+
+canonicalize-join
+[[
+    (call_binary and #0 (call_binary add_int32 #0 #0))
+    (call_binary add_int32 #0 #0)
+    (call_binary add_int32 #0 (call_binary add_int32 #0 #0))
+]]
+----
+[(#0 && (#0 + #0)) (#0 + #0) (#0 + (#0 + #0))]
+
+canonicalize-join
+[
+    [#0 #3]
+    [#1
+        (call_binary add_int32 (call_binary add_int32 #2 #2) #1)
+        (call_binary add_int32
+            (call_binary add_int32 #2 #2)
+            (call_binary add_int32 (call_binary add_int32 #0 #0) #0))
+        (call_binary add_int32 (call_binary add_int32 #3 #3) #3)
+    ]
+]
+----
+[#0 #3]
+[#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
+
+canonicalize-join
+[
+    [#0 #3]
+    [#1
+        (call_binary add_int32 (call_binary add_int32 #2 #2) #1)
+        (call_binary add_int32
+            (call_binary mul_int32 #4 #5)
+            (call_binary add_int32 (call_binary add_int32 #0 #0) #0))
+        (call_binary add_int32 (call_binary add_int32 #3 #3) #3)
+    ]
+    [(call_binary add_int32 #2 #2) (call_binary mul_int32 #4 #5)]
+]
+----
+[#0 #3]
+[#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
+[(#2 + #2) (#4 * #5)]
+
+canonicalize-join
+[
+    [#0 #3]
+    [#1
+        (call_binary add_int32 #0 #0)
+        (call_binary add_int32 (call_binary add_int32 #2 #2) #1)
+        (call_binary add_int32
+            (call_binary mul_int32 #4 #5)
+            (call_binary add_int32 (call_binary add_int32 #0 #0) #0))
+        (call_binary add_int32 (call_binary add_int32 #3 #3) #3)
+    ]
+    [(call_binary add_int32 #3 #3) (call_binary mul_int32 #4 #5) (call_binary
+    sub_int32 (call_binary add_int32 #3 #3) (call_binary mul_int32 #4 #5))]
+]
+----
+[#0 #3]
+[#1 (#0 + #0) (#1 + #0) (#1 + #1) ((#2 + #2) + #1) (#1 - #1) (#4 * #5)]
