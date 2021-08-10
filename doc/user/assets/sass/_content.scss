@@ -37,6 +37,7 @@ a {
     
     &:first-of-type{
       margin-top: 0;
+      margin-bottom: 2rem;
       padding: 0 0 1.25rem;
       
       &::after {
@@ -385,7 +386,7 @@ a {
   }
   
   .breadcrumb {
-    margin: 0 0 2.5rem;
+    margin: 0 0 1.5rem;
     font-size: 0.75rem;
     font-weight: 700;
     letter-spacing: -0.015em;
