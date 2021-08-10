@@ -10,10 +10,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use timely::progress::Timestamp;
+
 use crate::error::Error;
+use crate::indexed::ListenEvent;
 use crate::nemesis::{
-    AllowCompactionReq, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step,
-    TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
+    AllowCompactionReq, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res,
+    SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::storage::SeqNo;
 
@@ -67,6 +70,7 @@ impl Validator {
         match s.res {
             Res::Write(WriteReq::Single(req), res) => self.step_write_single(s.req_id, req, res),
             Res::Write(WriteReq::Multi(req), res) => self.step_write_multi(s.req_id, req, res),
+            Res::ReadOutput(req, res) => self.step_read_output(s.req_id, req, res),
             Res::Seal(req, res) => self.step_seal(s.req_id, req, res),
             Res::AllowCompaction(req, res) => self.step_allow_compaction(s.req_id, req, res),
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
@@ -152,6 +156,90 @@ impl Validator {
         }
     }
 
+    fn step_read_output(
+        &mut self,
+        req_id: ReqId,
+        req: ReadOutputReq,
+        res: Result<ReadOutputRes, Error>,
+    ) {
+        let should_succeed = true;
+        self.check_success(req_id, &res, should_succeed);
+
+        if let Ok(res) = res {
+            // Seal acts as a barrier, so we're guaranteed to receive any writes
+            // that were sent for times before the seal. However, we're not
+            // guaranteed to see every seal we sent, especially across restarts.
+            // Start by finding the latest seal.
+            let mut latest_seal = Timestamp::minimum();
+            let mut all_received_writes = Vec::new();
+            for e in res.contents {
+                match e {
+                    ListenEvent::Sealed(ts) => {
+                        if ts > latest_seal {
+                            latest_seal = ts;
+                        }
+                    }
+                    ListenEvent::Records(records) => {
+                        for ((k, v), ts, diff) in records.into_iter() {
+                            let k = match k {
+                                Ok(k) => k,
+                                Err(err) => {
+                                    self.errors.push(format!("unable to decode key {}", err,));
+                                    continue;
+                                }
+                            };
+                            let v = match v {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    self.errors.push(format!("unable to decode val {}", err,));
+                                    continue;
+                                }
+                            };
+                            all_received_writes.push(((k, v), ts, diff));
+                        }
+                    }
+                }
+            }
+
+            // The latest seal shouldn't be past anything we sent.
+            let latest_seal_sent = self
+                .seal_frontier
+                .get(&req.stream)
+                .copied()
+                .unwrap_or_default();
+            if latest_seal > latest_seal_sent {
+                self.errors.push(format!(
+                    "received seal {} greater than the latest one we sent {}",
+                    latest_seal, latest_seal_sent
+                ));
+            }
+
+            // Verify that the output contains all sent writes less than the
+            // latest seal it contains.
+            //
+            // TODO: Figure out what our contract is for writes we've received
+            // in advance of this latest seal. There should be something we can
+            // do here.
+            let mut actual = all_received_writes
+                .into_iter()
+                .filter(|(_, ts, _)| *ts < latest_seal)
+                .collect();
+            let mut expected: Vec<((String, ()), u64, isize)> = self
+                .writes_by_seqno
+                .range((req.stream.clone(), SeqNo(0))..(req.stream, SeqNo(u64::MAX)))
+                .flat_map(|(_, v)| v)
+                .filter(|(_, ts, _)| *ts < latest_seal)
+                .cloned()
+                .collect();
+            if !updates_eq(&mut actual, &mut expected) {
+                self.errors.push(format!(
+                    "incorrect output {:?} up to {}, expected {:?} got: {:?}",
+                    req_id, latest_seal, expected, actual
+                ));
+            }
+        }
+    }
+
     fn step_seal(&mut self, req_id: ReqId, req: SealReq, res: Result<(), Error>) {
         let should_succeed = self.runtime_available
             && self.storage_available
@@ -221,15 +309,7 @@ impl Validator {
                         .flat_map(|(_, v)| v)
                         .cloned()
                         .collect();
-                    // TODO: This is also used by the implementation. Write a
-                    // slower but more obvious impl of consolidation here and
-                    // use it for validation.
-                    // TODO: The actual snapshot will eventually be compacted up
-                    // to some since frontier and the expected snapshot will need
-                    // to account for that when checking equality.
-                    differential_dataflow::consolidation::consolidate_updates(&mut actual);
-                    differential_dataflow::consolidation::consolidate_updates(&mut expected);
-                    if actual != expected {
+                    if !updates_eq(&mut actual, &mut expected) {
                         self.errors.push(format!(
                             "incorrect snapshot {:?} expected {:?} got: {:?}",
                             req_id, expected, actual
@@ -261,4 +341,19 @@ impl Validator {
         self.check_success(req_id, &res, should_succeed);
         self.runtime_available = false;
     }
+}
+
+fn updates_eq(
+    actual: &mut Vec<((String, ()), u64, isize)>,
+    expected: &mut Vec<((String, ()), u64, isize)>,
+) -> bool {
+    // TODO: This is also used by the implementation. Write a slower but more
+    // obvious impl of consolidation here and use it for validation.
+    //
+    // TODO: The actual snapshot will eventually be compacted up to some since
+    // frontier and the expected snapshot will need to account for that when
+    // checking equality.
+    differential_dataflow::consolidation::consolidate_updates(actual);
+    differential_dataflow::consolidation::consolidate_updates(expected);
+    actual == expected
 }

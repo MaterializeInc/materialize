@@ -9,14 +9,17 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
+use crate::indexed::{ListenEvent, Snapshot};
 use crate::nemesis::{
-    AllowCompactionReq, Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq,
-    SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
+    AllowCompactionReq, Input, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, Req,
+    Res, Runtime, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti,
+    WriteReqSingle, WriteRes,
 };
 use crate::unreliable::UnreliableHandle;
 
@@ -25,6 +28,8 @@ pub struct Direct {
     persister: RuntimeClient,
     unreliable: UnreliableHandle,
     streams: HashMap<String, (StreamWriteHandle<String, ()>, StreamReadHandle<String, ()>)>,
+    output_by_stream_name:
+        HashMap<String, Arc<Mutex<Vec<ListenEvent<Result<String, String>, Result<(), String>>>>>>,
     snapshots: HashMap<SnapshotId, DecodedSnapshot<String, ()>>,
 }
 
@@ -37,6 +42,7 @@ impl Runtime for Direct {
             Req::Write(WriteReq::Multi(req)) => {
                 Res::Write(WriteReq::Multi(req.clone()), self.write_multi(req))
             }
+            Req::ReadOutput(req) => Res::ReadOutput(req.clone(), self.read_output(req)),
             Req::Seal(req) => Res::Seal(req.clone(), self.seal(req)),
             Req::AllowCompaction(req) => {
                 Res::AllowCompaction(req.clone(), self.allow_compaction(req))
@@ -74,6 +80,7 @@ impl Direct {
             persister,
             unreliable,
             streams: HashMap::new(),
+            output_by_stream_name: HashMap::new(),
             snapshots: HashMap::new(),
         })
     }
@@ -85,7 +92,29 @@ impl Direct {
         let (streams, persister) = (&mut self.streams, &mut self.persister);
         match streams.entry(name.to_string()) {
             Entry::Occupied(x) => Ok(x.into_mut()),
-            Entry::Vacant(x) => persister.create_or_load(name).map(|token| x.insert(token)),
+            Entry::Vacant(x) => {
+                let (write, read) = persister.create_or_load(name)?;
+
+                // Init the stream output with a snapshot like the dd/timely
+                // operator would and start listening for new changes.
+                {
+                    let mut snap = read.snapshot()?;
+                    let mut snap_data = Vec::new();
+                    while snap.read(&mut snap_data) {}
+                    let output = Arc::new(Mutex::new(vec![ListenEvent::Records(snap_data)]));
+                    let previous_output = self
+                        .output_by_stream_name
+                        .insert(name.to_string(), output.clone());
+                    // This is expected to have been cleared on start.
+                    debug_assert!(previous_output.is_none());
+
+                    read.listen(Box::new(move |e| {
+                        output.lock().unwrap().push(e);
+                    }))?;
+                }
+
+                Ok(x.insert((write, read)))
+            }
         }
     }
 
@@ -108,6 +137,15 @@ impl Direct {
 
         let seqno = multi.write_atomic(updates).recv()?.0;
         Ok(WriteRes { seqno })
+    }
+
+    fn read_output(&mut self, req: ReadOutputReq) -> Result<ReadOutputRes, Error> {
+        let contents = if let Some(output) = self.output_by_stream_name.get_mut(&req.stream) {
+            output.lock()?.clone()
+        } else {
+            vec![]
+        };
+        Ok(ReadOutputRes { contents })
     }
 
     fn seal(&mut self, req: SealReq) -> Result<(), Error> {
@@ -153,8 +191,12 @@ impl Direct {
     fn start(&mut self) -> Result<(), Error> {
         // The handles from the previous persister cannot be used after stop.
         self.streams.clear();
+        // New "dataflow" (which we're simulating here) means new output.
+        self.output_by_stream_name.clear();
+
         let persister = (self.start_fn)(self.unreliable.clone())?;
         self.persister = persister;
+
         Ok(())
     }
 

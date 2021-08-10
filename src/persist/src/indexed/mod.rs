@@ -648,6 +648,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 //
 // TODO: This is similar to timely's capture Event but just different enough
 // that I couldn't see how to use it directly. Revisit.
+#[derive(Clone, Debug)]
 pub enum ListenEvent<K, V> {
     /// Records in the data stream.
     Records(Vec<((K, V), u64, isize)>),

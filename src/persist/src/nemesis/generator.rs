@@ -15,8 +15,8 @@ use rand::{Rng, SeedableRng};
 use serde::Serialize;
 
 use crate::nemesis::{
-    AllowCompactionReq, Input, ReadSnapshotReq, Req, ReqId, SealReq, SnapshotId, TakeSnapshotReq,
-    WriteReq, WriteReqMulti, WriteReqSingle,
+    AllowCompactionReq, Input, ReadOutputReq, ReadSnapshotReq, Req, ReqId, SealReq, SnapshotId,
+    TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle,
 };
 
 /// Configuration of the relative probabilities of producing various
@@ -26,6 +26,7 @@ pub struct GeneratorConfig {
     pub write_unsealed_weight: u32,
     pub write_sealed_weight: u32,
     pub write_multi_weight: u32,
+    pub read_output_weight: u32,
     pub seal_weight: u32,
     pub allow_compaction_weight: u32,
     pub take_snapshot_weight: u32,
@@ -42,6 +43,7 @@ impl GeneratorConfig {
             write_unsealed_weight: 1,
             write_sealed_weight: 1,
             write_multi_weight: 1,
+            read_output_weight: 1,
             seal_weight: 1,
             allow_compaction_weight: 1,
             take_snapshot_weight: 1,
@@ -61,6 +63,10 @@ impl Default for GeneratorConfig {
         // NB: If we need to temporarily disable an operation in all the nemesis
         // tests, set it to 0 here. (As opposed to clearing it in the impl of
         // `all_operations`, which will break the Generator tests.)
+
+        // TODO: Re-enable this once we aren't duplicating the output of listen
+        // and snapshot.
+        ops.read_output_weight = 0;
         ops
     }
 }
@@ -110,6 +116,7 @@ enum ReqGenerator {
     WriteUnsealed,
     WriteSealed,
     WriteMulti,
+    ReadOutput,
     Seal,
     AllowCompaction,
     TakeSnapshot,
@@ -180,6 +187,11 @@ impl ReqGenerator {
         Req::Write(WriteReq::Multi(WriteReqMulti { writes }))
     }
 
+    fn read_output(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
+        let stream = state.rng_stream(rng);
+        Req::ReadOutput(ReadOutputReq { stream })
+    }
+
     fn seal(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let stream = state.rng_stream(rng);
         let stream_sealed_ts = state
@@ -239,6 +251,7 @@ impl ReqGenerator {
             }
             ReqGenerator::WriteSealed => ReqGenerator::write_sealed(rng, state),
             ReqGenerator::WriteMulti => ReqGenerator::write_multi(rng, state),
+            ReqGenerator::ReadOutput => ReqGenerator::read_output(rng, state),
             ReqGenerator::Seal => ReqGenerator::seal(rng, state),
             ReqGenerator::AllowCompaction => ReqGenerator::allow_compaction(rng, state),
             ReqGenerator::TakeSnapshot => ReqGenerator::take_snapshot(rng, state),
@@ -297,6 +310,7 @@ impl Generator {
             Some((self.config.write_sealed_weight, ReqGenerator::WriteSealed))
                 .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
             Some((self.config.write_multi_weight, ReqGenerator::WriteMulti)),
+            Some((self.config.read_output_weight, ReqGenerator::ReadOutput)),
             Some((self.config.seal_weight, ReqGenerator::Seal)),
             Some((
                 self.config.allow_compaction_weight,
@@ -404,6 +418,9 @@ mod tests {
             Req::Write(WriteReq::Multi(_)) => {
                 counts.write_multi_weight += 1;
             }
+            Req::ReadOutput(_) => {
+                counts.read_output_weight += 1;
+            }
             Req::Seal(r) => {
                 let ts = cmp::max(
                     r.ts,
@@ -439,6 +456,7 @@ mod tests {
             write_unsealed_weight: 0,
             write_sealed_weight: 0,
             write_multi_weight: 0,
+            read_output_weight: 0,
             seal_weight: 0,
             allow_compaction_weight: 0,
             take_snapshot_weight: 0,
