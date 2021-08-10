@@ -46,16 +46,15 @@ def multi_json(s: str) -> List[Dict[Any, Any]]:
 
     return result
 
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
+def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--subnet-id", type=str, default=DEFAULT_SUBNET_ID)
     parser.add_argument("--key-name", type=str, required=False)
     parser.add_argument("--security-group-id", type=str, default=DEFAULT_SG_ID)
     parser.add_argument("--extra-tags", type=str, required=False)
     parser.add_argument("--instance-profile", type=str, default=DEFAULT_INSTPROF_NAME)
     parser.add_argument("--no-instance-profile", action="store_const", const=True)
-    args = parser.parse_args()
+
+def run(args: argparse.Namespace) -> None:
     instance_profile = None if args.no_instance_profile else args.instance_profile
     extra_tags = {}
     if args.extra_tags:
@@ -97,7 +96,3 @@ def main() -> None:
 
     print("Launched instances:")
     print_instances(instances)
-
-
-if __name__ == "__main__":
-    main()

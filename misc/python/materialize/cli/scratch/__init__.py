@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import os
+import argparse
 
 # Sane defaults for internal Materialize use in the scratch account
 DEFAULT_SUBNET_ID = "subnet-0b47df5733387582b"

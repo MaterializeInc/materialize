@@ -15,10 +15,8 @@ from materialize.cli.scratch import check_required_vars
 from materialize.scratch import launched_by, print_instances, tags, whoami
 from mypy_boto3_ec2.service_resource import Instance
 
-
-def main() -> None:
+def configure_parser(parser: argparse.ArgumentParser):
     check_required_vars()
-    parser = argparse.ArgumentParser()
     parser.add_argument(
         "who",
         nargs="*",
@@ -27,8 +25,7 @@ def main() -> None:
     )
     parser.add_argument("--all", help="Show all instances", action="store_true")
 
-    args = parser.parse_args()
-
+def run(args: argparse.Namespace) -> None:
     filter: Callable[[Instance], bool] = (
         (lambda _i: True) if args.all else (lambda i: launched_by(tags(i)) in args.who)
     )
@@ -36,7 +33,3 @@ def main() -> None:
     ists = [i for i in boto3.resource("ec2").instances.all() if filter(i)]
 
     print_instances(ists)
-
-
-if __name__ == "__main__":
-    main()
