@@ -324,6 +324,10 @@ def launch_cluster(
     return instances
 
 
+def whoami() -> str:
+    return boto3.client("sts").get_caller_identity()["UserId"].split(":")[1]
+
+
 def get_old_instances() -> List[InstanceTypeDef]:
     def is_running(i: InstanceTypeDef) -> bool:
         return i["State"]["Name"] == "running"

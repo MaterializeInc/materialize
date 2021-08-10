@@ -15,7 +15,7 @@ import sys
 from typing import Any, Dict, List
 
 import boto3
-from materialize.scratch import MachineDesc, launch_cluster
+from materialize.scratch import MachineDesc, launch_cluster, whoami
 from prettytable import PrettyTable
 
 
@@ -49,10 +49,6 @@ def multi_json(s: str) -> List[Dict[Any, Any]]:
             result.append(obj)
 
     return result
-
-
-def whoami() -> str:
-    return boto3.client("sts").get_caller_identity()["UserId"].split(":")[1]
 
 
 # Sane defaults for internal Materialize use in the scratch account
