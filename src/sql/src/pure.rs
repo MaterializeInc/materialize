@@ -26,11 +26,11 @@ use uuid::Uuid;
 use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
 use repr::strconv;
 use sql_parser::ast::{
-    display::AstDisplay, AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement,
-    CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrSeed, DbzMode,
-    Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem, SetExpr, Statement,
-    TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition, WithOption,
-    WithOptionValue,
+    display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
+    CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
+    CsrSeed, DbzMode, Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem,
+    SetExpr, Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
 };
 use sql_parser::parser::parse_columns;
 
@@ -88,7 +88,7 @@ pub fn purify(
 
             let mut file = None;
             match connector {
-                Connector::Kafka { broker, topic, .. } => {
+                CreateSourceConnector::Kafka { broker, topic, .. } => {
                     if !broker.contains(':') {
                         *broker += ":9092";
                     }
@@ -136,7 +136,7 @@ pub fn purify(
                         _ => {}
                     }
                 }
-                Connector::AvroOcf { path, .. } => {
+                CreateSourceConnector::AvroOcf { path, .. } => {
                     let path = path.clone();
                     task::block_in_place(|| {
                         // mz_avro::Reader has no async equivalent, so we're stuck
@@ -154,19 +154,19 @@ pub fn purify(
                     })?;
                 }
                 // Report an error if a file cannot be opened, or if it is a directory.
-                Connector::File { path, .. } => {
+                CreateSourceConnector::File { path, .. } => {
                     let f = File::open(&path).await?;
                     if f.metadata().await?.is_dir() {
                         bail!("Expected a regular file, but {} is a directory.", path);
                     }
                     file = Some(f);
                 }
-                Connector::S3 { .. } => {
+                CreateSourceConnector::S3 { .. } => {
                     let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
                     aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
                         .await?;
                 }
-                Connector::Kinesis { arn } => {
+                CreateSourceConnector::Kinesis { arn } => {
                     let region = arn
                         .parse::<ARN>()
                         .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
@@ -177,7 +177,7 @@ pub fn purify(
                         normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
                     aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
                 }
-                Connector::Postgres {
+                CreateSourceConnector::Postgres {
                     conn,
                     publication,
                     slot,
@@ -194,10 +194,10 @@ pub fn purify(
                     // detection
                     let _ = postgres_util::publication_info(&conn, &publication).await?;
                 }
-                Connector::PubNub { .. } => (),
+                CreateSourceConnector::PubNub { .. } => (),
             }
 
-            purify_format(
+            purify_source_format(
                 format,
                 connector,
                 &envelope,
@@ -356,16 +356,16 @@ pub fn purify(
     }
 }
 
-async fn purify_format(
+async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut Connector<Raw>,
+    connector: &mut CreateSourceConnector,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
-        && !matches!(connector, Connector::Kafka { .. })
+        && !matches!(connector, CreateSourceConnector::Kafka { .. })
     {
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
@@ -375,7 +375,7 @@ async fn purify_format(
     //
     // TODO(bwm): We should either make this the semantics everywhere, or deprecate
     // this.
-    if matches!(connector, Connector::Kafka { .. })
+    if matches!(connector, CreateSourceConnector::Kafka { .. })
         && matches!(envelope, Envelope::Upsert)
         && format.is_simple()
     {
@@ -393,7 +393,7 @@ async fn purify_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_format_single(
+            purify_source_format_single(
                 format,
                 connector,
                 envelope,
@@ -410,18 +410,32 @@ async fn purify_format(
                 anyhow!("[internal-error] File sources cannot be key-value sources")
             );
 
-            purify_format_single(key, connector, envelope, col_names, None, connector_options)
-                .await?;
-            purify_format_single(val, connector, envelope, col_names, None, connector_options)
-                .await?;
+            purify_source_format_single(
+                key,
+                connector,
+                envelope,
+                col_names,
+                None,
+                connector_options,
+            )
+            .await?;
+            purify_source_format_single(
+                val,
+                connector,
+                envelope,
+                col_names,
+                None,
+                connector_options,
+            )
+            .await?;
         }
     }
     Ok(())
 }
 
-async fn purify_format_single(
+async fn purify_source_format_single(
     format: &mut Format<Raw>,
-    connector: &mut Connector<Raw>,
+    connector: &mut CreateSourceConnector,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
@@ -434,7 +448,7 @@ async fn purify_format_single(
                 seed,
                 with_options: ccsr_options,
             } => {
-                let topic = if let Connector::Kafka { topic, .. } = connector {
+                let topic = if let CreateSourceConnector::Kafka { topic, .. } = connector {
                     topic
                 } else {
                     bail!("Confluent Schema Registry is only supported with Kafka sources")

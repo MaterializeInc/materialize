@@ -22,8 +22,9 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, CreateSourceFormat, CreateSourceKeyEnvelope, DataType, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, TableConstraint, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat,
+    CreateSourceKeyEnvelope, DataType, Envelope, Expr, Format, Ident, KeyConstraint, Query,
+    TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -354,7 +355,7 @@ impl_display!(CreateSchemaStatement);
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: Connector<T>,
+    pub connector: CreateSourceConnector,
     pub with_options: Vec<SqlOption<T>>,
     pub format: CreateSourceFormat<T>,
     pub key_envelope: CreateSourceKeyEnvelope,
@@ -414,7 +415,7 @@ impl_display_t!(CreateSourceStatement);
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub from: UnresolvedObjectName,
-    pub connector: Connector<T>,
+    pub connector: CreateSinkConnector<T>,
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope>,

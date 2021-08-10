@@ -1612,7 +1612,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
-        let connector = self.parse_connector()?;
+        let connector = self.parse_create_source_connector()?;
         let with_options = self.parse_opt_with_sql_options()?;
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
@@ -1714,7 +1714,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let from = self.parse_object_name()?;
         self.expect_keyword(INTO)?;
-        let connector = self.parse_connector()?;
+        let connector = self.parse_create_sink_connector()?;
         let mut with_options = vec![];
         if self.parse_keyword(WITH) {
             if let Some(Token::LParen) = self.next_token() {
@@ -1758,7 +1758,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
+    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector, ParserError> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -1766,7 +1766,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(CHANNEL)?;
                 let channel = self.parse_literal_string()?;
 
-                Ok(Connector::PubNub {
+                Ok(CreateSourceConnector::PubNub {
                     subscribe_key,
                     channel,
                 })
@@ -1782,7 +1782,7 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                Ok(Connector::Postgres {
+                Ok(CreateSourceConnector::Postgres {
                     conn,
                     publication,
                     slot,
@@ -1795,7 +1795,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Compression::None
                 };
-                Ok(Connector::File { path, compression })
+                Ok(CreateSourceConnector::File { path, compression })
             }
             KAFKA => {
                 self.expect_keyword(BROKER)?;
@@ -1813,23 +1813,17 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                let consistency = self.parse_kafka_consistency()?;
-                Ok(Connector::Kafka {
-                    broker,
-                    topic,
-                    key,
-                    consistency,
-                })
+                Ok(CreateSourceConnector::Kafka { broker, topic, key })
             }
             KINESIS => {
                 self.expect_keyword(ARN)?;
                 let arn = self.parse_literal_string()?;
-                Ok(Connector::Kinesis { arn })
+                Ok(CreateSourceConnector::Kinesis { arn })
             }
             AVRO => {
                 self.expect_keyword(OCF)?;
                 let path = self.parse_literal_string()?;
-                Ok(Connector::AvroOcf { path })
+                Ok(CreateSourceConnector::AvroOcf { path })
             }
             S3 => {
                 // FROM S3 DISCOVER OBJECTS
@@ -1870,11 +1864,46 @@ impl<'a> Parser<'a> {
                 } else {
                     Compression::None
                 };
-                Ok(Connector::S3 {
+                Ok(CreateSourceConnector::S3 {
                     key_sources,
                     pattern,
                     compression,
                 })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_create_sink_connector(&mut self) -> Result<CreateSinkConnector<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[KAFKA, AVRO])? {
+            KAFKA => {
+                self.expect_keyword(BROKER)?;
+                let broker = self.parse_literal_string()?;
+                self.expect_keyword(TOPIC)?;
+                let topic = self.parse_literal_string()?;
+                // one token of lookahead:
+                // * `KEY (` means we're parsing a list of columns for the key
+                // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
+                let key = if self.peek_keyword(KEY)
+                    && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
+                {
+                    let _ = self.expect_keyword(KEY);
+                    Some(self.parse_parenthesized_column_list(Mandatory)?)
+                } else {
+                    None
+                };
+                let consistency = self.parse_kafka_consistency()?;
+                Ok(CreateSinkConnector::Kafka {
+                    broker,
+                    topic,
+                    key,
+                    consistency,
+                })
+            }
+            AVRO => {
+                self.expect_keyword(OCF)?;
+                let path = self.parse_literal_string()?;
+                Ok(CreateSinkConnector::AvroOcf { path })
             }
             _ => unreachable!(),
         }

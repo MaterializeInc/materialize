@@ -381,7 +381,7 @@ FORMAT BYTES
 ----
 CREATE SOURCE foo FROM KAFKA BROKER 'bar' TOPIC 'baz' WITH (consistency = 'lug', ssl_certificate_file = '/Path/to/file') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: Kafka { broker: "bar", topic: "baz", key: None, consistency: None }, with_options: [Value { name: Ident("consistency"), value: String("lug") }, Value { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], format: Bare(Bytes), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: Kafka { broker: "bar", topic: "baz", key: None }, with_options: [Value { name: Ident("consistency"), value: String("lug") }, Value { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], format: Bare(Bytes), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE
@@ -487,105 +487,105 @@ CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT 
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None, consistency: None }, with_options: [], format: KeyValue { key: Text, value: Text }, key_envelope: Included, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: KeyValue { key: Text, value: Text }, key_envelope: Included, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS crobat ENVELOPE NONE
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS crobat
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None, consistency: None }, with_options: [], format: KeyValue { key: Text, value: Text }, key_envelope: Named(Ident("crobat")), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: KeyValue { key: Text, value: Text }, key_envelope: Named(Ident("crobat")), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY ENVELOPE NONE
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None, consistency: None }, with_options: [], format: KeyValue { key: Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] }), value: Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] }) }, key_envelope: Included, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: KeyValue { key: Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] }), value: Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] }) }, key_envelope: Included, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None, consistency: None }, with_options: [], format: Bare(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Bare(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING SCHEMA 'long' VALUE FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None, consistency: None }, with_options: [], format: KeyValue { key: Avro(Schema { schema: Inline("long"), with_options: [] }), value: Avro(Schema { schema: Inline("string"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: KeyValue { key: Avro(Schema { schema: Inline("long"), with_options: [] }), value: Avro(Schema { schema: Inline("string"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (confluent_wire_format = false) ENVELOPE NONE
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (confluent_wire_format = false)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None, consistency: None }, with_options: [], format: Bare(Avro(Schema { schema: Inline("string"), with_options: [WithOption { key: Ident("confluent_wire_format"), value: Some(Value(Boolean(false))) }] })), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Bare(Avro(Schema { schema: Inline("string"), with_options: [WithOption { key: Ident("confluent_wire_format"), value: Some(Value(Boolean(false))) }] })), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None, consistency: None }, with_options: [], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = 2) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("start_offset"), value: Number("2") }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Number("2") }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = []) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("start_offset"), value: Array([]) }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([]) }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2]) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2")]) }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2")]) }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2, 40000000]) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2"), Number("40000000")]) }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2"), Number("40000000")]) }], format: KeyValue { key: Text, value: Avro(Schema { schema: File("path"), with_options: [] }) }, key_envelope: None, envelope: Upsert, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 ----
 CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("a"), Ident("b")], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("a"), Ident("b")], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
 
 parse-statement
 CREATE SOURCE source (a, PRIMARY KEY (a) NOT ENFORCED, b) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 ----
 CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("a"), Ident("b")], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("a"), Ident("b")], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
 
 parse-statement
 CREATE SOURCE source (PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 ----
 CREATE SOURCE source (PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
 
 parse-statement
 CREATE SOURCE source (PRIMARY, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 ----
 CREATE SOURCE source (primary, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("primary")], connector: Kafka { broker: "broker", topic: "topic", key: None, consistency: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("primary")], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [], format: None, key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }) })
 
 parse-statement
 CREATE SOURCE source PRIMARY KEY (a) NOT ENFORCED FROM KAFKA BROKER 'broker' TOPIC 'topic'
@@ -639,16 +639,16 @@ CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+error: Expected one of KAFKA or AVRO, found FILE
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
+                              ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+error: Expected one of KAFKA or AVRO, found FILE
+CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
+                              ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
@@ -688,44 +688,44 @@ CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), fro
 parse-statement
 CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
-CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: true })
+error: Expected one of KAFKA or AVRO, found FILE
+CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
+                                            ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF 123
 ----
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF 123
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Value(Number("123"))), if_not_exists: false })
+error: Expected one of KAFKA or AVRO, found FILE
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF 123
+                              ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
 ----
+error: Expected one of KAFKA or AVRO, found FILE
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: false, as_of: Some(Value(Number("123"))), if_not_exists: false })
+                              ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF now()
 ----
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF now()
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: Some(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), if_not_exists: false })
+error: Expected one of KAFKA or AVRO, found FILE
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF now()
+                              ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
 ----
+error: Expected one of KAFKA or AVRO, found FILE
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+                              ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
 ----
+error: Expected one of KAFKA or AVRO, found FILE
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: File { path: "baz", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+                              ^
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
