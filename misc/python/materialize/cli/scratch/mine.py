@@ -8,11 +8,12 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-
-from materialize.cli.scratch import check_required_vars
-from materialize.scratch import launched_by, tags, whoami, print_instances
+from typing import Callable
 
 import boto3
+from materialize.cli.scratch import check_required_vars
+from materialize.scratch import launched_by, print_instances, tags, whoami
+from mypy_boto3_ec2.service_resource import Instance
 
 
 def main() -> None:
@@ -28,9 +29,11 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    filter = (lambda _i: True) if args.all else (lambda i: launched_by(tags(i)) in args.who)
+    filter: Callable[[Instance], bool] = (
+        (lambda _i: True) if args.all else (lambda i: launched_by(tags(i)) in args.who)
+    )
 
-    ists  = [i for i in boto3.resource('ec2').instances.all() if filter(i)]
+    ists = [i for i in boto3.resource("ec2").instances.all() if filter(i)]
 
     print_instances(ists)
 
