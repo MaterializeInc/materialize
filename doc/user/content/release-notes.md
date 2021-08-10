@@ -46,11 +46,13 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.8.4 %}}
+{{% version-header v0.9.1 %}}
 
 - Change the type of the [`mz_metrics`](/sql/system-catalog#mz_metrics).`time`
   column from [`timestamp`] to [`timestamp with time zone`] to better reflect
   that the timestamp is in UTC.
+
+{{% version-header v0.9.0 %}}
 
 - **Breaking change.** Reject [Protobuf sources] whose schemas contain
   unsigned integer types (`uint32`, `uint64`, `fixed32`, and `fixed64`).
