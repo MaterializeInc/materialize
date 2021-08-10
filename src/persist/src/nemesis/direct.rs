@@ -12,11 +12,11 @@ use std::collections::HashMap;
 
 use crate::error::Error;
 use crate::indexed::runtime::{
-    self, DecodedSnapshot, RuntimeClient, StreamReadHandle, StreamWriteHandle,
+    self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
 use crate::nemesis::{
     AllowCompactionReq, Input, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq,
-    SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteRes,
+    SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::unreliable::UnreliableHandle;
 
@@ -31,7 +31,12 @@ pub struct Direct {
 impl Runtime for Direct {
     fn run(&mut self, i: Input) -> Step {
         let res = match i.req {
-            Req::Write(req) => Res::Write(req.clone(), self.write(req)),
+            Req::Write(WriteReq::Single(req)) => {
+                Res::Write(WriteReq::Single(req.clone()), self.write_single(req))
+            }
+            Req::Write(WriteReq::Multi(req)) => {
+                Res::Write(WriteReq::Multi(req.clone()), self.write_multi(req))
+            }
             Req::Seal(req) => Res::Seal(req.clone(), self.seal(req)),
             Req::AllowCompaction(req) => {
                 Res::AllowCompaction(req.clone(), self.allow_compaction(req))
@@ -84,9 +89,24 @@ impl Direct {
         }
     }
 
-    fn write(&mut self, req: WriteReq) -> Result<WriteRes, Error> {
+    fn write_single(&mut self, req: WriteReqSingle) -> Result<WriteRes, Error> {
         let (write, _) = self.stream(&req.stream)?;
         let seqno = write.write(&[req.update]).recv()?.0;
+        Ok(WriteRes { seqno })
+    }
+
+    fn write_multi(&mut self, req: WriteReqMulti) -> Result<WriteRes, Error> {
+        let mut write_handles = Vec::new();
+        let mut updates = Vec::new();
+        for req in req.writes {
+            let (write, _) = self.stream(&req.stream)?;
+            updates.push((write.stream_id(), vec![req.update]));
+            write_handles.push(write.clone());
+        }
+        let write_handles = write_handles.iter().collect::<Vec<_>>();
+        let multi = MultiWriteHandle::new(&write_handles)?;
+
+        let seqno = multi.write_atomic(updates).recv()?.0;
         Ok(WriteRes { seqno })
     }
 
@@ -187,7 +207,8 @@ mod tests {
     fn direct_mzlike() {
         let config = GeneratorConfig {
             // Writes are likely to outnumber other operations.
-            write_unsealed_weight: 20,
+            write_unsealed_weight: 10,
+            write_multi_weight: 10,
             // Writes to sealed timestamps are errors that we don't expect in
             // production usage.
             write_sealed_weight: 0,

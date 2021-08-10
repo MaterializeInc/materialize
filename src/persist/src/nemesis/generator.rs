@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use crate::nemesis::{
     AllowCompactionReq, Input, ReadSnapshotReq, Req, ReqId, SealReq, SnapshotId, TakeSnapshotReq,
-    WriteReq,
+    WriteReq, WriteReqMulti, WriteReqSingle,
 };
 
 /// Configuration of the relative probabilities of producing various
@@ -25,6 +25,7 @@ use crate::nemesis::{
 pub struct GeneratorConfig {
     pub write_unsealed_weight: u32,
     pub write_sealed_weight: u32,
+    pub write_multi_weight: u32,
     pub seal_weight: u32,
     pub allow_compaction_weight: u32,
     pub take_snapshot_weight: u32,
@@ -40,6 +41,7 @@ impl GeneratorConfig {
         GeneratorConfig {
             write_unsealed_weight: 1,
             write_sealed_weight: 1,
+            write_multi_weight: 1,
             seal_weight: 1,
             allow_compaction_weight: 1,
             take_snapshot_weight: 1,
@@ -107,6 +109,7 @@ impl GeneratorState {
 enum ReqGenerator {
     WriteUnsealed,
     WriteSealed,
+    WriteMulti,
     Seal,
     AllowCompaction,
     TakeSnapshot,
@@ -118,7 +121,7 @@ enum ReqGenerator {
 }
 
 impl ReqGenerator {
-    fn write_unsealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
+    fn write_unsealed(rng: &mut SmallRng, state: &mut GeneratorState) -> WriteReqSingle {
         let stream = state.rng_stream(rng);
         let key = state.rng_key(rng);
         let stream_sealed_ts = state
@@ -134,10 +137,10 @@ impl ReqGenerator {
         // once we start thinking of operator persistence? Perhaps
         // overflows, what else might be relevant here then?
         let diff = rng.gen_range(-2..=2);
-        Req::Write(WriteReq {
+        WriteReqSingle {
             stream,
             update: ((key, ()), ts, diff),
-        })
+        }
     }
 
     fn write_sealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
@@ -151,10 +154,30 @@ impl ReqGenerator {
             .expect("internal nemesis error: no streams has a sealed ts > 0");
         // This is expected to error so it doesn't matter what diff is.
         let diff = 1;
-        Req::Write(WriteReq {
+        Req::Write(WriteReq::Single(WriteReqSingle {
             stream: stream,
             update: ((key, ()), ts, diff),
-        })
+        }))
+    }
+
+    // NB: Unlike WriteReqSingle, this is always generated so that the timestamp
+    // will not be sealed. We already cover that error case with write_sealed
+    // and, given that a single write ends up being mapped to the same code path
+    // by the time it gets to the Runtime barrier, it's not interesting to also
+    // test it here.
+    fn write_multi(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
+        // MultiWriteHandle and atomic_write both gracefully handle duplication,
+        // so we can simply generate some number of normal writes to perform
+        // atomically.
+        //
+        // NB: We generate up to state.streams.len() writes to apply atomically,
+        // but, again, this doesn't mean they are distinct streams. It's just a
+        // convenient way to make this scale up proportionally to the number of
+        // streams (which may stop being hardcoded in the future).
+        let writes = (0..state.streams.len())
+            .map(|_| ReqGenerator::write_unsealed(rng, state))
+            .collect();
+        Req::Write(WriteReq::Multi(WriteReqMulti { writes }))
     }
 
     fn seal(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
@@ -211,8 +234,11 @@ impl ReqGenerator {
 
     fn gen(&self, rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         match self {
-            ReqGenerator::WriteUnsealed => ReqGenerator::write_unsealed(rng, state),
+            ReqGenerator::WriteUnsealed => {
+                Req::Write(WriteReq::Single(ReqGenerator::write_unsealed(rng, state)))
+            }
             ReqGenerator::WriteSealed => ReqGenerator::write_sealed(rng, state),
+            ReqGenerator::WriteMulti => ReqGenerator::write_multi(rng, state),
             ReqGenerator::Seal => ReqGenerator::seal(rng, state),
             ReqGenerator::AllowCompaction => ReqGenerator::allow_compaction(rng, state),
             ReqGenerator::TakeSnapshot => ReqGenerator::take_snapshot(rng, state),
@@ -270,6 +296,7 @@ impl Generator {
             )),
             Some((self.config.write_sealed_weight, ReqGenerator::WriteSealed))
                 .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
+            Some((self.config.write_multi_weight, ReqGenerator::WriteMulti)),
             Some((self.config.seal_weight, ReqGenerator::Seal)),
             Some((
                 self.config.allow_compaction_weight,
@@ -367,12 +394,15 @@ mod tests {
     fn all_operations() {
         let mut closed_by_stream = HashMap::new();
         let mut count_input = move |input: Input, counts: &mut GeneratorConfig| match input.req {
-            Req::Write(r) => {
+            Req::Write(WriteReq::Single(r)) => {
                 if r.update.1 >= closed_by_stream.get(&r.stream).copied().unwrap_or_default() {
                     counts.write_unsealed_weight += 1;
                 } else {
                     counts.write_sealed_weight += 1;
                 }
+            }
+            Req::Write(WriteReq::Multi(_)) => {
+                counts.write_multi_weight += 1;
             }
             Req::Seal(r) => {
                 let ts = cmp::max(
@@ -408,6 +438,7 @@ mod tests {
         let mut counts = GeneratorConfig {
             write_unsealed_weight: 0,
             write_sealed_weight: 0,
+            write_multi_weight: 0,
             seal_weight: 0,
             allow_compaction_weight: 0,
             take_snapshot_weight: 0,

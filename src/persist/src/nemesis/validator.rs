@@ -13,14 +13,14 @@ use std::fmt;
 use crate::error::Error;
 use crate::nemesis::{
     AllowCompactionReq, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step,
-    TakeSnapshotReq, WriteReq, WriteRes,
+    TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::storage::SeqNo;
 
 pub struct Validator {
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
-    writes_by_seqno: BTreeMap<(String, SeqNo), ((String, ()), u64, isize)>,
+    writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, isize)>>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
     storage_available: bool,
@@ -65,7 +65,8 @@ impl Validator {
         // TODO: Figure out how to get the log crate working.
         eprintln!("step: {:?}", &s);
         match s.res {
-            Res::Write(req, res) => self.step_write(s.req_id, req, res),
+            Res::Write(WriteReq::Single(req), res) => self.step_write_single(s.req_id, req, res),
+            Res::Write(WriteReq::Multi(req), res) => self.step_write_multi(s.req_id, req, res),
             Res::Seal(req, res) => self.step_seal(s.req_id, req, res),
             Res::AllowCompaction(req, res) => self.step_allow_compaction(s.req_id, req, res),
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
@@ -100,7 +101,12 @@ impl Validator {
         }
     }
 
-    fn step_write(&mut self, req_id: ReqId, req: WriteReq, res: Result<WriteRes, Error>) {
+    fn step_write_single(
+        &mut self,
+        req_id: ReqId,
+        req: WriteReqSingle,
+        res: Result<WriteRes, Error>,
+    ) {
         let should_succeed = self.runtime_available
             && self.storage_available
             && req.update.1
@@ -112,7 +118,37 @@ impl Validator {
         self.check_success(req_id, &res, should_succeed);
         if let Ok(res) = res {
             self.writes_by_seqno
-                .insert((req.stream, SeqNo(res.seqno)), req.update);
+                .entry((req.stream, SeqNo(res.seqno)))
+                .or_default()
+                .push(req.update);
+        }
+    }
+
+    fn step_write_multi(
+        &mut self,
+        req_id: ReqId,
+        req: WriteReqMulti,
+        res: Result<WriteRes, Error>,
+    ) {
+        let should_succeed = self.runtime_available
+            && self.storage_available
+            && req.writes.len() > 0
+            && req.writes.iter().all(|req| {
+                req.update.1
+                    >= self
+                        .seal_frontier
+                        .get(&req.stream)
+                        .copied()
+                        .unwrap_or_default()
+            });
+        self.check_success(req_id, &res, should_succeed);
+        if let Ok(res) = res {
+            for req in req.writes {
+                self.writes_by_seqno
+                    .entry((req.stream, SeqNo(res.seqno)))
+                    .or_default()
+                    .push(req.update);
+            }
         }
     }
 
@@ -182,7 +218,7 @@ impl Validator {
                     let mut expected: Vec<((String, ()), u64, isize)> = self
                         .writes_by_seqno
                         .range((stream.clone(), SeqNo(0))..(stream, SeqNo(res.seqno)))
-                        .map(|(_, v)| v)
+                        .flat_map(|(_, v)| v)
                         .cloned()
                         .collect();
                     // TODO: This is also used by the implementation. Write a

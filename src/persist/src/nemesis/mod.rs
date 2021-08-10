@@ -68,7 +68,6 @@
 // - Storage (buffer/blob) with variable latency/slow requests
 // - Vary key size
 // - Deleting streams
-// - Atomic multi-stream writes
 
 use std::env;
 
@@ -140,9 +139,20 @@ pub enum Res {
 }
 
 #[derive(Clone, Debug)]
-pub struct WriteReq {
+pub struct WriteReqSingle {
     stream: String,
     update: ((String, ()), u64, isize),
+}
+
+#[derive(Clone, Debug)]
+pub struct WriteReqMulti {
+    writes: Vec<WriteReqSingle>,
+}
+
+#[derive(Clone, Debug)]
+pub enum WriteReq {
+    Single(WriteReqSingle),
+    Multi(WriteReqMulti),
 }
 
 #[derive(Clone, Debug)]
