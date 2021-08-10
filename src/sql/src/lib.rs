@@ -71,14 +71,14 @@ macro_rules! unsupported {
             feature: $feature.to_string(),
             issue_no: None,
         }
-        .into());
+        .into())
     };
     ($issue:expr, $feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),
             issue_no: Some($issue),
         }
-        .into());
+        .into())
     };
 }
 
