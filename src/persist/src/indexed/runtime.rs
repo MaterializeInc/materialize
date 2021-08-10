@@ -578,53 +578,81 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
     fn work(&mut self) -> bool {
-        let cmd = match self.rx.recv() {
-            Ok(cmd) => cmd,
+        let mut cmds = vec![];
+        match self.rx.recv() {
+            Ok(cmd) => cmds.push(cmd),
             Err(crossbeam_channel::RecvError) => {
                 // All Runtime handles hung up. Drop should have shut things down
                 // nicely, so this is unexpected.
                 return false;
             }
         };
-        match cmd {
-            Cmd::Stop(res) => {
-                res.fill(self.indexed.close());
-                return false;
-            }
-            Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
-                let r = self.indexed.register(&id, key_codec_name, val_codec_name);
-                res.fill(r);
-            }
-            Cmd::Destroy(id, res) => {
-                let r = self.indexed.destroy(&id);
-                res.fill(r);
-            }
-            Cmd::Write(updates, res) => {
-                let write_res = self.indexed.write_sync(updates);
-                // TODO: Move this to a Cmd::Tick or something.
-                let step_res = self.indexed.step();
-                res.fill(step_res.and_then(|_| write_res));
-            }
-            Cmd::Seal(ids, ts, res) => {
-                let seal_res = self.indexed.seal(ids, ts);
-                // TODO: Move this to a Cmd::Tick or something.
-                let step_res = self.indexed.step();
-                res.fill(step_res.and_then(|_| seal_res));
-            }
-            Cmd::AllowCompaction(id, ts, res) => {
-                let r = self.indexed.allow_compaction(id, ts);
-                res.fill(r);
-            }
-            Cmd::Snapshot(id, res) => {
-                let r = self.indexed.snapshot(id);
-                res.fill(r);
-            }
-            Cmd::Listen(id, listen_fn, res) => {
-                let r = self.indexed.listen(id, listen_fn);
-                res.fill(r);
+
+        let mut more_work = true;
+
+        // Grab as many commands as we can out of the channel and execute them
+        // all before calling `step` again to amortise the cost of trace
+        // maintenance between them.
+        loop {
+            match self.rx.try_recv() {
+                Ok(cmd) => cmds.push(cmd),
+                Err(crossbeam_channel::TryRecvError::Empty) => {
+                    break;
+                }
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    // All Runtime handles hung up. Drop should have shut things down
+                    // nicely, so this is unexpected.
+                    more_work = false;
+                }
             }
         }
-        return true;
+
+        for cmd in cmds {
+            match cmd {
+                Cmd::Stop(res) => {
+                    // Finish up any pending work that we can before closing.
+                    let _ = self.indexed.step();
+                    res.fill(self.indexed.close());
+                    return false;
+                }
+                Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
+                    let r = self.indexed.register(&id, key_codec_name, val_codec_name);
+                    res.fill(r);
+                }
+                Cmd::Destroy(id, res) => {
+                    let r = self.indexed.destroy(&id);
+                    res.fill(r);
+                }
+                Cmd::Write(updates, res) => {
+                    let r = self.indexed.write_sync(updates);
+                    res.fill(r);
+                }
+                Cmd::Seal(ids, ts, res) => {
+                    let r = self.indexed.seal(ids, ts);
+                    res.fill(r);
+                }
+                Cmd::AllowCompaction(id, ts, res) => {
+                    let r = self.indexed.allow_compaction(id, ts);
+                    res.fill(r);
+                }
+                Cmd::Snapshot(id, res) => {
+                    let r = self.indexed.snapshot(id);
+                    res.fill(r);
+                }
+                Cmd::Listen(id, listen_fn, res) => {
+                    let r = self.indexed.listen(id, listen_fn);
+                    res.fill(r);
+                }
+            }
+        }
+
+        if let Err(e) = self.indexed.step() {
+            // TODO: revisit whether we need to move this to a different log level
+            // depending on how spammy it ends up being. Alternatively, we
+            // may want to rate-limit our logging here.
+            log::warn!("error running step: {:?}", e);
+        }
+        return more_work;
     }
 }
 
