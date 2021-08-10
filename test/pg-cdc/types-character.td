@@ -23,6 +23,7 @@ CREATE TABLE t1 (f1 VARCHAR(10), f2 CHAR(10), f3 TEXT);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 INSERT INTO t1 VALUES ('abc', 'abc', 'abc');
+INSERT INTO t1 VALUES ('abc ', 'abc ', 'abc ');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
@@ -45,3 +46,15 @@ INSERT INTO t1 SELECT * FROM t1;
 > SELECT * FROM t1;
 "abc" "abc       " "abc"
 "abc" "abc       " "abc"
+"abc " "abc       " "abc "
+"abc " "abc       " "abc "
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+UPDATE t1 SET f1 = 'klm', f2 = 'klm', f3 = 'klm' WHERE f1 = 'abc';
+UPDATE t1 SET f1 = 'xyz ', f2 = 'xyz ', f3 = 'xyz ' WHERE f1 = 'abc ';
+
+> SELECT * FROM t1;
+"klm" "klm       " "klm"
+"klm" "klm       " "klm"
+"xyz " "xyz       " "xyz "
+"xyz " "xyz       " "xyz "
