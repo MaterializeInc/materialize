@@ -28,7 +28,7 @@ use crate::pfuture::{Future, FutureHandle};
 use crate::storage::{Blob, Buffer, SeqNo};
 use crate::Codec;
 
-enum Cmd {
+pub(crate) enum Cmd {
     Register(String, (&'static str, &'static str), FutureHandle<Id>),
     Destroy(String, FutureHandle<bool>),
     Write(
@@ -610,43 +610,50 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
             }
         }
 
+        // TODO: naming
+        let mut cmd_batch = vec![];
         for cmd in cmds {
             match cmd {
-                Cmd::Stop(res) => {
-                    // Finish up any pending work that we can before closing.
-                    let _ = self.indexed.step();
-                    res.fill(self.indexed.close());
-                    return false;
+                cmd @ Cmd::Write(..) | cmd @ Cmd::Seal(..) | cmd @ Cmd::AllowCompaction(..) => {
+                    cmd_batch.push(cmd)
                 }
-                Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
-                    let r = self.indexed.register(&id, key_codec_name, val_codec_name);
-                    res.fill(r);
-                }
-                Cmd::Destroy(id, res) => {
-                    let r = self.indexed.destroy(&id);
-                    res.fill(r);
-                }
-                Cmd::Write(updates, res) => {
-                    let r = self.indexed.write_sync(updates);
-                    res.fill(r);
-                }
-                Cmd::Seal(ids, ts, res) => {
-                    let r = self.indexed.seal(ids, ts);
-                    res.fill(r);
-                }
-                Cmd::AllowCompaction(id, ts, res) => {
-                    let r = self.indexed.allow_compaction(id, ts);
-                    res.fill(r);
-                }
-                Cmd::Snapshot(id, res) => {
-                    let r = self.indexed.snapshot(id);
-                    res.fill(r);
-                }
-                Cmd::Listen(id, listen_fn, res) => {
-                    let r = self.indexed.listen(id, listen_fn);
-                    res.fill(r);
+                cmd => {
+                    if !cmd_batch.is_empty() {
+                        let cmds = std::mem::take(&mut cmd_batch);
+                        self.indexed.handle_cmds(cmds);
+                    }
+
+                    match cmd {
+                        Cmd::Stop(res) => {
+                            // Finish up any pending work that we can before closing.
+                            let _ = self.indexed.step();
+                            res.fill(self.indexed.close());
+                            return false;
+                        }
+                        Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
+                            let r = self.indexed.register(&id, key_codec_name, val_codec_name);
+                            res.fill(r);
+                        }
+                        Cmd::Destroy(id, res) => {
+                            let r = self.indexed.destroy(&id);
+                            res.fill(r);
+                        }
+                        Cmd::Snapshot(id, res) => {
+                            let r = self.indexed.snapshot(id);
+                            res.fill(r);
+                        }
+                        Cmd::Listen(id, listen_fn, res) => {
+                            let r = self.indexed.listen(id, listen_fn);
+                            res.fill(r);
+                        }
+                        Cmd::Write(..) | Cmd::AllowCompaction(..) | Cmd::Seal(..) => unreachable!(),
+                    }
                 }
             }
+        }
+        if !cmd_batch.is_empty() {
+            let cmds = std::mem::take(&mut cmd_batch);
+            self.indexed.handle_cmds(cmds);
         }
 
         if let Err(e) = self.indexed.step() {

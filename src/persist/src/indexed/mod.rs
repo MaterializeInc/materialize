@@ -31,6 +31,7 @@ use crate::indexed::encoding::{
     StreamRegistration,
 };
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
+use crate::indexed::runtime::Cmd;
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
 
@@ -307,12 +308,10 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         // TODO: Incrementally compact future.
     }
 
-    /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
-    /// with the given id.
-    pub fn write_sync(
-        &mut self,
-        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
-    ) -> Result<SeqNo, Error> {
+    fn validate_write_sync(
+        &self,
+        updates: &[(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)],
+    ) -> Result<(), Error> {
         for (id, updates) in updates.iter() {
             let sealed_frontier = self.sealed_frontier(*id)?;
             for update in updates.iter() {
@@ -326,6 +325,16 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Synchronously persists (Key, Value, Time, Diff) updates for the stream
+    /// with the given id.
+    pub fn write_sync(
+        &mut self,
+        updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+    ) -> Result<SeqNo, Error> {
+        self.validate_write_sync(&updates)?;
         let prev = self.serialize_meta();
         let mut updates_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
         for (id, updates) in updates.into_iter() {
@@ -520,40 +529,34 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         Ok(trace.get_seal())
     }
 
-    /// Check if a given seal command is valid and if so, return the set of ids and
-    /// their previous seal frontiers.
-    fn validate_seal(&self, ids: &[Id], seal_ts: u64) -> Result<Vec<(Id, u64)>, Error> {
-        ids.iter()
-            .map(|id| {
-                let prev = self.sealed_frontier(*id)?;
+    fn apply_seal(&mut self, ids: Vec<Id>, seal_ts: u64) -> Result<(), Error> {
+        for id in ids.iter() {
+            let prev = self.sealed_frontier(*id)?;
+            if !prev.less_than(&seal_ts) {
+                return Err(Error::from(format!(
+                    "invalid seal for {:?}: {:?} not in advance of current seal frontier {:?}",
+                    id, seal_ts, prev
+                )));
+            }
+        }
 
-                if !prev.less_than(&seal_ts) {
-                    Err(Error::from(format!(
-                        "invalid seal for {:?}: {:?} not in advance of current seal frontier {:?}",
-                        id, seal_ts, prev
-                    )))
-                } else {
-                    Ok((*id, prev[0]))
-                }
-            })
-            .collect()
+        for id in ids.iter() {
+            let trace = self
+                .traces
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            trace.update_seal(seal_ts);
+        }
+
+        Ok(())
     }
 
     /// Sealing a time advances the "sealed" frontier for an id, which restricts
     /// what times can later be sealed and written for that id. See
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64) -> Result<(), Error> {
-        let prev = self.validate_seal(&ids, seal_ts)?;
-
-        // Update in-memory state to reflect the new seal.
-        // TODO: we should keep the in-memory state immutable until after the
-        // results have been safely committed to durable storage. For now this
-        // protocol is simple enough to reason about.
-        for id in ids.iter() {
-            let trace = self.traces.get_mut(id).expect("trace known to exist");
-
-            trace.update_seal(seal_ts);
-        }
+        let prev = self.serialize_meta();
+        self.apply_seal(ids, seal_ts)?;
 
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
@@ -561,16 +564,21 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             // Revert in-memory state back to its previous version so that
             // things are consistent between the durably persisted version
             // and the in-memory version.
-            for (id, seal) in prev {
-                let trace = self.traces.get_mut(&id).expect("trace known to exist");
-
-                trace.update_seal(seal);
-            }
-
-            Err(e)
-        } else {
-            Ok(())
+            self.restore(prev);
+            return Err(format!("failed to commit metadata after seal: {}", e).into());
         }
+
+        Ok(())
+    }
+
+    fn apply_allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
+        let trace = self
+            .traces
+            .get_mut(&id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let since = Antichain::from_elem(since);
+
+        trace.allow_compaction(since)
     }
 
     /// Permit compaction of updates at times < since to since.
@@ -584,32 +592,18 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// calls with a frontier <= current_compaction_frontier. We chose to mirror
     /// the `seal` API here but if that doesn't make sense, remove the restrictions.
     pub fn allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
-        let trace = self
-            .traces
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let prev = trace.meta();
-        let since = Antichain::from_elem(since);
-
-        trace.allow_compaction(since)?;
-        // Atomically update the meta with both the trace and future changes.
-        //
+        let prev = self.serialize_meta();
+        self.apply_allow_compaction(id, since)?;
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
         if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
-            let trace = self
-                .traces
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-
-            // Revert in-memory state back to its previous version so that
-            // things are consistent between the durably persisted version
-            // and the in-memory version.
-            *trace = BlobTrace::new(prev);
-            Err(e)
-        } else {
-            Ok(())
+            // We were unable to properly commit the results of draining the logical buffer.
+            // Revert back to the previous version, so that we can retry again next time.
+            self.restore(prev);
+            return Err(format!("failed to commit metadata after allow_compaction: {}", e).into());
         }
+
+        Ok(())
     }
 
     /// Appends the given `batch` to the future for `id`, writing the data into
@@ -673,6 +667,107 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         let _ = self.sealed_frontier(id)?;
         self.listeners.entry(id).or_default().push(listen_fn);
         Ok(())
+    }
+
+    fn handle_cmds_error(&mut self, cmds: Vec<Cmd>, prev: BlobMeta, err: Error) {
+        for cmd in cmds.into_iter() {
+            match cmd {
+                Cmd::Write(_, res) => res.fill(Err(Error::from(
+                    format!("error while attempting write in a batch: {:?}", err).to_string(),
+                ))),
+                Cmd::Seal(_, _, res) => res.fill(Err(Error::from(
+                    format!("error while attempting seal in a batch: {:?}", err).to_string(),
+                ))),
+                Cmd::AllowCompaction(_, _, res) => res.fill(Err(Error::from(
+                    format!(
+                        "error while attempting allow_compaction in a batch: {:?}",
+                        err
+                    )
+                    .to_string(),
+                ))),
+                _ => unreachable!(),
+            }
+        }
+
+        self.restore(prev);
+    }
+
+    /// Handle a sequence of write, seal and allow_compaction commands
+    pub(crate) fn handle_cmds(&mut self, cmds: Vec<Cmd>) {
+        let prev = self.serialize_meta();
+
+        let mut pending_responses = vec![];
+        let mut writes_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
+        let mut seqno = self.futures_seqno_upper;
+
+        for cmd in cmds.iter() {
+            let resp = match cmd {
+                Cmd::Write(writes, _) => match self.validate_write_sync(writes) {
+                    Ok(_) => {
+                        let ret = seqno;
+                        seqno = SeqNo(ret.0 + 1);
+                        for (id, updates) in writes.iter() {
+                            writes_by_id
+                                .entry(*id)
+                                .or_default()
+                                .extend(updates.iter().cloned());
+                        }
+
+                        Ok(Some(ret))
+                    }
+                    Err(e) => Err(e),
+                },
+                Cmd::Seal(ids, ts_upper, _) => {
+                    self.apply_seal(ids.to_vec(), *ts_upper).map(|_| None)
+                }
+                Cmd::AllowCompaction(id, ts, _) => {
+                    self.apply_allow_compaction(*id, *ts).map(|_| None)
+                }
+                _ => {
+                    return self.handle_cmds_error(
+                        cmds,
+                        prev,
+                        Error::from("invalid command sent to handle commands"),
+                    )
+                }
+            };
+            pending_responses.push(resp);
+        }
+
+        let desc = self.futures_seqno_upper..seqno;
+        self.futures_seqno_upper = desc.end;
+
+        // Persist writes and metadata changes to durable storage. Any failure here
+        // needs to be handled by sending an error response for all commands and
+        // reverting the in-memory state back to what it was prior to processing all
+        // commands.
+
+        // First, persist the writes.
+        for (id, updates) in writes_by_id {
+            if !updates.is_empty() {
+                debug_assert!(desc.end > desc.start);
+                if let Err(e) = self.write_sync_inner(id, updates, &desc) {
+                    return self.handle_cmds_error(cmds, prev, e);
+                }
+            }
+        }
+
+        // TODO: correctly handle error here.
+        if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
+            return self.handle_cmds_error(cmds, prev, e);
+        }
+
+        for (cmd, rsp) in cmds.into_iter().zip(pending_responses.into_iter()) {
+            match (cmd, rsp) {
+                (Cmd::Write(_, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Seal(_, _, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::AllowCompaction(_, _, res), Err(e)) => res.fill(Err(e)),
+                (Cmd::Write(_, res), Ok(Some(seqno))) => res.fill(Ok(seqno)),
+                (Cmd::Seal(_, _, res), Ok(None)) => res.fill(Ok(())),
+                (Cmd::AllowCompaction(_, _, res), Ok(None)) => res.fill(Ok(())),
+                _ => unreachable!(),
+            }
+        }
     }
 }
 
