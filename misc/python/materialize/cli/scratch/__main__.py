@@ -17,13 +17,14 @@ from materialize import errors
 
 
 def main() -> None:
-    from materialize.cli.scratch import create, mine
+    from materialize.cli.scratch import create, destroy, mine
 
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand")
     for name, configure, run in [
         ("create", create.configure_parser, create.run),
         ("mine", mine.configure_parser, mine.run),
+        ("destroy", destroy.configure_parser, destroy.run),
     ]:
         s = subparsers.add_parser(name)
         configure(s)

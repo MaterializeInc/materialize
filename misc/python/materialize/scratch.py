@@ -62,6 +62,7 @@ def print_instances(ists: List[Instance], format: str) -> None:
         "Public IP Address",
         "Launched By",
         "Delete After",
+        "State",
     ]
     rows = [
         [
@@ -70,6 +71,7 @@ def print_instances(ists: List[Instance], format: str) -> None:
             i.public_ip_address,
             launched_by(tags),
             delete_after(tags),
+            i.state["Name"],
         ]
         for (i, tags) in [(i, tags(i)) for i in ists]
     ]
