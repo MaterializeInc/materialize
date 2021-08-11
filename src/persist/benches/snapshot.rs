@@ -61,20 +61,16 @@ where
     let mut i = new_fn(1).expect("creating index cannot fail");
     let id = i.register("0", "", "").expect("registration succeeds");
 
-    // Write the data out to the index's buffer.
+    // Write the data out to the index's future.
     i.write_sync(vec![(id, data)])
         .expect("writing to index cannot fail");
-    c.bench_function(&format!("{}_buffer_snapshot", name), |b| {
-        bench_snapshot(&i, id, data_len, b)
-    });
-
-    // After a step, it's all moved into the future part of the index.
-    i.step().expect("processing records in index cannot fail");
     c.bench_function(&format!("{}_future_snapshot", name), |b| {
         bench_snapshot(&i, id, data_len, b)
     });
-    // Seal the updates to move them all to the trace
+
+    // After a seal and a step, it's all moved into the trace part of the index.
     i.seal(vec![id], 100_001).expect("sealing update times");
+    i.step().expect("processing records in index cannot fail");
     c.bench_function(&format!("{}_trace_snapshot", name), |b| {
         bench_snapshot(&i, id, data_len, b)
     });

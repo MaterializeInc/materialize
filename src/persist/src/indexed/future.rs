@@ -206,7 +206,6 @@ impl BlobFuture {
         }
 
         Ok(FutureSnapshot {
-            seqno_upper: self.seqno_upper(),
             ts_lower,
             ts_upper,
             updates,
@@ -288,8 +287,6 @@ impl BlobFuture {
 /// A consistent snapshot of the data currently in a persistent [BlobFuture].
 #[derive(Debug)]
 pub struct FutureSnapshot {
-    /// An open upper bound on the seqnos of contained updates.
-    pub seqno_upper: Antichain<SeqNo>,
     /// A closed lower bound on the times of contained updates.
     pub ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
