@@ -18,8 +18,7 @@ use sysinfo::{ProcessorExt, SystemExt};
 use ore::cast::CastFrom;
 use ore::cgroup::{self, MemoryLimit};
 use ore::metric;
-use ore::metrics::ThirdPartyMetric;
-use ore::metrics::{ComputedGauge, MetricsRegistry, UIntGauge, UIntGaugeVec};
+use ore::metrics::{ComputedGauge, MetricsRegistry, UIntGauge};
 use ore::option::OptionExt;
 
 use crate::BUILD_INFO;
@@ -31,16 +30,6 @@ pub struct Metrics {
     pub worker_count: UIntGauge,
     /// The number of seconds that the system has been running.
     pub uptime: ComputedGauge,
-    /// The amount of time we spend gathering metrics in prometheus endpoints.
-    pub request_metrics_gather: UIntGauge,
-    /// The amount of time we spend encoding metrics in prometheus endpoints.
-    pub request_metrics_encode: UIntGauge,
-    /// The amount of time we spend gathering third-party metrics in prometheus
-    /// endpoints.
-    pub third_party_request_metrics_gather: UIntGauge,
-    /// The amount of time we spend encoding third-party metrics in prometheus
-    /// endpoints.
-    pub third_party_request_metrics_encode: UIntGauge,
 }
 
 impl Metrics {
@@ -91,23 +80,9 @@ impl Metrics {
             )
         };
 
-        let request_metrics: ThirdPartyMetric<UIntGaugeVec> = registry.register_third_party_visible(metric!(
-            name: "mz_server_scrape_metrics_times",
-            help: "how long it took to gather metrics, used for very low frequency high accuracy measures",
-            var_labels: ["action"],
-        ));
-
         Self {
             worker_count,
             uptime,
-            request_metrics_gather: request_metrics
-                .third_party_metric_with_label_values(&["gather"]),
-            request_metrics_encode: request_metrics
-                .third_party_metric_with_label_values(&["encode"]),
-            third_party_request_metrics_encode: request_metrics
-                .third_party_metric_with_label_values(&["gather_third_party"]),
-            third_party_request_metrics_gather: request_metrics
-                .third_party_metric_with_label_values(&["encode_third_party"]),
         }
     }
 }

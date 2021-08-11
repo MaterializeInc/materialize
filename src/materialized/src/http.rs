@@ -172,12 +172,9 @@ impl Server {
 
                 let res = match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
-                    (&Method::GET, "/metrics") => metrics::handle_prometheus(
-                        req,
-                        &metrics_registry,
-                        &global_metrics,
-                        MetricsVariant::Regular,
-                    ),
+                    (&Method::GET, "/metrics") => {
+                        metrics::handle_prometheus(req, &metrics_registry, MetricsVariant::Regular)
+                    }
                     (&Method::GET, "/status") => metrics::handle_status(
                         req,
                         &mut coord_client,
@@ -281,7 +278,6 @@ impl hyper::service::Service<Request<Body>> for ThirdPartyServer {
                     match metrics::handle_prometheus(
                         req,
                         &server.metrics_registry,
-                        &server.global_metrics,
                         metrics::MetricsVariant::ThirdPartyVisible,
                     ) {
                         Ok(response) => Ok(response),
