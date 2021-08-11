@@ -59,6 +59,7 @@ pub struct Config {
     pub coord_client: coord::Client,
     pub metrics_registry: MetricsRegistry,
     pub global_metrics: Metrics,
+    pub pgwire_metrics: pgwire::Metrics,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +80,7 @@ pub struct Server {
     coord_client: coord::Client,
     metrics_registry: MetricsRegistry,
     global_metrics: Metrics,
+    pgwire_metrics: pgwire::Metrics,
 }
 
 impl Server {
@@ -88,6 +90,7 @@ impl Server {
             coord_client: config.coord_client,
             metrics_registry: config.metrics_registry,
             global_metrics: config.global_metrics,
+            pgwire_metrics: config.pgwire_metrics,
         }
     }
 
@@ -152,6 +155,7 @@ impl Server {
             let coord_client = self.coord_client.clone();
             let metrics_registry = self.metrics_registry.clone();
             let global_metrics = self.global_metrics.clone();
+            let pgwire_metrics = self.pgwire_metrics.clone();
             let future = async move {
                 let user = match user {
                     Ok(user) => user,
@@ -178,8 +182,8 @@ impl Server {
                     (&Method::GET, "/status") => metrics::handle_status(
                         req,
                         &mut coord_client,
-                        &metrics_registry,
                         &global_metrics,
+                        &pgwire_metrics,
                     ),
                     (&Method::GET, "/prof") => prof::handle_prof(req, &mut coord_client).await,
                     (&Method::GET, "/memory") => memory::handle_memory(req, &mut coord_client),
