@@ -586,6 +586,9 @@ impl AggregateFunc {
             AggregateFunc::SumInt16 => ScalarType::Int64,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
+            // Note AggregateFunc::MaxString, MinString rely on returning input
+            // type as output type to support the proper return type for
+            // character input.
             _ => input_type.scalar_type,
         };
         // Count never produces null, and other aggregations only produce

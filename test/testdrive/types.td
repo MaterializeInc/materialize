@@ -16,7 +16,9 @@
 name
 ----
 _bool
+_bpchar
 _bytea
+_char
 _date
 _float4
 _float8
@@ -33,6 +35,7 @@ _time
 _timestamp
 _timestamptz
 _uuid
+_varchar
 any
 anyarray
 anyelement
@@ -65,7 +68,9 @@ varchar
 name             type
 ----------------------
 _bool            system
+_bpchar          system
 _bytea           system
+_char            system
 _date            system
 _float4          system
 _float8          system
@@ -82,6 +87,7 @@ _time            system
 _timestamp       system
 _timestamptz     system
 _uuid            system
+_varchar         system
 any              system
 anyarray         system
 anyelement       system
@@ -221,6 +227,15 @@ other_int_map_c     user
 > CREATE TYPE text_array_list_c AS LIST (element_type=_text);
 > CREATE TABLE text_array_list_t (a text_array_list_c);
 > INSERT INTO text_array_list_t VALUES (LIST[ARRAY['a','b']]);
+
+> CREATE TYPE varchar_array_list_c AS LIST (element_type=_varchar);
+> CREATE TABLE varchar_array_list_t (a varchar_array_list_c);
+> INSERT INTO varchar_array_list_t VALUES (LIST[ARRAY['a'::varchar,'b'::varchar]]);
+
+# Enable this when closing #7613
+# > CREATE TYPE char_array_list_c AS LIST (element_type=_char);
+# > CREATE TABLE char_array_list_t (a char_array_list_c);
+# > INSERT INTO char_array_list_t VALUES (LIST[ARRAY['a'::char,'b'::char]]);
 
 > CREATE TYPE float4_array_list_c AS LIST (element_type=_float4);
 > CREATE TABLE float4_array_list_t (a float4_array_list_c);

@@ -2716,7 +2716,7 @@ impl<'a> Parser<'a> {
                     let name = if self.parse_keyword(VARYING) {
                         "varchar"
                     } else {
-                        "char"
+                        "bpchar"
                     };
                     DataType::Other {
                         name: RawName::Name(UnresolvedObjectName::unqualified(name)),

@@ -1681,6 +1681,42 @@ SELECT ('{a,  }'::text list)::text
 query error invalid input syntax for type list: malformed literal; missing element: "\{  ,a\}"
 SELECT ('{  ,a}'::text list)::text
 
+# 🔬🔬🔬🔬 homogeneous text lists
+query T
+SELECT (LIST['ab'::char, 'cd'::varchar, 'ef'::text])::text
+----
+{a,cd,ef}
+
+# 🔬🔬 char lists
+# ensures that the list type does not pick up an elements' typmod
+
+query error char list not yet supported
+SELECT LIST['abc'::char(1), 'abc'::char(2), 'abc'::char(3)]::text;
+
+query error char list not yet supported
+SELECT LIST['abc'::char(3), 'abc'::char(2), 'abc'::char(1)]::text;
+
+query error char list not yet supported
+SELECT pg_typeof(LIST['abc'::char(1), 'abc'::char(2), 'abc'::char(3)]);
+
+# 🔬🔬 varchar lists
+# ensures that the list type does not pick up an elements' typmod
+
+query T
+SELECT LIST['abc'::varchar(1), 'abc'::varchar(2), 'abc'::varchar(3)]::text;
+----
+{a,ab,abc}
+
+query T
+SELECT LIST['abc'::varchar(3), 'abc'::varchar(2), 'abc'::varchar(1)]::text;
+----
+{abc,ab,a}
+
+query T
+SELECT pg_typeof(LIST['abc'::varchar(1), 'abc'::varchar(2), 'abc'::varchar(3)]);
+----
+character varying list
+
 # 🔬 Built-in operations
 
 # 🔬🔬 concatenation (||)

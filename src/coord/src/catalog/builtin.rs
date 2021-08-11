@@ -423,6 +423,24 @@ pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::BPCHAR,
 };
 
+pub const TYPE_CHAR_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1043),
+    pgtype: &postgres_types::Type::CHAR_ARRAY,
+};
+
+pub const TYPE_VARCHAR_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1044),
+    pgtype: &postgres_types::Type::VARCHAR_ARRAY,
+};
+
+pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1045),
+    pgtype: &postgres_types::Type::BPCHAR_ARRAY,
+};
+
 lazy_static! {
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -1299,7 +1317,9 @@ lazy_static! {
             Builtin::Type(&TYPE_BYTEA),
             Builtin::Type(&TYPE_BYTEA_ARRAY),
             Builtin::Type(&TYPE_BPCHAR),
+            Builtin::Type(&TYPE_BPCHAR_ARRAY),
             Builtin::Type(&TYPE_CHAR),
+            Builtin::Type(&TYPE_CHAR_ARRAY),
             Builtin::Type(&TYPE_DATE),
             Builtin::Type(&TYPE_DATE_ARRAY),
             Builtin::Type(&TYPE_FLOAT4),
@@ -1335,6 +1355,7 @@ lazy_static! {
             Builtin::Type(&TYPE_UUID),
             Builtin::Type(&TYPE_UUID_ARRAY),
             Builtin::Type(&TYPE_VARCHAR),
+            Builtin::Type(&TYPE_VARCHAR_ARRAY),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
             Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY),

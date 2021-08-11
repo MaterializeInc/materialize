@@ -251,6 +251,36 @@ lazy_static! {
                     cast_expr: Box::new(cast_expr),
                 }))
             }),
+            (String, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
+            (String, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
+
+            // CHAR
+            (Char, String) => Implicit: CastCharToString,
+            (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
+            (Char, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
+
+            // VARCHAR
+            (VarChar, String) => Implicit: CastVarCharToString,
+            (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
+            (VarChar, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+                let length = to_type.unwrap_char_varchar_length();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment}))
+            }),
 
             // RECORD
             (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
@@ -303,10 +333,12 @@ lazy_static! {
             (Uuid, String) => Assignment: CastUuidToString,
 
             // Numeric
-            // Numeric to Numeric casts are not necessary in implicit contexts
             (Numeric, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let scale = to_type.unwrap_numeric_scale().unwrap();
-                Some(move |e: HirScalarExpr|e.call_unary(UnaryFunc::RescaleNumeric(scale)))
+                let scale = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| match scale {
+                    None => e,
+                    Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(scale)),
+                })
             }),
             (Numeric, Float32) => Implicit: CastNumericToFloat32,
             (Numeric, Float64) => Implicit: CastNumericToFloat64,
@@ -329,39 +361,32 @@ fn get_cast(
     use CastContext::*;
 
     // Determines if types are equal in a way that does not require casting.
-    //
-    // Note that these checks are necessary to avoid unnecessary nop rescales of numeric types.
     fn embedded_value_equality(ccx: &CastContext, l: &ScalarType, r: &ScalarType) -> bool {
         use ScalarType::*;
         match (l, r) {
+            (Array(l), Array(r)) => embedded_value_equality(&ccx, &l, &r),
             (
-                ScalarType::Numeric { scale: from_scale },
-                ScalarType::Numeric {
-                    scale: to_scale @ Some(..),
-                },
-            ) if ccx != &Implicit => from_scale == to_scale,
-            (Array(l), Array(r))
-            | (
                 List {
                     element_type: l,
-                    custom_oid: None,
+                    custom_oid: oid_l,
                 },
                 List {
                     element_type: r,
-                    custom_oid: None,
+                    custom_oid: oid_r,
                 },
             )
             | (
                 Map {
                     value_type: l,
-                    custom_oid: None,
+                    custom_oid: oid_l,
                 },
                 Map {
                     value_type: r,
-                    custom_oid: None,
+                    custom_oid: oid_r,
                 },
-            ) => embedded_value_equality(&ccx, &l, &r),
-            (l, r) => l.base_eq(r),
+            ) => oid_l == oid_r && embedded_value_equality(&ccx, &l, &r),
+            (l, r) if ccx == &Implicit => l.base_eq(r),
+            (l, r) => l == r,
         }
     }
 
@@ -387,7 +412,7 @@ fn get_cast(
         }
     }
 
-    if (from.is_custom_type() || to.is_custom_type()) && structural_equality(from, to) {
+    if (from.is_custom_type() || to.is_custom_type()) && structural_equality(&from, to) {
         // CastInPlace allowed if going between custom and anonymous or if cast
         // explicitly requested.
         if from.is_custom_type() ^ to.is_custom_type() || ccx == CastContext::Explicit {
@@ -405,7 +430,7 @@ fn get_cast(
         (Implicit, Implicit) => Some(&imp.template),
         _ => None,
     };
-    template.and_then(|template| (template.0)(ecx, ccx, from, to))
+    template.and_then(|template| (template.0)(ecx, ccx, &from, to))
 }
 
 /// Converts an expression to `ScalarType::String`.
@@ -519,20 +544,22 @@ pub fn guess_best_common_type(
     let r = known_types
         .iter()
         .max_by_key(|scalar_type| match scalar_type {
-            // Strings can be cast to any type, so should be given lowest priority.
-            ScalarType::String => 0,
+            // TypeCategory::String
+            ScalarType::VarChar { .. } => 0,
+            ScalarType::Char { .. } => 1,
+            ScalarType::String => 2,
             // TypeCategory::Numeric
-            ScalarType::Int16 => 1,
-            ScalarType::Int32 => 2,
-            ScalarType::Int64 => 3,
-            ScalarType::Numeric { .. } => 4,
-            ScalarType::Float32 => 5,
-            ScalarType::Float64 => 6,
+            ScalarType::Int16 => 3,
+            ScalarType::Int32 => 4,
+            ScalarType::Int64 => 5,
+            ScalarType::Numeric { .. } => 6,
+            ScalarType::Float32 => 7,
+            ScalarType::Float64 => 8,
             // TypeCategory::DateTime
-            ScalarType::Date => 7,
-            ScalarType::Timestamp => 8,
-            ScalarType::TimestampTz => 9,
-            _ => 10,
+            ScalarType::Date => 9,
+            ScalarType::Timestamp => 10,
+            ScalarType::TimestampTz => 11,
+            _ => 12,
         })
         .unwrap();
 
@@ -556,7 +583,14 @@ pub fn plan_coerce<'a>(
 
         LiteralString(s) => {
             let lit = HirScalarExpr::literal(Datum::String(&s), ScalarType::String);
-            plan_cast("string literal", ecx, CastContext::Explicit, lit, coerce_to)?
+            let ccx = match coerce_to {
+                // Postgres' literal string parsing functions for bpchar
+                // (bpcharin) and varchar (varcharin) have the same semantics as
+                // the behavior in Assignment casts (other types don't have this complexity)
+                ScalarType::Char { .. } | ScalarType::VarChar { .. } => CastContext::Assignment,
+                _ => CastContext::Explicit,
+            };
+            plan_cast("string literal", ecx, ccx, lit, coerce_to)?
         }
 
         LiteralRecord(exprs) => {
@@ -661,8 +695,13 @@ pub fn plan_cast<D>(
 where
     D: fmt::Display,
 {
-    let from_typ = ecx.scalar_type(&expr);
-    match get_cast(ecx, ccx, &from_typ, cast_to) {
+    use ScalarType::*;
+
+    let cast_from = ecx.scalar_type(&expr);
+
+    // Close over ccx, cast_from, and cast_to to simplify error messages in the
+    // face of intermediate expressions.
+    let cast_inner = |from, to, expr| match get_cast(ecx, ccx, from, to) {
         Some(cast) => Ok(cast(expr)),
         None => bail!(
             "{} does not support {}casting from {} to {}",
@@ -672,9 +711,30 @@ where
             } else {
                 ""
             },
-            ecx.humanize_scalar_type(&from_typ),
+            ecx.humanize_scalar_type(&cast_from),
             ecx.humanize_scalar_type(&cast_to),
         ),
+    };
+
+    // Get cast which might include parameter rewrites + generating intermediate
+    // expressions.
+    //
+    // n.b PG solves this problem by making casts use the same process as their
+    // typical function selection, which already applies these semantics. Until
+    // we refactor this function to approximately use the function selection
+    // infrastructure, this is probably the fewest LOC change.
+    match (&cast_from, cast_to) {
+        // Rewrite from char, varchar as from string
+        (Char { .. } | VarChar { .. }, dest) if !dest.is_string_like() => {
+            cast_inner(&String, dest, expr)
+        }
+        // If to is char or varchar, use intermediate string expression.
+        (source, dest @ Char { .. } | dest @ VarChar { .. }) if !source.is_string_like() => {
+            let source_to_str_expr = cast_inner(source, &String, expr)?;
+            cast_inner(&String, dest, source_to_str_expr)
+        }
+        // Standard cast
+        (source, dest) => cast_inner(source, dest, expr),
     }
 }
 
@@ -682,8 +742,18 @@ where
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    cast_from: &ScalarType,
-    cast_to: &ScalarType,
+    cast_from: ScalarType,
+    cast_to: ScalarType,
 ) -> bool {
-    get_cast(ecx, ccx, cast_from, cast_to).is_some()
+    // All char values are cast to strings during casts, so this transformation
+    // is equivalent.
+    let cast_from = match cast_from {
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        from => from,
+    };
+    let cast_to = match cast_to {
+        ScalarType::Char { .. } | ScalarType::VarChar { .. } => ScalarType::String,
+        to => to,
+    };
+    get_cast(ecx, ccx, &cast_from, &cast_to).is_some()
 }

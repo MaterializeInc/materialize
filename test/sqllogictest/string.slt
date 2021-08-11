@@ -390,15 +390,15 @@ SELECT length('str', 99)
 
 # standard tests
 query I rowsort
-SELECT length(strcol) FROM lengthtest
+SELECT octet_length(strcol) FROM lengthtest
 ----
 15
 15
 15
 15
-15
-15
-15
+19
+21
+23
 NULL
 
 query I rowsort
@@ -851,28 +851,28 @@ true
 
 # Invalid type mods
 
-query error length for type varchar must be within \[1-10485760\], have 0
+query error length for type character varying must be within \[1-10485760\], have 0
 SELECT ''::VARCHAR(0)
 
-query error length for type varchar must be within \[1-10485760\], have 10485761
+query error length for type character varying must be within \[1-10485760\], have 10485761
 SELECT ''::VARCHAR(10485761)
 
-query error length for type char must be within \[1-10485760\], have 0
+query error length for type character must be within \[1-10485760\], have 0
 SELECT ''::CHAR(0)
 
-query error length for type char must be within \[1-10485760\], have 10485761
+query error length for type character must be within \[1-10485760\], have 10485761
 SELECT ''::CHAR(10485761)
 
-query error length for type varchar must be within \[1-10485760\], have 0
+query error length for type character varying must be within \[1-10485760\], have 0
 SELECT ''::pg_catalog.VARCHAR(0)
 
-query error length for type varchar must be within \[1-10485760\], have 10485761
+query error length for type character varying must be within \[1-10485760\], have 10485761
 SELECT ''::pg_catalog.VARCHAR(10485761)
 
-query error length for type char must be within \[1-10485760\], have 0
+query error length for type character must be within \[1-10485760\], have 0
 SELECT ''::pg_catalog.CHAR(0)
 
-query error length for type char must be within \[1-10485760\], have 10485761
+query error length for type character must be within \[1-10485760\], have 10485761
 SELECT ''::pg_catalog.CHAR(10485761)
 
 ### position ###
@@ -1197,3 +1197,112 @@ query T
 SELECT repeat('a', -1)
 ----
 (empty)
+
+# Check for char cmp validity, which ignores white space
+# ...at datum level
+
+statement ok
+CREATE TABLE bpchar_t (a char(5));
+
+statement ok
+INSERT INTO bpchar_t VALUES ('a');
+
+query TTTTTT
+SELECT a = 'a ', a != 'a ', 'a ' < a, 'a ' <= a, a > 'a ', a >= 'a ' FROM bpchar_t;
+----
+true false false true false true
+
+# ...at row level
+statement ok
+INSERT INTO bpchar_t VALUES ('a  ');
+
+query T
+SELECT DISTINCT octet_length(a) FROM bpchar_t;
+----
+5
+
+# LIKE comparisons using char retains lhs padding, but rhs is cast to string, so
+# trimmed.
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc';
+----
+true
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc ';
+----
+false
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc'::char(4);
+----
+true
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc';
+----
+false
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc ';
+----
+true
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc'::char(3);
+----
+false
+
+query B
+SELECT 'abc'::char(4) ~~ 'abc'::char(4);
+----
+false
+
+query B
+SELECT 'abc'::char(3) ~~ 'abc'::char(4);
+----
+true
+
+# Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-893343138
+
+query T
+SELECT 'a'::char(3) = 'a '::varchar(3);
+----
+true
+
+# Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-895061714
+
+statement ok
+CREATE TABLE char_col (a char(10));
+
+statement ok
+INSERT INTO char_col VALUES ('a'), ('bc'), ('def');
+
+query T
+SELECT max(a)::text FROM char_col
+----
+def
+
+query I
+SELECT octet_length(max(a)) FROM char_col
+----
+10
+
+# Ensure calls to Any param'ed funcs pad char values
+query T
+SELECT to_jsonb('a'::char(10))
+----
+"a         "
+
+# Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-895057022
+
+query T
+SELECT CONCAT('a'::char(3), 'b'::text, 'c');
+----
+a  bc
+
+query T
+SELECT CONCAT('a'::text, 'b'::char(3), 'c');
+----
+ab  c

@@ -35,7 +35,7 @@ use tokio_postgres::types::FromSql;
 use uuid::Uuid;
 
 use pgrepr::Jsonb;
-use repr::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION};
+use repr::adt::numeric;
 use repr::{Datum, RelationDesc, RelationType, Row};
 use sql::ast::{
     ColumnOption, CreateSchemaStatement, CreateTableStatement, DataType, DeleteStatement,
@@ -392,8 +392,10 @@ fn push_column(
     sql_type: &DataType<Aug>,
     nullable: bool,
 ) -> Result<Row, anyhow::Error> {
-    // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
-    // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
+    // NOTE this needs to stay in sync with
+    // materialize::sql::scalar_type_from_sql in some cases, we use slightly
+    // different representations than postgres does for the same sql types, so
+    // we have to be careful about conversions
     match sql_type {
         DataType::Other { name, typ_mod } => match name.raw_name().to_string().as_str() {
             "pg_catalog.bool" => {
@@ -404,9 +406,29 @@ fn push_column(
                 let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
                 row.push(Datum::from(bytes.as_deref()));
             }
-            "pg_catalog.bpchar" | "pg_catalog.char" | "pg_catalog.text" | "pg_catalog.varchar" => {
+            "pg_catalog.text" => {
                 let string = get_column_inner::<String>(postgres_row, i, nullable)?;
                 row.push(Datum::from(string.as_deref()));
+            }
+            "pg_catalog.bpchar" | "pg_catalog.char" => {
+                let length = repr::adt::char::extract_typ_mod(&typ_mod)?;
+                match get_column_inner::<String>(postgres_row, i, nullable)? {
+                    None => row.push(Datum::Null),
+                    Some(s) => {
+                        let s = repr::adt::char::format_str_trim(&s, length, true)?;
+                        row.push(Datum::String(&s));
+                    }
+                }
+            }
+            "pg_catalog.varchar" => {
+                let length = repr::adt::varchar::extract_typ_mod(&typ_mod)?;
+                match get_column_inner::<String>(postgres_row, i, nullable)? {
+                    None => row.push(Datum::Null),
+                    Some(s) => {
+                        let s = repr::adt::varchar::format_str(&s, length, true)?;
+                        row.push(Datum::String(&s));
+                    }
+                }
             }
             "pg_catalog.date" => {
                 let d: chrono::NaiveDate =
@@ -446,11 +468,7 @@ fn push_column(
                 }
             }
             "pg_catalog.numeric" => {
-                let (_, desired_scale) = sql::plan::unwrap_numeric_typ_mod(
-                    typ_mod,
-                    NUMERIC_DATUM_MAX_PRECISION as u8,
-                    "numeric",
-                )?;
+                let desired_scale = repr::adt::numeric::extract_typ_mod(typ_mod)?;
                 match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
                     None => row.push(Datum::Null),
                     Some(mut d) => {

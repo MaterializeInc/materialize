@@ -26,6 +26,10 @@ pub enum PgScalarType {
     Simple(PgType),
     Numeric { precision: u16, scale: u16 },
     NumericArray { precision: u16, scale: u16 },
+    BPChar { length: i32 },
+    BPCharArray { length: i32 },
+    VarChar { length: i32 },
+    VarCharArray { length: i32 },
 }
 
 impl AstDisplay for PgScalarType {
@@ -46,6 +50,26 @@ impl AstDisplay for PgScalarType {
                 f.write_str(precision);
                 f.write_str(", ");
                 f.write_str(scale);
+                f.write_str(")[]");
+            }
+            Self::BPChar { length } => {
+                f.write_str("character(");
+                f.write_str(length);
+                f.write_str(")");
+            }
+            Self::BPCharArray { length } => {
+                f.write_str("character(");
+                f.write_str(length);
+                f.write_str(")[]");
+            }
+            Self::VarChar { length } => {
+                f.write_str("character varying(");
+                f.write_str(length);
+                f.write_str(")");
+            }
+            Self::VarCharArray { length } => {
+                f.write_str("character varying(");
+                f.write_str(length);
                 f.write_str(")[]");
             }
         }
@@ -218,6 +242,23 @@ pub async fn publication_info(
                             PgScalarType::Numeric { scale, precision }
                         } else {
                             PgScalarType::NumericArray { scale, precision }
+                        }
+                    }
+                    typ @ PgType::BPCHAR
+                    | typ @ PgType::BPCHAR_ARRAY
+                    | typ @ PgType::VARCHAR
+                    | typ @ PgType::VARCHAR_ARRAY => {
+                        let modifier: i32 = row.get("modifier");
+                        // BPCHAR: https://github.com/postgres/postgres/blob/272d82ec6febb97ab25fd7c67e9c84f4660b16ac/src/backend/utils/adt/varchar.c#L282-L286
+                        // VARCHAR https://github.com/postgres/postgres/blob/272d82ec6febb97ab25fd7c67e9c84f4660b16ac/src/backend/utils/adt/varchar.c#L617
+                        let length = if modifier < 4 { i32::MAX } else { modifier - 4 };
+
+                        match typ {
+                            PgType::BPCHAR => PgScalarType::BPChar { length },
+                            PgType::BPCHAR_ARRAY => PgScalarType::BPCharArray { length },
+                            PgType::VARCHAR => PgScalarType::VarChar { length },
+                            PgType::VARCHAR_ARRAY => PgScalarType::VarCharArray { length },
+                            _ => unreachable!(),
                         }
                     }
                     other => PgScalarType::Simple(other),

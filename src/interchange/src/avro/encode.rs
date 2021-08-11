@@ -342,7 +342,13 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     buf
                 }),
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
+                ScalarType::String | ScalarType::VarChar { .. } => {
+                    Value::String(datum.unwrap_str().to_owned())
+                }
+                ScalarType::Char { length } => {
+                    let s = repr::adt::char::format_str_pad(datum.unwrap_str(), *length);
+                    Value::String(s)
+                }
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
                 ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {

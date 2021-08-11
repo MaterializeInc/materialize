@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
+use lazy_static::lazy_static;
+use semver::Version;
 
 use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
@@ -50,16 +52,32 @@ where
     Ok(())
 }
 
+lazy_static! {
+    static ref VER_0_9_1: Version = Version::new(0, 9, 1);
+}
+
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     let mut storage = catalog.storage();
+    let catalog_version = storage.get_catalog_content_version()?;
+    let catalog_version = match Version::parse(&catalog_version) {
+        Ok(v) => v,
+        // Catalog content versions changed to semver after 0.8.3, so all
+        // non-semver versions are less than that.
+        Err(_) => Version::new(0, 0, 0),
+    };
+
     let mut tx = storage.transaction()?;
     // First, do basic AST -> AST transformations.
     rewrite_items(&tx, |stmt| {
         ast_rewrite_type_references_0_6_1(stmt)?;
         ast_use_pg_catalog_0_7_1(stmt)?;
         ast_insert_default_confluent_wire_format_0_7_1(stmt)?;
+        if catalog_version < *VER_0_9_1 {
+            ast_rewrite_pg_catalog_char_to_text_0_9_1(stmt)?;
+        }
         Ok(())
     })?;
+
     // Then, load up a temporary catalog with the rewritten items, and perform
     // some transformations that require introspecting the catalog. These
     // migrations are *weird*: they're rewriting the catalog while looking at
@@ -82,9 +100,10 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // > <category>_<description>_<version>
 //
 // Note that:
-// - Migration functions must be idempotent because all migrations run every
-//   time the catalog opens, unless migrations are explicitly disabled. This
-//   might mean changing code outside the migration itself.
+// - The sum of all migrations must be idempotent because all migrations run
+//   every time the catalog opens, unless migrations are explicitly disabled.
+//   This might mean changing code outside the migration itself, or only
+//   executing some migrations when encountering certain versions.
 // - Migrations must preserve backwards compatibility with all past releases of
 //   materialized.
 //
@@ -93,6 +112,107 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+/// Rewrites all references of `pg_catalog.char` to `pg_catalog.text`, which
+/// matches the previous char implementation's semantics.
+///
+/// Note that the previous `char` "implementation" was simply an alias to
+/// `text`. However, the new `char` semantics mirrors Postgres' `bpchar` type,
+/// which `char` is now essentially an alias of.
+///
+/// This approach is safe because all previous references to `char` were
+/// actually `text` references. All `char` references going forward will
+/// properly behave as `bpchar` references.
+fn ast_rewrite_pg_catalog_char_to_text_0_9_1(
+    stmt: &mut sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    struct TypeNormalizer;
+
+    lazy_static! {
+        static ref CHAR_REFERENCE: UnresolvedObjectName =
+            UnresolvedObjectName(vec![Ident::new(PG_CATALOG_SCHEMA), Ident::new("char")]);
+        static ref TEXT_REFERENCE: UnresolvedObjectName =
+            UnresolvedObjectName(vec![Ident::new(PG_CATALOG_SCHEMA), Ident::new("text")]);
+    }
+
+    impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
+        fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType<Raw>) {
+            if let DataType::Other { name, typ_mod } = data_type {
+                if name.name() == &*CHAR_REFERENCE {
+                    let t = TEXT_REFERENCE.clone();
+                    *name = match name {
+                        RawName::Name(_) => RawName::Name(t),
+                        RawName::Id(id, _) => RawName::Id(id.clone(), t),
+                    };
+                    *typ_mod = vec![];
+                }
+            }
+        }
+    }
+
+    match stmt {
+        Statement::CreateTable(CreateTableStatement {
+            name: _,
+            columns,
+            constraints: _,
+            with_options: _,
+            if_not_exists: _,
+            temporary: _,
+        }) => {
+            for c in columns {
+                TypeNormalizer.visit_column_def_mut(c);
+            }
+        }
+
+        Statement::CreateView(CreateViewStatement {
+            temporary: _,
+            materialized: _,
+            if_exists: _,
+            definition:
+                ViewDefinition {
+                    name: _,
+                    columns: _,
+                    query,
+                    with_options: _,
+                },
+        }) => TypeNormalizer.visit_query_mut(query),
+
+        Statement::CreateIndex(CreateIndexStatement {
+            name: _,
+            on_name: _,
+            key_parts,
+            with_options,
+            if_not_exists: _,
+        }) => {
+            if let Some(key_parts) = key_parts {
+                for key_part in key_parts {
+                    TypeNormalizer.visit_expr_mut(key_part);
+                }
+            }
+            for with_option in with_options {
+                TypeNormalizer.visit_with_option_mut(with_option);
+            }
+        }
+
+        Statement::CreateType(CreateTypeStatement {
+            name: _,
+            as_type: _,
+            with_options,
+        }) => {
+            for option in with_options {
+                TypeNormalizer.visit_sql_option_mut(option);
+            }
+        }
+
+        // At the time the migration was written, sinks and sources
+        // could not contain references to types.
+        Statement::CreateSource(_) | Statement::CreateSink(_) => {}
+
+        _ => bail!("catalog item contained inappropriate statement: {}", stmt),
+    };
+
+    Ok(())
+}
 
 // Insert default value for confluent_wire_format.
 //

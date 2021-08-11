@@ -161,7 +161,6 @@ fn cast_bool_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
         false => Datum::Int32(0),
     }
 }
-
 fn cast_int16_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     strconv::format_int16(&mut buf, a.unwrap_int16());
@@ -635,6 +634,49 @@ fn cast_string_to_uuid<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     strconv::parse_uuid(a.unwrap_str())
         .map(Datum::Uuid)
         .err_into()
+}
+
+fn cast_str_to_char<'a>(
+    a: Datum<'a>,
+    length: Option<usize>,
+    fail_on_len: bool,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let s =
+        repr::adt::char::format_str_trim(a.unwrap_str(), length, fail_on_len).map_err(|_| {
+            assert!(fail_on_len);
+            EvalError::StringValueTooLong {
+                target_type: "character".to_string(),
+                length: length.unwrap(),
+            }
+        })?;
+
+    Ok(Datum::String(temp_storage.push_string(s)))
+}
+
+fn pad_char<'a>(
+    a: Datum<'a>,
+    length: Option<usize>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let s = repr::adt::char::format_str_pad(a.unwrap_str(), length);
+    Ok(Datum::String(temp_storage.push_string(s)))
+}
+
+fn cast_string_to_varchar<'a>(
+    a: Datum<'a>,
+    length: Option<usize>,
+    fail_on_len: bool,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let s = repr::adt::varchar::format_str(a.unwrap_str(), length, fail_on_len).map_err(|_| {
+        assert!(fail_on_len);
+        EvalError::StringValueTooLong {
+            target_type: "character varying".to_string(),
+            length: length.unwrap(),
+        }
+    })?;
+    Ok(Datum::String(temp_storage.push_string(s)))
 }
 
 fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -3580,6 +3622,22 @@ pub enum UnaryFunc {
     CastStringToInterval,
     CastStringToNumeric(Option<u8>),
     CastStringToUuid,
+    CastStringToChar {
+        length: Option<usize>,
+        fail_on_len: bool,
+    },
+    /// All Char data is stored in Datum::String with its blank padding removed
+    /// (i.e. trimmed), so this function provides a means of restoring any
+    /// removed padding.
+    PadChar {
+        length: Option<usize>,
+    },
+    CastStringToVarChar {
+        length: Option<usize>,
+        fail_on_len: bool,
+    },
+    CastCharToString,
+    CastVarCharToString,
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastDateToString,
@@ -3775,6 +3833,18 @@ impl UnaryFunc {
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
             UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
             UnaryFunc::CastStringToUuid => cast_string_to_uuid(a),
+            UnaryFunc::CastStringToChar {
+                length,
+                fail_on_len,
+            } => cast_str_to_char(a, *length, *fail_on_len, temp_storage),
+            UnaryFunc::PadChar { length } => pad_char(a, *length, temp_storage),
+            UnaryFunc::CastStringToVarChar {
+                length,
+                fail_on_len,
+            } => cast_string_to_varchar(a, *length, *fail_on_len, temp_storage),
+            // This function simply allows the expression of changing a's type from varchar to string
+            UnaryFunc::CastCharToString => Ok(a),
+            UnaryFunc::CastVarCharToString => Ok(a),
             UnaryFunc::CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
             UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
@@ -3914,6 +3984,8 @@ impl UnaryFunc {
 
             CastBoolToString
             | CastBoolToStringNonstandard
+            | CastCharToString
+            | CastVarCharToString
             | CastInt16ToString
             | CastInt32ToString
             | CastInt64ToString
@@ -4002,6 +4074,14 @@ impl UnaryFunc {
 
             CastList1ToList2 { return_ty, .. } | CastStringToList { return_ty, .. } => {
                 return_ty.default_embedded_value().nullable(false)
+            }
+
+            CastStringToChar { length, .. } | PadChar { length } => {
+                ScalarType::Char { length: *length }.nullable(nullable)
+            }
+
+            CastStringToVarChar { length, .. } => {
+                ScalarType::VarChar { length: *length }.nullable(nullable)
             }
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(nullable),
@@ -4096,6 +4176,8 @@ impl UnaryFunc {
             }
             CastBoolToString
             | CastBoolToStringNonstandard
+            | CastCharToString
+            | CastVarCharToString
             | CastInt16ToString
             | CastInt32ToString
             | CastInt64ToString
@@ -4152,6 +4234,8 @@ impl UnaryFunc {
             | CastStringToList { .. }
             | CastStringToMap { .. }
             | CastInPlace { .. } => false,
+            CastStringToChar { .. } | PadChar { .. } => false,
+            CastStringToVarChar { .. } => false,
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
@@ -4183,6 +4267,8 @@ impl UnaryFunc {
                 | UnaryFunc::NegNumeric
                 | UnaryFunc::CastBoolToString
                 | UnaryFunc::CastBoolToStringNonstandard
+                | UnaryFunc::CastCharToString
+                | UnaryFunc::CastVarCharToString
                 | UnaryFunc::CastInt16ToInt32
                 | UnaryFunc::CastInt16ToInt64
                 | UnaryFunc::CastInt16ToString
@@ -4281,6 +4367,11 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),
             UnaryFunc::CastStringToInterval => f.write_str("strtoiv"),
             UnaryFunc::CastStringToUuid => f.write_str("strtouuid"),
+            UnaryFunc::CastStringToChar { .. } => f.write_str("strtochar"),
+            UnaryFunc::PadChar { .. } => f.write_str("padchar"),
+            UnaryFunc::CastCharToString => f.write_str("chartostr"),
+            UnaryFunc::CastVarCharToString => f.write_str("varchartostr"),
+            UnaryFunc::CastStringToVarChar { .. } => f.write_str("strtovarchar"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
             UnaryFunc::CastDateToString => f.write_str("datetostr"),
@@ -4325,8 +4416,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CharLength => f.write_str("char_length"),
             UnaryFunc::BitLengthBytes => f.write_str("bit_length"),
             UnaryFunc::BitLengthString => f.write_str("bit_length"),
-            UnaryFunc::ByteLengthBytes => f.write_str("byte_length"),
-            UnaryFunc::ByteLengthString => f.write_str("byte_length"),
+            UnaryFunc::ByteLengthBytes => f.write_str("octet_length"),
+            UnaryFunc::ByteLengthString => f.write_str("octet_length"),
             UnaryFunc::IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             UnaryFunc::RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             UnaryFunc::DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
@@ -4867,7 +4958,11 @@ where
         TimestampTz => strconv::format_timestamptz(buf, d.unwrap_timestamptz()),
         Interval => strconv::format_interval(buf, d.unwrap_interval()),
         Bytes => strconv::format_bytes(buf, d.unwrap_bytes()),
-        String => strconv::format_string(buf, d.unwrap_str()),
+        String | VarChar { .. } => strconv::format_string(buf, d.unwrap_str()),
+        Char { length } => strconv::format_string(
+            buf,
+            &repr::adt::char::format_str_pad(d.unwrap_str(), *length),
+        ),
         Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
         Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
         Record { fields, .. } => {

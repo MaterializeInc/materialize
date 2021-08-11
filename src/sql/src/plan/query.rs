@@ -42,7 +42,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
+use repr::adt::numeric;
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
     Timestamp,
@@ -2344,7 +2344,17 @@ pub fn plan_expr<'a>(
                 Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
                 _ => plan_expr(ecx, expr)?,
             };
-            let expr = typeconv::plan_coerce(ecx, expr, &to_scalar_type)?;
+
+            let expr = match expr {
+                // Maintain the stringness of literals strings to preserve any
+                // side effects of Explicit casts (going through plan_coerce
+                // uses Assignment casts).
+                CoercibleScalarExpr::LiteralString(..) => {
+                    expr.type_as(&ecx, &ScalarType::String)?
+                }
+                expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
+            };
+
             typeconv::plan_cast("CAST", ecx, CastContext::Explicit, expr, &to_scalar_type)?.into()
         }
         Expr::Function(func) => plan_function(ecx, func)?.into(),
@@ -2589,6 +2599,11 @@ fn plan_array(
         let out = coerce_homogeneous_exprs("ARRAY expression", ecx, out, type_hint)?;
         (ecx.scalar_type(&out[0]), out)
     };
+
+    if matches!(elem_type, ScalarType::Char { .. }) {
+        unsupported!("char[]");
+    }
+
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayCreate { elem_type },
         exprs,
@@ -2612,6 +2627,7 @@ fn plan_list(
             Some(ScalarType::List { element_type, .. }) => Some(&**element_type),
             _ => None,
         };
+
         let mut out = vec![];
         for expr in exprs {
             out.push(match expr {
@@ -2624,6 +2640,11 @@ fn plan_list(
         let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
         (ecx.scalar_type(&out[0]).default_embedded_value(), out)
     };
+
+    if matches!(elem_type, ScalarType::Char { .. }) {
+        unsupported!("char list");
+    }
+
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },
         exprs,
@@ -3088,27 +3109,21 @@ pub fn scalar_type_from_sql(
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
                     ScalarType::Numeric { .. } => {
-                        let (_, scale) = unwrap_numeric_typ_mod(
-                            typ_mod,
-                            NUMERIC_DATUM_MAX_PRECISION as u8,
-                            "numeric",
-                        )?;
+                        let scale = numeric::extract_typ_mod(typ_mod)?;
                         ScalarType::Numeric { scale }
                     }
-                    ScalarType::String => {
-                        // TODO(justin): we should look up in the catalog to see
-                        // if this type is actually a length-parameterized
-                        // string.
-                        match name.raw_name().item.as_str() {
-                            n @ "bpchar" | n @ "char" | n @ "varchar" => {
-                                validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
-                            }
-                            _ => {}
-                        }
-                        ScalarType::String
+                    ScalarType::Char { .. } => {
+                        let length = repr::adt::char::extract_typ_mod(&typ_mod)?;
+                        ScalarType::Char { length }
+                    }
+                    ScalarType::VarChar { .. } => {
+                        let length = repr::adt::varchar::extract_typ_mod(&typ_mod)?;
+                        ScalarType::VarChar { length }
                     }
                     t => {
-                        validate_typ_mod(&name.to_string(), &typ_mod, &[])?;
+                        if !typ_mod.is_empty() {
+                            bail!("{} does not support type modifiers", &name.to_string());
+                        }
                         t
                     }
                 },
@@ -3119,71 +3134,6 @@ pub fn scalar_type_from_sql(
             }
         }
     })
-}
-
-/// Returns the first two values provided as typ_mods as `u8`, which are
-/// appropriate values to associate with `ScalarType::Numeric`'s values,
-/// precision and scale.
-///
-/// Note that this function assumes you have already determined that
-/// `data_type.name` should resolve to `ScalarType::Numeric`.
-pub fn unwrap_numeric_typ_mod(
-    typ_mod: &[u64],
-    max: u8,
-    name: &str,
-) -> Result<(Option<u8>, Option<u8>), anyhow::Error> {
-    let max_precision = u64::from(max);
-    validate_typ_mod(
-        name,
-        &typ_mod,
-        &[("precision", 1, max_precision), ("scale", 0, max_precision)],
-    )?;
-
-    // Poor man's VecDeque
-    let (precision, scale) = match typ_mod.len() {
-        0 => (None, None),
-        1 => (Some(typ_mod[0] as u8), None),
-        2 => {
-            let precision = typ_mod[0] as u8;
-            let scale = typ_mod[1] as u8;
-            if scale > precision {
-                bail!(
-                    "{} scale {} must be between 0 and precision {}",
-                    name,
-                    scale,
-                    precision
-                );
-            }
-            (Some(precision), Some(scale))
-        }
-        _ => unreachable!(),
-    };
-
-    Ok((precision, scale))
-}
-
-fn validate_typ_mod(
-    name: &str,
-    typ_mod: &[u64],
-    val_ranges: &[(&str, u64, u64)],
-) -> Result<(), anyhow::Error> {
-    if typ_mod.len() > val_ranges.len() {
-        bail!("invalid {} type modifier", name)
-    }
-
-    for (v, range) in typ_mod.iter().zip(val_ranges.iter()) {
-        if v < &range.1 || v > &range.2 {
-            bail!(
-                "{} for type {} must be within [{}-{}], have {}",
-                range.0,
-                name,
-                range.1,
-                range.2,
-                v,
-            )
-        }
-    }
-    Ok(())
 }
 
 pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Error> {
@@ -3202,6 +3152,8 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         pgrepr::Type::Interval => Ok(ScalarType::Interval),
         pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
         pgrepr::Type::Text => Ok(ScalarType::String),
+        pgrepr::Type::Char => Ok(ScalarType::Char { length: None }),
+        pgrepr::Type::VarChar => Ok(ScalarType::VarChar { length: None }),
         pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
         pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
         pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),

@@ -440,7 +440,7 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
         let ty = col.type_();
         let mut value = match *ty {
             Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
-            Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+            Type::BPCHAR | Type::TEXT | Type::VARCHAR => row.get::<_, Option<String>>(i),
             Type::TEXT_ARRAY => row
                 .get::<_, Option<Array<ArrayElement<String>>>>(i)
                 .map(|a| a.to_string()),

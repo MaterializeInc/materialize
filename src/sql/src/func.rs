@@ -104,7 +104,9 @@ impl TypeCategory {
             | ScalarType::Numeric { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
-            ScalarType::String => Self::String,
+            ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
+                Self::String
+            }
             ScalarType::Record { .. } => Self::Pseudo,
             ScalarType::Map { .. } => Self::Pseudo,
         }
@@ -679,7 +681,7 @@ impl ParamType {
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),
-            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
+            Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t.clone(), to.clone()),
         }
     }
 
@@ -773,6 +775,8 @@ impl From<ScalarBaseType> for ParamType {
             Interval => ScalarType::Interval,
             Bytes => ScalarType::Bytes,
             String => ScalarType::String,
+            Char => ScalarType::Char { length: None },
+            VarChar => ScalarType::VarChar { length: None },
             Jsonb => ScalarType::Jsonb,
             Uuid => ScalarType::Uuid,
             Oid => ScalarType::Oid,
@@ -1266,15 +1270,16 @@ lazy_static! {
                         bail!("No function matches the given name and argument types. \
                         You might need to add explicit type casts.")
                     }
-                   let mut exprs = vec![];
+                    let mut exprs = vec![];
                     for expr in cexprs {
-                        if ecx.scalar_type(&expr) == ScalarType::Bool {
+                        exprs.push(match ecx.scalar_type(&expr) {
                             // concat uses nonstandard bool -> string casts
                             // to match historical baggage in PostgreSQL.
-                            exprs.push(expr.call_unary(UnaryFunc::CastBoolToStringNonstandard));
-                        } else {
-                            exprs.push(typeconv::to_string(ecx, expr));
-                        }
+                            ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard),
+                            // TODO(#7572): remove call to PadChar
+                            ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar { length }),
+                            _ => typeconv::to_string(ecx, expr)
+                        });
                     }
                     Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
                 }), 3058;
@@ -1389,6 +1394,7 @@ lazy_static! {
             },
             "length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
+                // bpcharlen is redundant with automatic coercion to string, 1318.
                 params!(String) => UnaryFunc::CharLength, 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
             },
@@ -1431,6 +1437,12 @@ lazy_static! {
             "octet_length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 720;
                 params!(String) => UnaryFunc::ByteLengthString, 1374;
+                params!(Char) => Operation::unary(|ecx, e| {
+                    let length = ecx.scalar_type(&e).unwrap_char_varchar_length();
+                    Ok(e.call_unary(UnaryFunc::PadChar { length })
+                        .call_unary(UnaryFunc::ByteLengthString)
+                    )
+                }), 1375;
             },
             "obj_description" => Scalar {
                 params!(Oid, String) => Operation::binary(|_ecx, _oid, _catalog| {
@@ -1604,7 +1616,14 @@ lazy_static! {
             //
             // https://www.postgresql.org/docs/current/functions-json.html
             "to_jsonb" => Scalar {
-                params!(Any) => Operation::unary(|ecx, e| Ok(typeconv::to_jsonb(ecx, e))), 3787;
+                params!(Any) => Operation::unary(|ecx, e| {
+                    // TODO(#7572): remove this
+                    let e = match ecx.scalar_type(&e) {
+                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar { length }),
+                        _ => e,
+                    };
+                    Ok(typeconv::to_jsonb(ecx, e))
+                }), 3787;
             },
             "to_timestamp" => Scalar {
                 params!(Float64) => UnaryFunc::ToTimestamp, 1158;
@@ -1668,6 +1687,8 @@ lazy_static! {
                 params!(Float32) => AggregateFunc::MaxFloat32, 2119;
                 params!(Float64) => AggregateFunc::MaxFloat64, 2120;
                 params!(String) => AggregateFunc::MaxString, 2129;
+                // TODO(#7572): make this its own function
+                params!(Char) => AggregateFunc::MaxString, 2244;
                 params!(Date) => AggregateFunc::MaxDate, 2122;
                 params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126;
                 params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127;
@@ -1681,6 +1702,8 @@ lazy_static! {
                 params!(Float32) => AggregateFunc::MinFloat32, 2135;
                 params!(Float64) => AggregateFunc::MinFloat64, 2136;
                 params!(String) => AggregateFunc::MinString, 2145;
+                // TODO(#7572): make this its own function
+                params!(Char) => AggregateFunc::MinString, 2245;
                 params!(Date) => AggregateFunc::MinDate, 2138;
                 params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
@@ -1691,6 +1714,11 @@ lazy_static! {
             },
             "jsonb_agg" => Aggregate {
                 params!(Any) => Operation::unary(|ecx, e| {
+                    // TODO(#7572): remove this
+                    let e = match ecx.scalar_type(&e) {
+                        ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar { length }),
+                        _ => e,
+                    };
                     // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
                     // needs to have *some* identity input), but the semantics
                     // of the SQL function require that `Datum::Null` is treated
@@ -1706,6 +1734,16 @@ lazy_static! {
             },
             "jsonb_object_agg" => Aggregate {
                 params!(Any, Any) => Operation::binary(|ecx, key, val| {
+                    // TODO(#7572): remove this
+                    let key = match ecx.scalar_type(&key) {
+                        ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar { length }),
+                        _ => key,
+                    };
+                    let val = match ecx.scalar_type(&val) {
+                        ScalarType::Char { length } => val.call_unary(UnaryFunc::PadChar { length }),
+                        _ => val,
+                    };
+
                     let key = typeconv::to_string(ecx, key);
                     let val = typeconv::to_jsonb(ecx, val);
                     let e = HirScalarExpr::CallVariadic {
@@ -2189,6 +2227,12 @@ lazy_static! {
             // LIKE
             "~~" => Scalar {
                 params!(String, String) => IsLikePatternMatch { case_insensitive: false }, 1209;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                    )
+                }), 1211;
             },
             "!~~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
@@ -2196,16 +2240,35 @@ lazy_static! {
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
                 }), 1210;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
+                        .call_unary(UnaryFunc::Not)
+                    )
+                }), 1212;
             },
 
             // REGEX
             "~" => Scalar {
                 params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
+                    )
+                }), 1055;
             },
             "~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(rhs, IsRegexpMatch { case_insensitive: true }))
                 }), 1228;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                    )
+                }), 1234;
             },
             "!~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
@@ -2213,6 +2276,13 @@ lazy_static! {
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
                 }), 642;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                        .call_unary(UnaryFunc::Not)
+                    )
+                }), 1056;
             },
             "!~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
@@ -2220,6 +2290,13 @@ lazy_static! {
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not))
                 }), 1229;
+                params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
+                    let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
+                    Ok(lhs.call_unary(UnaryFunc::PadChar { length })
+                        .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                        .call_unary(UnaryFunc::Not)
+                    )
+                }), 1235;
             },
 
             // CONCAT
@@ -2331,6 +2408,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Lt, 1332;
                 params!(Bytes, Bytes) => BinaryFunc::Lt, 1957;
                 params!(String, String) => BinaryFunc::Lt, 664;
+                params!(Char, Char) => BinaryFunc::Lt, 1058;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lt, 1072;
             },
@@ -2351,6 +2429,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Lte, 1333;
                 params!(Bytes, Bytes) => BinaryFunc::Lte, 1958;
                 params!(String, String) => BinaryFunc::Lte, 665;
+                params!(Char, Char) => BinaryFunc::Lte, 1059;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Lte, 1074;
             },
@@ -2371,6 +2450,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Gt, 1334;
                 params!(Bytes, Bytes) => BinaryFunc::Gt, 1959;
                 params!(String, String) => BinaryFunc::Gt, 666;
+                params!(Char, Char) => BinaryFunc::Gt, 1060;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gt, 1073;
             },
@@ -2391,9 +2471,13 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Gte, 1335;
                 params!(Bytes, Bytes) => BinaryFunc::Gte, 1960;
                 params!(String, String) => BinaryFunc::Gte, 667;
+                params!(Char, Char) => BinaryFunc::Gte, 1061;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Gte, 1075;
             },
+            // Warning! If you are writing functions here that do not simply use
+            // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
+            // operations).
             "=" => Scalar {
                 params!(Numeric, Numeric) => BinaryFunc::Eq, 1752;
                 params!(Bool, Bool) => BinaryFunc::Eq, 91;
@@ -2411,6 +2495,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::Eq, 1330;
                 params!(Bytes, Bytes) => BinaryFunc::Eq, 1955;
                 params!(String, String) => BinaryFunc::Eq, 98;
+                params!(Char, Char) => BinaryFunc::Eq, 1054;
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
                 params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
@@ -2432,6 +2517,7 @@ lazy_static! {
                 params!(Interval, Interval) => BinaryFunc::NotEq, 1331;
                 params!(Bytes, Bytes) => BinaryFunc::NotEq, 1956;
                 params!(String, String) => BinaryFunc::NotEq, 531;
+                params!(Char, Char) => BinaryFunc::NotEq, 1057;
                 params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
                 params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq, 1071;
             }

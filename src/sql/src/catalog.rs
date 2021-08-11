@@ -129,7 +129,7 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
 
     /// Returns a lossy `ScalarType` associated with `id` if one exists.
     ///
-    /// For example `pg_catalog.numeric` returns `ScalarType::Decimal(0,0)`,
+    /// For example `pg_catalog.numeric` returns `ScalarType::Numeric { scale: None}`,
     /// meaning that its precision and scale need to be associated with values
     /// from elsewhere.
     fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType>;

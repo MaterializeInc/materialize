@@ -18,6 +18,8 @@ use anyhow::bail;
 use dec::{Context, Decimal};
 use lazy_static::lazy_static;
 
+use super::util;
+
 /// The maximum number of digits expressable in a numeric.
 pub const NUMERIC_DATUM_WIDTH: usize = 13;
 pub const NUMERIC_DATUM_MAX_PRECISION: usize = NUMERIC_DATUM_WIDTH * 3;
@@ -587,4 +589,33 @@ pub fn rescale(n: &mut Numeric, scale: u8) -> Result<(), anyhow::Error> {
     munge_numeric(n)?;
 
     Ok(())
+}
+
+/// Validates the typ_mod is valid for numeric type and returns a specified
+/// scale is appropriate (we ignore the specified precision).
+pub fn extract_typ_mod(typ_mod: &[u64]) -> Result<Option<u8>, anyhow::Error> {
+    let max_precision = u8::try_from(NUMERIC_DATUM_MAX_PRECISION).unwrap();
+    let typ_mod = util::extract_typ_mod::<u8>(
+        "numeric",
+        &typ_mod,
+        &[("precision", 1, max_precision), ("scale", 0, max_precision)],
+    )?;
+
+    // Poor man's VecDeque
+    Ok(match typ_mod.len() {
+        0 | 1 => None,
+        2 => {
+            let precision = typ_mod[0];
+            let scale = typ_mod[1];
+            if scale > precision {
+                bail!(
+                    "numeric scale {} must be between 0 and precision {}",
+                    scale,
+                    precision
+                );
+            }
+            Some(scale)
+        }
+        _ => unreachable!(),
+    })
 }
