@@ -306,9 +306,8 @@ impl Snapshot<Vec<u8>, Vec<u8>> for FutureSnapshot {
                 .filter(|(_, ts, _)| self.ts_lower.less_equal(ts) && !self.ts_upper.less_equal(ts))
                 .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
             buf.extend(updates);
-            return true;
         }
-        false
+        !self.updates.is_empty()
     }
 }
 

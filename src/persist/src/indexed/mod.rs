@@ -776,6 +776,12 @@ pub trait Snapshot<K, V> {
     /// A partial read of the data in the snapshot.
     ///
     /// Returns true if read needs to be called again for more data.
+    /// TODO: this API is easy to misuse (callers want to be able to say:
+    /// while foo.read() { do_stuff() }
+    /// where this API requires a more complicated control flow. If we instead
+    /// changed the semantics to "Return false when no more data has been added,
+    /// nor will ever be added to the destination" then we could support the
+    /// desired control flow.
     fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool;
 }
 

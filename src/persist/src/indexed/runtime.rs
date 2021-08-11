@@ -443,6 +443,7 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
 
 /// A consistent snapshot of all data currently stored for an id, with keys and
 /// vals decoded.
+#[derive(Debug)]
 pub struct DecodedSnapshot<K, V> {
     snap: IndexedSnapshot,
     buf: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
@@ -473,10 +474,12 @@ impl<K: Codec + Ord, V: Codec + Ord> DecodedSnapshot<K, V> {
     pub fn read_to_end_flattened(&mut self) -> Result<Vec<((K, V), u64, isize)>, Error> {
         let mut res = Vec::new();
         let mut buf = Vec::new();
-        while self.read(&mut buf) {
-            for ((k, v), ts, diff) in buf.drain(..) {
-                res.push(((k?, v?), ts, diff));
-            }
+
+        // Read in all of the potentially decoded data.
+        while self.read(&mut buf) {}
+
+        for ((k, v), ts, diff) in buf.drain(..) {
+            res.push(((k?, v?), ts, diff));
         }
         res.sort();
         Ok(res)

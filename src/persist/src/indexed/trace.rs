@@ -310,9 +310,8 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
     fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         if let Some(batch) = self.updates.pop() {
             buf.extend(batch.updates.iter().cloned());
-            return true;
         }
-        false
+        !self.updates.is_empty()
     }
 }
 
