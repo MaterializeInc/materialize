@@ -97,8 +97,9 @@ impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
         let catalog_file = NamedTempFile::new()?;
         let metrics_registry = MetricsRegistry::new();
+        let num_workers = 1;
         let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp) =
-            coord::serve_debug(catalog_file.path(), metrics_registry.clone());
+            coord::serve_debug(catalog_file.path(), metrics_registry.clone(), num_workers);
         let coordtest = CoordTest {
             _handle: handle,
             client: Some(client),

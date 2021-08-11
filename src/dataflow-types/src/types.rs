@@ -65,6 +65,17 @@ pub enum TailResponse {
     Dropped,
 }
 
+/// Updates on the status of dataflows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DataflowStatusUpdate {
+    CreatedDataflows {
+        /// List of index IDs for which the requested dataflow was created.
+        created_indexes: Vec<GlobalId>,
+        /// List of sink IDs for which the requested dataflow was created.
+        created_sinks: Vec<GlobalId>,
+    },
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {

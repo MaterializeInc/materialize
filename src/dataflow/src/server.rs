@@ -37,8 +37,8 @@ use tokio::sync::mpsc;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDescription, DataflowError, ExternalSourceConnector, MzOffset,
-    PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
+    Consistency, DataflowDescription, DataflowError, DataflowStatusUpdate, ExternalSourceConnector,
+    MzOffset, PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
 use ore::{now::NowFn, result::ResultExt};
@@ -226,6 +226,8 @@ pub enum WorkerFeedback {
     PeekResponse(u32, PeekResponse),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse),
+    /// Status updates on dataflows.
+    DataflowStatusUpdate(DataflowStatusUpdate),
 }
 
 /// Configures a dataflow server.
@@ -299,6 +301,9 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     metrics,
                     persist: persist.clone(),
                     tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+                    dataflow_status_updates_buffer: std::rc::Rc::new(std::cell::RefCell::new(
+                        Vec::new(),
+                    )),
                 },
                 materialized_logger: None,
                 command_rx,
@@ -515,6 +520,8 @@ where
             ));
         }
 
+        let mut created_indexes = Vec::new();
+
         // Install traces as maintained indexes
         for (log, (_, trace)) in t_traces {
             let id = logging.active_logs[&log];
@@ -523,6 +530,7 @@ where
                 .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            created_indexes.push(id);
         }
         for (log, (_, trace)) in r_traces {
             let id = logging.active_logs[&log];
@@ -531,6 +539,7 @@ where
                 .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            created_indexes.push(id);
         }
         for (log, (_, trace)) in d_traces {
             let id = logging.active_logs[&log];
@@ -539,6 +548,7 @@ where
                 .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            created_indexes.push(id);
         }
         for (log, (_, trace)) in m_traces {
             let id = logging.active_logs[&log];
@@ -547,7 +557,17 @@ where
                 .set(id, TraceBundle::new(trace, errs.clone()));
             self.reported_frontiers.insert(id, Antichain::from_elem(0));
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
+            created_indexes.push(id);
         }
+
+        let mut status_updates = self
+            .render_state
+            .dataflow_status_updates_buffer
+            .borrow_mut();
+        status_updates.push(DataflowStatusUpdate::CreatedDataflows {
+            created_indexes,
+            created_sinks: Vec::new(),
+        });
 
         self.materialized_logger = Some(logger);
     }
@@ -600,6 +620,7 @@ where
             self.metrics.observe_command_finish();
             self.process_peeks();
             self.process_tails();
+            self.report_dataflow_status_updates();
         }
     }
 
@@ -1136,6 +1157,22 @@ where
                 .send(Response {
                     worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::TailResponse(sink_id, response),
+                })
+                .expect("feedback receiver should not drop first");
+        }
+    }
+
+    /// Scans the shared buffer of updates and forwards along to to coordinator.
+    fn report_dataflow_status_updates(&mut self) {
+        let mut status_updates = self
+            .render_state
+            .dataflow_status_updates_buffer
+            .borrow_mut();
+        for update in status_updates.drain(..) {
+            self.feedback_tx
+                .send(Response {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::DataflowStatusUpdate(update),
                 })
                 .expect("feedback receiver should not drop first");
         }

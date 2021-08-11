@@ -91,11 +91,11 @@ snk5
 > SHOW FULL SINKS
 name   type  volatility  status
 ----------------------------------
-snk1   user  unknown     created
-snk2   user  unknown     created
-snk3   user  unknown     created
-snk4   user  unknown     created
-snk5   user  unknown     created
+snk1   user  unknown     available
+snk2   user  unknown     available
+snk3   user  unknown     available
+snk4   user  unknown     available
+snk5   user  unknown     available
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
@@ -186,16 +186,16 @@ $ kafka-verify format=avro sink=materialize.public.sink10 sort-messages=true
 > SHOW FULL SINKS
 name        type  volatility   status
 ----------------------------------------
-snk1        user  unknown      created
-snk2        user  unknown      created
-snk3        user  unknown      created
-snk4        user  unknown      created
-snk5        user  unknown      created
-snk6        user  unknown      created
-snk7        user  unknown      created
-snk8        user  unknown      created
-sink9       user  nonvolatile  created
-sink10      user  nonvolatile  created
+snk1        user  unknown      available
+snk2        user  unknown      available
+snk3        user  unknown      available
+snk4        user  unknown      available
+snk5        user  unknown      available
+snk6        user  unknown      available
+snk7        user  unknown      available
+snk8        user  unknown      available
+sink9       user  nonvolatile  available
+sink10      user  nonvolatile  available
 
 # test explicit partition count
 > CREATE SINK sink11 FROM foo

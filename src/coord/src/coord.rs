@@ -45,6 +45,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use self::dataflow_status::DataflowStatusUpdateBuffer;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -53,6 +54,7 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use log::debug;
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
@@ -66,8 +68,9 @@ use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use dataflow::{TimestampBindingFeedback, WorkerFeedback};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
-    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
-    SinkConnector, SourceConnector, TailResponse, TailSinkConnector, TimestampSourceUpdate, Update,
+    DataflowDesc, DataflowStatusUpdate, ExternalSourceConnector, IndexDesc, PeekResponse,
+    PostgresSourceConnector, SinkConnector, SourceConnector, TailResponse, TailSinkConnector,
+    TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
@@ -103,7 +106,9 @@ use transform::Optimizer;
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
-use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState, Table};
+use crate::catalog::{
+    self, BuiltinTableUpdate, Catalog, CatalogItem, Op, SinkConnectorState, Status, Table,
+};
 use crate::client::{Client, Handle};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
@@ -121,6 +126,7 @@ use crate::util::ClientTransmitter;
 mod antichain;
 mod arrangement_state;
 mod dataflow_builder;
+mod dataflow_status;
 mod prometheus;
 
 #[derive(Debug)]
@@ -250,6 +256,11 @@ pub struct Coordinator {
     ///
     /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
     pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
+
+    /// A buffer for incoming [`DataflowStatusUpdates`](DataflowStatusUpdate).
+    /// We need to buffer them until we received the same update from all
+    /// workers, before we can act on them.
+    dataflow_status_updates: DataflowStatusUpdateBuffer,
 }
 
 /// Metadata about an active connection.
@@ -628,6 +639,37 @@ impl Coordinator {
                             self.pending_tails.remove(&sink_id);
                         }
                     }
+                }
+            }
+            WorkerFeedback::DataflowStatusUpdate(status_update) => {
+                debug!("Received dataflow status update: {:?}", status_update);
+
+                // stash and see if we got the update from all workers
+                let status_update = self.dataflow_status_updates.add_update(status_update);
+
+                match status_update {
+                    Some(DataflowStatusUpdate::CreatedDataflows {
+                        created_indexes,
+                        created_sinks,
+                    }) => {
+                        debug!(
+                            "Got dataflow status update from buffer: created_indexes {:?}, created_sinks: {:?}",
+                            created_indexes, created_sinks
+                        );
+
+                        let status_ops = created_indexes
+                            .into_iter()
+                            .chain(created_sinks.into_iter())
+                            .filter(|id| !id.is_transient())
+                            .map(|id| Op::UpdateItemStatus {
+                                id,
+                                status: Status::Available,
+                            })
+                            .collect();
+                        self.catalog_transact(status_ops)
+                            .expect("failed to update dataflow status in catalog");
+                    }
+                    None => (), // not yet ready
                 }
             }
             WorkerFeedback::FrontierUppers(updates) => {
@@ -3599,6 +3641,7 @@ pub async fn serve(
                 now,
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
+                dataflow_status_updates: DataflowStatusUpdateBuffer::new(workers),
             };
             if let Some(config) = &logging {
                 coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
@@ -3648,6 +3691,7 @@ pub async fn serve(
 pub fn serve_debug(
     catalog_path: &Path,
     metrics_registry: MetricsRegistry,
+    num_workers: usize,
 ) -> (
     JoinOnDropHandle<()>,
     Client,
@@ -3668,7 +3712,7 @@ pub fn serve_debug(
         experimental_mode: None,
         safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
-        num_workers: 0,
+        num_workers,
         timestamp_frequency: Duration::from_millis(1),
         now: get_debug_timestamp,
         persist: PersistConfig::disabled(),
@@ -3757,6 +3801,7 @@ pub fn serve_debug(
             now: get_debug_timestamp,
             pending_peeks: HashMap::new(),
             pending_tails: HashMap::new(),
+            dataflow_status_updates: DataflowStatusUpdateBuffer::new(num_workers),
         };
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();

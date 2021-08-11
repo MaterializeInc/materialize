@@ -40,7 +40,7 @@ Unable to automatically determine a timestamp for your query; this can happen if
 name        type     materialized  volatility  status
 -----------------------------------------------------
 data_view   user     false         unknown     created
-test1       user     true          unknown     created
+test1       user     true          unknown     available
 
 > SHOW MATERIALIZED VIEWS
 test1
@@ -48,7 +48,7 @@ test1
 > SHOW FULL MATERIALIZED VIEWS
 name     type  volatility  status
 ---------------------------------
-test1    user  unknown     created
+test1    user  unknown     available
 
 > SELECT * FROM test1
 b  sum
@@ -169,7 +169,7 @@ catalog item 'materialize.public.idx1' is an index and so cannot be depended upo
 > SHOW FULL VIEWS LIKE 'test5'
 name        type     materialized  volatility  status
 -----------------------------------------------------
-test5       user     true          unknown     created
+test5       user     true          unknown     available
 
 > SELECT * from test5
 b  c
@@ -322,12 +322,12 @@ mat_data
 name     type materialized  volatility  status
 ----------------------------------------------
 data     user false         unknown     created
-mat_data user true          unknown     created
+mat_data user true          unknown     available
 
 > SHOW FULL MATERIALIZED SOURCES
 name     type  volatility  status
 ---------------------------------
-mat_data user  unknown     created
+mat_data user  unknown     available
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

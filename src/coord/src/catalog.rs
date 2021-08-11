@@ -402,6 +402,27 @@ pub enum Status {
 }
 
 impl Status {
+    /// Creates a derived status based on the given `depended_on` statuses (stati?).
+    ///
+    /// This can be used to determine the status of an item that depends on
+    /// multiple other items.
+    ///
+    /// If and only if all dependent items are in [`Status::Available`] the
+    /// combined status is also [`Status::Available`]. Otherwise it is
+    /// [`Status::Created`].
+    fn combine<I>(depended_on: I) -> Status
+    where
+        I: Iterator<Item = Status>,
+    {
+        if depended_on
+            .into_iter()
+            .all(|status| matches!(status, Status::Available))
+        {
+            Status::Available
+        } else {
+            Status::Created
+        }
+    }
     fn as_str(&self) -> &'static str {
         match self {
             Status::Created => "created",
@@ -1515,7 +1536,10 @@ impl Catalog {
                 name: FullName,
                 item: CatalogItem,
             },
-
+            UpdateItemStatus {
+                id: GlobalId,
+                status: Status,
+            },
             DropDatabase {
                 name: String,
             },
@@ -1647,6 +1671,12 @@ impl Catalog {
                         name,
                         item,
                     }]
+                }
+                Op::UpdateItemStatus { id, status } => {
+                    // no need to change the state in the database, because
+                    // dataflow status is ephemeral and will be re-discovered
+                    // on restart.
+                    vec![Action::UpdateItemStatus { id, status }]
                 }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
@@ -1829,6 +1859,21 @@ impl Catalog {
                 } => {
                     self.insert_item(id, oid, name, item);
                     builtin_table_updates.extend(self.pack_item_update(id, 1));
+
+                    // Views might depend on items that have a statically
+                    // "available" status, might not depend on any other items,
+                    // or they might depend on items whose status was already
+                    // set to available.
+                    //
+                    // We therefore need to set an initial status, and we need
+                    // to do it here instead of when creating the CatalogItem
+                    // because the catalog might have change concurrently but we
+                    // are serialized here.
+                    self.set_status_from_uses(&id, &mut builtin_table_updates);
+                }
+
+                Action::UpdateItemStatus { id, status } => {
+                    self.set_status(&id, status.clone(), &mut builtin_table_updates);
                 }
 
                 Action::DropDatabase { name } => {
@@ -1868,6 +1913,7 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
+
                     if let CatalogItem::Index(index) = &metadata.item {
                         let indexes = self
                             .indexes
@@ -1878,6 +1924,18 @@ impl Catalog {
                             .position(|(idx_id, _keys)| *idx_id == id)
                             .expect("catalog out of sync");
                         indexes.remove(i);
+
+                        if indexes.is_empty() && !drop_ids.contains(&index.on) {
+                            // If the indexed item now doesn't have any indexes
+                            // set the status of it to Created.
+                            //
+                            // We update the status here, instead of introducing
+                            // dataflow feedback for dropped indexes and updating
+                            // based on that because this is the earliest we know
+                            // and the item that is being indexes should be
+                            // unavailable from here.
+                            self.set_status(&index.on, Status::Created, &mut builtin_table_updates);
+                        }
                     }
                     self.indexes.remove(&id);
                 }
@@ -2008,13 +2066,20 @@ impl Catalog {
                 let mut optimizer = Optimizer::for_view();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
+                // Views might depend on items that have a statically "available"
+                // status, such as Tables. Those never have their status updated
+                // based on feedback from the dataflow layer, meaning that views
+                // that only depend on those would never have their status
+                // updated. We therefore need to initialize the status here.
+                let dependent_status = depends_on.iter().map(|id| self.status(&id));
+                let initial_status = Status::combine(dependent_status);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     optimized_expr,
                     desc,
                     conn_id: None,
                     depends_on,
-                    status: Default::default(),
+                    status: initial_status,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan {
@@ -2182,6 +2247,91 @@ impl Catalog {
         self.get_by_id(id).item().status()
     }
 
+    /// Sets the status of the item identified by `id` to the given `status`.
+    ///
+    /// This panics if the item identified by `id` cannot have a status. Only
+    /// tables, sources, indexes, views, and sinks can have a status.
+    pub fn set_status(
+        &mut self,
+        id: &GlobalId,
+        status: Status,
+        packed_updates: &mut Vec<BuiltinTableUpdate>,
+    ) {
+        if self.status(id) == status {
+            return;
+        }
+
+        packed_updates.extend(self.pack_item_update(id.clone(), -1));
+        self.internal_set_status(id, status);
+        packed_updates.extend(self.pack_item_update(id.clone(), 1));
+
+        // if the item is the default index for another item,
+        // update the status of that item as well
+        let entry = self.get_by_id(&id);
+        if let CatalogItem::Index(index) = &entry.item() {
+            if self.default_index_for(index.on) == Some(*id) {
+                let indexed_id = index.on;
+
+                self.set_status(&indexed_id, status, packed_updates);
+            }
+        }
+
+        // also update the status of any views that depend on this item
+        let entry = self.by_id.get(id).expect("missing item");
+
+        let dependent_views: Vec<_> = entry
+            .used_by()
+            .iter()
+            .map(|id| self.get_by_id(id))
+            .filter(|entry| matches!(entry.item(), CatalogItem::View(_)))
+            .map(|entry| entry.id())
+            .collect();
+
+        for dependent_view in dependent_views {
+            self.set_status_from_uses(&dependent_view, packed_updates);
+        }
+    }
+
+    fn internal_set_status(&mut self, id: &GlobalId, status: Status) {
+        let entry = self.by_id.get_mut(id).expect("missing item");
+        match &mut entry.item {
+            CatalogItem::Source(source) => source.status = status,
+            CatalogItem::Index(index) => index.status = status,
+            CatalogItem::View(view) => view.status = status,
+            CatalogItem::Sink(sink) => sink.status = status,
+            CatalogItem::Table(table) => table.status = status,
+            _ => {
+                panic!(
+                    "item {} of type {} cannot have a status",
+                    entry.id,
+                    entry.item_type()
+                );
+            }
+        }
+    }
+
+    /// Updates the status of the view identified by `id` based on the combined
+    /// status of the items that it depends on/uses.
+    ///
+    /// If the item identified by `id` is not a view, this returns without
+    /// changing anything.
+    fn set_status_from_uses(
+        &mut self,
+        id: &GlobalId,
+        packed_updates: &mut Vec<BuiltinTableUpdate>,
+    ) {
+        let entry = self.get_by_id(id);
+        if !matches!(entry.item(), CatalogItem::View(_)) {
+            return;
+        }
+
+        let uses = entry.uses();
+        let uses_status: Vec<_> = uses.iter().map(|id| self.status(&id)).collect();
+
+        let combined_status = Status::combine(uses_status.into_iter());
+        self.set_status(id, combined_status, packed_updates);
+    }
+
     /// Serializes the catalog's in-memory state.
     ///
     /// There are no guarantees about the format of the serialized state, except
@@ -2273,6 +2423,10 @@ pub enum Op {
         oid: u32,
         name: FullName,
         item: CatalogItem,
+    },
+    UpdateItemStatus {
+        id: GlobalId,
+        status: Status,
     },
     DropDatabase {
         name: String,

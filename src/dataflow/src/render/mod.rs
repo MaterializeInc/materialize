@@ -167,6 +167,9 @@ pub struct RenderState {
     /// The entries are pairs of sink identifier (to identify the tail instance)
     /// and the response itself.
     pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+    /// Shared buffer for sending dataflow status updates from workers back to
+    /// the coordinator.
+    pub dataflow_status_updates_buffer: Rc<RefCell<Vec<DataflowStatusUpdate>>>,
 }
 
 /// A container for "tokens" that are relevant to an in-construction dataflow.
@@ -246,12 +249,15 @@ pub fn build_dataflow<A: Allocate>(
             }
 
             // Export declared indexes.
+            let mut created_indexes = Vec::new();
             for (idx_id, idx, _typ) in &dataflow.index_exports {
                 let imports = dataflow.get_imports(&idx.on_id);
                 context.export_index(render_state, &mut tokens, imports, *idx_id, idx);
+                created_indexes.push(idx_id.clone());
             }
 
             // Export declared sinks.
+            let mut created_sinks = Vec::new();
             for (sink_id, sink) in &dataflow.sink_exports {
                 let imports = dataflow.get_imports(&sink.from);
                 context.export_sink(
@@ -262,7 +268,14 @@ pub fn build_dataflow<A: Allocate>(
                     sink,
                     sink_metrics,
                 );
+                created_sinks.push(sink_id.clone());
             }
+
+            let mut status_updates = render_state.dataflow_status_updates_buffer.borrow_mut();
+            status_updates.push(DataflowStatusUpdate::CreatedDataflows {
+                created_indexes,
+                created_sinks,
+            })
         });
     })
 }

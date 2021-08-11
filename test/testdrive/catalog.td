@@ -318,24 +318,24 @@ mz_worker_materialization_frontiers
 > SHOW FULL SOURCES FROM mz_catalog
 name                                 type   materialized  volatility  status
 ----------------------------------------------------------------------------
-mz_arrangement_sharing               system true          volatile    created
-mz_arrangement_sizes                 system true          volatile    created
-mz_dataflow_channels                 system true          volatile    created
-mz_dataflow_operator_addresses       system true          volatile    created
-mz_dataflow_operator_reachability    system true          volatile    created
-mz_dataflow_operators                system true          volatile    created
-mz_kafka_broker_rtt                  system true          volatile    created
-mz_kafka_consumer_partitions         system true          volatile    created
-mz_materialization_dependencies      system true          volatile    created
-mz_materializations                  system true          volatile    created
-mz_message_counts                    system true          volatile    created
-mz_peek_active                       system true          volatile    created
-mz_peek_durations                    system true          volatile    created
-mz_scheduling_elapsed                system true          volatile    created
-mz_scheduling_histogram              system true          volatile    created
-mz_scheduling_parks                  system true          volatile    created
-mz_source_info                       system true          volatile    created
-mz_worker_materialization_frontiers  system true          volatile    created
+mz_arrangement_sharing               system true          volatile    available
+mz_arrangement_sizes                 system true          volatile    available
+mz_dataflow_channels                 system true          volatile    available
+mz_dataflow_operator_addresses       system true          volatile    available
+mz_dataflow_operator_reachability    system true          volatile    available
+mz_dataflow_operators                system true          volatile    available
+mz_kafka_broker_rtt                  system true          volatile    available
+mz_kafka_consumer_partitions         system true          volatile    available
+mz_materialization_dependencies      system true          volatile    available
+mz_materializations                  system true          volatile    available
+mz_message_counts                    system true          volatile    available
+mz_peek_active                       system true          volatile    available
+mz_peek_durations                    system true          volatile    available
+mz_scheduling_elapsed                system true          volatile    available
+mz_scheduling_histogram              system true          volatile    available
+mz_scheduling_parks                  system true          volatile    available
+mz_source_info                       system true          volatile    available
+mz_worker_materialization_frontiers  system true          volatile    available
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -479,21 +479,21 @@ mz_relations
 
 > SHOW FULL VIEWS FROM mz_catalog
 name                              type   materialized  volatility  status
--------------------------------------------------------------------------
-mz_dataflow_names                 system false         volatile    created
-mz_dataflow_operator_dataflows    system false         volatile    created
-mz_materialization_frontiers      system false         volatile    created
-mz_objects                        system false         volatile    created
-mz_perf_arrangement_records       system false         volatile    created
-mz_perf_dependency_frontiers      system false         volatile    created
-mz_perf_peek_durations_aggregates system false         volatile    created
-mz_perf_peek_durations_bucket     system false         volatile    created
-mz_perf_peek_durations_core       system false         volatile    created
-mz_records_per_dataflow           system false         volatile    created
-mz_records_per_dataflow_global    system false         volatile    created
-mz_records_per_dataflow_operator  system false         volatile    created
-mz_relations                      system false         volatile    created
-mz_catalog_names                  system false         volatile    created
+--------------------------------------------------------------------------
+mz_dataflow_names                 system false         volatile    available
+mz_dataflow_operator_dataflows    system false         volatile    available
+mz_materialization_frontiers      system false         volatile    available
+mz_objects                        system false         volatile    available
+mz_perf_arrangement_records       system false         volatile    available
+mz_perf_dependency_frontiers      system false         volatile    available
+mz_perf_peek_durations_aggregates system false         volatile    available
+mz_perf_peek_durations_bucket     system false         volatile    available
+mz_perf_peek_durations_core       system false         volatile    available
+mz_records_per_dataflow           system false         volatile    available
+mz_records_per_dataflow_global    system false         volatile    available
+mz_records_per_dataflow_operator  system false         volatile    available
+mz_relations                      system false         volatile    available
+mz_catalog_names                  system false         volatile    available
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
