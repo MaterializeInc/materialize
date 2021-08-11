@@ -11,6 +11,106 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::Instant;
+
+use sysinfo::{ProcessorExt, SystemExt};
+
+use ore::cast::CastFrom;
+use ore::cgroup::{self, MemoryLimit};
+use ore::metric;
+use ore::metrics::ThirdPartyMetric;
+use ore::metrics::{ComputedGauge, MetricsRegistry, UIntGauge, UIntGaugeVec};
+use ore::option::OptionExt;
+
+use crate::BUILD_INFO;
+
+/// Global metrics for the materialized server.
+#[derive(Debug, Clone)]
+pub struct Metrics {
+    /// The number of workers active in the system.
+    pub worker_count: UIntGauge,
+    /// The number of seconds that the system has been running.
+    pub uptime: ComputedGauge,
+    /// The amount of time we spend gathering metrics in prometheus endpoints.
+    pub request_metrics_gather: UIntGauge,
+    /// The amount of time we spend encoding metrics in prometheus endpoints.
+    pub request_metrics_encode: UIntGauge,
+    /// The amount of time we spend gathering third-party metrics in prometheus
+    /// endpoints.
+    pub third_party_request_metrics_gather: UIntGauge,
+    /// The amount of time we spend encoding third-party metrics in prometheus
+    /// endpoints.
+    pub third_party_request_metrics_encode: UIntGauge,
+}
+
+impl Metrics {
+    pub fn register_with(
+        registry: &mut MetricsRegistry,
+        workers: usize,
+        start_instant: Instant,
+    ) -> Self {
+        let worker_count: UIntGauge = registry.register(metric!(
+            name: "mz_server_metadata_timely_worker_threads",
+            help: "number of timely worker threads",
+            const_labels: {"count" => workers},
+        ));
+        worker_count.set(u64::cast_from(workers));
+
+        let uptime = {
+            let mut system = sysinfo::System::new();
+            system.refresh_system();
+
+            let memory_limit = cgroup::detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+                max: None,
+                swap_max: None,
+            });
+
+            registry.register_computed_gauge(
+                metric!(
+                    name: "mz_server_metadata_seconds",
+                    help: "server metadata, value is uptime",
+                    const_labels: {
+                        "build_time" => BUILD_INFO.time,
+                        "version" => BUILD_INFO.version,
+                        "build_sha" => BUILD_INFO.sha,
+                        "os" => &os_info::get().to_string(),
+                        "ncpus_logical" => &num_cpus::get().to_string(),
+                        "ncpus_physical" => &num_cpus::get_physical().to_string(),
+                        "cpu0" => &{
+                            match &system.processors().get(0) {
+                                None => "<unknown>".to_string(),
+                                Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
+                            }
+                        },
+                        "memory_total" => &system.total_memory().to_string(),
+                        "memory_limit" => memory_limit.max.map(|l| l / 1024).display_or("none"),
+                        "swap_limit" => memory_limit.swap_max.map(|l| l / 1024).display_or("none")
+                    },
+                ),
+                move || start_instant.elapsed().as_secs_f64(),
+            )
+        };
+
+        let request_metrics: ThirdPartyMetric<UIntGaugeVec> = registry.register_third_party_visible(metric!(
+            name: "mz_server_scrape_metrics_times",
+            help: "how long it took to gather metrics, used for very low frequency high accuracy measures",
+            var_labels: ["action"],
+        ));
+
+        Self {
+            worker_count,
+            uptime,
+            request_metrics_gather: request_metrics
+                .third_party_metric_with_label_values(&["gather"]),
+            request_metrics_encode: request_metrics
+                .third_party_metric_with_label_values(&["encode"]),
+            third_party_request_metrics_encode: request_metrics
+                .third_party_metric_with_label_values(&["gather_third_party"]),
+            third_party_request_metrics_gather: request_metrics
+                .third_party_metric_with_label_values(&["encode_third_party"]),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum PromMetric<'a> {

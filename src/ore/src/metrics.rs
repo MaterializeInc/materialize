@@ -41,12 +41,17 @@
 //! }
 //! ```
 
-use crate::stats::HISTOGRAM_BUCKETS;
+use std::fmt;
+use std::sync::Arc;
+
 use prometheus::core::{
-    Atomic, Collector, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec, Opts,
+    Atomic, AtomicF64, AtomicI64, AtomicU64, Collector, GenericCounter, GenericCounterVec,
+    GenericGauge, GenericGaugeVec, Opts,
 };
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
+
+use crate::stats::HISTOGRAM_BUCKETS;
 
 pub use prometheus::Opts as PrometheusOpts;
 pub use prometheus::{
@@ -109,6 +114,24 @@ impl MetricsRegistry {
         let collector = M::make_collector(opts);
         self.inner.register(Box::new(collector.clone())).unwrap();
         collector
+    }
+
+    /// Registers a gauge whose value is computed when observed.
+    pub fn register_computed_gauge<F, P>(
+        &self,
+        opts: prometheus::Opts,
+        f: F,
+    ) -> ComputedGenericGauge<P>
+    where
+        F: Fn() -> P::T + Send + Sync + 'static,
+        P: Atomic + 'static,
+    {
+        let gauge = ComputedGenericGauge {
+            gauge: GenericGauge::make_collector(opts),
+            f: Arc::new(f),
+        };
+        self.inner.register(Box::new(gauge.clone())).unwrap();
+        gauge
     }
 
     /// Register a metric that can be scraped from both the "normal" registry, as well as the
@@ -216,6 +239,71 @@ impl MakeCollector for HistogramVec {
         .expect("defining a histogram vec")
     }
 }
+
+/// A [`Gauge`] whose value is computed whenever it is observed.
+pub struct ComputedGenericGauge<P>
+where
+    P: Atomic,
+{
+    gauge: GenericGauge<P>,
+    f: Arc<dyn Fn() -> P::T + Send + Sync>,
+}
+
+impl<P> fmt::Debug for ComputedGenericGauge<P>
+where
+    P: Atomic + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ComputedGenericGauge")
+            .field("gauge", &self.gauge)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<P> Clone for ComputedGenericGauge<P>
+where
+    P: Atomic,
+{
+    fn clone(&self) -> ComputedGenericGauge<P> {
+        ComputedGenericGauge {
+            gauge: self.gauge.clone(),
+            f: self.f.clone(),
+        }
+    }
+}
+
+impl<T> Collector for ComputedGenericGauge<T>
+where
+    T: Atomic,
+{
+    fn desc(&self) -> Vec<&prometheus::core::Desc> {
+        self.gauge.desc()
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        self.gauge.set((self.f)());
+        self.gauge.collect()
+    }
+}
+
+impl<P> ComputedGenericGauge<P>
+where
+    P: Atomic,
+{
+    /// Computes the current value of the gauge.
+    pub fn get(&self) -> P::T {
+        (self.f)()
+    }
+}
+
+/// A [`ComputedGenericGauge`] for 64-bit floating point numbers.
+pub type ComputedGauge = ComputedGenericGauge<AtomicF64>;
+
+/// A [`ComputedGenericGauge`] for 64-bit signed integers.
+pub type ComputedIntGauge = ComputedGenericGauge<AtomicI64>;
+
+/// A [`ComputedGenericGauge`] for 64-bit unsigned integers.
+pub type ComputedUIntGauge = ComputedGenericGauge<AtomicU64>;
 
 #[cfg(test)]
 mod tests;
