@@ -217,9 +217,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
-    // Initialize persistence runtime.
-    let persist = config.persist.init()?;
-
     // Initialize coordinator.
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         workers,
@@ -233,7 +230,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
         metrics_registry: config.metrics_registry.clone(),
-        persist,
+        persist: config.persist,
     })
     .await?;
 

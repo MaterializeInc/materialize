@@ -110,7 +110,7 @@ use crate::command::{
 };
 use crate::coord::antichain::AntichainToken;
 use crate::error::CoordError;
-use crate::persistcfg::{PersistConfig, PersisterWithConfig};
+use crate::persistcfg::PersistConfig;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -188,8 +188,8 @@ pub struct Config<'a> {
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
-    /// Handle to persistence runtime and feature configuration.
-    pub persist: PersisterWithConfig,
+    /// Persistence subsystem configuration.
+    pub persist: PersistConfig,
 }
 
 /// Glues the external world to the Timely workers.
@@ -3509,8 +3509,7 @@ pub async fn serve(
     };
 
     let path = data_directory.join("catalog");
-    let persister = persist.persister.clone();
-    let (catalog, builtin_table_updates) = Catalog::open(&catalog::Config {
+    let (catalog, builtin_table_updates, persister) = Catalog::open(&catalog::Config {
         path: &path,
         experimental_mode: Some(experimental_mode),
         safe_mode,
@@ -3659,8 +3658,7 @@ pub fn serve_debug(
         *DEBUG_TIMESTAMP.lock().unwrap()
     }
 
-    let persist = PersistConfig::disabled().init().unwrap();
-    let (catalog, builtin_table_updates) = catalog::Catalog::open(&catalog::Config {
+    let (catalog, builtin_table_updates, persister) = catalog::Catalog::open(&catalog::Config {
         path: catalog_path,
         enable_logging: true,
         experimental_mode: None,
@@ -3669,7 +3667,7 @@ pub fn serve_debug(
         num_workers: 0,
         timestamp_frequency: Duration::from_millis(1),
         now: get_debug_timestamp,
-        persist: persist.clone(),
+        persist: PersistConfig::disabled(),
         skip_migrations: false,
     })
     .unwrap();
@@ -3688,7 +3686,7 @@ pub fn serve_debug(
         experimental_mode: true,
         now: get_debug_timestamp,
         metrics_registry: metrics_registry.clone(),
-        persist: persist.persister,
+        persist: persister,
         feedback_tx,
     })
     .unwrap();
