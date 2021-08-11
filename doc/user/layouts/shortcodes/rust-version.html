@@ -1,1 +1,1 @@
-{{- trim (readFile "rust-toolchain") "\n" -}}
+{{- index $.Site.Data "rust-toolchain" "toolchain" "channel" -}}
