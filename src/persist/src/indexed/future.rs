@@ -61,8 +61,8 @@ use crate::storage::{Blob, SeqNo};
 /// - TODO: Space usage.
 pub struct BlobFuture {
     id: Id,
-    // The next id used to assign a Blob key for this future.
-    next_blob_id: u64,
+    /// The next id used to assign a Blob key for this future.
+    pub next_blob_id: u64,
     // NB: This is a closed lower bound. When Indexed seals a time, only data
     // strictly before that time gets moved into the trace.
     ts_lower: Antichain<u64>,

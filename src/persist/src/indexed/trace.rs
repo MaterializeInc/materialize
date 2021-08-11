@@ -70,8 +70,8 @@ use crate::storage::Blob;
 /// - TODO: Space usage.
 pub struct BlobTrace {
     id: Id,
-    // The next ID used to assign a Blob key for this trace.
-    next_blob_id: u64,
+    /// The next ID used to assign a Blob key for this trace.
+    pub next_blob_id: u64,
     // NB: We may at some point need to break this up into separate logical and
     // physical compaction frontiers.
     since: Antichain<u64>,

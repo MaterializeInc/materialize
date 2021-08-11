@@ -131,6 +131,71 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         Ok(indexed)
     }
 
+    /// Revert the in-memory state back to a previously serialized version.
+    ///
+    /// Used to keep the in-memory and durably stored data structures consistent
+    /// in the presence of errors.
+    ///
+    /// TODO: can we simplify this logic and combine it with Indexed::new()? In
+    /// principle both functions are doing very similar things to start up given
+    /// a set of serialized metadata.
+    fn restore(&mut self, meta: BlobMeta) {
+        self.next_stream_id = meta.next_stream_id;
+        self.futures_seqno_upper = meta.futures_seqno_upper;
+        self.id_mapping = meta.id_mapping;
+        self.graveyard = meta.graveyard;
+
+        let mut restored_futures: HashMap<Id, BlobFuture> = meta
+            .futures
+            .into_iter()
+            .map(|meta| (meta.id, BlobFuture::new(meta)))
+            .collect();
+
+        // TODO: ideally we would be able to do something smarter here that didn't
+        // require manually remembering the next blob id. Also, since this state
+        // isn't stored in persistent storage, it can be an issue across restarts.
+        // One potentially reasonable fix is to assign blob keys based on stream
+        // id and the batch [lower, upper, since] description, instead of an opaque
+        // incrementing id. That way if we collide on a key on we know that it has
+        // the required data and we can happily reuse it.
+        for (id, restored_future) in restored_futures.iter_mut() {
+            if let Some(future) = self.futures.get(id) {
+                restored_future.next_blob_id = future.next_blob_id;
+            }
+        }
+
+        self.futures = restored_futures;
+
+        let mut restored_traces: HashMap<Id, BlobTrace> = meta
+            .traces
+            .into_iter()
+            .map(|meta| (meta.id, BlobTrace::new(meta)))
+            .collect();
+
+        for (id, restored_trace) in restored_traces.iter_mut() {
+            if let Some(trace) = self.traces.get(id) {
+                restored_trace.next_blob_id = trace.next_blob_id;
+            }
+        }
+
+        self.traces = restored_traces;
+    }
+
+    /// Attempt to commit the current in-memory metadata state to durable storage,
+    /// and if not, revert back to a previous version.
+    fn try_set_meta(&mut self, prev: BlobMeta) -> Result<(), Error> {
+        // TODO: Instead of fully overwriting META each time, this should be
+        // more like a compactable log.
+        if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
+            // We were unable to durably commit the in-memory state. Revert back to the
+            // previous version of meta.
+            self.restore(prev);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
     /// Releases exclusive-writer locks and causes all future commands to error.
     ///
     /// This method is idempotent.
@@ -162,6 +227,8 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                 id_str
             )));
         }
+
+        let prev = self.serialize_meta();
         let id = self.id_mapping.iter().find(|s| s.name == id_str);
         let id = match id {
             Some(s) => {
@@ -197,6 +264,8 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         self.traces
             .entry(id)
             .or_insert_with_key(|id| BlobTrace::new(BlobTraceMeta::new(*id)));
+
+        self.try_set_meta(prev)?;
         Ok(id)
     }
 
@@ -210,6 +279,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             return Ok(false);
         }
 
+        let prev = self.serialize_meta();
         let mapping = self.id_mapping.iter().find(|r| r.name == id_str);
 
         let mapping = match mapping {
@@ -235,7 +305,8 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
         self.graveyard.push(mapping);
 
-        return Ok(true);
+        self.try_set_meta(prev)?;
+        Ok(true)
     }
 
     /// Drains writes from the buffer into the future and does any necessary
@@ -282,6 +353,14 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         let mut updates_by_id: HashMap<Id, Vec<(SeqNo, (Vec<u8>, Vec<u8>), u64, isize)>> =
             HashMap::new();
         let desc = self.buf.snapshot(|seqno, buf| {
+            // Skip updates not in advance of the last sequence number we have observed.
+            // These are potentially still present because buffer truncation failed to
+            // occur. TODO: this would all be simpler with a Buffer api that let the
+            // reader specify a lower bound on the sequence numbers they wished to
+            // observe.
+            if seqno < self.futures_seqno_upper {
+                return Ok(());
+            }
             let mut buf = buf.to_vec();
             let (entry, remaining) = unsafe { abomonation::decode::<BufferEntry>(&mut buf) }
                 .ok_or_else(|| Error::from(format!("invalid buffer entry")))?;
@@ -309,6 +388,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             return Ok(());
         }
 
+        let prev = self.serialize_meta();
         for (id, updates) in updates_by_id.drain() {
             let future = self
                 .futures
@@ -319,19 +399,28 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             // future's seqno_upper and that there is nothing for that future in
             // [future.seqno_upper, self.futures_seqno_upper). Use this to make the
             // seqnos of all the future batches line up.
-            debug_assert_eq!(desc.start, self.futures_seqno_upper);
+            //
+            // We cannot assert strict equality here because a buffer may have
+            // previously failed to truncate, so the best we can say is that
+            // we're reading data at or before the last sequence number we
+            // know we read from.
+            debug_assert!(desc.start <= self.futures_seqno_upper);
             let new_start = future.seqno_upper()[0];
-            debug_assert!(new_start <= desc.start);
+            // Double check the invariant that Indexed's futures_seqno_upper is
+            // >= every future's seqno_upper.
+            debug_assert!(new_start <= self.futures_seqno_upper);
             let mut desc = desc.clone();
             desc.start = new_start;
 
-            self.drain_buf_inner(id, updates, &desc)?;
+            if let Err(e) = self.drain_buf_inner(id, updates, &desc) {
+                self.restore(prev);
+                return Err(format!("failed to append to future: {}", e).into());
+            }
         }
 
         self.futures_seqno_upper = desc.end;
-        // TODO: Instead of fully overwriting META each time, this should be
-        // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())?;
+        self.try_set_meta(prev)
+            .map_err(|e| format!("failed to commit metadata after appending to future: {}", e))?;
 
         self.buf.truncate(desc.end)
     }
@@ -393,7 +482,9 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// seal frontier into the trace and does any necessary resulting eviction
     /// work to remove uneccessary batches.
     fn drain_future(&mut self) -> Result<(), Error> {
+        let prev = self.serialize_meta();
         let mut updates_by_id = vec![];
+        let mut future_ts_lower_updates = vec![];
         for (id, trace) in self.traces.iter_mut() {
             // If this future is already properly sealed then we don't need
             // to do anything.
@@ -433,17 +524,21 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
             let new_future_ts_lower = batch.desc.upper().clone();
-            trace.append(batch, &mut self.blob)?;
-            future.truncate(new_future_ts_lower)?;
+            if let Err(e) = trace.append(batch, &mut self.blob) {
+                self.restore(prev);
+                return Err(format!("failed to append to trace: {}", e).into());
+            }
+
+            // We can only truncate future after we have successfully committed
+            // everything to trace.
+            future_ts_lower_updates.push((*id, new_future_ts_lower));
         }
 
         // TODO: This is a good point to compact future. The data that's been
         // moved is still there but now irrelevant. It may also be a good time
         // to compact trace.
-
-        // TODO: Instead of fully overwriting META each time, this should be
-        // more like a compactable log.
-        self.blob.set_meta(self.serialize_meta())?;
+        self.try_set_meta(prev)
+            .map_err(|e| format!("failed to commit metadata after appending to trace: {}", e))?;
 
         for (id, seal, updates) in updates_by_id {
             if let Some(listen_fns) = self.listeners.get(&id) {
@@ -452,6 +547,18 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                     listen_fn(ListenEvent::Sealed(seal[0]));
                 }
             }
+        }
+
+        // Now that all of the trace data and metadata writes have completed, we
+        // can attempt to truncate future. The goal here is strictly to reduce
+        // consumption of durable storage, and so we don't need to roll back if
+        // one of the truncates fails.
+        for (id, new_future_ts_lower) in future_ts_lower_updates {
+            let future = self
+                .futures
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            future.truncate(new_future_ts_lower)?;
         }
 
         Ok(())

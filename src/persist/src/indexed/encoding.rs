@@ -54,8 +54,10 @@ pub struct BufferEntry {
 /// - None of the ids in graveyard are present in any of the (string, id) tuples
 ///   in id_mapping.
 /// - The same set of ids are present in id_mapping, futures, and traces.
-/// - For each id, the ts_lower in the future is == the ts_upper in the
-///   corresponding trace.
+/// - For each id, the ts_lower in the future is <= the ts_upper in the
+///   corresponding trace. (This is less than equals and not strictly equals
+///   because truncating the unnecessary elements out of future is fallible, and
+///   is allowed to lag behind the migration of new data into trace)
 /// - id_mapping.len() + graveyard.len() is == next_stream_id.
 #[derive(Clone, Debug, Abomonation)]
 pub struct BlobMeta {
@@ -375,9 +377,9 @@ impl BlobMeta {
                 )));
             }
             let trace_ts_upper = trace.ts_upper();
-            if trace_ts_upper != future.ts_lower {
+            if !PartialOrder::less_equal(&future.ts_lower, &trace_ts_upper) {
                 return Err(Error::from(format!(
-                    "id {:?} trace ts_upper {:?} does not match future ts_lower {:?}",
+                    "id {:?} trace ts_upper {:?} is not at or in advance of future ts_lower {:?}",
                     id, trace_ts_upper, future.ts_lower,
                 )));
             }
@@ -1258,7 +1260,49 @@ mod tests {
         };
         assert_eq!(b.validate(), Err(Error::from("duplicate trace: Id(0)")));
 
-        // Future ts_lower doesn't match trace ts_upper
+        // Normal case: future ts_lower < ts_upper
+        let b = BlobMeta {
+            next_stream_id: Id(1),
+            id_mapping: vec![("0", Id(0)).into()],
+            futures: vec![BlobFutureMeta {
+                id: Id(0),
+                ts_lower: vec![0].into(),
+                batches: vec![],
+                next_blob_id: 0,
+            }],
+            traces: vec![BlobTraceMeta {
+                id: Id(0),
+                batches: vec![batch_meta(0, 1)],
+                since: Antichain::from_elem(0),
+                seal: Antichain::from_elem(1),
+                next_blob_id: 0,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(b.validate(), Ok(()),);
+
+        // Normal case: future ts_lower at ts_upper
+        let b = BlobMeta {
+            next_stream_id: Id(1),
+            id_mapping: vec![("0", Id(0)).into()],
+            futures: vec![BlobFutureMeta {
+                id: Id(0),
+                ts_lower: vec![1].into(),
+                batches: vec![],
+                next_blob_id: 0,
+            }],
+            traces: vec![BlobTraceMeta {
+                id: Id(0),
+                batches: vec![batch_meta(0, 1)],
+                since: Antichain::from_elem(0),
+                seal: Antichain::from_elem(1),
+                next_blob_id: 0,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(b.validate(), Ok(()),);
+
+        // Future ts_lower in advance of ts_upper
         let b = BlobMeta {
             next_stream_id: Id(1),
             id_mapping: vec![("0", Id(0)).into()],
@@ -1280,7 +1324,7 @@ mod tests {
         assert_eq!(
             b.validate(),
             Err(Error::from(
-                "id Id(0) trace ts_upper Antichain { elements: [1] } does not match future ts_lower Antichain { elements: [2] }"
+                "id Id(0) trace ts_upper Antichain { elements: [1] } is not at or in advance of future ts_lower Antichain { elements: [2] }"
             ))
         );
 
