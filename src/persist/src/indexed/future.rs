@@ -61,8 +61,8 @@ use crate::storage::{Blob, SeqNo};
 /// - TODO: Space usage.
 pub struct BlobFuture {
     id: Id,
-    // The next id used to assign a Blob key for this future.
-    next_blob_id: u64,
+    /// The next id used to assign a Blob key for this future.
+    pub next_blob_id: u64,
     // NB: This is a closed lower bound. When Indexed seals a time, only data
     // strictly before that time gets moved into the trace.
     ts_lower: Antichain<u64>,
@@ -306,9 +306,8 @@ impl Snapshot<Vec<u8>, Vec<u8>> for FutureSnapshot {
                 .filter(|(_, ts, _)| self.ts_lower.less_equal(ts) && !self.ts_upper.less_equal(ts))
                 .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
             buf.extend(updates);
-            return true;
         }
-        false
+        !self.updates.is_empty()
     }
 }
 

@@ -37,16 +37,19 @@ fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Code
         // TODO: Do this with a timely operator that reads the snapshot.
         let (mut buf, mut ok, mut errors) = (Vec::new(), Vec::new(), Vec::new());
         match read.snapshot() {
-            Ok(mut snap) => {
-                while snap.read(&mut buf) {
-                    for update in buf.drain(..) {
-                        match flatten_decoded_update(update) {
-                            Ok(u) => ok.push(u),
-                            Err(errs) => errors.extend(errs),
-                        }
+            Ok(mut snap) => loop {
+                let ret = snap.read(&mut buf);
+                for update in buf.drain(..) {
+                    match flatten_decoded_update(update) {
+                        Ok(u) => ok.push(u),
+                        Err(errs) => errors.extend(errs),
                     }
                 }
-            }
+
+                if ret == false {
+                    break;
+                }
+            },
             Err(err) => {
                 // TODO: Figure out how to make these retractable.
                 let err_str = format!("replaying persisted data: {}", err);

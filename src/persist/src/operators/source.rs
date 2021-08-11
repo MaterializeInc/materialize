@@ -252,14 +252,21 @@ mod tests {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
+        let (_, read) = p.create_or_load::<(), ()>("1").unwrap();
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
-            worker.dataflow(|scope| {
-                let (_, read) = p.create_or_load::<(), ()>("1").unwrap();
+            let recv = worker.dataflow(|scope| {
                 let (_, err_stream) = scope.persisted_source(&read);
                 err_stream.capture()
-            })
+            });
+
+            unreliable.make_available();
+            // TODO: think through the error handling more. Ideally, we could make
+            // this test work without this call to seal.
+            let (write, _) = p.create_or_load::<(), ()>("1").unwrap();
+            write.seal(1).recv().expect("seal was successful");
+            recv
         });
 
         let actual = recv

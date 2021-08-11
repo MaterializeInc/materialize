@@ -138,11 +138,11 @@ mod tests {
         let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
         let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
+        let token = p.create_or_load::<(), ()>("error_stream").unwrap();
         unreliable.make_unavailable();
 
         let recv = timely::execute_directly(move |worker| {
             worker.dataflow(|scope| {
-                let token = p.create_or_load::<(), ()>("error_stream").unwrap();
                 let stream = operator::empty(scope);
                 let (_, err_stream) = stream.persist(token);
                 err_stream.capture()
