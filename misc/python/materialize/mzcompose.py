@@ -16,6 +16,8 @@ documentation][user-docs].
 """
 
 import functools
+import importlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -26,6 +28,7 @@ import shlex
 import subprocess
 import sys
 import time
+from inspect import getmembers, isfunction
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
@@ -47,9 +50,8 @@ from typing import (
 import pg8000  # type: ignore
 import pymysql
 import yaml
-from typing_extensions import Literal, TypedDict
-
 from materialize import errors, mzbuild, spawn, ui
+from typing_extensions import Literal, TypedDict
 
 T = TypeVar("T")
 say = ui.speaker("C> ")
@@ -180,6 +182,7 @@ class Composition:
         self.name = name
         self.repo = repo
         self.images: List[mzbuild.Image] = []
+        self.python_funcs: Dict[str, Callable[[Composition], None]] = {}
 
         default_tag = os.getenv(f"MZBUILD_TAG", None)
 
@@ -192,7 +195,19 @@ class Composition:
             compose = yaml.safe_load(f)
 
         # Stash away sub workflows so that we can load them with the correct environment variables
-        self.workflows = compose.pop("mzworkflows", None)
+        self.yaml_workflows = compose.pop("mzworkflows", None)
+
+        # Load the mzworkflows.py file, if any.
+        mzworkflows_py = self.path.parent / "mzworkflows.py"
+        if mzworkflows_py.exists():
+            spec = importlib.util.spec_from_file_location("mzworkflows", mzworkflows_py)
+            assert spec
+            module = importlib.util.module_from_spec(spec)
+            assert isinstance(spec.loader, importlib.abc.Loader)
+            spec.loader.exec_module(module)
+            for name, fn in getmembers(module, isfunction):
+                if name.startswith("workflow_"):
+                    self.python_funcs[name] = fn
 
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
@@ -252,7 +267,10 @@ class Composition:
     def get_env(self, workflow_name: str, parent_env: Dict[str, str]) -> Dict[str, str]:
         """Return the desired environment for a workflow."""
 
-        raw_env = self.workflows[workflow_name].get("env")
+        if workflow_name in self.yaml_workflows:
+            raw_env = self.yaml_workflows[workflow_name].get("env")
+        else:
+            raw_env = {}
 
         if not isinstance(raw_env, dict) and raw_env is not None:
             raise errors.BadSpec(
@@ -276,20 +294,35 @@ class Composition:
         return env
 
     def get_workflow(
-        self, parent_env: Dict[str, str], workflow_name: str
+        self, workflow_name: str, parent_env: Dict[str, str]
     ) -> "Workflow":
         """Return sub-workflow, with env vars substituted using the supplied environment."""
-        if not self.workflows:
+        if not self.yaml_workflows and not self.python_funcs:
             raise KeyError(f"No workflows defined for composition {self.name}")
-        if workflow_name not in self.workflows:
+        if (
+            workflow_name not in self.yaml_workflows
+            and workflow_name not in self.python_funcs
+        ):
             raise KeyError(f"No workflow called {workflow_name} in {self.name}")
 
         # Build this workflow, performing environment substitution as necessary
         workflow_env = self.get_env(workflow_name, parent_env)
-        workflow = _substitute_env_vars(self.workflows[workflow_name], workflow_env)
 
+        # Return a PythonWorkflow if an appropriately-named Python function exists
+        if workflow_name in self.python_funcs:
+            return PythonWorkflow(
+                name=workflow_name,
+                func=self.python_funcs[workflow_name],
+                env=workflow_env,
+                composition=self,
+            )
+
+        # Otherwise, look for a YAML sub-workflow
+        yaml_workflow = _substitute_env_vars(
+            self.yaml_workflows[workflow_name], workflow_env
+        )
         built_steps = []
-        for raw_step in workflow["steps"]:
+        for raw_step in yaml_workflow["steps"]:
             # A step could be reused over several workflows, so operate on a copy
             raw_step = raw_step.copy()
 
@@ -533,6 +566,42 @@ class Workflow:
         self, args: List[str], capture: bool = False
     ) -> subprocess.CompletedProcess:
         return self.composition.run(args, self.env, capture=capture)
+
+
+class PythonWorkflow(Workflow):
+    """
+    A PythonWorkflow is a workflow that has been specified as a Python function in a mzworkflows.py file
+    """
+
+    def __init__(
+        self,
+        name: str,
+        func: Callable,
+        env: Dict[str, str],
+        composition: Composition,
+    ) -> None:
+        self.name = name
+        self.func = func
+        self.env = env
+        self.composition = composition
+
+    def overview(self) -> str:
+        return "{} [{}]".format(self.name, self.func)
+
+    def __repr__(self) -> str:
+        return "Workflow<{}>".format(self.overview())
+
+    def run(self) -> None:
+        print("Running Python function {}".format(self.name))
+        old_env = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(self.env)
+
+        try:
+            self.func(self.composition)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 class Steps:
@@ -1245,7 +1314,7 @@ class WorkflowWorkflowStep(WorkflowStep):
         try:
             # Run the specified workflow with the context of the parent workflow
             child_workflow = workflow.composition.get_workflow(
-                workflow.env, self._workflow
+                self._workflow, workflow.env
             )
             print(f"Running workflow {child_workflow.name} ...")
             child_workflow.run()
@@ -1253,7 +1322,7 @@ class WorkflowWorkflowStep(WorkflowStep):
             raise errors.UnknownItem(
                 f"workflow in {workflow.composition.name}",
                 self._workflow,
-                (w for w in workflow.composition.workflows),
+                (w for w in workflow.composition.yaml_workflows),
             )
 
 

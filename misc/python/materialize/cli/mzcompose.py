@@ -18,9 +18,8 @@ import webbrowser
 from pathlib import Path
 from typing import IO, List, Optional, Sequence, Text, Tuple
 
-from typing_extensions import NoReturn
-
 from materialize import errors, mzbuild, mzcompose, spawn, ui
+from typing_extensions import NoReturn
 
 announce = ui.speaker("==> ")
 say = ui.speaker("")
@@ -117,7 +116,7 @@ def main(argv: List[str]) -> int:
 
         try:
             workflow = composition.get_workflow(
-                dict(os.environ), args.first_command_arg
+                args.first_command_arg, dict(os.environ)
             )
         except KeyError:
             # Restart any dependencies whose definitions have changed. This is
@@ -200,7 +199,9 @@ def list_compositions(repo: mzbuild.Repository) -> int:
 
 
 def list_workflows(composition: mzcompose.Composition) -> int:
-    for name in sorted(composition.workflows):
+    for name in sorted(
+        list(composition.yaml_workflows) + list(composition.python_funcs)
+    ):
         print(name)
     return 0
 
