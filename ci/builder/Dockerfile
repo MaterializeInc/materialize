@@ -10,11 +10,13 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:bionic AS crosstool
+FROM ubuntu:20.04 AS crosstool
 
 WORKDIR /scratch
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# The environment variables are necessary to convince `tzdata`'s install scripts
+# not to hang -- see https://serverfault.com/questions/949991/how-to-install-tzdata-on-a-ubuntu-docker-image
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
     automake \
     bison \
@@ -53,7 +55,7 @@ RUN mkdir crosstool \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:bionic
+FROM ubuntu:20.04
 
 WORKDIR /workdir
 
@@ -63,8 +65,7 @@ COPY --from=crosstool /opt/x-tools /opt/x-tools
 
 # Install dependencies needed by any CI job. Not all of these are available in
 # the Ubuntu repositories.
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     bsdmainutils \
     ca-certificates \
     cmake \
@@ -75,6 +76,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gnupg2 \
     jq \
+    make \
     openssh-client \
     pkg-config \
     python3 \
@@ -84,6 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rsync \
     ruby \
     unzip \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/autouseradd-1.2.0-amd64.tar.gz \
