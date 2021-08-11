@@ -79,6 +79,7 @@ pub fn purify(
             connector,
             format,
             envelope,
+            key_envelope,
             with_options,
             ..
         }) = &mut stmt
@@ -206,7 +207,14 @@ pub fn purify(
                 &config_options,
             )
             .await?;
+
+            if key_envelope.is_present() && !matches!(format, CreateSourceFormat::KeyValue { .. }) {
+                bail!(
+                    "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT"
+                );
+            }
         }
+
         if let Statement::CreateViews(CreateViewsStatement { definitions, .. }) = &mut stmt {
             if let CreateViewsDefinitions::Source {
                 name: source_name,
