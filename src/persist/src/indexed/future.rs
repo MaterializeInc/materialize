@@ -150,7 +150,7 @@ impl BlobFuture {
         batch: BlobFutureBatch,
         blob: &mut BlobCache<L>,
     ) -> Result<(), Error> {
-        if batch.desc.lower() != &self.seqno_upper() {
+        if !PartialOrder::less_equal(&self.seqno_upper(), batch.desc.lower()) {
             return Err(Error::from(format!(
                 "batch lower doesn't match seqno_upper {:?}: {:?}",
                 self.seqno_upper(),
