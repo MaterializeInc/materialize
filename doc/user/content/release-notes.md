@@ -73,6 +73,8 @@ Wrap your release notes at the 80 character mark.
   a beta feature for Kafka Sinks. This allows re-using the output topic across
   restarts of Materialize.
 
+- Add support for JSON-encoded Kafka sinks.
+
 {{% version-header v0.8.3 %}}
 - The `MZ_LOG` environment variable is no longer recognized. Setting the log
   level can be done using the `--log-filter` command line parameter or the
