@@ -310,9 +310,12 @@ steps:
 
   - id: mzcompose-self
     label: "mzcompose self test"
+    depends_on: build
     timeout_in_minutes: 10
-    inputs: [test/mzcompose, 'misc/python/materialize']
-    command: bin/ci-mzcompose
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mzcompose
+          run: ci
 
   - id: lang-csharp
     label: ":csharp: tests"
