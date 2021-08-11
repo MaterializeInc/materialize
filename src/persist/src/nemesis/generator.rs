@@ -9,13 +9,14 @@
 
 use std::collections::HashMap;
 
-use rand::prelude::{IteratorRandom, SliceRandom, SmallRng};
+use rand::distributions::WeightedIndex;
+use rand::prelude::{Distribution, IteratorRandom, SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
 
 use crate::nemesis::{
-    AllowCompactionReq, Input, ReadSnapshotReq, Req, ReqId, SealReq, SnapshotId, TakeSnapshotReq,
-    WriteReq,
+    AllowCompactionReq, Input, ReadOutputReq, ReadSnapshotReq, Req, ReqId, SealReq, SnapshotId,
+    TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle,
 };
 
 /// Configuration of the relative probabilities of producing various
@@ -24,11 +25,14 @@ use crate::nemesis::{
 pub struct GeneratorConfig {
     pub write_unsealed_weight: u32,
     pub write_sealed_weight: u32,
+    pub write_multi_weight: u32,
+    pub read_output_weight: u32,
     pub seal_weight: u32,
     pub allow_compaction_weight: u32,
     pub take_snapshot_weight: u32,
     pub read_snapshot_weight: u32,
-    pub restart_weight: u32,
+    pub start_weight: u32,
+    pub stop_weight: u32,
     pub storage_unavailable: u32,
     pub storage_available: u32,
 }
@@ -38,11 +42,14 @@ impl GeneratorConfig {
         GeneratorConfig {
             write_unsealed_weight: 1,
             write_sealed_weight: 1,
+            write_multi_weight: 1,
+            read_output_weight: 1,
             seal_weight: 1,
             allow_compaction_weight: 1,
             take_snapshot_weight: 1,
             read_snapshot_weight: 1,
-            restart_weight: 1,
+            start_weight: 1,
+            stop_weight: 1,
             storage_unavailable: 1,
             storage_available: 1,
         }
@@ -56,58 +63,74 @@ impl Default for GeneratorConfig {
         // NB: If we need to temporarily disable an operation in all the nemesis
         // tests, set it to 0 here. (As opposed to clearing it in the impl of
         // `all_operations`, which will break the Generator tests.)
+
+        // TODO: Re-enable this once we aren't duplicating the output of listen
+        // and snapshot.
+        ops.read_output_weight = 0;
         ops
     }
 }
 
 struct GeneratorState {
+    running: bool,
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
     snap_id: SnapshotId,
     outstanding_snaps: HashMap<SnapshotId, String>,
     storage_available: bool,
+    streams: Vec<String>,
+    stream_weights: WeightedIndex<u32>,
+    keys: Vec<String>,
+    key_weights: WeightedIndex<u32>,
 }
 
 impl Default for GeneratorState {
     fn default() -> Self {
         GeneratorState {
+            running: true,
             seal_frontier: HashMap::new(),
             since_frontier: HashMap::new(),
             snap_id: SnapshotId(0),
             outstanding_snaps: HashMap::new(),
             storage_available: true,
+            // TODO: Allow for a dynamic number of streams and keys
+            streams: ('a'..='e').map(|x| x.to_string()).collect(),
+            stream_weights: WeightedIndex::new(&[9, 5, 3, 1, 1]).expect("weights are valid"),
+            keys: ('a'..='e').map(|x| x.to_string()).collect(),
+            key_weights: WeightedIndex::new(&[9, 5, 3, 1, 1]).expect("weights are valid"),
         }
+    }
+}
+
+impl GeneratorState {
+    fn rng_stream(&self, rng: &mut SmallRng) -> String {
+        self.streams[self.stream_weights.sample(rng)].clone()
+    }
+
+    fn rng_key(&self, rng: &mut SmallRng) -> String {
+        self.keys[self.key_weights.sample(rng)].clone()
     }
 }
 
 enum ReqGenerator {
     WriteUnsealed,
     WriteSealed,
+    WriteMulti,
+    ReadOutput,
     Seal,
     AllowCompaction,
     TakeSnapshot,
     ReadSnapshot,
-    Restart,
+    Stop,
+    Start,
     StorageUnavailable,
     StorageAvailable,
 }
 
-fn rng_stream(rng: &mut SmallRng) -> String {
-    // TODO: Compute this from some WeightedIndex with configurable weights
-    // defaulting to zipfian.
-    rng.gen_range('a'..'e').to_string()
-}
-
-fn rng_key(rng: &mut SmallRng) -> String {
-    // TODO: Compute this from some WeightedIndex with configurable weights
-    // defaulting to zipfian.
-    rng.gen_range('a'..'e').to_string()
-}
-
 impl ReqGenerator {
-    fn write_unsealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
-        let key = rng_key(rng);
+    fn write_unsealed(rng: &mut SmallRng, state: &mut GeneratorState) -> WriteReqSingle {
+        let stream = state.rng_stream(rng);
+        let key = state.rng_key(rng);
         let stream_sealed_ts = state
             .seal_frontier
             .get(&stream)
@@ -121,14 +144,14 @@ impl ReqGenerator {
         // once we start thinking of operator persistence? Perhaps
         // overflows, what else might be relevant here then?
         let diff = rng.gen_range(-2..=2);
-        Req::Write(WriteReq {
+        WriteReqSingle {
             stream,
             update: ((key, ()), ts, diff),
-        })
+        }
     }
 
     fn write_sealed(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let key = rng_key(rng);
+        let key = state.rng_key(rng);
         let (stream, ts) = state
             .seal_frontier
             .iter()
@@ -138,14 +161,39 @@ impl ReqGenerator {
             .expect("internal nemesis error: no streams has a sealed ts > 0");
         // This is expected to error so it doesn't matter what diff is.
         let diff = 1;
-        Req::Write(WriteReq {
+        Req::Write(WriteReq::Single(WriteReqSingle {
             stream: stream,
             update: ((key, ()), ts, diff),
-        })
+        }))
+    }
+
+    // NB: Unlike WriteReqSingle, this is always generated so that the timestamp
+    // will not be sealed. We already cover that error case with write_sealed
+    // and, given that a single write ends up being mapped to the same code path
+    // by the time it gets to the Runtime barrier, it's not interesting to also
+    // test it here.
+    fn write_multi(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
+        // MultiWriteHandle and atomic_write both gracefully handle duplication,
+        // so we can simply generate some number of normal writes to perform
+        // atomically.
+        //
+        // NB: We generate up to state.streams.len() writes to apply atomically,
+        // but, again, this doesn't mean they are distinct streams. It's just a
+        // convenient way to make this scale up proportionally to the number of
+        // streams (which may stop being hardcoded in the future).
+        let writes = (0..state.streams.len())
+            .map(|_| ReqGenerator::write_unsealed(rng, state))
+            .collect();
+        Req::Write(WriteReq::Multi(WriteReqMulti { writes }))
+    }
+
+    fn read_output(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
+        let stream = state.rng_stream(rng);
+        Req::ReadOutput(ReadOutputReq { stream })
     }
 
     fn seal(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
+        let stream = state.rng_stream(rng);
         let stream_sealed_ts = state
             .seal_frontier
             .get(&stream)
@@ -156,7 +204,7 @@ impl ReqGenerator {
     }
 
     fn allow_compaction(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
+        let stream = state.rng_stream(rng);
         let ts = {
             let base = if rng.gen_bool(0.5) {
                 state
@@ -178,7 +226,7 @@ impl ReqGenerator {
     }
 
     fn take_snapshot(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
-        let stream = rng_stream(rng);
+        let stream = state.rng_stream(rng);
         let snap = SnapshotId(state.snap_id.0);
         state.snap_id = SnapshotId(snap.0 + 1);
         state.outstanding_snaps.insert(snap, stream.clone());
@@ -198,13 +246,24 @@ impl ReqGenerator {
 
     fn gen(&self, rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         match self {
-            ReqGenerator::WriteUnsealed => ReqGenerator::write_unsealed(rng, state),
+            ReqGenerator::WriteUnsealed => {
+                Req::Write(WriteReq::Single(ReqGenerator::write_unsealed(rng, state)))
+            }
             ReqGenerator::WriteSealed => ReqGenerator::write_sealed(rng, state),
+            ReqGenerator::WriteMulti => ReqGenerator::write_multi(rng, state),
+            ReqGenerator::ReadOutput => ReqGenerator::read_output(rng, state),
             ReqGenerator::Seal => ReqGenerator::seal(rng, state),
             ReqGenerator::AllowCompaction => ReqGenerator::allow_compaction(rng, state),
             ReqGenerator::TakeSnapshot => ReqGenerator::take_snapshot(rng, state),
             ReqGenerator::ReadSnapshot => ReqGenerator::read_snapshot(rng, state),
-            ReqGenerator::Restart => Req::Restart,
+            ReqGenerator::Start => {
+                state.running = state.storage_available;
+                Req::Start
+            }
+            ReqGenerator::Stop => {
+                state.running = false;
+                Req::Stop
+            }
             ReqGenerator::StorageUnavailable => {
                 state.storage_available = false;
                 Req::StorageUnavailable
@@ -243,46 +302,48 @@ impl Generator {
     // - ReadSnapshot can only apply if we have previously taken a snapshot but
     //   not consumed (read) it yet.
     fn fill_relevant(&mut self, relevant: &mut Vec<(u32, ReqGenerator)>) {
-        let req_weights = [
-            (
+        let only_when_running = vec![
+            Some((
                 self.config.write_unsealed_weight,
-                Some(ReqGenerator::WriteUnsealed),
-            ),
-            (
-                self.config.write_sealed_weight,
-                Some(ReqGenerator::WriteSealed)
-                    .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
-            ),
-            (self.config.seal_weight, Some(ReqGenerator::Seal)),
-            (
+                ReqGenerator::WriteUnsealed,
+            )),
+            Some((self.config.write_sealed_weight, ReqGenerator::WriteSealed))
+                .filter(|_| self.state.seal_frontier.iter().any(|(_, ts)| *ts > 0)),
+            Some((self.config.write_multi_weight, ReqGenerator::WriteMulti)),
+            Some((self.config.read_output_weight, ReqGenerator::ReadOutput)),
+            Some((self.config.seal_weight, ReqGenerator::Seal)),
+            Some((
                 self.config.allow_compaction_weight,
-                Some(ReqGenerator::AllowCompaction),
-            ),
-            (
-                self.config.take_snapshot_weight,
-                Some(ReqGenerator::TakeSnapshot),
-            ),
-            (
-                self.config.read_snapshot_weight,
-                Some(ReqGenerator::ReadSnapshot)
-                    .filter(|_| !self.state.outstanding_snaps.is_empty()),
-            ),
-            (self.config.restart_weight, Some(ReqGenerator::Restart)),
-            (
+                ReqGenerator::AllowCompaction,
+            )),
+            Some((self.config.take_snapshot_weight, ReqGenerator::TakeSnapshot)),
+            Some((self.config.read_snapshot_weight, ReqGenerator::ReadSnapshot))
+                .filter(|_| !self.state.outstanding_snaps.is_empty()),
+            Some((self.config.stop_weight, ReqGenerator::Stop)).filter(|_| self.state.running),
+            Some((
                 self.config.storage_unavailable,
-                Some(ReqGenerator::StorageUnavailable).filter(|_| self.state.storage_available),
-            ),
-            (
-                self.config.storage_available,
-                Some(ReqGenerator::StorageAvailable)
-                    .filter(|_| self.state.storage_available == false),
-            ),
+                ReqGenerator::StorageUnavailable,
+            ))
+            .filter(|_| self.state.storage_available),
         ];
-        for (weight, req) in req_weights {
-            if let Some(req) = req {
-                relevant.push((weight, req));
-            }
+        let also_when_not_running = vec![
+            Some((
+                self.config.storage_available,
+                ReqGenerator::StorageAvailable,
+            ))
+            .filter(|_| self.state.storage_available == false),
+            Some((self.config.start_weight, ReqGenerator::Start))
+                .filter(|_| self.state.running == false),
+        ];
+
+        // Most operations just error if the runtime is down and this is fairly
+        // uninteresting to test. Maximize our time spent by focusing on
+        // operations that help get the runtime started (Start,
+        // StorageAvailable) if it's not.
+        if self.state.running {
+            relevant.extend(only_when_running.into_iter().flatten());
         }
+        relevant.extend(also_when_not_running.into_iter().flatten());
     }
 
     fn gen(&mut self) -> Option<Input> {
@@ -322,6 +383,23 @@ mod tests {
 
     use super::*;
 
+    // Sanity check that we don't generate uninteresting traffic (like writes)
+    // while the runtime isn't up. The only thing we should generate when the
+    // runtime is down is making storage available and starting.
+    #[test]
+    fn operations_while_runtime_down() {
+        let (seed, config) = (0, GeneratorConfig::all_operations());
+        let mut g = Generator::new(seed, config);
+        for _ in 0..100 {
+            g.state.running = false;
+            let input = g.gen().expect("some input should always be available");
+            match input.req {
+                Req::Start | Req::StorageAvailable => {}
+                r => panic!("unexpected req type: {:?}", r),
+            }
+        }
+    }
+
     // Generate random inputs until we've seen each type at least N times. This
     // both verifies that the config returned by `all_operations()` in fact
     // contains all operations as well as verifies that Generator actually
@@ -330,12 +408,18 @@ mod tests {
     fn all_operations() {
         let mut closed_by_stream = HashMap::new();
         let mut count_input = move |input: Input, counts: &mut GeneratorConfig| match input.req {
-            Req::Write(r) => {
+            Req::Write(WriteReq::Single(r)) => {
                 if r.update.1 >= closed_by_stream.get(&r.stream).copied().unwrap_or_default() {
                     counts.write_unsealed_weight += 1;
                 } else {
                     counts.write_sealed_weight += 1;
                 }
+            }
+            Req::Write(WriteReq::Multi(_)) => {
+                counts.write_multi_weight += 1;
+            }
+            Req::ReadOutput(_) => {
+                counts.read_output_weight += 1;
             }
             Req::Seal(r) => {
                 let ts = cmp::max(
@@ -354,8 +438,11 @@ mod tests {
             Req::ReadSnapshot(_) => {
                 counts.read_snapshot_weight += 1;
             }
-            Req::Restart => {
-                counts.restart_weight += 1;
+            Req::Start => {
+                counts.start_weight += 1;
+            }
+            Req::Stop => {
+                counts.stop_weight += 1;
             }
             Req::StorageUnavailable => {
                 counts.storage_unavailable += 1;
@@ -368,11 +455,14 @@ mod tests {
         let mut counts = GeneratorConfig {
             write_unsealed_weight: 0,
             write_sealed_weight: 0,
+            write_multi_weight: 0,
+            read_output_weight: 0,
             seal_weight: 0,
             allow_compaction_weight: 0,
             take_snapshot_weight: 0,
             read_snapshot_weight: 0,
-            restart_weight: 0,
+            start_weight: 0,
+            stop_weight: 0,
             storage_unavailable: 0,
             storage_available: 0,
         };

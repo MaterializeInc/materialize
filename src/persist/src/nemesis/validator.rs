@@ -10,17 +10,20 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use timely::progress::Timestamp;
+
 use crate::error::Error;
+use crate::indexed::ListenEvent;
 use crate::nemesis::{
-    AllowCompactionReq, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res, SealReq, SnapshotId, Step,
-    TakeSnapshotReq, WriteReq, WriteRes,
+    AllowCompactionReq, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res,
+    SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::storage::SeqNo;
 
 pub struct Validator {
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
-    writes_by_seqno: BTreeMap<(String, SeqNo), ((String, ()), u64, isize)>,
+    writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, isize)>>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
     storage_available: bool,
@@ -65,12 +68,15 @@ impl Validator {
         // TODO: Figure out how to get the log crate working.
         eprintln!("step: {:?}", &s);
         match s.res {
-            Res::Write(req, res) => self.step_write(s.req_id, req, res),
+            Res::Write(WriteReq::Single(req), res) => self.step_write_single(s.req_id, req, res),
+            Res::Write(WriteReq::Multi(req), res) => self.step_write_multi(s.req_id, req, res),
+            Res::ReadOutput(req, res) => self.step_read_output(s.req_id, req, res),
             Res::Seal(req, res) => self.step_seal(s.req_id, req, res),
             Res::AllowCompaction(req, res) => self.step_allow_compaction(s.req_id, req, res),
             Res::TakeSnapshot(req, res) => self.step_take_snapshot(s.req_id, req, res),
             Res::ReadSnapshot(req, res) => self.step_read_snapshot(s.req_id, req, res),
-            Res::Restart(res) => self.step_restart(s.req_id, res),
+            Res::Start(res) => self.step_start(s.req_id, res),
+            Res::Stop(res) => self.step_stop(s.req_id, res),
             Res::StorageUnavailable => {
                 self.storage_available = false;
             }
@@ -99,7 +105,12 @@ impl Validator {
         }
     }
 
-    fn step_write(&mut self, req_id: ReqId, req: WriteReq, res: Result<WriteRes, Error>) {
+    fn step_write_single(
+        &mut self,
+        req_id: ReqId,
+        req: WriteReqSingle,
+        res: Result<WriteRes, Error>,
+    ) {
         let should_succeed = self.runtime_available
             && self.storage_available
             && req.update.1
@@ -111,7 +122,121 @@ impl Validator {
         self.check_success(req_id, &res, should_succeed);
         if let Ok(res) = res {
             self.writes_by_seqno
-                .insert((req.stream, SeqNo(res.seqno)), req.update);
+                .entry((req.stream, SeqNo(res.seqno)))
+                .or_default()
+                .push(req.update);
+        }
+    }
+
+    fn step_write_multi(
+        &mut self,
+        req_id: ReqId,
+        req: WriteReqMulti,
+        res: Result<WriteRes, Error>,
+    ) {
+        let should_succeed = self.runtime_available
+            && self.storage_available
+            && req.writes.len() > 0
+            && req.writes.iter().all(|req| {
+                req.update.1
+                    >= self
+                        .seal_frontier
+                        .get(&req.stream)
+                        .copied()
+                        .unwrap_or_default()
+            });
+        self.check_success(req_id, &res, should_succeed);
+        if let Ok(res) = res {
+            for req in req.writes {
+                self.writes_by_seqno
+                    .entry((req.stream, SeqNo(res.seqno)))
+                    .or_default()
+                    .push(req.update);
+            }
+        }
+    }
+
+    fn step_read_output(
+        &mut self,
+        req_id: ReqId,
+        req: ReadOutputReq,
+        res: Result<ReadOutputRes, Error>,
+    ) {
+        let should_succeed = true;
+        self.check_success(req_id, &res, should_succeed);
+
+        if let Ok(res) = res {
+            // Seal acts as a barrier, so we're guaranteed to receive any writes
+            // that were sent for times before the seal. However, we're not
+            // guaranteed to see every seal we sent, especially across restarts.
+            // Start by finding the latest seal.
+            let mut latest_seal = Timestamp::minimum();
+            let mut all_received_writes = Vec::new();
+            for e in res.contents {
+                match e {
+                    ListenEvent::Sealed(ts) => {
+                        if ts > latest_seal {
+                            latest_seal = ts;
+                        }
+                    }
+                    ListenEvent::Records(records) => {
+                        for ((k, v), ts, diff) in records.into_iter() {
+                            let k = match k {
+                                Ok(k) => k,
+                                Err(err) => {
+                                    self.errors.push(format!("unable to decode key {}", err,));
+                                    continue;
+                                }
+                            };
+                            let v = match v {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    self.errors.push(format!("unable to decode val {}", err,));
+                                    continue;
+                                }
+                            };
+                            all_received_writes.push(((k, v), ts, diff));
+                        }
+                    }
+                }
+            }
+
+            // The latest seal shouldn't be past anything we sent.
+            let latest_seal_sent = self
+                .seal_frontier
+                .get(&req.stream)
+                .copied()
+                .unwrap_or_default();
+            if latest_seal > latest_seal_sent {
+                self.errors.push(format!(
+                    "received seal {} greater than the latest one we sent {}",
+                    latest_seal, latest_seal_sent
+                ));
+            }
+
+            // Verify that the output contains all sent writes less than the
+            // latest seal it contains.
+            //
+            // TODO: Figure out what our contract is for writes we've received
+            // in advance of this latest seal. There should be something we can
+            // do here.
+            let mut actual = all_received_writes
+                .into_iter()
+                .filter(|(_, ts, _)| *ts < latest_seal)
+                .collect();
+            let mut expected: Vec<((String, ()), u64, isize)> = self
+                .writes_by_seqno
+                .range((req.stream.clone(), SeqNo(0))..(req.stream, SeqNo(u64::MAX)))
+                .flat_map(|(_, v)| v)
+                .filter(|(_, ts, _)| *ts < latest_seal)
+                .cloned()
+                .collect();
+            if !updates_eq(&mut actual, &mut expected) {
+                self.errors.push(format!(
+                    "incorrect output {:?} up to {}, expected {:?} got: {:?}",
+                    req_id, latest_seal, expected, actual
+                ));
+            }
         }
     }
 
@@ -181,18 +306,10 @@ impl Validator {
                     let mut expected: Vec<((String, ()), u64, isize)> = self
                         .writes_by_seqno
                         .range((stream.clone(), SeqNo(0))..(stream, SeqNo(res.seqno)))
-                        .map(|(_, v)| v)
+                        .flat_map(|(_, v)| v)
                         .cloned()
                         .collect();
-                    // TODO: This is also used by the implementation. Write a
-                    // slower but more obvious impl of consolidation here and
-                    // use it for validation.
-                    // TODO: The actual snapshot will eventually be compacted up
-                    // to some since frontier and the expected snapshot will need
-                    // to account for that when checking equality.
-                    differential_dataflow::consolidation::consolidate_updates(&mut actual);
-                    differential_dataflow::consolidation::consolidate_updates(&mut expected);
-                    if actual != expected {
+                    if !updates_eq(&mut actual, &mut expected) {
                         self.errors.push(format!(
                             "incorrect snapshot {:?} expected {:?} got: {:?}",
                             req_id, expected, actual
@@ -203,18 +320,40 @@ impl Validator {
         }
     }
 
-    fn step_restart(&mut self, req_id: ReqId, res: Result<(), Error>) {
-        // The semantics of Req::Restart are pretty blunt. It unconditionally
-        // stops the currently running persister and then attempts to start a
-        // new one. If the storage is down, the new one won't be able to read
-        // metadata and will fail to start. This will cause all operations on
-        // the persister to fail until it gets another Req::Restart with storage
-        // available. This ends up being a pretty uninteresting state to test,
-        // but it's not clear what else we should do. Perhaps we should rework
-        // the weights so that StorageAvailable and Restart are both much more
-        // likely while the runtime is down.
+    fn step_start(&mut self, req_id: ReqId, res: Result<(), Error>) {
+        // The semantics of Req::Start are pretty blunt. It unconditionally
+        // attempts to start a new persister. If the storage is down, the new
+        // one won't be able to read metadata and will fail to start. This will
+        // cause all operations on the persister to fail until it gets another
+        // Req::Start with storage available. This ends up being a pretty
+        // uninteresting state to test, so we filter out everything but start
+        // and storage_available when the runtime is not available.
         let should_succeed = self.storage_available;
         self.check_success(req_id, &res, should_succeed);
         self.runtime_available = res.is_ok();
     }
+
+    fn step_stop(&mut self, req_id: ReqId, res: Result<(), Error>) {
+        // Stop is a no-op if the runtime is already down (and so will succeed).
+        // Otherwise, it will succeed if it can cleanly release locks, which
+        // requires the storage to be available.
+        let should_succeed = !self.runtime_available || self.storage_available;
+        self.check_success(req_id, &res, should_succeed);
+        self.runtime_available = false;
+    }
+}
+
+fn updates_eq(
+    actual: &mut Vec<((String, ()), u64, isize)>,
+    expected: &mut Vec<((String, ()), u64, isize)>,
+) -> bool {
+    // TODO: This is also used by the implementation. Write a slower but more
+    // obvious impl of consolidation here and use it for validation.
+    //
+    // TODO: The actual snapshot will eventually be compacted up to some since
+    // frontier and the expected snapshot will need to account for that when
+    // checking equality.
+    differential_dataflow::consolidation::consolidate_updates(actual);
+    differential_dataflow::consolidation::consolidate_updates(expected);
+    actual == expected
 }

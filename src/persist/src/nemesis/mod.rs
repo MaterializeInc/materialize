@@ -67,9 +67,7 @@
 // - Impl of Runtime with Timely workers running in processes
 // - Storage (buffer/blob) with variable latency/slow requests
 // - Vary key size
-// - Non-uniform (zipfian) distribution of keys (any other distributions?)
 // - Deleting streams
-// - Atomic multi-stream writes
 
 use std::env;
 
@@ -77,6 +75,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::error::Error;
+use crate::indexed::ListenEvent;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
 
@@ -117,11 +116,13 @@ pub struct Step {
 #[derive(Clone, Debug)]
 pub enum Req {
     Write(WriteReq),
+    ReadOutput(ReadOutputReq),
     Seal(SealReq),
     AllowCompaction(AllowCompactionReq),
     TakeSnapshot(TakeSnapshotReq),
     ReadSnapshot(ReadSnapshotReq),
-    Restart,
+    Start,
+    Stop,
     StorageUnavailable,
     StorageAvailable,
 }
@@ -130,23 +131,46 @@ pub enum Req {
 pub enum Res {
     Write(WriteReq, Result<WriteRes, Error>),
     Seal(SealReq, Result<(), Error>),
+    ReadOutput(ReadOutputReq, Result<ReadOutputRes, Error>),
     AllowCompaction(AllowCompactionReq, Result<(), Error>),
     TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
     ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
-    Restart(Result<(), Error>),
+    Start(Result<(), Error>),
+    Stop(Result<(), Error>),
     StorageUnavailable,
     StorageAvailable,
 }
 
 #[derive(Clone, Debug)]
-pub struct WriteReq {
+pub struct WriteReqSingle {
     stream: String,
     update: ((String, ()), u64, isize),
 }
 
 #[derive(Clone, Debug)]
+pub struct WriteReqMulti {
+    writes: Vec<WriteReqSingle>,
+}
+
+#[derive(Clone, Debug)]
+pub enum WriteReq {
+    Single(WriteReqSingle),
+    Multi(WriteReqMulti),
+}
+
+#[derive(Clone, Debug)]
 pub struct WriteRes {
     seqno: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadOutputReq {
+    stream: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadOutputRes {
+    contents: Vec<ListenEvent<Result<String, String>, Result<(), String>>>,
 }
 
 #[derive(Clone, Debug)]
