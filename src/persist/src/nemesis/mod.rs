@@ -170,7 +170,7 @@ pub struct ReadOutputReq {
 
 #[derive(Clone, Debug)]
 pub struct ReadOutputRes {
-    contents: Vec<ListenEvent<Result<String, String>, Result<(), String>>>,
+    contents: Vec<ListenEvent<String, ()>>,
 }
 
 #[derive(Clone, Debug)]
@@ -234,7 +234,8 @@ impl<R: Runtime> Runner<R> {
 pub fn run<R: Runtime>(steps: usize, config: GeneratorConfig, runtime: R) {
     let seed =
         env::var("MZ_NEMESIS_SEED").map_or_else(|_| OsRng.next_u64(), |s| s.parse().unwrap());
-    eprintln!("MZ_NEMESIS_SEED={}", seed);
+    let steps = env::var("MZ_NEMESIS_STEPS").map_or(steps, |s| s.parse().unwrap());
+    eprintln!("MZ_NEMESIS_SEED={} MZ_NEMESIS_STEPS={}", seed, steps);
     let generator = Generator::new(seed, config);
     let runner = Runner::new(generator, runtime);
     let history = runner.run(steps);
