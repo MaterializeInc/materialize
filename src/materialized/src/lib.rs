@@ -29,6 +29,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use build_info::BuildInfo;
 use coord::LoggingConfig;
 use ore::metrics::MetricsRegistry;
+use pid_file::PidFile;
 
 use crate::mux::Mux;
 use crate::server_metrics::Metrics;
@@ -213,6 +214,9 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
+    // Attempt to acquire PID file lock.
+    let pid_file = PidFile::open(config.data_directory.join("materialized.pid"))?;
+
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
@@ -292,6 +296,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     Ok(Server {
         local_addr,
+        _pid_file: pid_file,
         _drain_trigger: drain_trigger,
         _coord_handle: coord_handle,
     })
@@ -300,6 +305,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 /// A running `materialized` server.
 pub struct Server {
     local_addr: SocketAddr,
+    _pid_file: PidFile,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
     _coord_handle: coord::Handle,

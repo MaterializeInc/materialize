@@ -56,6 +56,7 @@ copyright_files=$(grep -vE \
     -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e 'demo/chbench/chbench' \
+    -e 'src/pid-file/libbsd' \
     -e 'test/sqllogictest/postgres/testdata/.*\.data' \
     -e 'test/pgtest/.*\.pt' \
     -e 'test/coordtest/.*\.ct' \
