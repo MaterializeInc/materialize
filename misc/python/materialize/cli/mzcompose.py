@@ -32,7 +32,7 @@ def main(argv: List[str]) -> int:
     # Lightly parse the arguments so we know what to do.
     parser = ArgumentParser()
     args, unknown_args = parser.parse_known_args(argv)
-    if args.help:
+    if args.help or args.command == "help":
         parser.print_help()
         return 0
 
