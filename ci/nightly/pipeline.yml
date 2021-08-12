@@ -11,6 +11,8 @@
   label: Code coverage
   timeout_in_minutes: 240
   command: bin/ci-builder run nightly bin/pyactivate --dev -m ci.nightly.coverage
+  agents:
+    queue: builder
 
 - id: sqlsmith
   label: SQLsmith fuzzing
