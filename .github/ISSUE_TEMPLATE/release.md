@@ -1,6 +1,6 @@
 ---
 name: 'Internal: release checklist'
-about: > 
+about: >
 A tracking issue for a new release of Materialize. Contributor use only.
 title: ''
 labels: ''
