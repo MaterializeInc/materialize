@@ -1,11 +1,9 @@
 ---
 name: Bug
 about: >
-A defect in an existing feature. For example, "consistency is violated if Kafka Connect restarts."
-title: ''
+  A defect in an existing feature. For example, "consistency is violated if
+  Kafka Connect restarts."
 labels: C-bug
-assignees: ''
-
 ---
 
 <!--
