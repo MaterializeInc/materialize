@@ -32,7 +32,6 @@ from materialize import errors, git, spawn, ssh, ui
 
 SPEAKER = ui.speaker("scratch> ")
 ROOT = os.environ["MZ_ROOT"]
-MAX_AGE = timedelta(weeks=1)
 
 
 def tags(i: Instance) -> Dict[str, str]:
@@ -101,6 +100,7 @@ def launch(
     instance_profile: Optional[str],
     nonce: str,
     delete_after: int,
+    git_rev: str,
 ) -> Instance:
     """Launch and configure an ec2 instance with the given properties."""
 
@@ -189,7 +189,11 @@ async def run_ssm(i: Instance, commands: List[str], timeout: int = 60) -> Comman
 
 
 async def setup(
-    i: Instance, subnet_id: Optional[str], local_pub_key: str, identity_file: str
+    i: Instance,
+    subnet_id: Optional[str],
+    local_pub_key: str,
+    identity_file: str,
+    git_rev: str,
 ) -> None:
     def is_ready(i: Instance) -> bool:
         return bool(
@@ -250,10 +254,10 @@ async def setup(
             "Instance did not finish setup in a reasonable amount of time"
         )
 
-    mkrepo(i, identity_file)
+    mkrepo(i, identity_file, git_rev)
 
 
-def mkrepo(i: Instance, identity_file: str) -> None:
+def mkrepo(i: Instance, identity_file: str, rev: str) -> None:
     """Create a Materialize repository on the remote ec2 instance and push the present repository to it."""
     ssh.runv(
         ["git", "init", "--bare", "/home/ubuntu/materialize/.git"],
@@ -263,7 +267,7 @@ def mkrepo(i: Instance, identity_file: str) -> None:
     )
     os.chdir(ROOT)
     os.environ["GIT_SSH_COMMAND"] = f"ssh -i {identity_file}"
-    head_rev = git.rev_parse("HEAD")
+    head_rev = git.rev_parse(rev)
     git.push(
         f"ubuntu@{i.public_ip_address}:~/materialize/.git",
         f"refs/heads/scratch_{head_rev}",
@@ -292,10 +296,14 @@ class MachineDesc(NamedTuple):
 
 
 async def setup_all(
-    instances: List[Instance], subnet_id: str, local_pub_key: str, identity_file: str
+    instances: List[Instance],
+    subnet_id: str,
+    local_pub_key: str,
+    identity_file: str,
+    git_rev: str,
 ) -> None:
     await asyncio.gather(
-        *(setup(i, subnet_id, local_pub_key, identity_file) for i in instances)
+        *(setup(i, subnet_id, local_pub_key, identity_file, git_rev) for i in instances)
     )
 
 
@@ -307,13 +315,10 @@ def launch_cluster(
     security_group_id: str,
     instance_profile: Optional[str],
     extra_tags: Dict[str, str],
-    delete_after: Optional[int] = None,  # Unix timestamp. By default, one week from now
+    delete_after: int,  # Unix timestamp.
+    git_rev: str,
 ) -> List[Instance]:
     """Launch a cluster of instances with a given nonce"""
-    if not delete_after:
-        delete_after = int(
-            datetime.now(timezone.utc).timestamp() + MAX_AGE.total_seconds()
-        )
     instances = [
         launch(
             key_name=key_name,
@@ -326,6 +331,7 @@ def launch_cluster(
             security_group_id=security_group_id,
             instance_profile=instance_profile,
             nonce=nonce,
+            git_rev=git_rev,
             delete_after=delete_after,
         )
         for d in descs
@@ -341,7 +347,7 @@ def launch_cluster(
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
-        setup_all(instances, subnet_id, local_pub_key, identity_file)
+        setup_all(instances, subnet_id, local_pub_key, identity_file, git_rev)
     )
     loop.close()
 
