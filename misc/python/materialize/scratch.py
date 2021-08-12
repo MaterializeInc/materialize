@@ -35,6 +35,8 @@ ROOT = os.environ["MZ_ROOT"]
 
 
 def tags(i: Instance) -> Dict[str, str]:
+    if not i.tags:
+        return {}
     return {t["Key"]: t["Value"] for t in i.tags}
 
 
