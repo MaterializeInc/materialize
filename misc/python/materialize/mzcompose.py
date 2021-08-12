@@ -51,8 +51,9 @@ from typing import (
 import pg8000  # type: ignore
 import pymysql
 import yaml
-from materialize import errors, mzbuild, spawn, ui
 from typing_extensions import Literal, TypedDict
+
+from materialize import errors, mzbuild, spawn, ui
 
 T = TypeVar("T")
 say = ui.speaker("C> ")

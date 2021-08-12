@@ -45,6 +45,7 @@ def main() -> None:
         {},
         # Keep alive for at least a day
         int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 3600 * 24,
+        "HEAD",
     )
 
 

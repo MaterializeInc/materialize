@@ -12,6 +12,7 @@ import json
 import os
 import random
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import boto3
@@ -22,6 +23,8 @@ from materialize.cli.scratch import (
     check_required_vars,
 )
 from materialize.scratch import MachineDesc, launch_cluster, print_instances, whoami
+
+MAX_AGE = timedelta(weeks=1)
 
 
 def multi_json(s: str) -> List[Dict[Any, Any]]:
@@ -55,6 +58,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--instance-profile", type=str, default=DEFAULT_INSTPROF_NAME)
     parser.add_argument("--no-instance-profile", action="store_const", const=True)
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
+    parser.add_argument("--git-rev", type=str, default="HEAD")
 
 
 def run(args: argparse.Namespace) -> None:
@@ -87,6 +91,7 @@ def run(args: argparse.Namespace) -> None:
 
     nonce = "".join(random.choice("0123456789abcdef") for n in range(8))
 
+    delete_after = int(datetime.now(timezone.utc).timestamp() + MAX_AGE.total_seconds())
     instances = launch_cluster(
         descs,
         nonce,
@@ -95,6 +100,8 @@ def run(args: argparse.Namespace) -> None:
         args.security_group_id,
         instance_profile,
         extra_tags,
+        delete_after,
+        args.git_rev,
     )
 
     print("Launched instances:")
