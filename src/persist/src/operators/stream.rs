@@ -156,7 +156,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "replaying persisted data: unavailable: buffer snapshot".to_string(),
+            "replaying persisted data: unavailable: blob get".to_string(),
             0,
             1,
         )];
