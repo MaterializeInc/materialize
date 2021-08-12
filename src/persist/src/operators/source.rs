@@ -149,16 +149,6 @@ mod tests {
                     .expect("write was successful");
             }
             write.seal(6).recv().expect("seal was successful");
-
-            // TODO: we need this additional write to force a `step` so that
-            // data that has been sealed can move into trace, and be observed
-            // by the listener. Remove this once we either have `step` running
-            // in the background or a dedicated command to move data into
-            // future and trace.
-            write
-                .write(&[((6.to_string(), ()), 6, 1)])
-                .recv()
-                .expect("write was successful");
             recv
         });
 

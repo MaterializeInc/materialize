@@ -63,10 +63,6 @@ impl Default for GeneratorConfig {
         // NB: If we need to temporarily disable an operation in all the nemesis
         // tests, set it to 0 here. (As opposed to clearing it in the impl of
         // `all_operations`, which will break the Generator tests.)
-
-        // TODO: Re-enable this once we aren't duplicating the output of listen
-        // and snapshot.
-        ops.read_output_weight = 0;
         ops
     }
 }

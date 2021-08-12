@@ -346,6 +346,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         // a buffer. On the other hand, how would we distinguish future batches
         // from each other?
         let desc = write_seqno..self.futures_seqno_upper;
+        let updates_for_listeners = updates_by_id.clone();
         for (id, updates) in updates_by_id.drain() {
             let future = self
                 .futures
@@ -373,6 +374,14 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         self.futures_seqno_upper = desc.end;
         self.try_set_meta(prev)
             .map_err(|e| format!("failed to commit metadata after appending to future: {}", e))?;
+
+        for (id, updates) in updates_for_listeners.iter() {
+            if let Some(listen_fns) = self.listeners.get(&id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Records(updates.clone()));
+                }
+            }
+        }
 
         Ok(write_seqno)
     }
@@ -480,15 +489,6 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         self.try_set_meta(prev)
             .map_err(|e| format!("failed to commit metadata after appending to trace: {}", e))?;
 
-        for (id, seal, updates) in updates_by_id {
-            if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
-                    listen_fn(ListenEvent::Sealed(seal[0]));
-                }
-            }
-        }
-
         // Now that all of the trace data and metadata writes have completed, we
         // can attempt to truncate future. The goal here is strictly to reduce
         // consumption of durable storage, and so we don't need to roll back if
@@ -567,10 +567,17 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                 trace.update_seal(seal);
             }
 
-            Err(e)
-        } else {
-            Ok(())
+            return Err(e);
         }
+
+        for id in ids.iter() {
+            if let Some(listen_fns) = self.listeners.get(id) {
+                for listen_fn in listen_fns.iter() {
+                    listen_fn(ListenEvent::Sealed(seal_ts));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Permit compaction of updates at times < since to since.
