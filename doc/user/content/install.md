@@ -45,32 +45,30 @@ brew install MaterializeInc/materialize/materialized
 
 ```shell
 curl -L https://binaries.materialize.com/materialized-{{< version >}}-x86_64-apple-darwin.tar.gz \
-    | tar -xzC /usr/local --strip-components=1
+    | sudo tar -xzC /usr/local --strip-components=1
 ```
 
 ## Linux installation
 
 ### apt (Ubuntu, Debian, or variants)
 
-Run the following commands as root.
-
 **Note!** These instructions changed between versions 0.8.0 and 0.8.1. If you ran them
 previously, you may need to do so again to continue receiving updates.
 
 ```shell
 # Add the signing key for the Materialize apt repository
-apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
+sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
 # Add and update the repository
-sh -c 'echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list'
-apt update
+sudo sh -c 'echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list'
+sudo apt update
 # Install materialized
-apt install materialized
+sudo apt install materialized
 ```
 
 ### curl
 ```shell
 curl -L https://binaries.materialize.com/materialized-{{< version >}}-x86_64-unknown-linux-gnu.tar.gz \
-    | tar -xzC /usr/local --strip-components=1
+    | sudo tar -xzC /usr/local --strip-components=1
 ```
 
 ## Build from source
