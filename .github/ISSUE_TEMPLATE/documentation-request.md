@@ -13,9 +13,9 @@ Please skip any fields that don't seem relevant to your request.
 
 ### For updates to existing documentation
 
-* What pages are affected? 
+* What pages are affected?
 
-* What needs to be changed or added?  
+* What needs to be changed or added?
 
 ### For new documentation
 
