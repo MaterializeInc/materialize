@@ -9,13 +9,14 @@
 
 //! Persistence related errors.
 
+use std::sync::Arc;
 use std::{error, fmt, io, sync};
 
 /// A persistence related error.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
     /// A persistence related error resulting from an io failure.
-    IO(io::Error),
+    IO(Arc<io::Error>),
     /// An unstructured persistence related error.
     String(String),
     /// An error returned when a command is sent to a persistence runtime that
@@ -49,7 +50,7 @@ impl PartialEq for Error {
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
-        Error::IO(e)
+        Error::IO(Arc::new(e))
     }
 }
 

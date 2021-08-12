@@ -55,7 +55,7 @@ impl<T> Future<T> {
 }
 
 /// A handle for filling the result of an asynchronous computation.
-pub(crate) struct FutureHandle<T>(oneshot::Sender<Result<T, Error>>);
+pub struct FutureHandle<T>(oneshot::Sender<Result<T, Error>>);
 
 impl<T> FutureHandle<T> {
     pub(crate) fn fill(self, res: Result<T, Error>) {
