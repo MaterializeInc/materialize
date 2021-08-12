@@ -1718,6 +1718,7 @@ impl Coordinator {
             conn_id,
             depends_on,
             persist,
+            status: Default::default(),
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();

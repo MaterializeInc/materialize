@@ -151,6 +151,7 @@ impl Catalog {
                 Datum::Int32(oid as i32),
                 Datum::Int64(schema_id),
                 Datum::String(name),
+                Datum::String(self.status(&id).as_str()),
             ]),
             diff,
         }]

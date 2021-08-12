@@ -276,6 +276,8 @@ pub struct Table {
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
     pub persist: Option<PersistDetails>,
+    #[serde(skip_serializing)]
+    pub status: Status,
 }
 
 impl Table {
@@ -831,6 +833,7 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![],
                             persist,
+                            status: Default::default(),
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -2046,6 +2049,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 persist,
+                status: Default::default(),
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 let mut optimizer = Optimizer::for_view();
@@ -2067,10 +2071,10 @@ impl Catalog {
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 // Views might depend on items that have a statically "available"
-                // status, such as Tables. Those never have their status updated
-                // based on feedback from the dataflow layer, meaning that views
-                // that only depend on those would never have their status
-                // updated. We therefore need to initialize the status here.
+                // status, or might not depend on any other items. Those will
+                // never have their status updated based on feedback from the
+                // dataflow layer. We therefore need to initialize the status
+                // here.
                 let dependent_status = depends_on.iter().map(|id| self.status(&id));
                 let initial_status = Status::combine(dependent_status);
                 CatalogItem::View(View {
