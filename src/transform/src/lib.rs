@@ -270,6 +270,11 @@ impl Optimizer {
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
                     Box::new(crate::map_lifting::LiteralLifting),
+                    // Identifies common relation subexpressions.
+                    // Must be followed by let inlining, to keep under control.
+                    Box::new(crate::cse::relation_cse::RelationCSE),
+                    Box::new(crate::inline_let::InlineLet),
+                    Box::new(crate::update_let::UpdateLet),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
@@ -306,6 +311,11 @@ impl Optimizer {
             Box::new(crate::projection_lifting::ProjectionLifting),
             Box::new(crate::join_implementation::JoinImplementation),
             Box::new(crate::fusion::project::Project),
+            // Identifies common relation subexpressions.
+            // Must be followed by let inlining, to keep under control.
+            Box::new(crate::cse::relation_cse::RelationCSE),
+            Box::new(crate::inline_let::InlineLet),
+            Box::new(crate::update_let::UpdateLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
         let mut optimizer = Self::for_view();
