@@ -1,6 +1,7 @@
 ---
 name: Feature
-about: A request for a specific, new feature. For example, "support using MySQL global
+about: >
+  A request for a specific, new feature. For example, "support using MySQL global
   transaction IDs for consistency."
 title: ''
 labels: C-feature
