@@ -209,6 +209,7 @@ Field        | Type        | Meaning
 `name`       | [`text`]    | The name of the index.
 `on_id`      | [`text`]    | The ID of the relation on which the index is built.
 `volatility` | [`text`]    | Whether the the index is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+`status`     | [`text`]    | Status of the index. Can be one of `created` or `available`. Only `available` indexes can be used for querying.
 
 ### `mz_index_columns`
 
@@ -568,6 +569,7 @@ Field            | Type        | Meaning
 `name`           | [`text`]    | The name of the sink.
 `connector_type` | [`text`]    | The type of the sink: `avro-ocf` or `kafka`.
 `volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+`status`         | [`text`]    | Status of the sink. Can be one of `created` or `available`. An `available` sink is running as expected.
 
 ### `mz_source_info`
 
@@ -595,6 +597,7 @@ Field            | Type       | Meaning
 `name`           | [`text`]   | The name of the source.
 `connector_type` | [`text`]   | The type of the source: `avro-ocf`, `file`, `kafka`, `kinesis`, `s3`, `postgres`, or `pubnub`.
 `volatility`     | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+`status`         | [`text`]   | Status of the source. Can be one of `created` or `available`. Only `available` sources can be queried.
 
 ### `mz_tables`
 
@@ -606,6 +609,7 @@ Field          | Type       | Meaning
 `oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
 `schema_id`    | [`bigint`] | The ID of the schema to which the table belongs.
 `name`         | [`text`]   | The name of the table.
+`status`       | [`text`]   | Status of the table. Can be one of `created` or `available`. Only `available` tables can be queried.
 
 ### `mz_types`
 
@@ -629,6 +633,7 @@ Field          | Type        | Meaning
 `schema_id`    | [`bigint`]  | The ID of the schema to which the view belongs.
 `name`         | [`text`]    | The name of the view.
 `volatility`   | [`text`]    | Whether the view is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+`status`       | [`text`]    | Status of the view. Can be one of `created` or `available`. Only `available` views can be queried.
 
 ### `mz_worker_materialization_frontiers`
 

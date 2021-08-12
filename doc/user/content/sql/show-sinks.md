@@ -26,9 +26,9 @@ _schema&lowbar;name_ | The schema to show sinks from. Defaults to `public` in th
 `SHOW FULL SINKS`'s output is a table, with this structure:
 
 ```nofmt
- name  | type | volatile
--------+------+---------
- ...   | ...  | ...
+ name  | type | volatile | status
+-------+------+----------+-------
+ ...   | ...  | ...      | ...
 ```
 
 Field | Meaning
@@ -36,6 +36,7 @@ Field | Meaning
 **name** | The name of the sink
 **type** | Whether the sink was created by the `user` or the `system`
 **volatility** | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+**status** | Status of the sink. Can be one of `created` or `available`. An `available` sink is running as expected.
 
 {{< version-changed v0.5.0 >}}
 The output column is renamed from `SINKS` to `name`.
