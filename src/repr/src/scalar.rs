@@ -15,6 +15,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -24,6 +25,7 @@ use lowertest::MzEnumReflect;
 use crate::adt::array::Array;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
+use crate::Row;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 
 /// A single value.
@@ -983,5 +985,43 @@ impl<'a> ScalarType {
             ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => true,
             _ => false,
         }
+    }
+}
+
+lazy_static! {
+    static ref EMPTY_ARRAY_ROW: Row = unsafe {
+        Row::from_bytes_unchecked(vec![
+            22, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ])
+    };
+}
+
+impl Datum<'static> {
+    pub fn empty_array() -> Datum<'static> {
+        EMPTY_ARRAY_ROW.unpack_first()
+    }
+}
+
+// Verify that bytes for static datums with manually stuffed bytes are correct.
+#[test]
+fn verify_static_datum_bytes<'a>() {
+    let arena = crate::RowArena::new();
+
+    let empty_array_datum: Datum = arena.make_datum(|packer| {
+        packer
+            .push_array::<_, Datum<'a>>(
+                &[crate::adt::array::ArrayDimension {
+                    lower_bound: 1,
+                    length: 0,
+                }],
+                std::iter::empty(),
+            )
+            .unwrap();
+    });
+    if EMPTY_ARRAY_ROW.iter().next().is_none() || Datum::empty_array() != empty_array_datum {
+        panic!(
+            "expected EMPTY_ARRAY bytes: {:?}",
+            Row::pack_slice(&[empty_array_datum]).data()
+        );
     }
 }

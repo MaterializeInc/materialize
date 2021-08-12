@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use lowertest::MzEnumReflect;
 use ore::cast::CastFrom;
+use repr::adt::array::ArrayDimension;
 use repr::adt::numeric;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
@@ -453,6 +454,24 @@ where
     })
 }
 
+fn array_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let datums: Vec<_> = datums
+        .into_iter()
+        .map(|d| d.unwrap_array().elements().iter())
+        .flatten()
+        .collect();
+    let dims = ArrayDimension {
+        lower_bound: 1,
+        length: datums.len(),
+    };
+    temp_storage.make_datum(|packer| {
+        packer.push_array(&[dims], datums).unwrap();
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
@@ -498,6 +517,8 @@ pub enum AggregateFunc {
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
     JsonbObjectAgg,
+    /// Accumulates `Datum::Array`s into a single `Datum::Array`.
+    ArrayConcat,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -544,6 +565,7 @@ impl AggregateFunc {
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
             AggregateFunc::JsonbObjectAgg => jsonb_object_agg(datums, temp_storage),
+            AggregateFunc::ArrayConcat => array_agg(datums, temp_storage),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -567,6 +589,7 @@ impl AggregateFunc {
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
+            AggregateFunc::ArrayConcat => Datum::empty_array(),
             _ => Datum::Null,
         }
     }
@@ -586,6 +609,9 @@ impl AggregateFunc {
             AggregateFunc::SumInt16 => ScalarType::Int64,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
+            // Since we coerce all input args to array_agg to be an array, the input_type
+            // is already correct.
+            AggregateFunc::ArrayConcat => input_type.scalar_type,
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -759,6 +785,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::All => f.write_str("all"),
             AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
             AggregateFunc::JsonbObjectAgg => f.write_str("jsonb_object_agg"),
+            AggregateFunc::ArrayConcat => f.write_str("array_agg"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

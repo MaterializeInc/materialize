@@ -42,7 +42,7 @@ SELECT min(NULL)
 NULL
 
 # Aggregate functions return NULL if there are no rows.
-statement error supported
+query T
 SELECT array_agg(1) FROM kv
 ----
 NULL
@@ -72,7 +72,7 @@ SELECT bool_or(v = 1) FROM kv
 ----
 NULL
 
-statement error supported
+query T
 SELECT array_agg(v) FROM kv
 ----
 NULL
@@ -94,8 +94,10 @@ SELECT min(1), count(1), max(1), avg(1)::float, sum(1), stddev(1), variance(1)
 1 1 1 1 1 NULL NULL
 
 # Aggregate functions triggers aggregation and computation when there is no source.
-statement error supported
+query T
 SELECT array_agg(1)
+----
+{1}
 
 statement error supported
 SELECT json_agg(1)
@@ -122,17 +124,21 @@ SELECT jsonb_agg(NULL)
 
 # This should ideally return {NULL}, but this is a pathological case, and
 # Postgres has the same behavior, so it's sufficient for now.
-statement error supported
+statement error arguments cannot be implicitly cast
 SELECT array_agg(NULL)
 
 # With an explicit cast, this works as expected.
-statement error supported
+query T
 SELECT array_agg(NULL::TEXT)
+----
+{NULL}
 
 # Regression test for #25724 (problem with typed NULLs and distsql planning).
 # The previous query doesn't run under distsql.
-statement error supported
+query T
 SELECT array_agg(NULL::TEXT) FROM (VALUES (1)) AS t(x)
+----
+{NULL}
 
 # Check that COALESCE using aggregate results over an empty table
 # work properly.
@@ -177,8 +183,10 @@ SELECT min(1), count(1), max(1), avg(1)::float, sum(1), stddev(1)::float, varian
 1 6 1 1 6 0 0
 
 # Aggregate functions triggers aggregation and computation for every row even when applied to a constant.
-statement error supported
+query T
 SELECT array_agg(1) FROM kv
+----
+{1,1,1,1,1,1}
 
 statement error supported
 SELECT json_agg(1) FROM kv
@@ -577,14 +585,18 @@ SELECT min(k), max(k), min(v), max(v) FROM kv WHERE k > 8
 ----
 NULL NULL NULL NULL
 
-query error supported
+query TT
 SELECT array_agg(k), array_agg(s) FROM (SELECT k, s FROM kv ORDER BY k)
+----
+{1,3,5,6,7,8} {NULL,A,a,a,b,b}
 
-query error supported
+query error arguments cannot be implicitly cast
 SELECT array_agg(k) || 1 FROM (SELECT k FROM kv ORDER BY k)
 
-query error supported
+query T
 SELECT array_agg(s) FROM kv WHERE s IS NULL
+----
+{NULL}
 
 query error supported
 SELECT json_agg(s) FROM kv WHERE s IS NULL
@@ -1077,7 +1089,7 @@ SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
 1
 
 # Regression test for distsql aggregator crash when using hash aggregation.
-query error supported
+query error arguments cannot be implicitly cast
 SELECT v, array_agg('a') FROM kv GROUP BY v
 
 query I
@@ -1393,8 +1405,11 @@ CREATE TABLE uvw (u INT, v INT, w INT)
 statement ok
 INSERT INTO uvw VALUES (1, 2, 3), (1, 2, 3), (3, 2, 1), (3, 2, 3)
 
-query error supported
-SELECT u, v, array_agg(w) AS s FROM (SELECT * FROM uvw ORDER BY w) GROUP BY u, v
+query IIT
+SELECT u, v, array_agg(w) AS s FROM (SELECT * FROM uvw ORDER BY w) GROUP BY u, v ORDER BY u
+----
+1 2 {3,3}
+3 2 {1,3}
 
 # Regression test for #36433: don't panic with count_agg if a post-render produces an error.
 

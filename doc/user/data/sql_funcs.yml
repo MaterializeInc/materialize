@@ -31,6 +31,9 @@
     description: Aggregate keys and values (including nulls) as a jsonb object.
     url: jsonb_object_agg
 
+  - signature: 'array_agg(x: T) -> T[]'
+    description: Aggregate values (including nulls) as an array.
+
   - signature: 'max(x: T) -> T'
     description: Maximum value among `T`
 
