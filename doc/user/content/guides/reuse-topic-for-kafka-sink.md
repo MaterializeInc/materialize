@@ -16,7 +16,7 @@ This is currently available only for Kafka sources and the views based on them.
 When you create a sink, you must:
 
 - Enable the `reuse_topic` switch.
-- Optionally specify the name of a [consistency topic](#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system. The name of the consistency topic may be provided via:
+- Optionally specify the name of a [consistency topic](sql/create-sink/#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system. The name of the consistency topic may be provided via:
     * The `CONSISTENCY TOPIC` parameter.
     * The `consistency_topic` WITH option. **Note:** This option is only available to support backwards-compatibility. You will not be able to indicate `consistency_topic` and `CONSISTENCY TOPIC` or `CONSISTENCY FORMAT` simultaneously.
 
