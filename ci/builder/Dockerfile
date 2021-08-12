@@ -202,7 +202,6 @@ ENV CPP=x86_64-unknown-linux-gnu-cpp
 ENV CC=x86_64-unknown-linux-gnu-cc
 ENV CXX=x86_64-unknown-linux-gnu-c++
 ENV LDFLAGS=-fuse-ld=lld
-ENV RUSTFLAGS="-C link-arg=-Wl,--compress-debug-sections=zlib -C link-arg=-fuse-ld=lld"
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV PATH=/opt/x-tools/x86_64-unknown-linux-gnu/bin:$PATH
