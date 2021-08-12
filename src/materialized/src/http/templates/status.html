@@ -4,14 +4,9 @@
 
 {% block content %}
 <p>
-    materialized OK.<br/>
-    handled {{ query_count }} queries so far.<br/>
-    up for {{ uptime_seconds }} seconds
+    materialized OK. <br>
+    Version v{{ version }}.<br>
+    Handled {{ query_count }} queries so far.<br>
+    Up for {{ uptime_seconds }} seconds.<br>
 </p>
-
-<pre>
-{% for metric in metrics %}
-{{ metric }}
-{% endfor %}
-</pre>
 {% endblock %}

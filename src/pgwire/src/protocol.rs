@@ -274,6 +274,7 @@ where
                 portal_name,
                 max_rows,
             }) => {
+                self.metrics.query_count.inc();
                 let max_rows = match usize::try_from(max_rows) {
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
@@ -365,6 +366,7 @@ where
             }
         }
 
+        self.metrics.query_count.inc();
         let result = match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
             Ok(response) => {
                 self.send_execute_response(

@@ -19,6 +19,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, R
 use tokio_openssl::SslStream;
 
 use ore::cast::CastFrom;
+use ore::metrics::MetricsRegistry;
 use ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
@@ -38,7 +39,7 @@ pub struct Config<'a> {
     pub tls: Option<TlsConfig>,
 
     /// The registry that the pg wire server uses to report metrics.
-    pub metrics_registry: &'a ore::metrics::MetricsRegistry,
+    pub metrics_registry: &'a MetricsRegistry,
 }
 
 /// Configures a server's TLS encryption and authentication.
@@ -151,6 +152,10 @@ impl Server {
                 }
             }
         }
+    }
+
+    pub fn metrics(&self) -> Metrics {
+        self.metrics.clone()
     }
 }
 

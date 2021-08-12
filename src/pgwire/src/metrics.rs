@@ -17,6 +17,7 @@ pub struct Metrics {
     pub command_durations: HistogramVec,
     pub bytes_sent: UIntCounter,
     pub rows_returned: UIntCounter,
+    pub query_count: UIntCounter,
 }
 
 impl Metrics {
@@ -26,6 +27,11 @@ impl Metrics {
                 name: "mz_command_durations",
                 help: "how long individual commands took",
                 var_labels: ["command", "status"],
+            )),
+
+            query_count: registry.register(metric!(
+                name: "mz_query_count",
+                help: "total number of queries executed",
             )),
 
             rows_returned: registry.register(metric!(
