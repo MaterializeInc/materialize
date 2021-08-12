@@ -61,7 +61,7 @@ that were incorporated into the built image, and open a PR!
 
 ## Upgrading the Rust version
 
-1. Update the [`rust-toolchain`] file with the desired version.
+1. Update the [`rust-toolchain.toml`] file with the desired version.
 
 2. Run:
 
@@ -100,7 +100,7 @@ $ bin/ci-builder push nightly-2001-02-03
 ```
 
 [bin/ci-builder]: /bin/ci-builder
-[rust-toolchain]: /rust-toolchain
+[rust-toolchain]: /rust-toolchain.toml
 [stable.stamp]: stable.stamp
 [nightly.stamp]: nightly.stamp
 [rust-toolstate]: https://rust-lang.github.io/rustup-components-history/

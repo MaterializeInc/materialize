@@ -36,7 +36,7 @@ channel=$1 && shift
 
 rust_date=
 case "$channel" in
-    stable) rust_version=$(<rust-toolchain) ;;
+    stable) rust_version=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" rust-toolchain.toml) ;;
     nightly) rust_version=nightly ;;
     nightly-*)
         rust_date=/${channel#nightly-}
