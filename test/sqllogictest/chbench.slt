@@ -302,7 +302,7 @@ ORDER BY n_name, su_name, i_id
 ----
 %0 = Let l0 =
 | Get materialize.public.region (u37)
-| Filter "^EUROP.*$" ~(#1)
+| Filter "^EUROP.*$" ~(padchar(#1))
 | ArrangeBy (#0)
 
 %1 =
@@ -350,7 +350,7 @@ ORDER BY n_name, su_name, i_id
 | Join %1 %2 %3 %4 %0 %8 (= #0 #12 #37) (= #5 #29) (= #8 #30) (= #14 #38) (= #32 #34)
 | | implementation = Differential %3 %8.(#0, #1) %1.(#0) %2.(#0) %4.(#0) %0.(#0)
 | | demand = (#0, #2, #4..#7, #9, #11, #31)
-| Filter "^.*b$" ~(#4)
+| Filter "^.*b$" ~(padchar(#4))
 | Project (#5, #6, #31, #0, #2, #7, #9, #11)
 
 Finish order_by=(#2 asc, #1 asc, #3 asc) limit=none offset=0 project=(#0..#7)

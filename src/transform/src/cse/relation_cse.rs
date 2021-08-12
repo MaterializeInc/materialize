@@ -10,7 +10,7 @@
 //! Identifies common relation subexpressions and places them behind `Let` bindings.
 //!
 //! All structurally equivalent expressions, defined recursively as having structurally
-//! equivelant inputs, and identical parameters, will be placed behind `Let` bindings.
+//! equivalent inputs, and identical parameters, will be placed behind `Let` bindings.
 //! The resulting expressions likely have an excess of `Let` expressions, and should be
 //! subjected to the `InlineLet` transformation to remove those that are not necessary.
 
@@ -42,7 +42,7 @@ impl crate::Transform for RelationCSE {
 /// The `bindings` map contains neither `Let` bindings nor two structurally
 /// equivalent expressions.
 ///
-/// The bindings can be interpretend as an ordered sequence of let bindings,
+/// The bindings can be interpreted as an ordered sequence of let bindings,
 /// ordered by their identifier, that should be applied in order before the
 /// use of the expression from which they have been extracted.
 #[derive(Debug, Default)]
