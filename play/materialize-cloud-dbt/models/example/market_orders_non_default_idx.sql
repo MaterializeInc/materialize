@@ -13,9 +13,12 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{{ config(materialized='materializedview') }}
+{{ config(materialized='index') }}
 
-SELECT
-    val->>'symbol' AS symbol,
-    (val->'bid_price')::float AS bid_price
-FROM (SELECT text::jsonb AS val FROM {{ ref('market_orders_raw') }})
+{% set index_name %}
+    "{{ mz_generate_name('market_orders_non_default_idx') }}"
+{% endset %}
+
+
+CREATE INDEX {{ index_name }}
+ON {{ ref('market_orders_raw') }} ("text")

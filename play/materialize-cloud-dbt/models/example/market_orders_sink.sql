@@ -13,9 +13,14 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{{ config(materialized='materializedview') }}
+{{ config(materialized='sink') }}
 
-SELECT
-    val->>'symbol' AS symbol,
-    (val->'bid_price')::float AS bid_price
-FROM (SELECT text::jsonb AS val FROM {{ ref('market_orders_raw') }})
+{% set sink_name %}
+    {{ mz_generate_name('market_orders_sink') }}
+{% endset %}
+
+CREATE SINK {{ sink_name }}
+FROM {{ ref('market_orders') }}
+INTO KAFKA BROKER 'localhost:9092' TOPIC 'market-orders-sink'
+FORMAT AVRO USING
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';

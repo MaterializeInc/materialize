@@ -13,9 +13,12 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{{ config(materialized='materializedview') }}
+{{ config(materialized='source') }}
 
-SELECT
-    val->>'symbol' AS symbol,
-    (val->'bid_price')::float AS bid_price
-FROM (SELECT text::jsonb AS val FROM {{ ref('market_orders_raw') }})
+{% set source_name %}
+    {{ mz_generate_name('market_orders_raw') }}
+{% endset %}
+
+CREATE MATERIALIZED SOURCE {{ source_name }} FROM PUBNUB
+SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+CHANNEL 'pubnub-market-orders'
