@@ -24,6 +24,7 @@ pub struct Validator {
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
     writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, isize)>>,
+    output_by_stream: HashMap<String, Vec<ListenEvent<String, ()>>>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
     storage_available: bool,
@@ -49,6 +50,7 @@ impl Validator {
             seal_frontier: HashMap::new(),
             since_frontier: HashMap::new(),
             writes_by_seqno: BTreeMap::new(),
+            output_by_stream: HashMap::new(),
             available_snapshots: HashMap::new(),
             errors: Vec::new(),
             storage_available: true,
@@ -166,36 +168,25 @@ impl Validator {
         self.check_success(req_id, &res, should_succeed);
 
         if let Ok(res) = res {
+            let all_stream_output = self.output_by_stream.entry(req.stream.clone()).or_default();
+            all_stream_output.extend(res.contents);
+
             // Seal acts as a barrier, so we're guaranteed to receive any writes
             // that were sent for times before the seal. However, we're not
             // guaranteed to see every seal we sent, especially across restarts.
             // Start by finding the latest seal.
             let mut latest_seal = Timestamp::minimum();
             let mut all_received_writes = Vec::new();
-            for e in res.contents {
+            for e in all_stream_output.iter() {
                 match e {
                     ListenEvent::Sealed(ts) => {
-                        if ts > latest_seal {
-                            latest_seal = ts;
+                        if *ts > latest_seal {
+                            latest_seal = *ts;
                         }
                     }
                     ListenEvent::Records(records) => {
-                        for ((k, v), ts, diff) in records.into_iter() {
-                            let k = match k {
-                                Ok(k) => k,
-                                Err(err) => {
-                                    self.errors.push(format!("unable to decode key {}", err,));
-                                    continue;
-                                }
-                            };
-                            let v = match v {
-                                Ok(v) => v,
-                                Err(err) => {
-                                    self.errors.push(format!("unable to decode val {}", err,));
-                                    continue;
-                                }
-                            };
-                            all_received_writes.push(((k, v), ts, diff));
+                        for ((k, v), ts, diff) in records.iter() {
+                            all_received_writes.push(((k.clone(), *v), *ts, *diff));
                         }
                     }
                 }
@@ -340,6 +331,7 @@ impl Validator {
         let should_succeed = !self.runtime_available || self.storage_available;
         self.check_success(req_id, &res, should_succeed);
         self.runtime_available = false;
+        self.output_by_stream.clear();
     }
 }
 

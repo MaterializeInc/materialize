@@ -63,10 +63,6 @@ impl Default for GeneratorConfig {
         // NB: If we need to temporarily disable an operation in all the nemesis
         // tests, set it to 0 here. (As opposed to clearing it in the impl of
         // `all_operations`, which will break the Generator tests.)
-
-        // TODO: Re-enable this once we aren't duplicating the output of listen
-        // and snapshot.
-        ops.read_output_weight = 0;
         ops
     }
 }
@@ -200,27 +196,40 @@ impl ReqGenerator {
             .copied()
             .unwrap_or_default();
         let ts = stream_sealed_ts + rng.gen_range(0..5);
+        // This seal request might end up failing if (e.g. storage is down),
+        // but, unlike in Validator, optimistically updating the seal frontier
+        // here does no harm, it just bumps up the time at which we'll issue
+        // future seal requests.
+        state.seal_frontier.insert(stream.clone(), ts);
         Req::Seal(SealReq { stream, ts })
     }
 
     fn allow_compaction(rng: &mut SmallRng, state: &mut GeneratorState) -> Req {
         let stream = state.rng_stream(rng);
-        let ts = {
-            let base = if rng.gen_bool(0.5) {
-                state
-                    .since_frontier
-                    .get(&stream)
-                    .copied()
-                    .unwrap_or_default()
-            } else {
-                state
-                    .seal_frontier
-                    .get(&stream)
-                    .copied()
-                    .unwrap_or_default()
-            };
-
-            base + rng.gen_range(0..5)
+        let bonus = rng.gen_range(0..5);
+        let ts = if rng.gen_bool(0.5) {
+            let base = state
+                .since_frontier
+                .get(&stream)
+                .copied()
+                .unwrap_or_default();
+            let ts = base + bonus;
+            // This allow_compaction request might end up failing if (e.g.
+            // storage is down), but, unlike in Validator, optimistically
+            // updating the since frontier here does no harm, it just bumps up
+            // the time at which we'll issue future allow_compaction requests.
+            state.since_frontier.insert(stream.to_string(), ts);
+            ts
+        } else {
+            let base = state
+                .seal_frontier
+                .get(&stream)
+                .copied()
+                .unwrap_or_default();
+            let ts = base + bonus;
+            // This allow_compaction request is expected to fail, so don't
+            // update the since frontier.
+            ts
         };
         Req::AllowCompaction(AllowCompactionReq { stream, ts })
     }
@@ -390,7 +399,7 @@ mod tests {
     fn operations_while_runtime_down() {
         let (seed, config) = (0, GeneratorConfig::all_operations());
         let mut g = Generator::new(seed, config);
-        for _ in 0..100 {
+        for _ in 0..1000 {
             g.state.running = false;
             let input = g.gen().expect("some input should always be available");
             match input.req {
@@ -400,79 +409,124 @@ mod tests {
         }
     }
 
+    // Regression test for a bug where sealed writes would be generated even
+    // when disabled.
+    #[test]
+    fn seal_write_disabled() {
+        let (seed, mut config) = (0, GeneratorConfig::all_operations());
+        config.write_sealed_weight = 0;
+        let mut g = Generator::new(seed, config);
+        let mut counter = ReqCounter::default();
+        for _ in 0..1000 {
+            let input = g.gen().expect("some input should always be available");
+            counter.count(&input.req);
+        }
+        assert_eq!(counter.counts().write_sealed_weight, 0);
+    }
+
     // Generate random inputs until we've seen each type at least N times. This
     // both verifies that the config returned by `all_operations()` in fact
     // contains all operations as well as verifies that Generator actually
     // generates all of these operation types.
     #[test]
     fn all_operations() {
-        let mut closed_by_stream = HashMap::new();
-        let mut count_input = move |input: Input, counts: &mut GeneratorConfig| match input.req {
-            Req::Write(WriteReq::Single(r)) => {
-                if r.update.1 >= closed_by_stream.get(&r.stream).copied().unwrap_or_default() {
-                    counts.write_unsealed_weight += 1;
-                } else {
-                    counts.write_sealed_weight += 1;
-                }
-            }
-            Req::Write(WriteReq::Multi(_)) => {
-                counts.write_multi_weight += 1;
-            }
-            Req::ReadOutput(_) => {
-                counts.read_output_weight += 1;
-            }
-            Req::Seal(r) => {
-                let ts = cmp::max(
-                    r.ts,
-                    closed_by_stream.get(&r.stream).copied().unwrap_or_default(),
-                );
-                closed_by_stream.insert(r.stream, ts);
-                counts.seal_weight += 1;
-            }
-            Req::AllowCompaction(_) => {
-                counts.allow_compaction_weight += 1;
-            }
-            Req::TakeSnapshot(_) => {
-                counts.take_snapshot_weight += 1;
-            }
-            Req::ReadSnapshot(_) => {
-                counts.read_snapshot_weight += 1;
-            }
-            Req::Start => {
-                counts.start_weight += 1;
-            }
-            Req::Stop => {
-                counts.stop_weight += 1;
-            }
-            Req::StorageUnavailable => {
-                counts.storage_unavailable += 1;
-            }
-            Req::StorageAvailable => {
-                counts.storage_available += 1;
-            }
-        };
-
-        let mut counts = GeneratorConfig {
-            write_unsealed_weight: 0,
-            write_sealed_weight: 0,
-            write_multi_weight: 0,
-            read_output_weight: 0,
-            seal_weight: 0,
-            allow_compaction_weight: 0,
-            take_snapshot_weight: 0,
-            read_snapshot_weight: 0,
-            start_weight: 0,
-            stop_weight: 0,
-            storage_unavailable: 0,
-            storage_available: 0,
-        };
-
         const MIN_EACH_TYPE: u32 = 5;
         let (seed, config) = (0, GeneratorConfig::all_operations());
         let mut g = Generator::new(seed, config);
-        while !for_all_u32_fields(&counts, |x| x >= MIN_EACH_TYPE) {
+        let mut counter = ReqCounter::default();
+        while !for_all_u32_fields(counter.counts(), |x| x >= MIN_EACH_TYPE) {
             let input = g.gen().expect("some input should always be available");
-            count_input(input, &mut counts);
+            counter.count(&input.req)
+        }
+    }
+
+    struct ReqCounter {
+        counts: GeneratorConfig,
+        closed_by_stream: HashMap<String, u64>,
+    }
+
+    impl Default for ReqCounter {
+        fn default() -> Self {
+            let counts = GeneratorConfig {
+                write_unsealed_weight: 0,
+                write_sealed_weight: 0,
+                write_multi_weight: 0,
+                read_output_weight: 0,
+                seal_weight: 0,
+                allow_compaction_weight: 0,
+                take_snapshot_weight: 0,
+                read_snapshot_weight: 0,
+                start_weight: 0,
+                stop_weight: 0,
+                storage_unavailable: 0,
+                storage_available: 0,
+            };
+            ReqCounter {
+                counts,
+                closed_by_stream: HashMap::new(),
+            }
+        }
+    }
+
+    impl ReqCounter {
+        fn counts(&self) -> &GeneratorConfig {
+            &self.counts
+        }
+
+        fn count(&mut self, req: &Req) {
+            match req {
+                Req::Write(WriteReq::Single(r)) => {
+                    if r.update.1
+                        >= self
+                            .closed_by_stream
+                            .get(&r.stream)
+                            .copied()
+                            .unwrap_or_default()
+                    {
+                        self.counts.write_unsealed_weight += 1;
+                    } else {
+                        self.counts.write_sealed_weight += 1;
+                    }
+                }
+                Req::Write(WriteReq::Multi(_)) => {
+                    self.counts.write_multi_weight += 1;
+                }
+                Req::ReadOutput(_) => {
+                    self.counts.read_output_weight += 1;
+                }
+                Req::Seal(r) => {
+                    let ts = cmp::max(
+                        r.ts,
+                        self.closed_by_stream
+                            .get(&r.stream)
+                            .copied()
+                            .unwrap_or_default(),
+                    );
+                    self.closed_by_stream.insert(r.stream.clone(), ts);
+                    self.counts.seal_weight += 1;
+                }
+                Req::AllowCompaction(_) => {
+                    self.counts.allow_compaction_weight += 1;
+                }
+                Req::TakeSnapshot(_) => {
+                    self.counts.take_snapshot_weight += 1;
+                }
+                Req::ReadSnapshot(_) => {
+                    self.counts.read_snapshot_weight += 1;
+                }
+                Req::Start => {
+                    self.counts.start_weight += 1;
+                }
+                Req::Stop => {
+                    self.counts.stop_weight += 1;
+                }
+                Req::StorageUnavailable => {
+                    self.counts.storage_unavailable += 1;
+                }
+                Req::StorageAvailable => {
+                    self.counts.storage_available += 1;
+                }
+            }
         }
     }
 
