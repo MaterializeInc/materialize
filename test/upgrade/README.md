@@ -13,6 +13,8 @@ The framework does the following:
 
 Kafka and the Schema Registry are not restarted.
 
+A separate sub-workflow also tests the "upgrade" from your branch back to your branch.
+
 ## Test naming convention
 
 Since different versions support different functionality, the framework makes sure that objects are only created in versions that support them and any tests against those objects are only run if the objects were created in first place.
@@ -29,7 +31,7 @@ Tests for version_name = X will be run when testing upgrade from version X and w
 
 There are also two other special version identifiers:
 
-- ```latest_version``` will only run if upgrading from materialize:latest to your code
+- ```current_source``` will only run when testing the "upgrade" from your current source to your current source
 - ```any_version``` tests will run when upgrading from any version
 
 ## Adding a new Materialize version to the test
@@ -45,20 +47,22 @@ There are also two other special version identifiers:
 2. Add a section:
 
 ```
-  upgrade-from-0_6_1:
+  upgrade-from-0_8_2:
     env:
-      PREVIOUS_VERSION: v0.6.1
-      TESTS: any_version|v0.6.1
+      UPGRADE_FROM_VERSION: v0.8.2
+      TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 ```
 
 Make sure the ```TESTS``` line includes the version under test **and all other** versions prior to it that are already in the file.
 
 ## Adding a new test
 
-1. Decide which is the earlest version ```vX.Y.Z``` that supports the desired functionality and create a test named ```create-in-vX.Y.Z-feature_under_test.td``` where you will be creating the database objects that will be surviving an upgrade attempt. Use ```any_version``` if the feature exists in all versions listed in ```mzcompose.yml``` and ```latest_version``` if you are adding the feature just now and it does not exist in any previously released version.
+### For an existing feature
+
+1. Decide which is the earlest version ```vX.Y.Z``` that supports the desired functionality and create a test named ```create-in-vX.Y.Z-feature_under_test.td``` where you will be creating the database objects that will be surviving an upgrade attempt. Use ```any_version``` if the feature exists in all versions listed in ```mzcompose.yml``` and `current_source` if you are adding the feature just now and it does not exist in any previously released version.
 
 2. In a file named ```check-from-vX.Y.Z-feature_undex_test.td``` put the queries that will be testing that the object has survived the upgrade intact. This may include any of the following:
 
@@ -67,3 +71,8 @@ Make sure the ```TESTS``` line includes the version under test **and all other**
 - if a source, check that new data can still be ingested
 - if a sink, check that new data can still be output post-upgrade
 - if any DDL statements can be run against the object, test them. At the very least, test that ```DROP``` is able to drop the object (and confirm that the object is gone).
+
+### For a feature you are currently developing
+
+Follow the instructions above, but use `current_source` as the version name within the name of the `.td` files. The `mkrelease.py` will rename
+your test and replace `current_source` with the actual name of the version your feature has been released in.

@@ -297,12 +297,12 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
     version = f"v{released_version}"
     readme = upgrade_dir.joinpath("README.md")
     need_upgrade = [
-        str(p) for p in upgrade_dir.glob("*latest_version*") if "smoke" not in str(p)
+        str(p) for p in upgrade_dir.glob("*current_source*") if "example" not in str(p)
     ]
     if not need_upgrade:
         return
     for path in need_upgrade:
-        spawn.runv(["git", "mv", path, path.replace("latest_version", version)])
+        spawn.runv(["git", "mv", path, path.replace("current_source", version)])
 
     mzcompose = upgrade_dir.joinpath("mzcompose.yml")
     with mzcompose.open() as fh:
@@ -315,7 +315,7 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
 """
     found = False
     for i, line in enumerate(contents):
-        if "workflow: upgrade-from-latest" in line:
+        if "mkrelease.py will place new versions here" in line:
             contents.insert(i - 2, step)
             found = True
             break
@@ -330,16 +330,16 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
         if "TESTS:" in line:
             tests = line.split(":")[1].strip()
 
-        if "upgrade-from-latest:" in line:
+        if "upgrade-from-current-source:" in line:
             new_workflow_location = i - 1
             workflow = f"""
   upgrade-from-{workflow_version}:
     env:
-      PREVIOUS_VERSION: {version}
+      UPGRADE_FROM_VERSION: {version}
       TESTS: {tests}|{version}
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 """
 
         if new_workflow_location and "TESTS:" in line:
@@ -371,7 +371,7 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
         )
 
     git.commit_all_changed(
-        f"Update {len(need_upgrade)} latest_version upgrade tests to {version}"
+        f"Rename {len(need_upgrade)} current_source upgrade tests to {version}"
     )
 
 

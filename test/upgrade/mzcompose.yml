@@ -13,6 +13,14 @@ mzworkflows:
   upgrade:
     steps:
       - step: workflow
+        workflow: upgrade-from-previous-versions
+
+      - step: workflow
+        workflow: upgrade-from-current-source
+
+  upgrade-from-previous-versions:
+    steps:
+      - step: workflow
         workflow: upgrade-from-0_6_1
 
       - step: workflow
@@ -31,65 +39,123 @@ mzworkflows:
         workflow: upgrade-from-0_8_3
 
       - step: workflow
-        workflow: upgrade-from-latest
+        workflow: upgrade-from-0_9_0
+
+      # DO NOT REMOVE: mkrelease.py will place new versions here
 
   upgrade-from-0_6_1:
     env:
-      PREVIOUS_VERSION: v0.6.1
+      UPGRADE_FROM_VERSION: v0.6.1
       TESTS: any_version|v0.6.1
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 
   upgrade-from-0_7_3:
     env:
-      PREVIOUS_VERSION: v0.7.3
+      UPGRADE_FROM_VERSION: v0.7.3
       TESTS: any_version|v0.6.1|v0.7.3
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 
   upgrade-from-0_8_0:
     env:
-      PREVIOUS_VERSION: v0.8.0
+      UPGRADE_FROM_VERSION: v0.8.0
       TESTS: any_version|v0.6.1|v0.7.3|v0.8.0
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 
   upgrade-from-0_8_1:
     env:
-      PREVIOUS_VERSION: v0.8.1
+      UPGRADE_FROM_VERSION: v0.8.1
       TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 
   upgrade-from-0_8_2:
     env:
-      PREVIOUS_VERSION: v0.8.2
+      UPGRADE_FROM_VERSION: v0.8.2
       TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 
   upgrade-from-0_8_3:
     env:
-      PREVIOUS_VERSION: v0.8.3
+      UPGRADE_FROM_VERSION: v0.8.3
       TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2|v0.8.3
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 
-  upgrade-from-latest:
+  upgrade-from-0_9_0:
     env:
-      PREVIOUS_VERSION: latest
-      TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2|v0.8.3|latest_version
+      UPGRADE_FROM_VERSION: v0.9.0
+      TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2|v0.8.3|v0.9.0
     steps:
       - step: workflow
-        workflow: test-upgrade
+        workflow: test-upgrade-from-version
 
-  test-upgrade:
+  upgrade-from-current-source:
+    env:
+      UPGRADE_FROM_VERSION: current_source
+      TESTS: any_version|v0.6.1|v0.7.3|v0.8.0|v0.8.1|v0.8.2|v0.8.3|v0.9.0|current_source
+    steps:
+      - step: workflow
+        workflow: test-upgrade-from-current-source
+
+  test-upgrade-from-version:
+    steps:
+      - step: workflow
+        workflow: start-prerequisites
+
+      - step: start-services
+        services: [materialized-upgrade-from-version]
+
+      - step: wait-for-mz
+        service: materialized-upgrade-from-version
+
+      - step: run
+        service: testdrive-svc
+        command: --materialized-url=postgres://materialize@materialized-upgrade-from-version:6875 create-in-@(${TESTS})-*.td
+
+      - step: kill-services
+        services: [materialized-upgrade-from-version]
+
+      - step: remove-services
+        services: [materialized-upgrade-from-version]
+
+      - step: workflow
+        workflow: complete-upgrade
+
+  test-upgrade-from-current-source:
+    steps:
+      - step: workflow
+        workflow: start-prerequisites
+
+      - step: start-services
+        services: [materialized-upgrade-from-current-source]
+
+      - step: wait-for-mz
+        service: materialized-upgrade-from-current-source
+
+      - step: run
+        service: testdrive-svc
+        command: --materialized-url=postgres://materialize@materialized-upgrade-from-current-source:6875 create-in-@(${TESTS})-*.td
+
+      - step: kill-services
+        services: [materialized-upgrade-from-current-source]
+
+      - step: remove-services
+        services: [materialized-upgrade-from-current-source]
+
+      - step: workflow
+        workflow: complete-upgrade
+
+  start-prerequisites:
     steps:
       - step: start-services
         services: [kafka, schema-registry, postgres]
@@ -106,33 +172,21 @@ mzworkflows:
       - step: wait-for-postgres
         dbname: postgres
 
+  complete-upgrade:
+    steps:
       - step: start-services
-        services: [materialized-previous]
+        services: [materialized-upgrade-to]
 
       - step: wait-for-mz
-        service: materialized-previous
+        service: materialized-upgrade-to
 
       - step: run
         service: testdrive-svc
-        command: --materialized-url=postgres://materialize@materialized-previous:6875 create-in-@(${TESTS})-*.td
-
-      - step: kill-services
-        services: [materialized-previous]
-
-      - step: start-services
-        services: [materialized-current]
-
-      - step: wait-for-mz
-        service: materialized-current
-
-      - step: run
-        service: testdrive-svc
-        command: --materialized-url=postgres://materialize@materialized-current:6875 check-from-@(${TESTS})-*.td
+        command: --materialized-url=postgres://materialize@materialized-upgrade-to:6875 check-from-@(${TESTS})-*.td
 
       - step: remove-services
         services:
-          - materialized-current
-          - materialized-previous
+          - materialized-upgrade-to
           - testdrive-svc
           - schema-registry
           - kafka
@@ -145,10 +199,25 @@ mzworkflows:
 
 services:
 #
-# The current Materialize version
+# The Materialize instance to upgrade from. It can be either an existing image or the current source
 #
 
-  materialized-current:
+  materialized-upgrade-from-version:
+    image: materialize/materialized:${UPGRADE_FROM_VERSION}
+    command: >-
+      --data-directory=/share/mzdata
+      --experimental
+      --disable-telemetry
+    ports:
+      - 6875
+    environment:
+      - MZ_DEV=1
+      - MZ_LOG=${MZ_LOG:-dataflow::source::s3=trace,info}
+    volumes:
+      - mzdata:/share/mzdata
+      - tmp:/share/tmp
+
+  materialized-upgrade-from-current-source:
     mzbuild: materialized
     command: >-
       --data-directory=/share/mzdata
@@ -164,11 +233,11 @@ services:
       - tmp:/share/tmp
 
 #
-# The previous Materialize version
+# The Materialize instance to upgrade to
 #
 
-  materialized-previous:
-    image: materialize/materialized:${PREVIOUS_VERSION}
+  materialized-upgrade-to:
+    mzbuild: materialized
     command: >-
       --data-directory=/share/mzdata
       --experimental
@@ -200,14 +269,14 @@ services:
          --kafka-addr=kafka:9092
          ${BUILDKITE:+--ci-output}
          --schema-registry-url=http://schema-registry:8081
-         --temp-dir=/share/tmp/upgrade-from-${PREVIOUS_VERSION}
+         --temp-dir=/share/tmp/upgrade-from-${UPGRADE_FROM_VERSION}
          $$*
       - bash
     environment:
       - TESTS
       - TMPDIR=/share/tmp
       - MZ_LOG
-      - PREVIOUS_VERSION
+      - UPGRADE_FROM_VERSION
     volumes:
       - .:/workdir
       - mzdata:/share/mzdata
