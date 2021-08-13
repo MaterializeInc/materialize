@@ -1,0 +1,1514 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+#
+# Test Common subexpression elimination for Relations.
+# PR https://github.com/MaterializeInc/materialize/pull/7715
+#
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+
+statement ok
+CREATE INDEX i1 ON t1 (f1);
+
+statement ok
+CREATE TABLE t2 (f1 INTEGER, f2 INTEGER);
+
+##
+## Tests around the placement of CSEs in the top-level query itself
+##
+
+# no CSE detection here, no predicates in query
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
+
+#
+# Inner joins
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Join %0 %0 %1
+| | implementation = Differential %1 %0.() %0.()
+| | demand = (#0..#5)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Join %1 %0
+| | implementation = Differential %0 %1.()
+| | demand = (#0..#3)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3 WHERE a1.f1 = 1 AND a2.f1 = 1 AND a3.f1 = 1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Join %1 %1 %0
+| | implementation = Differential %0 %1.() %1.()
+| | demand = (#0..#5)
+
+EOF
+
+#
+# Outer join
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1) WHERE a1.f1 = 1 AND a2.f1 = 1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 = Let l1 =
+| Join %1 %0 (= #0 #2)
+| | implementation = Differential %0 %1.(#0)
+| | demand = (#0, #1, #3)
+
+%3 =
+| Get %2 (l1)
+| Project (#0, #1, #0, #3)
+
+%4 =
+| Get %2 (l1)
+| Distinct group=(#0, #1)
+| Negate
+
+%5 =
+| Get materialize.public.t1 (u1)
+| Distinct group=(#0, #1)
+
+%6 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0, #1)
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %6 %7.(#0, #1)
+| | demand = (#0, #1)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%9 =
+| Union %3 %8
+| Map coalesce(#0, #2)
+| Filter (#4 = 1)
+| Project (#4, #1, #3)
+
+EOF
+
+#
+# Subqueries
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM t1);
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+| Project (#0)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%2 = Let l0 =
+| Union %0 %1
+
+%3 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0)), !(isnull(#1))
+| ArrangeBy (#1)
+
+%4 =
+| Get %2 (l0)
+| ArrangeBy (#0)
+
+%5 =
+| Join %3 %4 %2 (= #0 #2) (= #1 #3)
+| | implementation = Differential %2 %3.(#1) %4.(#0)
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (SELECT f1 FROM t1 WHERE f1 = 1);
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%3 = Let l1 =
+| Union %1 %2
+
+%4 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0)), !(isnull(#1))
+| ArrangeBy (#1)
+
+%5 =
+| Get %3 (l1)
+| ArrangeBy (#0)
+
+%6 =
+| Join %4 %5 %3 (= #0 #2) (= #1 #3)
+| | implementation = Differential %3 %4.(#1) %5.(#0)
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FROM t1);
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%4 =
+| Union %2 %3
+
+%5 =
+| Get materialize.public.t1 (u1)
+| Distinct group=()
+| ArrangeBy ()
+
+%6 =
+| Join %1 %4 %5 (= #0 #2)
+| | implementation = Differential %4 %5.() %1.(#0)
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM t1);
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Project (#0)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%2 = Let l0 =
+| Union %0 %1
+
+%3 =
+| Get %2 (l0)
+| Distinct group=()
+| Negate
+
+%4 =
+| Constant ()
+
+%5 =
+| Union %3 %4
+| Map null
+
+%6 = Let l1 =
+| Union %2 %5
+
+%7 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%8 =
+| Get %6 (l1)
+| ArrangeBy ()
+
+%9 =
+| Join %7 %8 %6
+| | implementation = Differential %6 %7.() %8.()
+| | demand = (#0..#3)
+| Filter ((#0 = #2) || (#1 = #3))
+| Project (#0, #1)
+
+EOF
+
+#
+# CSEs in derived tables
+#
+
+query T multiline
+EXPLAIN SELECT *
+FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
+JOIN (SELECT * FROM t1 WHERE f1 = 1) AS a2
+ON TRUE
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Join %1 %0
+| | implementation = Differential %0 %1.()
+| | demand = (#0..#3)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT *
+FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
+, (SELECT * FROM t1 WHERE f1 = 1) AS a2
+WHERE a1.f2 = 2
+AND a2.f2 = 2
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1), (#1 = 2)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Join %1 %0
+| | implementation = Differential %0 %1.()
+| | demand = (#0..#3)
+
+EOF
+
+# No CSE with only partially-overlapping predicates
+query T multiline
+EXPLAIN SELECT *
+FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
+, (SELECT * FROM t1 WHERE f1 = 1) AS a2
+WHERE a1.f2 = 2
+AND a2.f2 = 3
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1), (#1 = 2)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1), (#1 = 3)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
+
+#
+# CSEs in UNION branches
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Union %0 %0 %0
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION SELECT * FROM t1 WHERE f1 = 1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Union %0 %0 %0
+| Distinct group=(#1)
+| Map 1
+| Project (#1, #0)
+
+EOF
+
+#
+# CSEs in the SELECT list
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%3 = Let l1 =
+| Union %1 %2
+
+%4 =
+| Get %3 (l1)
+| Distinct group=()
+| Negate
+
+%5 =
+| Constant ()
+
+%6 =
+| Union %4 %5
+| Map null
+
+%7 = Let l2 =
+| Union %3 %6
+
+%8 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%9 =
+| Get %7 (l2)
+| ArrangeBy ()
+
+%10 =
+| Join %8 %9 %7
+| | implementation = Differential %7 %8.() %9.()
+| | demand = (#2, #3)
+| Project (#2, #3)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHERE f1 = 1)) FROM t1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%3 = Let l1 =
+| Union %1 %2
+
+%4 =
+| Get %3 (l1)
+| Distinct group=()
+| Negate
+
+%5 =
+| Constant ()
+
+%6 =
+| Union %4 %5
+| Map null
+
+%7 = Let l2 =
+| Union %3 %6
+
+%8 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%9 =
+| Get %7 (l2)
+| ArrangeBy ()
+
+%10 = Let l3 =
+| Join %8 %9 %7
+| | implementation = Differential %7 %8.() %9.()
+| | demand = (#2, #3)
+| Reduce group=()
+| | agg min(#2)
+| | agg max(#3)
+
+%11 =
+| Get %10 (l3)
+| Negate
+| Project ()
+
+%12 =
+| Constant ()
+
+%13 =
+| Union %11 %12
+| Map null, null
+
+%14 =
+| Union %10 %13
+
+EOF
+
+#
+# CSEs at two distinct positions within the query
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 FROM t1 WHERE f1 = 1);
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%3 = Let l1 =
+| Union %1 %2
+
+%4 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%5 =
+| Get %0 (l0)
+| Distinct group=()
+| ArrangeBy ()
+
+%6 =
+| Get %3 (l1)
+| Distinct group=()
+| Negate
+
+%7 =
+| Constant ()
+
+%8 =
+| Union %6 %7
+| Map null
+
+%9 =
+| Union %3 %8
+
+%10 =
+| Join %4 %5 %9
+| | implementation = Differential %9 %5.() %4.()
+| | demand = (#2)
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1
+UNION ALL
+SELECT f1 FROM t1 WHERE f1 = 1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%3 = Let l2 =
+| Union %1 %2
+
+%4 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%5 =
+| Get %3 (l2)
+| Distinct group=()
+| Negate
+
+%6 =
+| Constant ()
+
+%7 =
+| Union %5 %6
+| Map null
+
+%8 =
+| Union %3 %7
+
+%9 =
+| Join %4 %8
+| | implementation = Differential %8 %4.()
+| | demand = (#2)
+| Project (#2)
+
+%10 =
+| Union %9 %1
+
+EOF
+
+##
+## Tests around the contents of the CSE itself
+##
+
+#
+# CSE containing a join
+#
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1 AS a1, t1 AS a2
+UNION ALL
+SELECT * FROM t1 AS a1, t1 AS a2
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+%3 =
+| Union %2 %2
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
+UNION ALL
+SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 = Let l1 =
+| Join %1 %0 (= #0 #2)
+| | implementation = Differential %0 %1.(#0)
+| | demand = (#0, #1, #3)
+
+%3 =
+| Get %2 (l1)
+| Project (#0, #1, #0, #3)
+
+%4 =
+| Get %2 (l1)
+| Distinct group=(#0, #1)
+| Negate
+
+%5 =
+| Get materialize.public.t1 (u1)
+| Distinct group=(#0, #1)
+
+%6 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0, #1)
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %6 %7.(#0, #1)
+| | demand = (#0, #1)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%9 = Let l2 =
+| Union %3 %8
+| Map coalesce(#0, #2)
+
+%10 =
+| Union %9 %9
+| Project (#4, #1, #3)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) WHERE f1 = 1
+UNION ALL
+SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) WHERE f1 = 2
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 = Let l1 =
+| Join %1 %0 (= #0 #2)
+| | implementation = Differential %0 %1.(#0)
+| | demand = (#0, #1)
+
+%3 =
+| Get %2 (l1)
+| Project (#0, #1, #0, #3)
+
+%4 =
+| Get %2 (l1)
+| Distinct group=(#0, #1)
+| Negate
+
+%5 =
+| Get materialize.public.t1 (u1)
+| Distinct group=(#0, #1)
+
+%6 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0, #1)
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %6 %7.(#0, #1)
+| | demand = (#0)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%9 = Let l2 =
+| Union %3 %8
+| Map coalesce(#0, #2)
+
+%10 =
+| Get %9 (l2)
+| Filter (#4 = 1)
+
+%11 =
+| Get %9 (l2)
+| Filter (#4 = 2)
+
+%12 =
+| Union %10 %11
+| Project (#4)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM
+(SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s1,
+(SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s2
+WHERE s1.f1 = 1 AND s2.f1 = 1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 = Let l1 =
+| Join %1 %0 (= #0 #2)
+| | implementation = Differential %0 %1.(#0)
+| | demand = (#0, #1)
+
+%3 =
+| Get %2 (l1)
+| Project (#0, #1, #0, #3)
+
+%4 =
+| Get %2 (l1)
+| Distinct group=(#0, #1)
+| Negate
+
+%5 =
+| Get materialize.public.t1 (u1)
+| Distinct group=(#0, #1)
+
+%6 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0, #1)
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %6 %7.(#0, #1)
+| | demand = (#0)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%9 = Let l2 =
+| Union %3 %8
+| Map coalesce(#0, #2)
+| Filter (#4 = 1)
+
+%10 =
+| Get %9 (l2)
+| ArrangeBy ()
+
+%11 =
+| Join %10 %9
+| | implementation = Differential %9 %10.()
+| | demand = (#4, #9)
+| Project (#4, #9)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM
+(SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s1,
+(SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s2
+WHERE s1.f1 = 1 AND s2.f1 = 2
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy (#0)
+
+%2 = Let l1 =
+| Join %1 %0 (= #0 #2)
+| | implementation = Differential %0 %1.(#0)
+| | demand = (#0, #1)
+
+%3 =
+| Get %2 (l1)
+| Project (#0, #1, #0, #3)
+
+%4 =
+| Get %2 (l1)
+| Distinct group=(#0, #1)
+| Negate
+
+%5 =
+| Get materialize.public.t1 (u1)
+| Distinct group=(#0, #1)
+
+%6 =
+| Union %4 %5
+
+%7 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0, #1)
+
+%8 =
+| Join %6 %7 (= #0 #2) (= #1 #3)
+| | implementation = Differential %6 %7.(#0, #1)
+| | demand = (#0)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%9 = Let l2 =
+| Union %3 %8
+| Map coalesce(#0, #2)
+
+%10 =
+| Get %9 (l2)
+| Filter (#4 = 1)
+| ArrangeBy ()
+
+%11 =
+| Get %9 (l2)
+| Filter (#4 = 2)
+
+%12 =
+| Join %10 %11
+| | implementation = Differential %11 %10.()
+| | demand = (#4, #9)
+| Project (#4, #9)
+
+EOF
+
+#
+# CSE containing a disjunction (AND)
+#
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1 WHERE f1 = 1 AND f2 = 2
+UNION ALL
+SELECT * FROM t1 WHERE f1 = 1 AND f2 = 2
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1), (#1 = 2)
+
+%1 =
+| Union %0 %0
+
+EOF
+
+#
+# CSE containing a conjunction (OR)
+#
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1 WHERE f1 = 1 OR f1 = 2
+UNION ALL
+SELECT * FROM t1 WHERE f1 = 1 OR f1 = 2
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter ((#0 = 1) || (#0 = 2))
+
+%1 =
+| Union %0 %0
+
+EOF
+
+#
+# CSE containing a subquery
+#
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
+UNION ALL
+SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
+----
+%0 =
+| Get materialize.public.t1 (u1)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+| Distinct group=()
+| ArrangeBy ()
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %0 %1.()
+| | demand = (#0, #1)
+
+%3 =
+| Union %2 %2
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
+UNION ALL
+SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%4 =
+| Union %2 %3
+
+%5 = Let l1 =
+| Join %1 %4 (= #0 #2)
+| | implementation = Differential %4 %1.(#0)
+| | demand = (#0, #1)
+
+%6 =
+| Union %5 %5
+| Project (#0, #1)
+
+EOF
+
+#
+# CSE containing a derived table
+#
+
+query T multiline
+EXPLAIN
+SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
+UNION ALL
+SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Map (#0 + 2), (#2 + 1)
+
+%1 =
+| Union %0 %0
+| Project (#3)
+
+EOF
+
+#
+# CSEs containing an aggregate
+#
+
+query T multiline
+EXPLAIN
+SELECT MIN(f1) FROM t1
+UNION ALL
+SELECT MIN(f1) FROM t1;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg min(#0)
+
+%1 =
+| Get %0 (l0)
+| Negate
+| Project ()
+
+%2 =
+| Constant ()
+
+%3 = Let l1 =
+| Union %1 %2
+| Map null
+
+%4 =
+| Union %0 %3 %0 %3
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT DISTINCT f1 FROM t1
+UNION ALL
+SELECT DISTINCT f1 FROM t1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Distinct group=(#0)
+
+%1 =
+| Union %0 %0
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT f1, COUNT(*) FROM t1 GROUP BY f1
+UNION ALL
+SELECT f1, COUNT(*) FROM t1 GROUP BY f1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Reduce group=(#0)
+| | agg count(true)
+
+%1 =
+| Union %0 %0
+
+EOF
+
+#
+# CSEs containing an expression / function
+
+query T multiline
+EXPLAIN
+SELECT f1 + f1 + f1 + f1 FROM t1
+UNION ALL
+SELECT f1 + f1 + f1 + f1 FROM t1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Map (((#0 + #0) + #0) + #0)
+
+%1 =
+| Union %0 %0
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT ABS(f1) FROM t1
+UNION ALL
+SELECT ABS(f1) FROM t1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Map abs(#0)
+
+%1 =
+| Union %0 %0
+| Project (#2)
+
+EOF
+
+##
+## Nested CSEs
+##
+
+query T multiline
+EXPLAIN
+(SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1)
+UNION ALL
+(SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1)
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Union %0 %0 %0 %0
+
+EOF
+
+query T multiline
+EXPLAIN
+(SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
+UNION ALL
+(SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
+----
+%0 =
+| Get materialize.public.t1 (u1)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+| Distinct group=()
+| ArrangeBy ()
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %0 %1.()
+| | demand = (#0, #1)
+
+%3 =
+| Union %2 %2
+
+EOF
+
+##
+## Deeper-placed CSEs (where a higher-level construct is not a CSE but a lower-level one is)
+##
+
+query T multiline
+EXPLAIN
+(SELECT f1 FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
+UNION ALL
+(SELECT f2 FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
+----
+%0 =
+| Get materialize.public.t1 (u1)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+| Distinct group=()
+| ArrangeBy ()
+
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %0 %1.()
+| | demand = (#0, #1)
+
+%3 =
+| Get %2 (l0)
+| Project (#0)
+
+%4 =
+| Get %2 (l0)
+| Project (#1)
+
+%5 =
+| Union %3 %4
+
+EOF
+
+query T multiline
+EXPLAIN
+(SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
+UNION ALL
+(SELECT * FROM t2 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+| Distinct group=()
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Join %1 %0
+| | implementation = Differential %1 %0.()
+| | demand = (#0, #1)
+
+%3 =
+| Get materialize.public.t2 (u4)
+
+%4 =
+| Join %3 %0
+| | implementation = Differential %3 %0.()
+| | demand = (#0, #1)
+
+%5 =
+| Union %2 %4
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM
+(SELECT f1 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1) ,
+(SELECT f2 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1)
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+| Project (#0)
+
+%1 =
+| Get materialize.public.t2 (u4)
+| Project (#0)
+
+%2 =
+| Union %1 %0
+| ArrangeBy ()
+
+%3 =
+| Get materialize.public.t2 (u4)
+| Project (#1)
+
+%4 =
+| Union %3 %0
+
+%5 =
+| Join %2 %4
+| | implementation = Differential %4 %2.()
+| | demand = (#0, #1)
+
+EOF
+
+# Same predicate, different projections
+query T multiline
+EXPLAIN
+SELECT f1 FROM t1 WHERE f1 = 1
+UNION ALL
+SELECT f2 FROM t1 WHERE f1 = 1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get %0 (l0)
+| Project (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#1)
+
+%3 =
+| Union %1 %2
+
+EOF
+
+##
+## Negative cases - CSEs should not be identified where they do not exist
+##
+
+#
+query T multiline
+EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 2
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 2)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE f1 = 1
+UNION ALL
+SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE f1 = 2
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 = Let l1 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 2)
+
+%2 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%3 =
+| Join %2 %0
+| | implementation = Differential %0 %2.()
+| | demand = (#0)
+
+%4 =
+| Get %1 (l1)
+| ArrangeBy ()
+
+%5 =
+| Join %4 %1
+| | implementation = Differential %1 %4.()
+| | demand = (#0)
+
+%6 =
+| Union %3 %5
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1 WHERE f1 = 1
+UNION ALL
+SELECT * FROM t1 WHERE f1 = 2
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 1)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 2)
+
+%2 =
+| Union %0 %1
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT MIN(f1) FROM t1
+UNION ALL
+SELECT MAX(f1) FROM t1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg min(#0)
+
+%1 = Let l1 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg max(#0)
+
+%2 =
+| Get %0 (l0)
+| Negate
+| Project ()
+
+%3 =
+| Constant ()
+
+%4 =
+| Union %2 %3
+| Map null
+
+%5 =
+| Get %1 (l1)
+| Negate
+| Project ()
+
+%6 =
+| Constant ()
+
+%7 =
+| Union %5 %6
+| Map null
+
+%8 =
+| Union %0 %4 %1 %7
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT MIN(f1) FROM t1
+UNION ALL
+SELECT MIN(f2) FROM t1
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg min(#0)
+
+%1 = Let l1 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg min(#1)
+
+%2 =
+| Get %0 (l0)
+| Negate
+| Project ()
+
+%3 =
+| Constant ()
+
+%4 =
+| Union %2 %3
+| Map null
+
+%5 =
+| Get %1 (l1)
+| Negate
+| Project ()
+
+%6 =
+| Constant ()
+
+%7 =
+| Union %5 %6
+| Map null
+
+%8 =
+| Union %0 %4 %1 %7
+
+EOF

@@ -66,18 +66,17 @@ opt
 (join [(get x) (get x)] [[5 #0 5 #3]])
 ----
 ----
-%0 =
+%0 = Let l0 =
 | Get x (u0)
 | Filter (#0 = 5)
-| ArrangeBy ()
 
 %1 =
-| Get x (u0)
-| Filter (#0 = 5)
+| Get %0 (l0)
+| ArrangeBy ()
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+| Join %1 %0
+| | implementation = Differential %0 %1.()
 | | demand = (#0..#5)
 ----
 ----
