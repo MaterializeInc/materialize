@@ -2261,7 +2261,27 @@ impl Catalog {
         status: Status,
         packed_updates: &mut Vec<BuiltinTableUpdate>,
     ) {
-        if self.status(id) == status {
+        let entry = self.try_get_by_id(*id);
+        if entry.is_none() {
+            // TODO(aljoscha): This will happen for TAIL sinks, which are not
+            // added to the catalog. We can either not report them as created
+            // from the dataflow layer or add them to the catalog, like regular
+            // sinks. When doing that, we also need to make sure that we
+            // remove them from the catalog when they're dropped. In general,
+            // I feel like TAIL should be handled more like a "real" sink
+            // internally, to consolidate the code paths.
+            println!(
+                "Trying to set status for ID {}, there is no entry. Available IDs: {:?}",
+                id,
+                self.by_id
+                    .keys()
+                    .filter(|id| id.is_user())
+                    .collect::<Vec<_>>()
+            );
+            return;
+        }
+        let entry = entry.unwrap();
+        if entry.item().status() == status {
             return;
         }
 
