@@ -11,9 +11,9 @@
 
 import subprocess
 import sys
-from functools import lru_cache, total_ordering
+from functools import lru_cache
 from pathlib import Path
-from typing import List, NamedTuple, Optional, Set, Union
+from typing import List, Optional, Set, Union
 
 import semver.version
 

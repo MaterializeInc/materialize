@@ -16,7 +16,6 @@ documentation][user-docs].
 """
 
 import base64
-import contextlib
 import enum
 import hashlib
 import json
@@ -31,23 +30,9 @@ from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import (
-    IO,
-    Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Sequence,
-    Set,
-    Union,
-    cast,
-    overload,
-)
+from typing import IO, Any, Dict, Iterable, Iterator, List, Sequence, Set
 
 import yaml
-from typing_extensions import Literal
 
 from materialize import cargo, git, spawn, ui
 
@@ -677,7 +662,7 @@ class DependencySet:
                     d.build()
                 else:
                     announce(f"Acquiring {spec}")
-                    acquired_from = d.acquire()
+                    d.acquire()
             else:
                 announce(f"Already built {spec}")
 

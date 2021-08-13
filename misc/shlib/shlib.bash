@@ -24,7 +24,7 @@ die() {
 # Runs PROGRAM, but informs the user first. Specifically, run outputs "PROGRAM
 # ARGS..." to stderr, then executes PROGRAM with the specified ARGS.
 run() {
-   echo "$*" >&2
+   echo "\$ $*" >&2
    "$@"
 }
 
@@ -84,7 +84,7 @@ git_files() {
 # command fails. See also try_last_failed and try_finish.
 try() {
     try_last_failed=false
-    if ! "$@"; then
+    if ! run "$@"; then
         try_failed=true
         try_last_failed=true
     fi

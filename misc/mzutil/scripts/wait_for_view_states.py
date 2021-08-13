@@ -17,9 +17,7 @@ Prints timing information to indicate how long each view took to reach the desir
 """
 
 import argparse
-import glob
 import io
-import json
 import os
 import pathlib
 import sys
@@ -125,7 +123,6 @@ def wait_for_materialize_views(args: argparse.Namespace) -> None:
             if view not in view_snapshots:
                 continue
 
-            sources: typing.List[str] = query_info["sources"]
             if len(query_info["sources"]) != 1:
                 print(
                     f"ERROR: Expected just one source for view {view}: {query_info['sources']}"

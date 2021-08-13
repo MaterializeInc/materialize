@@ -15,7 +15,7 @@ import os
 import shlex
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from subprocess import CalledProcessError
 from typing import Dict, List, NamedTuple, Optional
 
@@ -28,7 +28,7 @@ from mypy_boto3_ec2.type_defs import (
 )
 from prettytable import PrettyTable
 
-from materialize import errors, git, spawn, ssh, ui
+from materialize import git, spawn, ssh, ui
 
 SPEAKER = ui.speaker("scratch> ")
 ROOT = os.environ["MZ_ROOT"]

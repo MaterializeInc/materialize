@@ -7,15 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import base64
 import concurrent.futures
 import os
 import re
 import subprocess
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import click
 import requests
@@ -198,7 +197,6 @@ def release(
         raise errors.MzConfigurationError(
             "working directory is not clean, stash or commit your changes"
         )
-        sys.exit(1)
 
     the_tag = f"v{version}"
     confirm_version_is_next(version, affect_remote)
@@ -364,7 +362,7 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
         spawn.capture(
             "bin/mzcompose --mz-find upgrade list-workflows".split(), stderr_too=True
         )
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         say(
             f"The generated test/upgrade/mzcompose.yml file appears to be broken, "
             f"please consult {readme}"

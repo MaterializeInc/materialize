@@ -13,5 +13,10 @@
 
 set -euo pipefail
 
-"$(dirname "$0")"/pyactivate --dev -m black --target-version py38 . "$@"
-"$(dirname "$0")"/pyactivate --dev -m isort --profile black .
+cd "$(dirname "$0")/.."
+
+. misc/shlib/shlib.bash
+
+try bin/pyactivate --dev -m black . "$@"
+try bin/pyactivate --dev -m isort . "$@"
+try_finish

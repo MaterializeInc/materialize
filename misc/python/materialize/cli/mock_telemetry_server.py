@@ -54,7 +54,6 @@ import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-import toml
 from materialize.cargo import Workspace
 
 

@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 
 import boto3
-import humanize
 
 from materialize import cargo, ci_util, deb, errors, git, mzbuild, spawn
 

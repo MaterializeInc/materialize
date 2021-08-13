@@ -21,7 +21,6 @@ import importlib.util
 import ipaddress
 import json
 import os
-import pathlib
 import random
 import re
 import shlex
@@ -32,17 +31,17 @@ from inspect import getmembers, isfunction
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
-    IO,
     Any,
     Callable,
     Collection,
-    Container,
     Dict,
     Iterable,
     List,
+    Literal,
     Match,
     Optional,
     Type,
+    TypedDict,
     TypeVar,
     Union,
     cast,
@@ -51,8 +50,8 @@ from typing import (
 import pg8000  # type: ignore
 import pymysql
 import yaml
+
 from materialize import errors, mzbuild, spawn, ui
-from typing_extensions import Literal, TypedDict
 
 T = TypeVar("T")
 say = ui.speaker("C> ")
@@ -351,9 +350,9 @@ class Composition:
         with open(path) as f:
             composition = yaml.safe_load(f)
 
-        errors: List[LintError] = []
-        lint_composition(path, composition, errors)
-        return errors
+        errs: List[LintError] = []
+        lint_composition(path, composition, errs)
+        return errs
 
     def run(
         self,
@@ -1041,10 +1040,8 @@ class WaitForTcpStep(WorkflowStep):
             cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
 
             try:
-                executed = _check_tcp(
-                    cmd[:], self._host, self._port, self._timeout_secs
-                )
-            except subprocess.CalledProcessError as e:
+                _check_tcp(cmd[:], self._host, self._port, self._timeout_secs)
+            except subprocess.CalledProcessError:
                 ui.progress(" {}".format(int(remaining)))
             else:
                 ui.progress(" success!", finish=True)
@@ -1056,7 +1053,7 @@ class WaitForTcpStep(WorkflowStep):
                     _check_tcp(
                         cmd[:], host, port, self._timeout_secs, kind="dependency "
                     )
-                except subprocess.CalledProcessError as e:
+                except subprocess.CalledProcessError:
                     message = f"Dependency is down {host}:{port}"
                     if "hint" in dep:
                         message += f"\n    hint: {dep['hint']}"

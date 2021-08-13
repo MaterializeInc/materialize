@@ -9,13 +9,11 @@
 
 import argparse
 import json
-import os
 import random
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-import boto3
 from materialize.cli.scratch import (
     DEFAULT_INSTPROF_NAME,
     DEFAULT_SG_ID,
@@ -89,7 +87,7 @@ def run(args: argparse.Namespace) -> None:
         for obj in multi_json(sys.stdin.read())
     ]
 
-    nonce = "".join(random.choice("0123456789abcdef") for n in range(8))
+    nonce = "".join(random.choice("0123456789abcdef") for _ in range(8))
 
     delete_after = int(datetime.now(timezone.utc).timestamp() + MAX_AGE.total_seconds())
     instances = launch_cluster(

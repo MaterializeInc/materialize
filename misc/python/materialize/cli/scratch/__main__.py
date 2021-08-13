@@ -8,17 +8,12 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-import types
-from typing import Callable, NamedTuple
-
-from materialize.cli.scratch import create, mine
 
 from materialize import errors
+from materialize.cli.scratch import create, destroy, mine
 
 
 def main() -> None:
-    from materialize.cli.scratch import create, destroy, mine
-
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand")
     for name, configure, run in [

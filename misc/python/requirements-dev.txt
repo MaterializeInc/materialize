@@ -3,6 +3,7 @@ boto3-stubs[ec2,kinesis,s3,sqs,ssm,sts]==1.18.13
 boto3==1.17.46
 humanize==3.11.0
 isort==5.9.3
+flake8==3.9.2
 mypy==0.910
 pdoc3==0.8.1
 prettytable==2.1.0

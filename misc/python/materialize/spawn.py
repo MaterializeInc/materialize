@@ -17,9 +17,7 @@ operations provided by the standard [`subprocess`][subprocess] module.
 
 import subprocess
 from pathlib import Path
-from typing import IO, Dict, Optional, Sequence, Union, overload
-
-from typing_extensions import Literal
+from typing import IO, Dict, Literal, Optional, Sequence, Union, overload
 
 from materialize import ui
 
