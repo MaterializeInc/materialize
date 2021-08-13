@@ -114,7 +114,7 @@ The health check is not part of Materialize's stable interface.
 Backwards-incompatible changes to the health check may be made at any time.
 {{< /warning >}}
 
-Materialize supports a minimal, HTTP health check at
+Materialize supports a minimal HTTP health check at
 `http://<materialized_endpoint>/status`. The `/status` page can be used by schedulers
 which require an HTTP endpoint to verify liveness -- it returns HTTP 200 as
 long as materialized is running. To integrate Materialize with your monitoring
