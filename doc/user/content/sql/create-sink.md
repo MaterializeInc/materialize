@@ -104,7 +104,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 ## Detail
 
 - Materialize currently only supports the following sinks:
-    - Avro-formtted sinks that write to either a topic or an Avro object container file.
+    - Avro-formatted sinks that write to either a topic or an Avro object container file.
     - JSON-formatted sinks that write to a topic.
 - For most sinks, Materialize creates new, distinct topics and files for each sink on restart.
 - A beta feature enables the use of the same topic after restart. For details, see [Enabling topic reuse after restart](#enabling-topic-reuse-after-restart).
