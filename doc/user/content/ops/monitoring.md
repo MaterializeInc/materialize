@@ -114,12 +114,17 @@ The health check is not part of Materialize's stable interface.
 Backwards-incompatible changes to the health check may be made at any time.
 {{< /warning >}}
 
-Materialize supports a minimal HTTP health check at
-`http://<materialized_endpoint>/status`. The `/status` page can be used by schedulers
-which require an HTTP endpoint to verify liveness -- it returns HTTP 200 as
-long as materialized is running. To integrate Materialize with your monitoring
-infrastructure or for more machine-readable status information the [Prometheus metrics
-endpoint](#prometheus) can be used.
+Materialize supports a basic HTTP health check at `http://<materialized_hostname>:6875/status`.
+
+The health check returns HTTP status code 200 as long as Materialize has enough resources to respond
+to HTTP requests. It does not otherwise assess the state of the system.
+
+Use this endpoint to integrate Materialize with monitoring and orchestration tools that support HTTP health
+checks, like [Kubernetes liveness probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
+or [AWS load balancer health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html).
+
+To perform health checks that assess other metrics, consider using the [Prometheus metrics endpoint](#prometheus).
+
 
 ## Memory usage visualization
 
