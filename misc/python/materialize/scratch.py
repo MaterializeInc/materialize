@@ -398,7 +398,7 @@ def get_old_instances() -> List[InstanceTypeDef]:
         return i["State"]["Name"] == "running"
 
     def is_old(i: InstanceTypeDef) -> bool:
-        tags_dict = {tag["Key"]: tag["Value"] for tag in i["Tags"]}
+        tags_dict = {tag["Key"]: tag["Value"] for tag in i.get("Tags", [])}
         delete_after = tags_dict.get("scratch-delete-after")
         if delete_after is None:
             return False
