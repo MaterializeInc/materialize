@@ -114,10 +114,12 @@ The health check is not part of Materialize's stable interface.
 Backwards-incompatible changes to the health check may be made at any time.
 {{< /warning >}}
 
-Materialize supports a minimal, human-readable HTTP health check endpoint at
-`http://<materialized host>:6875/status`. To check on the health of Materialize in
-a machine-readable format, the [metrics
-endpoint](https://materialize.com/docs/ops/monitoring/#prometheus) can be used.
+Materialize supports a minimal, HTTP health check at
+`http://<materialized_endpoint>/status`. The `/status` page can be used by schedulers
+which require an HTTP endpoint to verify liveness -- it returns HTTP 200 as
+long as materialized is running. To integrate Materialize with your monitoring
+infrastructure or for more machine-readable status information the [Prometheus metrics
+endpoint](#prometheus) can be used.
 
 ## Memory usage visualization
 
