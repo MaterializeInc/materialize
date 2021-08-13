@@ -14,6 +14,7 @@ use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
 use persist::error::Error;
 use persist::file::{FileBlob, FileBuffer};
 use persist::indexed::encoding::Id;
+use persist::indexed::metrics::Metrics;
 use persist::indexed::{Indexed, Snapshot};
 use persist::mem::{MemBlob, MemBuffer};
 use persist::storage::{Blob, Buffer, LockInfo};
@@ -80,7 +81,11 @@ pub fn bench_mem_snapshots(c: &mut Criterion) {
     bench_indexed_snapshots(c, "mem", |path| {
         let name = format!("snapshot_bench_{}", path);
         let lock_info = LockInfo::new_no_reentrance(name);
-        Indexed::new(MemBuffer::new(lock_info.clone()), MemBlob::new(lock_info))
+        Indexed::new(
+            MemBuffer::new(lock_info.clone()),
+            MemBlob::new(lock_info),
+            Metrics::default(),
+        )
     });
 }
 
@@ -97,6 +102,7 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
         Indexed::new(
             FileBuffer::new(buffer_dir, lock_info.clone())?,
             FileBlob::new(blob_dir, lock_info)?,
+            Metrics::default(),
         )
     });
 }

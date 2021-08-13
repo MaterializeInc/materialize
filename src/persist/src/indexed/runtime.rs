@@ -20,9 +20,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use log;
+use ore::metrics::MetricsRegistry;
 
 use crate::error::Error;
 use crate::indexed::encoding::Id;
+use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{Indexed, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
 use crate::pfuture::{Future, FutureHandle};
 use crate::storage::{Blob, Buffer, SeqNo};
@@ -50,17 +52,23 @@ enum Cmd {
 // TODO: At the moment, this runs IO and heavy cpu work in a single thread.
 // Move this work out into whatever async runtime the user likes, via something
 // like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
-pub fn start<U, L>(buf: U, blob: L) -> Result<RuntimeClient, Error>
+pub fn start<U, L>(buf: U, blob: L, reg: &MetricsRegistry) -> Result<RuntimeClient, Error>
 where
     U: Buffer + Send + 'static,
     L: Blob + Send + 'static,
 {
-    let indexed = Indexed::new(buf, blob)?;
+    let metrics = Metrics::register_with(reg);
+    let indexed = Indexed::new(buf, blob, metrics.clone())?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
+    let runtime_impl_metrics = metrics.clone();
     let runtime_f = move || {
         // TODO: Set up the tokio or other async runtime context here.
-        let mut l = RuntimeImpl { indexed, rx };
+        let mut l = RuntimeImpl {
+            indexed,
+            rx,
+            metrics: runtime_impl_metrics,
+        };
         while l.work() {}
     };
     let id = RuntimeId::new();
@@ -68,7 +76,11 @@ where
         .name(format!("persist-runtime-{}", id.0))
         .spawn(runtime_f)?;
     let handle = Mutex::new(Some(handle));
-    let core = RuntimeCore { handle, tx };
+    let core = RuntimeCore {
+        handle,
+        tx,
+        metrics,
+    };
     Ok(RuntimeClient {
         id,
         core: Arc::new(core),
@@ -90,10 +102,12 @@ impl RuntimeId {
 struct RuntimeCore {
     handle: Mutex<Option<JoinHandle<()>>>,
     tx: crossbeam_channel::Sender<Cmd>,
+    metrics: Metrics,
 }
 
 impl RuntimeCore {
     fn send(&self, cmd: Cmd) {
+        self.metrics.cmd_queue_in.inc();
         if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
             // According to the docs, a SendError can only happen if the
             // receiver has hung up, which in this case only happens if the
@@ -574,6 +588,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 struct RuntimeImpl<U: Buffer, L: Blob> {
     indexed: Indexed<U, L>,
     rx: crossbeam_channel::Receiver<Cmd>,
+    metrics: Metrics,
 }
 
 impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
@@ -610,6 +625,7 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
             }
         }
 
+        let run_start = Instant::now();
         for cmd in cmds {
             match cmd {
                 Cmd::Stop(res) => {
@@ -627,6 +643,7 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
                     res.fill(r);
                 }
                 Cmd::Write(updates, res) => {
+                    self.metrics.cmd_write_count.inc();
                     let r = self.indexed.write_sync(updates);
                     res.fill(r);
                 }
@@ -647,7 +664,12 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
                     res.fill(r);
                 }
             }
+            self.metrics.cmd_run_count.inc()
         }
+        let step_start = Instant::now();
+        self.metrics
+            .cmd_run_ms
+            .inc_by(metric_duration_ms(step_start.duration_since(run_start)));
 
         if let Err(e) = self.indexed.step() {
             // TODO: revisit whether we need to move this to a different log level
@@ -655,6 +677,11 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
             // may want to rate-limit our logging here.
             log::warn!("error running step: {:?}", e);
         }
+
+        self.metrics
+            .cmd_step_ms
+            .inc_by(metric_duration_ms(step_start.elapsed()));
+
         return more_work;
     }
 }
@@ -674,7 +701,7 @@ mod tests {
 
         let buffer = MemBuffer::new_no_reentrance("runtime");
         let blob = MemBlob::new_no_reentrance("runtime");
-        let mut runtime = start(buffer, blob)?;
+        let mut runtime = start(buffer, blob, &MetricsRegistry::new())?;
 
         let (write, meta) = runtime.create_or_load("0")?;
         write.write(&data).recv()?;
@@ -698,7 +725,7 @@ mod tests {
 
         let buffer = MemBuffer::new_no_reentrance("concurrent");
         let blob = MemBlob::new_no_reentrance("concurrent");
-        let client1 = start(buffer, blob)?;
+        let client1 = start(buffer, blob, &MetricsRegistry::new())?;
         let _ = client1.create_or_load::<String, String>("0")?;
 
         // Everything is still running after client1 is dropped.

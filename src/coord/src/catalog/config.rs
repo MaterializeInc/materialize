@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use build_info::BuildInfo;
+use ore::metrics::MetricsRegistry;
 
 use crate::persistcfg::PersistConfig;
 
@@ -37,4 +38,6 @@ pub struct Config<'a> {
     pub persist: PersistConfig,
     // Whether or not to skip catalog migrations
     pub skip_migrations: bool,
+    // The registry that catalog uses to report metrics.
+    pub metrics_registry: &'a MetricsRegistry,
 }

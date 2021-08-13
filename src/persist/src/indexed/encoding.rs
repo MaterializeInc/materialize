@@ -135,6 +135,8 @@ pub struct BlobFutureBatchMeta {
     pub ts_upper: u64,
     /// The minimum timestamp from any update contained in this batch.
     pub ts_lower: u64,
+    /// Size of the encoded batch.
+    pub size_bytes: u64,
 }
 
 /// The metadata necessary to reconstruct a BlobTrace.
@@ -179,6 +181,8 @@ pub struct BlobTraceBatchMeta {
     pub desc: Description<u64>,
     /// The compaction level of each batch.
     pub level: u64,
+    /// Size of the encoded batch.
+    pub size_bytes: u64,
 }
 
 /// The structure serialized and stored as a value in [crate::storage::Blob]
@@ -685,6 +689,7 @@ mod tests {
             key: "".to_string(),
             desc: u64_desc(lower, upper),
             level: 1,
+            size_bytes: 0,
         }
     }
 
@@ -693,6 +698,7 @@ mod tests {
             key: "".to_string(),
             desc: u64_desc_since(lower, upper, since),
             level,
+            size_bytes: 0,
         }
     }
 
@@ -718,6 +724,7 @@ mod tests {
             desc: seqno_desc(lower, upper),
             ts_upper: 0,
             ts_lower: 0,
+            size_bytes: 0,
         }
     }
 
