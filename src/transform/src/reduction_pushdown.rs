@@ -42,46 +42,63 @@ impl ReductionPushdown {
             expected_group_size: _,
         } = relation
         {
-            // Map expressions can be absorbed into the Reduce at no cost.
-            if let MirRelationExpr::Map {
-                input: inner,
-                scalars,
-            } = &mut **input
-            {
-                let arity = inner.arity();
+            let mut recurse = true;
+            while recurse {
+                // Map and project expressions can be absorbed into the Reduce at no cost.
+                if let MirRelationExpr::Map {
+                    input: inner,
+                    scalars,
+                } = &mut **input
+                {
+                    let arity = inner.arity();
 
-                // Normalize the scalars to not be self-referential.
-                let mut scalars = scalars.clone();
-                for index in 0..scalars.len() {
-                    let (lower, upper) = scalars.split_at_mut(index);
-                    upper[0].visit_mut(&mut |e| {
-                        if let expr::MirScalarExpr::Column(c) = e {
-                            if *c >= arity {
-                                *e = lower[*c - arity].clone();
+                    // Normalize the scalars to not be self-referential.
+                    let mut scalars = scalars.clone();
+                    for index in 0..scalars.len() {
+                        let (lower, upper) = scalars.split_at_mut(index);
+                        upper[0].visit_mut(&mut |e| {
+                            if let expr::MirScalarExpr::Column(c) = e {
+                                if *c >= arity {
+                                    *e = lower[*c - arity].clone();
+                                }
                             }
-                        }
-                    });
-                }
-                for key in group_key.iter_mut() {
-                    key.visit_mut(&mut |e| {
-                        if let expr::MirScalarExpr::Column(c) = e {
-                            if *c >= arity {
-                                *e = scalars[*c - arity].clone();
+                        });
+                    }
+                    for key in group_key.iter_mut() {
+                        key.visit_mut(&mut |e| {
+                            if let expr::MirScalarExpr::Column(c) = e {
+                                if *c >= arity {
+                                    *e = scalars[*c - arity].clone();
+                                }
                             }
-                        }
-                    });
-                }
-                for agg in aggregates.iter_mut() {
-                    agg.expr.visit_mut(&mut |e| {
-                        if let expr::MirScalarExpr::Column(c) = e {
-                            if *c >= arity {
-                                *e = scalars[*c - arity].clone();
+                        });
+                    }
+                    for agg in aggregates.iter_mut() {
+                        agg.expr.visit_mut(&mut |e| {
+                            if let expr::MirScalarExpr::Column(c) = e {
+                                if *c >= arity {
+                                    *e = scalars[*c - arity].clone();
+                                }
                             }
-                        }
-                    });
-                }
+                        });
+                    }
 
-                **input = inner.take_dangerous()
+                    **input = inner.take_dangerous()
+                } else if let MirRelationExpr::Project {
+                    input: inner,
+                    outputs,
+                } = &mut **input
+                {
+                    for key in group_key.iter_mut() {
+                        key.permute(outputs);
+                    }
+                    for agg in aggregates.iter_mut() {
+                        agg.expr.permute(outputs);
+                    }
+                    **input = inner.take_dangerous()
+                } else {
+                    recurse = false;
+                }
             }
         }
     }
