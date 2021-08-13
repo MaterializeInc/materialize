@@ -51,9 +51,8 @@ from typing import (
 import pg8000  # type: ignore
 import pymysql
 import yaml
-from typing_extensions import Literal, TypedDict
-
 from materialize import errors, mzbuild, spawn, ui
+from typing_extensions import Literal, TypedDict
 
 T = TypeVar("T")
 say = ui.speaker("C> ")
@@ -197,7 +196,7 @@ class Composition:
             compose = yaml.safe_load(f)
 
         # Stash away sub workflows so that we can load them with the correct environment variables
-        self.yaml_workflows = compose.pop("mzworkflows", None)
+        self.yaml_workflows = compose.pop("mzworkflows", {})
 
         # Load the mzworkflows.py file, if any.
         mzworkflows_py = self.path.parent / "mzworkflows.py"
@@ -600,7 +599,7 @@ class PythonWorkflow(Workflow):
         os.environ.update(self.env)
 
         try:
-            self.func(self.composition)
+            self.func(self)
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -619,18 +618,34 @@ class Steps:
             raise errors.UnknownItem("step", name, list(cls._steps))
 
     @classmethod
-    def register(cls, name: str) -> Callable[[Type[T]], Type[T]]:
+    def register(
+        cls, name: str
+    ) -> Callable[[Type["WorkflowStep"]], Type["WorkflowStep"]]:
         if name in cls._steps:
             raise ValueError(f"Double registration of step name: {name}")
 
-        def reg(to_register: Type[T]) -> Type[T]:
-            if not issubclass(to_register, WorkflowStep):
-                raise ValueError(
-                    f"Registered step must be a WorkflowStep: {to_register}"
-                )
+        def reg(to_register: Type["WorkflowStep"]) -> Type["WorkflowStep"]:
             cls._steps[name] = to_register
             to_register.name = name
-            return to_register  # type: ignore
+
+            # Allow the step to also be called as a Workflow.step_name() classmethod
+            def run_step(workflow: Workflow, **kwargs: Any) -> None:
+                step: WorkflowStep = to_register(**kwargs)
+                step.run(workflow)
+
+            func_name = name.replace("-", "_")
+            if func_name == "run":
+                # Temporary workaround for the fact that `Workflow.run` already
+                # exists.
+                func_name = "run_service"
+            if not hasattr(Workflow, func_name):
+                setattr(Workflow, func_name, run_step)
+            else:
+                raise errors.Failed(
+                    f"Unable to register method Workflow.{func_name} as one already exists."
+                )
+
+            return to_register
 
         return reg
 

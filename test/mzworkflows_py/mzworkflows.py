@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import materialize.mzcompose
+from materialize.mzcompose import Workflow
 
 
-def workflow_in_python(composition: materialize.mzcompose.Composition):
-    pass
+def workflow_in_python(w: Workflow):
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+    w.kill_services(services=["materialized"])

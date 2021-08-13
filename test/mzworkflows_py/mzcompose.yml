@@ -9,18 +9,6 @@
 
 version: '3.7'
 
-mzworkflows:
-  mzworkflows_py:
-    steps:
-      - step: start-services
-        services: [materialized]
-
-      - step: wait-for-mz
-        service: materialized
-
-      - step: workflow
-        workflow: workflow_in_python
-
 services:
   materialized:
     mzbuild: materialized
