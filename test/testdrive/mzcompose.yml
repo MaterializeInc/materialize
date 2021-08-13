@@ -64,6 +64,15 @@ mzworkflows:
         service: testdrive-svc
         command: --aws-region=us-east-2 --ci-output ${TD_TEST:-*.td esoteric/*.td}
 
+  # Run tests that hit the live, public PubNub service.
+  ci-pubnub:
+    steps:
+      - step: workflow
+        workflow: start-deps
+      - step: run
+        service: testdrive-svc
+        command: --ci-output esoteric/pubnub/pubnub.td
+
   # Run a couple of tests that verify that our http* proxy configuration works
   ci-proxy:
     env:
