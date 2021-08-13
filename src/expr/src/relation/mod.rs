@@ -636,19 +636,26 @@ impl MirRelationExpr {
     /// The resulting sequence contains the first moments at which differences were observed.
     /// There may be multiple elements in the list as the differences may only be observed
     /// when descending independent tree paths.
-    pub fn tree_differences(&self, other: &RelationExpr) -> Vec<(RelationExpr, RelationExpr)> {
+    pub fn tree_differences(
+        &self,
+        other: &MirRelationExpr,
+    ) -> Vec<(MirRelationExpr, MirRelationExpr)> {
         match (self, other) {
-            (RelationExpr::Constant { .. }, RelationExpr::Constant { .. }) if self == other => {
+            (MirRelationExpr::Constant { .. }, MirRelationExpr::Constant { .. })
+                if self == other =>
+            {
                 Vec::new()
             }
-            (RelationExpr::Get { .. }, RelationExpr::Get { .. }) if self == other => Vec::new(),
+            (MirRelationExpr::Get { .. }, MirRelationExpr::Get { .. }) if self == other => {
+                Vec::new()
+            }
             (
-                RelationExpr::Let {
+                MirRelationExpr::Let {
                     id: i1,
                     value: v1,
                     body: b1,
                 },
-                RelationExpr::Let {
+                MirRelationExpr::Let {
                     id: i2,
                     value: v2,
                     body: b2,
@@ -660,43 +667,43 @@ impl MirRelationExpr {
                 result
             }
             (
-                RelationExpr::Project {
+                MirRelationExpr::Project {
                     input: i1,
                     outputs: o1,
                 },
-                RelationExpr::Project {
+                MirRelationExpr::Project {
                     input: i2,
                     outputs: o2,
                 },
             ) if o1 == o2 => i1.tree_differences(i2),
             (
-                RelationExpr::Map {
+                MirRelationExpr::Map {
                     input: i1,
                     scalars: o1,
                 },
-                RelationExpr::Map {
+                MirRelationExpr::Map {
                     input: i2,
                     scalars: o2,
                 },
             ) if o1 == o2 => i1.tree_differences(i2),
             (
-                RelationExpr::Filter {
+                MirRelationExpr::Filter {
                     input: i1,
                     predicates: o1,
                 },
-                RelationExpr::Filter {
+                MirRelationExpr::Filter {
                     input: i2,
                     predicates: o2,
                 },
             ) if o1 == o2 => i1.tree_differences(i2),
             (
-                RelationExpr::FlatMap {
+                MirRelationExpr::FlatMap {
                     input: i1,
                     func: f1,
                     exprs: e1,
                     demand: d1,
                 },
-                RelationExpr::FlatMap {
+                MirRelationExpr::FlatMap {
                     input: i2,
                     func: f2,
                     exprs: e2,
@@ -704,13 +711,13 @@ impl MirRelationExpr {
                 },
             ) if (f1, e1, d1) == (f2, e2, d2) => i1.tree_differences(i2),
             (
-                RelationExpr::Join {
+                MirRelationExpr::Join {
                     inputs: i1,
                     equivalences: e1,
                     demand: d1,
                     implementation: m1,
                 },
-                RelationExpr::Join {
+                MirRelationExpr::Join {
                     inputs: i2,
                     equivalences: e2,
                     demand: d2,
@@ -724,61 +731,70 @@ impl MirRelationExpr {
                 result
             }
             (
-                RelationExpr::Reduce {
+                MirRelationExpr::Reduce {
                     input: i1,
                     group_key: k1,
                     aggregates: a1,
+                    monotonic: m1,
+                    expected_group_size: e1,
                 },
-                RelationExpr::Reduce {
+                MirRelationExpr::Reduce {
                     input: i2,
                     group_key: k2,
                     aggregates: a2,
+                    monotonic: m2,
+                    expected_group_size: e2,
                 },
-            ) if (k1, a1) == (k2, a2) => i1.tree_differences(i2),
+            ) if (k1, a1, m1, e1) == (k2, a2, m2, e2) => i1.tree_differences(i2),
             (
-                RelationExpr::TopK {
+                MirRelationExpr::TopK {
                     input: i1,
                     group_key: k1,
                     order_key: o1,
                     limit: l1,
                     offset: f1,
+                    monotonic: m1,
                 },
-                RelationExpr::TopK {
+                MirRelationExpr::TopK {
                     input: i2,
                     group_key: k2,
                     order_key: o2,
                     limit: l2,
                     offset: f2,
+                    monotonic: m2,
                 },
-            ) if (k1, o1, l1, f1) == (k2, o2, l2, f2) => i1.tree_differences(i2),
+            ) if (k1, o1, l1, f1, m1) == (k2, o2, l2, f2, m2) => i1.tree_differences(i2),
 
-            (RelationExpr::Negate { input: i1 }, RelationExpr::Negate { input: i2 }) => {
-                i1.tree_differences(i2)
-            }
-            (RelationExpr::Threshold { input: i1 }, RelationExpr::Threshold { input: i2 }) => {
+            (MirRelationExpr::Negate { input: i1 }, MirRelationExpr::Negate { input: i2 }) => {
                 i1.tree_differences(i2)
             }
             (
-                RelationExpr::Union {
-                    left: l1,
-                    right: r1,
+                MirRelationExpr::Threshold { input: i1 },
+                MirRelationExpr::Threshold { input: i2 },
+            ) => i1.tree_differences(i2),
+            (
+                MirRelationExpr::Union {
+                    base: b1,
+                    inputs: i1,
                 },
-                RelationExpr::Union {
-                    left: l2,
-                    right: r2,
+                MirRelationExpr::Union {
+                    base: b2,
+                    inputs: i2,
                 },
             ) => {
                 let mut result = Vec::new();
-                result.extend(l1.tree_differences(l2));
-                result.extend(r1.tree_differences(r2));
+                result.extend(b1.tree_differences(b2));
+                for (i1, i2) in i1.iter().zip(i2.iter()) {
+                    result.extend(i1.tree_differences(i2));
+                }
                 result
             }
             (
-                RelationExpr::ArrangeBy {
+                MirRelationExpr::ArrangeBy {
                     input: i1,
                     keys: o1,
                 },
-                RelationExpr::ArrangeBy {
+                MirRelationExpr::ArrangeBy {
                     input: i2,
                     keys: o2,
                 },

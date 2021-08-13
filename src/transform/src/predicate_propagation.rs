@@ -16,9 +16,9 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc};
+use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::Datum;
-use repr::{ColumnType, RelationType, ScalarType};
+use repr::{RelationType, ScalarType};
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
@@ -27,7 +27,7 @@ pub struct PredicateKnowledge;
 impl crate::Transform for PredicateKnowledge {
     fn transform(
         &self,
-        expr: &mut RelationExpr,
+        expr: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let _predicates = PredicateKnowledge::action(expr, &mut HashMap::new())?;
@@ -44,14 +44,17 @@ impl PredicateKnowledge {
     /// equivalence is expressed by a single `#col1 = #col2` and should inherit the
     /// implications of the first column's role in any predicates.
     fn action(
-        expr: &mut RelationExpr,
-        let_knowledge: &mut HashMap<expr::Id, Vec<ScalarExpr>>,
-    ) -> Result<Vec<ScalarExpr>, crate::TransformError> {
+        expr: &mut MirRelationExpr,
+        let_knowledge: &mut HashMap<expr::Id, Vec<MirScalarExpr>>,
+    ) -> Result<Vec<MirScalarExpr>, crate::TransformError> {
         let mut predicates = match expr {
-            RelationExpr::ArrangeBy { input, .. } => {
+            MirRelationExpr::ArrangeBy { input, .. } => {
                 PredicateKnowledge::action(input, let_knowledge)?
             }
-            RelationExpr::Get { id, typ } => {
+            MirRelationExpr::DeclareKeys { input, .. } => {
+                PredicateKnowledge::action(input, let_knowledge)?
+            }
+            MirRelationExpr::Get { id, typ } => {
                 // If we fail to find bound knowledge, use the nullability of the type.
                 let_knowledge.get(id).cloned().unwrap_or_else(|| {
                     typ.column_types
@@ -59,18 +62,18 @@ impl PredicateKnowledge {
                         .enumerate()
                         .filter(|(_index, ct)| !ct.nullable)
                         .map(|(index, _ct)| {
-                            ScalarExpr::column(index)
+                            MirScalarExpr::column(index)
                                 .call_unary(UnaryFunc::IsNull)
                                 .call_unary(UnaryFunc::Not)
                         })
                         .collect()
                 })
             }
-            RelationExpr::Constant { rows: _, typ: _ } => {
+            MirRelationExpr::Constant { rows: _, typ: _ } => {
                 // TODO(frank): sort out what things we could do here that we can't do in literal hoisting.
                 Vec::new()
             }
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 // This deals with shadowed let bindings, but perhaps we should just complain instead?
                 let value_knowledge = PredicateKnowledge::action(value, let_knowledge)?;
                 let prior_knowledge =
@@ -82,7 +85,7 @@ impl PredicateKnowledge {
                 }
                 body_knowledge
             }
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 let mut input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
                 // Need to
                 // 1. restrict to supported columns,
@@ -102,7 +105,7 @@ impl PredicateKnowledge {
                 // 2. rewrite constraints using new column identifiers,
                 for predicate in input_knowledge.iter_mut() {
                     predicate.visit_mut(&mut |e| {
-                        if let ScalarExpr::Column(c) = e {
+                        if let MirScalarExpr::Column(c) = e {
                             *c = remap[c];
                         }
                     })
@@ -112,14 +115,14 @@ impl PredicateKnowledge {
                 for (index, column) in outputs.iter().enumerate() {
                     if remap[column] != index {
                         input_knowledge.push(
-                            ScalarExpr::Column(remap[column])
-                                .call_binary(ScalarExpr::Column(*column), expr::BinaryFunc::Eq),
+                            MirScalarExpr::Column(remap[column])
+                                .call_binary(MirScalarExpr::Column(*column), expr::BinaryFunc::Eq),
                         );
                     }
                 }
                 input_knowledge
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
                 // Scalars could be simplified based on known predicates.
                 for scalar in scalars.iter_mut() {
@@ -127,7 +130,7 @@ impl PredicateKnowledge {
                 }
                 input_knowledge
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func: _,
                 exprs,
@@ -139,7 +142,7 @@ impl PredicateKnowledge {
                 }
                 input_knowledge
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 let mut input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
 
                 // Add predicates to the knowledge as we go.
@@ -149,7 +152,7 @@ impl PredicateKnowledge {
                 }
                 input_knowledge
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 ..
@@ -161,7 +164,7 @@ impl PredicateKnowledge {
                 for input in inputs.iter_mut() {
                     for mut predicate in PredicateKnowledge::action(input, let_knowledge)? {
                         predicate.visit_mut(&mut |expr| {
-                            if let ScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c) = expr {
                                 *c += prior_arity;
                             }
                         });
@@ -183,10 +186,11 @@ impl PredicateKnowledge {
                 normalize_predicates(&mut knowledge);
                 knowledge
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
+                ..
             } => {
                 let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
                 for key in group_key.iter_mut() {
@@ -200,18 +204,22 @@ impl PredicateKnowledge {
                 // will have the same property.
                 Vec::new()
             }
-            RelationExpr::TopK { input, .. } => PredicateKnowledge::action(input, let_knowledge)?,
-            RelationExpr::Negate { input } => PredicateKnowledge::action(input, let_knowledge)?,
-            RelationExpr::Threshold { input } => PredicateKnowledge::action(input, let_knowledge)?,
-            RelationExpr::Union { left, right } => {
-                let mut know1 = PredicateKnowledge::action(left, let_knowledge)?;
-                let know2 = PredicateKnowledge::action(right, let_knowledge)?;
-
-                know1.retain(|predicate| know2.contains(predicate));
+            MirRelationExpr::TopK { input, .. } => {
+                PredicateKnowledge::action(input, let_knowledge)?
+            }
+            MirRelationExpr::Negate { input } => PredicateKnowledge::action(input, let_knowledge)?,
+            MirRelationExpr::Threshold { input } => {
+                PredicateKnowledge::action(input, let_knowledge)?
+            }
+            MirRelationExpr::Union { base, inputs } => {
+                let mut know1 = PredicateKnowledge::action(base, let_knowledge)?;
+                for input in inputs.iter_mut() {
+                    let know2 = PredicateKnowledge::action(input, let_knowledge)?;
+                    know1.retain(|predicate| know2.contains(predicate));
+                }
                 know1
             }
         };
-
 
         normalize_predicates(&mut predicates);
         if predicates
@@ -224,7 +232,7 @@ impl PredicateKnowledge {
     }
 }
 
-fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
+fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     // Remove duplicates
     predicates.sort();
     predicates.dedup();
@@ -237,7 +245,7 @@ fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
 
     let mut classes = Vec::new();
     for predicate in predicates.iter() {
-        if let ScalarExpr::CallBinary {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::Eq,
@@ -247,14 +255,14 @@ fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
             class.extend(
                 classes
                     .iter()
-                    .position(|c: &Vec<ScalarExpr>| c.contains(&**expr1))
+                    .position(|c: &Vec<MirScalarExpr>| c.contains(&**expr1))
                     .map(|p| classes.remove(p))
                     .unwrap_or_else(|| vec![(**expr1).clone()]),
             );
             class.extend(
                 classes
                     .iter()
-                    .position(|c: &Vec<ScalarExpr>| c.contains(&**expr2))
+                    .position(|c: &Vec<MirScalarExpr>| c.contains(&**expr2))
                     .map(|p| classes.remove(p))
                     .unwrap_or_else(|| vec![(**expr2).clone()]),
             );
@@ -266,12 +274,12 @@ fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
     for class in classes.iter_mut() {
         use std::cmp::Ordering;
         class.sort_by(|x, y| match (x, y) {
-            (ScalarExpr::Literal { .. }, ScalarExpr::Literal { .. }) => x.cmp(y),
-            (ScalarExpr::Literal { .. }, _) => Ordering::Less,
-            (_, ScalarExpr::Literal { .. }) => Ordering::Greater,
-            (ScalarExpr::Column(_), ScalarExpr::Column(_)) => x.cmp(y),
-            (ScalarExpr::Column(_), _) => Ordering::Less,
-            (_, ScalarExpr::Column(_)) => Ordering::Greater,
+            (MirScalarExpr::Literal { .. }, MirScalarExpr::Literal { .. }) => x.cmp(y),
+            (MirScalarExpr::Literal { .. }, _) => Ordering::Less,
+            (_, MirScalarExpr::Literal { .. }) => Ordering::Greater,
+            (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => x.cmp(y),
+            (MirScalarExpr::Column(_), _) => Ordering::Less,
+            (_, MirScalarExpr::Column(_)) => Ordering::Greater,
             _ => x.cmp(y),
         });
         class.dedup();
@@ -279,10 +287,7 @@ fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
         // just replaces everything with false.
         if let Some(second) = class.get(1) {
             if second.is_literal_ok() {
-                predicates.push(ScalarExpr::literal_ok(
-                    Datum::False,
-                    ColumnType::new(ScalarType::Bool),
-                ));
+                predicates.push(MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool));
             }
         }
     }
@@ -292,13 +297,13 @@ fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
     // Visit each predicate and rewrite using the representative from each class.
     // Feel welcome to remove all equality tests and re-introduce canonical tests.
     for predicate in predicates.iter_mut() {
-        if let ScalarExpr::CallBinary {
+        if let MirScalarExpr::CallBinary {
             expr1: _,
             expr2: _,
             func: BinaryFunc::Eq,
         } = predicate
         {
-            *predicate = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
+            *predicate = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
         } else {
             predicate.visit_mut(&mut |e| {
                 if let Some(class) = classes.iter().find(|c| c.contains(e)) {
@@ -325,16 +330,15 @@ fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
 /// to be true, or known to be false. This is restricted to exact matches in the predicate,
 /// and is not clever enough to reason about various forms of inequality.
 pub fn optimize(
-    expr: &mut ScalarExpr,
+    expr: &mut MirScalarExpr,
     input_type: &RelationType,
-    predicates: &[ScalarExpr],
+    predicates: &[MirScalarExpr],
 ) -> Result<(), crate::TransformError> {
-
     // To simplify things, we'll build a map from complex expressions to the simpler ones
     // that should replace them.
     let mut normalizing_map = HashMap::new();
     for predicate in predicates.iter() {
-        if let ScalarExpr::CallBinary {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::Eq,
@@ -346,22 +350,24 @@ pub fn optimize(
     // Replace all expressions with a normalized representative.
     // Ideally we would do a pre-order traversal here, but that
     // method doesn't seem to exist.
-    expr.visit_mut(&mut |e| if let Some(expr) = normalizing_map.get(e) {
-        *e = (**expr).clone();
+    expr.visit_mut(&mut |e| {
+        if let Some(expr) = normalizing_map.get(e) {
+            *e = (**expr).clone();
+        }
     });
 
     expr.visit_mut(&mut |expr| {
         if predicates.contains(expr) {
             assert!(expr.typ(input_type).scalar_type == ScalarType::Bool);
-            *expr = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
+            *expr = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
             expr.reduce(input_type);
         } else if predicates.contains(&expr.clone().call_unary(UnaryFunc::Not)) {
             assert!(expr.typ(input_type).scalar_type == ScalarType::Bool);
-            *expr = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool));
+            *expr = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
             expr.reduce(input_type);
         } else {
             for predicate in predicates {
-                if let ScalarExpr::CallBinary {
+                if let MirScalarExpr::CallBinary {
                     expr1,
                     expr2,
                     func: BinaryFunc::Eq,
