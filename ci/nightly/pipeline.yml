@@ -25,8 +25,8 @@
   label: "pubnub source"
   plugins:
     - ./ci/plugins/mzcompose:
-        composition: pubnub
-        run: pubnub
+        composition: testdrive
+        run: ci-pubnub
 
 - id: kafka-matrix
   label: Kafka smoke test against previous Kafka versions
