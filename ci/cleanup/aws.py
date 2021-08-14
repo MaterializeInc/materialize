@@ -12,7 +12,6 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote, urlparse
 
 import boto3
-import botocore
 
 from materialize import scratch
 

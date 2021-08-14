@@ -16,7 +16,7 @@ from pathlib import Path
 import boto3
 import humanize
 
-from materialize import git, spawn
+from materialize import git
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"

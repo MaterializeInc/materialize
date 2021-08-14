@@ -9,7 +9,6 @@
 
 from unittest.mock import patch
 
-import pytest  # type: ignore
 from semver.version import Version
 
 from materialize import git

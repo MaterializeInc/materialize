@@ -25,11 +25,11 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Any, Iterable, List, Sequence, Set
+from typing import Any, Iterable, Set
 
 import yaml
 
-from materialize import git, mzbuild, mzcompose, spawn
+from materialize import mzbuild, mzcompose, spawn
 
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so

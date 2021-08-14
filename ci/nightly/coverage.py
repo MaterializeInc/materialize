@@ -22,8 +22,9 @@ pipeline.template.yml and the docstring on `trim_pipeline` below.
 import sys
 from pathlib import Path
 
-import materialize.cli.mzcompose
 import yaml
+
+import materialize.cli.mzcompose
 
 
 def main() -> int:

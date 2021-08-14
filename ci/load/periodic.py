@@ -9,13 +9,12 @@
 
 import datetime
 
+from materialize import scratch
 from materialize.cli.scratch import (
     DEFAULT_INSTPROF_NAME,
     DEFAULT_SG_ID,
     DEFAULT_SUBNET_ID,
 )
-
-from materialize import scratch
 
 
 def main() -> None:

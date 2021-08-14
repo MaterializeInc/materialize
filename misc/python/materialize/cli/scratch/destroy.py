@@ -10,6 +10,7 @@
 import argparse
 
 import boto3
+
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import print_instances
 

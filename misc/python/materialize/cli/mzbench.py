@@ -10,7 +10,6 @@
 # mzbench.py -- script to run materialized benchmarks
 
 import argparse
-import collections
 import csv
 import itertools
 import multiprocessing
@@ -20,7 +19,6 @@ import subprocess
 import sys
 import typing
 import uuid
-import webbrowser
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
@@ -250,7 +248,7 @@ def main(args: argparse.Namespace) -> None:
                 "web",
                 f"perf-dash-web",
             ]
-            output = subprocess.check_output(web_command, stderr=subprocess.STDOUT)
+            subprocess.check_output(web_command, stderr=subprocess.STDOUT)
         except (subprocess.CalledProcessError,) as e:
             print(f"Failed to open browser to perf-dash:\n{e.output.decode()}")
             raise

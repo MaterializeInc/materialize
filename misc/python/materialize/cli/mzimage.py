@@ -13,9 +13,9 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
-from materialize import git, mzbuild, ui
+from materialize import mzbuild, ui
 
 
 def main() -> int:
