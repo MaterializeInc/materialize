@@ -67,8 +67,7 @@ impl Validator {
     }
 
     fn step(&mut self, s: Step) {
-        // TODO: Figure out how to get the log crate working.
-        eprintln!("step: {:?}", &s);
+        log::debug!("step: {:?}", &s);
         match s.res {
             Res::Write(WriteReq::Single(req), res) => self.step_write_single(s.req_id, req, res),
             Res::Write(WriteReq::Multi(req), res) => self.step_write_multi(s.req_id, req, res),

@@ -41,6 +41,9 @@ pub fn init_logging_default(level: &str) {
         let filter = EnvFilter::try_from_env("MZ_LOG_FILTER")
             .or_else(|_| EnvFilter::try_new(level))
             .unwrap();
-        FmtSubscriber::builder().with_env_filter(filter).init();
+        FmtSubscriber::builder()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .init();
     });
 }

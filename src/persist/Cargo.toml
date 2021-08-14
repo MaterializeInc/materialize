@@ -29,6 +29,7 @@ tokio = { version = "1.9.0", default-features = false, features = ["macros", "sy
 
 [dev-dependencies]
 criterion = "0.3.5"
+ore = { path = "../ore", default-features = false, features = ["test"] }
 rand = { version = "0.8.4", features = [ "small_rng" ] }
 tempfile = "3.2.0"
 serde = { version = "1.0.127", features = ["derive"] }
