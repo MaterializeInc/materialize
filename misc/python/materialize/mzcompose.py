@@ -90,6 +90,9 @@ class LintError:
 
 
 def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
+    if "services" not in composition:
+        return
+
     for (name, service) in composition["services"].items():
         if service.get("mzbuild") == "materialized":
             lint_materialized_service(path, name, service, errors)
@@ -192,7 +195,10 @@ class Composition:
             raise errors.UnknownComposition
 
         with open(self.path) as f:
-            compose = yaml.safe_load(f)
+            compose = yaml.safe_load(f) or {}
+
+        if "services" not in compose:
+            compose["services"] = {}
 
         # Stash away sub workflows so that we can load them with the correct environment variables
         self.yaml_workflows = compose.pop("mzworkflows", {})
@@ -208,6 +214,9 @@ class Composition:
             for name, fn in getmembers(module, isfunction):
                 if name.startswith("workflow_"):
                     self.python_funcs[name] = fn
+
+            for python_service in getattr(module, "services", []):
+                compose["services"][python_service.name] = python_service.config
 
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
@@ -348,7 +357,7 @@ class Composition:
 
         path = repo.compositions[name]
         with open(path) as f:
-            composition = yaml.safe_load(f)
+            composition = yaml.safe_load(f) or {}
 
         errs: List[LintError] = []
         lint_composition(path, composition, errs)
@@ -566,6 +575,29 @@ class Workflow:
         self, args: List[str], capture: bool = False
     ) -> subprocess.CompletedProcess:
         return self.composition.run(args, self.env, capture=capture)
+
+
+class PythonService:
+    """
+    A PythonService is a service that has been specified in the 'services' variable of mzworkflows.py
+    """
+
+    def __init__(self, name: str, config: Dict) -> None:
+        self.name = name
+        self.config = config
+
+
+class Mz(PythonService):
+    def __init__(self) -> None:
+        super().__init__(
+            name="materialized",
+            config={
+                "mzbuild": "materialized",
+                "command": "--data-directory=/share/mzdata --experimental --disable-telemetry",
+                "ports": [6875],
+                "environment": ["MZ_DEV=1"],
+            },
+        )
 
 
 class PythonWorkflow(Workflow):
