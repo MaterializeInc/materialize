@@ -2144,6 +2144,7 @@ dependencies = [
  "pgrepr",
  "pgtest",
  "pgwire",
+ "pid-file",
  "postgres",
  "postgres-openssl",
  "postgres-protocol",
@@ -2814,6 +2815,16 @@ checksum = "a68318426de33640f02be62b4ae8eb1261be2efbc337b60c54d845bf4484e0d9"
 dependencies = [
  "siphasher",
  "uncased",
+]
+
+[[package]]
+name = "pid-file"
+version = "0.0.0"
+dependencies = [
+ "cc",
+ "libc",
+ "ore",
+ "tempfile",
 ]
 
 [[package]]

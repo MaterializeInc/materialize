@@ -27,6 +27,7 @@ members = [
     "src/ore",
     "src/peeker",
     "src/persist",
+    "src/pid-file",
     "src/pgrepr",
     "src/pgtest",
     "src/pgwire",

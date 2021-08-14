@@ -164,6 +164,35 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_pid_file() -> Result<(), Box<dyn Error>> {
+    let data_dir = tempfile::tempdir()?;
+    let config = util::Config::default().data_directory(data_dir.path());
+
+    // While `server1` is running, it should not be possible to start another
+    // server against the same data directory.
+    let server1 = util::start_server(config.clone())?;
+    match util::start_server(config.clone()) {
+        Ok(_) => panic!("unexpected success"),
+        Err(e) => {
+            if !e.to_string().contains("process already running") {
+                return Err(e);
+            }
+        }
+    }
+
+    // But it should be possible to start a server against a *different*
+    // data directory.
+    let _server2 = util::start_server(util::Config::default())?;
+
+    // Stopping `server1` should allow starting another server against the
+    // `server1`'s old data directory.
+    drop(server1);
+    util::start_server(config)?;
+
+    Ok(())
+}
+
+#[test]
 fn test_safe_mode() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(util::Config::default().safe_mode())?;
     let mut client = server.connect(postgres::NoTls)?;
