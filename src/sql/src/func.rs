@@ -1664,7 +1664,19 @@ lazy_static! {
 
             // Aggregates.
             "array_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("array_agg")), 4053;
+                params!(NonVecAny) => Operation::unary(|ecx, e| {
+                    if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
+                        unsupported!("array_agg on char");
+                    };
+                    // ArrayAgg excepts all inputs to be arrays, so wrap all input datums into
+                    // arrays.
+                    let e_arr = HirScalarExpr::CallVariadic{
+                        func: VariadicFunc::ArrayCreate{elem_type: ecx.scalar_type(&e)},
+                        exprs: vec![e],
+                    };
+                    Ok((e_arr, AggregateFunc::ArrayConcat))
+                }), 2335;
+                params!(ArrayAny) => Operation::unary(|_ecx, _e| unsupported!("array_agg on arrays")), 4053;
             },
             "bool_and" => Aggregate {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_and")), 2517;

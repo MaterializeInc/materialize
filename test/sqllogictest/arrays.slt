@@ -170,6 +170,83 @@ SELECT unnest::text FROM unnest(NULL::int[])
 query error Cannot call function unnest\(unknown\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT * FROM unnest(NULL)
 
+# array_agg
+
+query T
+SELECT array_agg(a) FROM (SELECT 1 AS a WHERE false)
+----
+NULL
+
+query T
+SELECT array_agg(1)
+----
+{1}
+
+query T
+select array_agg(unnest) FROM (SELECT NULL) x JOIN LATERAL unnest(ARRAY[1,2,NULL]) ON true;
+----
+{NULL,1,2}
+
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3), (NULL), (NULL)
+
+query T
+SELECT array_agg(a) FROM (select a from t1 where a IS NOT NULL)
+----
+{1,2,3}
+
+query T
+SELECT array_agg(a) FROM (select a from t1 where a IS NULL)
+----
+{NULL,NULL}
+
+query T
+SELECT array_agg(a) FROM t1
+----
+{NULL,NULL,1,2,3}
+
+query T
+SELECT array_agg(a::text) FROM t1
+----
+{NULL,NULL,1,2,3}
+
+query T
+SELECT array_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1
+----
+{1,2,3}
+
+query T
+SELECT array_agg(a) FILTER (WHERE a IS NULL) FROM t1
+----
+{NULL,NULL}
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT array_agg(1, 2)
+
+statement ok
+CREATE TABLE t2 (a int, b date)
+
+statement ok
+INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT array_agg((a, b)) FROM t2
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT array_agg((a, b)), array_agg(a), array_agg(b) FROM t2
+
+query error arrays not yet supported
+SELECT array_agg(ARRAY[1])
+
+query error array_agg on char
+SELECT array_agg('a'::char)
+
+query error array_agg on char
+SELECT array_agg('a'::char(2))
+
 
 # Duplicates of cockroach/array.slt. todo@jldlaughlin: Remove when we support that file.
 # array subscript access
