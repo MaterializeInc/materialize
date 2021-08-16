@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.42"
 futures = "0.3.16"
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
-native-tls = "0.2.7"
+native-tls = "0.2.8"
 openssl = { version = "0.10.35", features = ["vendored"] }
 reqwest = { version = "0.11.4", features = ["blocking", "json", "native-tls-vendored"] }
 serde = { version = "1.0.127", features = ["derive"] }
