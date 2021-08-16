@@ -12,6 +12,11 @@
 //! This transform does not move the predicates, which remain in force
 //! in their current location, but it is able to simplify expressions
 //! as it moves from inputs toward the query root.
+//!
+//! Importantly, the simplifications must all be robust to the possibility
+//! that the filter might move elsewhere. In particular, we should perform
+//! no simplifications that could result in errors that could not otherwise
+//! occur (e.g. by optimizing the `cond` of an `If` expression).
 
 use std::collections::HashMap;
 
@@ -47,6 +52,7 @@ impl PredicateKnowledge {
         expr: &mut MirRelationExpr,
         let_knowledge: &mut HashMap<expr::Id, Vec<MirScalarExpr>>,
     ) -> Result<Vec<MirScalarExpr>, crate::TransformError> {
+        let self_type = expr.typ();
         let mut predicates = match expr {
             MirRelationExpr::ArrangeBy { input, .. } => {
                 PredicateKnowledge::action(input, let_knowledge)?
@@ -69,9 +75,54 @@ impl PredicateKnowledge {
                         .collect()
                 })
             }
-            MirRelationExpr::Constant { rows: _, typ: _ } => {
-                // TODO(frank): sort out what things we could do here that we can't do in literal hoisting.
-                Vec::new()
+            MirRelationExpr::Constant { rows, typ } => {
+                // Each column could 1. be equal to a literal, 2. known to be non-null.
+                // They could be many other things too, but these are the ones we can handle.
+                if let Ok([(row, _cnt), rows @ ..]) = rows.as_deref_mut() {
+                    // An option for each column that contains a common value.
+                    let mut literal = row.iter().map(|x| Some(x)).collect::<Vec<_>>();
+                    // True for each column that is never `Datum::Null`.
+                    let mut non_null = literal
+                        .iter()
+                        .map(|x| x != &Some(Datum::Null))
+                        .collect::<Vec<_>>();
+                    for (row, _cnt) in rows.iter() {
+                        for (index, datum) in row.iter().enumerate() {
+                            if literal[index] != Some(datum) {
+                                literal[index] = None;
+                            }
+                            if datum == Datum::Null {
+                                non_null[index] = false;
+                            }
+                        }
+                    }
+                    // Load up a return predicate list with everything we have learned.
+                    let mut predicates = Vec::new();
+                    for column in 0..literal.len() {
+                        if let Some(datum) = literal[column] {
+                            predicates.push(MirScalarExpr::Column(column).call_binary(
+                                MirScalarExpr::literal(
+                                    Ok(datum),
+                                    typ.column_types[column].scalar_type.clone(),
+                                ),
+                                expr::BinaryFunc::Eq,
+                            ));
+                        }
+                        if non_null[column] {
+                            predicates.push(
+                                MirScalarExpr::column(column)
+                                    .call_unary(UnaryFunc::IsNull)
+                                    .call_unary(UnaryFunc::Not),
+                            );
+                        }
+                    }
+                    predicates
+                } else {
+                    // Everything is true about an empty collection, but let's have other rules
+                    // optimize them away.
+
+                    Vec::new()
+                }
             }
             MirRelationExpr::Let { id, value, body } => {
                 // This deals with shadowed let bindings, but perhaps we should just complain instead?
@@ -128,6 +179,7 @@ impl PredicateKnowledge {
                 for scalar in scalars.iter_mut() {
                     optimize(scalar, &input.typ(), &input_knowledge[..])?;
                 }
+                // TODO: present literal columns (and non-null?) as predicates.
                 input_knowledge
             }
             MirRelationExpr::FlatMap {
@@ -192,17 +244,81 @@ impl PredicateKnowledge {
                 aggregates,
                 ..
             } => {
+                let input_type = input.typ();
                 let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
                 for key in group_key.iter_mut() {
-                    optimize(key, &input.typ(), &input_knowledge[..])?;
+                    optimize(key, &input_type, &input_knowledge[..])?;
                 }
-                for aggregate in aggregates {
-                    optimize(&mut aggregate.expr, &input.typ(), &input_knowledge[..])?;
+                for aggregate in aggregates.iter_mut() {
+                    optimize(&mut aggregate.expr, &input_type, &input_knowledge[..])?;
                 }
+
+                // List of predicates we will return.
+                let mut predicates = Vec::new();
+
+                // Predicates that depend only on group keys should remain true of those columns.
+                // 0. Form a map from key expressions to the columns they will become.
+                let mut key_exprs = HashMap::new();
+                for (index, expr) in group_key.iter().enumerate() {
+                    key_exprs.insert(expr.clone(), MirScalarExpr::Column(index));
+                }
+                // 1. Visit each predicate, and collect those that reach no `ScalarExpr::Column` when substituting per `key_exprs`.
+                //    They will be preserved and presented as output.
+                for mut predicate in input_knowledge.iter().cloned() {
+                    if substitute(&mut predicate, &key_exprs) {
+                        predicates.push(predicate);
+                    }
+                }
+
                 // TODO: Predicates about columns that are certain aggregates can be preserved.
                 // For example, if a column Not(IsNull) or (= 7) then Min/Max of that column
                 // will have the same property.
-                Vec::new()
+                for (index, aggregate) in aggregates.iter_mut().enumerate() {
+                    let column = group_key.len() + index;
+                    if let Some(Ok(literal)) = aggregate.as_literal() {
+                        predicates.push(MirScalarExpr::Column(column).call_binary(
+                            MirScalarExpr::literal(
+                                Ok(literal),
+                                self_type.column_types[column].scalar_type.clone(),
+                            ),
+                            expr::BinaryFunc::Eq,
+                        ));
+                        if literal != Datum::Null {
+                            predicates.push(
+                                MirScalarExpr::column(column)
+                                    .call_unary(UnaryFunc::IsNull)
+                                    .call_unary(UnaryFunc::Not),
+                            );
+                        }
+                    } else {
+                        // Aggregates that are non-literals may still be non-null.
+                        if let expr::AggregateFunc::Count = aggregate.func {
+                            // Replace counts of nonnull, nondistinct expressions with `true`.
+                            if let MirScalarExpr::Column(c) = aggregate.expr {
+                                if !input_type.column_types[c].nullable && !aggregate.distinct {
+                                    aggregate.expr =
+                                        MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
+                                }
+                            }
+                            predicates.push(
+                                MirScalarExpr::column(column)
+                                    .call_unary(UnaryFunc::IsNull)
+                                    .call_unary(UnaryFunc::Not),
+                            );
+                        } else {
+                            // TODO: Something more sophisticated using `input_knowledge` too.
+                            if !self_type.column_types[column].nullable {
+                                predicates.push(
+                                    MirScalarExpr::column(column)
+                                        .call_unary(UnaryFunc::IsNull)
+                                        .call_unary(UnaryFunc::Not),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                predicates
             }
             MirRelationExpr::TopK { input, .. } => {
                 PredicateKnowledge::action(input, let_knowledge)?
@@ -280,6 +396,9 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
             (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => x.cmp(y),
             (MirScalarExpr::Column(_), _) => Ordering::Less,
             (_, MirScalarExpr::Column(_)) => Ordering::Greater,
+            // This last class could be problematic if a complex expression sorts lower than
+            // expressions it contains (e.g. in x + y = x, if x + y comes before x then x would
+            // repeatedly be replaced by x + y).
             _ => x.cmp(y),
         });
         class.dedup();
@@ -384,4 +503,28 @@ pub fn optimize(
     });
 
     Ok(())
+}
+
+/// Attempts to perform substitutions via `map` and returns `false` if an unreplaced column reference is reached.
+fn substitute(expression: &mut MirScalarExpr, map: &HashMap<MirScalarExpr, MirScalarExpr>) -> bool {
+    if let Some(expr) = map.get(expression) {
+        *expression = expr.clone();
+        true
+    } else {
+        match expression {
+            MirScalarExpr::Column(_) => false,
+            MirScalarExpr::Literal(_, _) => true,
+            MirScalarExpr::CallNullary(_) => true,
+            MirScalarExpr::CallUnary { expr, .. } => substitute(expr, map),
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                substitute(expr1, map) && substitute(expr2, map)
+            }
+            MirScalarExpr::CallVariadic { exprs, .. } => {
+                exprs.iter_mut().all(|expr| substitute(expr, map))
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                substitute(cond, map) && substitute(then, map) && substitute(els, map)
+            }
+        }
+    }
 }

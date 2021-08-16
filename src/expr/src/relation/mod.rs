@@ -1600,31 +1600,77 @@ impl AggregateExpr {
 
     /// Returns whether the expression has a constant result.
     pub fn is_constant(&self) -> bool {
-        match self.func {
-            AggregateFunc::MaxInt16
-            | AggregateFunc::MaxInt32
-            | AggregateFunc::MaxInt64
-            | AggregateFunc::MaxFloat32
-            | AggregateFunc::MaxFloat64
-            | AggregateFunc::MaxBool
-            | AggregateFunc::MaxString
-            | AggregateFunc::MaxDate
-            | AggregateFunc::MaxTimestamp
-            | AggregateFunc::MaxTimestampTz
-            | AggregateFunc::MinInt16
-            | AggregateFunc::MinInt32
-            | AggregateFunc::MinInt64
-            | AggregateFunc::MinFloat32
-            | AggregateFunc::MinFloat64
-            | AggregateFunc::MinBool
-            | AggregateFunc::MinString
-            | AggregateFunc::MinDate
-            | AggregateFunc::MinTimestamp
-            | AggregateFunc::MinTimestampTz
-            | AggregateFunc::Any
-            | AggregateFunc::All => self.expr.is_literal(),
-            AggregateFunc::Count => self.expr.is_literal_null(),
-            _ => self.expr.is_literal_err(),
+        self.as_literal().is_some()
+    }
+
+    /// A literal, if we are certain the aggregate evaluates to one.
+    ///
+    /// All aggregates require their expression to be a literal
+    pub fn as_literal(&self) -> Option<Result<Datum, &EvalError>> {
+        if let Some(literal) = self.expr.as_literal() {
+            match literal {
+                Err(err) => Some(Err(err)),
+                Ok(literal) => {
+                    match self.func {
+                        // These aggregates always return an input datum.
+                        AggregateFunc::MaxInt16
+                        | AggregateFunc::MaxInt32
+                        | AggregateFunc::MaxInt64
+                        | AggregateFunc::MaxFloat32
+                        | AggregateFunc::MaxFloat64
+                        | AggregateFunc::MaxBool
+                        | AggregateFunc::MaxString
+                        | AggregateFunc::MaxDate
+                        | AggregateFunc::MaxTimestamp
+                        | AggregateFunc::MaxTimestampTz
+                        | AggregateFunc::MinInt16
+                        | AggregateFunc::MinInt32
+                        | AggregateFunc::MinInt64
+                        | AggregateFunc::MinFloat32
+                        | AggregateFunc::MinFloat64
+                        | AggregateFunc::MinBool
+                        | AggregateFunc::MinString
+                        | AggregateFunc::MinDate
+                        | AggregateFunc::MinTimestamp
+                        | AggregateFunc::MinTimestampTz => Some(Ok(literal)),
+                        // Any maps non-Booleans to `Datum::False`.
+                        AggregateFunc::Any => match literal {
+                            Datum::True | Datum::Null => Some(Ok(literal)),
+                            _ => Some(Ok(Datum::False)),
+                        },
+                        // All maps non-Booleans to `Datum::True`.
+                        AggregateFunc::All => match literal {
+                            Datum::False | Datum::Null => Some(Ok(literal)),
+                            _ => Some(Ok(Datum::True)),
+                        },
+                        // These aggregates map all nulls to null.
+                        // They also map all zeros to zero, but not there yet.
+                        AggregateFunc::SumInt16
+                        | AggregateFunc::SumInt32
+                        | AggregateFunc::SumInt64
+                        | AggregateFunc::SumFloat32
+                        | AggregateFunc::SumFloat64
+                        | AggregateFunc::SumNumeric => {
+                            match literal {
+                                Datum::Null => Some(Ok(Datum::Null)),
+                                // We could match appropriate zeros here, to produce zero.
+                                _ => None,
+                            }
+                        }
+                        // Count maps all nulls to zero, and nothing else to a literal.
+                        AggregateFunc::Count => {
+                            if literal == Datum::Null {
+                                Some(Ok(Datum::Int64(0)))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+            }
+        } else {
+            None
         }
     }
 }

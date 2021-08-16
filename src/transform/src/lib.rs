@@ -38,7 +38,7 @@ pub mod inline_let;
 pub mod join_implementation;
 pub mod map_lifting;
 pub mod nonnull_requirements;
-pub mod nonnullable;
+// pub mod nonnullable;
 pub mod predicate_propagation;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
@@ -250,7 +250,7 @@ impl Optimizer {
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(crate::predicate_pushdown::PredicatePushdown),
                     // Lifts the information `!isnull(col)`
-                    Box::new(crate::nonnullable::NonNullable),
+                    // Box::new(crate::nonnullable::NonNullable),
                     // Lifts the information `col = literal`
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
@@ -310,6 +310,7 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation),
+                    Box::new(crate::predicate_propagation::PredicateKnowledge),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand),
