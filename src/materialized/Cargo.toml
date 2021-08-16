@@ -59,7 +59,7 @@ num_cpus = "1.0.0"
 openssl = { version = "0.10.35", features = ["vendored"] }
 openssl-sys = { version = "0.9.65", features = ["vendored"] }
 ore = { path = "../ore" }
-os_info = "3.0.6"
+os_info = "3.0.7"
 pid-file = { path = "../pid-file" }
 pgwire = { path = "../pgwire" }
 prof = { path = "../prof" }
