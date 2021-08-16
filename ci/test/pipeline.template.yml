@@ -20,7 +20,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build
     inputs:
       - "*"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: builder
 
