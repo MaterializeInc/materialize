@@ -1,7 +1,7 @@
 ---
 title: "Node.js and Materialize"
 description: "Use Node.js to connect, insert, manage, query and stream from Materialize."
-weight: 10
+weight: 20
 menu:
   main:
     parent: guides

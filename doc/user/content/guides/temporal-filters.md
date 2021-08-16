@@ -1,7 +1,7 @@
 ---
 title: "Temporal Filters"
 description: "Perform time-windowed computation over temporal data."
-weight: 10
+weight: 30
 menu:
   main:
     parent: guides
