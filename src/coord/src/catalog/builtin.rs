@@ -716,7 +716,8 @@ lazy_static! {
             .with_named_column("id", ScalarType::String.nullable(false))
             .with_named_column("oid", ScalarType::Oid.nullable(false))
             .with_named_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_named_column("name", ScalarType::String.nullable(false)),
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("persisted_name", ScalarType::String.nullable(true)),
         id: GlobalId::System(4019),
         index_id: GlobalId::System(4020),
         persistent: false,
