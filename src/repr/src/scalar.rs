@@ -994,11 +994,16 @@ lazy_static! {
             22, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ])
     };
+    static ref EMPTY_LIST_ROW: Row =
+        unsafe { Row::from_bytes_unchecked(vec![23, 0, 0, 0, 0, 0, 0, 0, 0]) };
 }
 
 impl Datum<'static> {
     pub fn empty_array() -> Datum<'static> {
         EMPTY_ARRAY_ROW.unpack_first()
+    }
+    pub fn empty_list() -> Datum<'static> {
+        EMPTY_LIST_ROW.unpack_first()
     }
 }
 
@@ -1006,22 +1011,35 @@ impl Datum<'static> {
 #[test]
 fn verify_static_datum_bytes<'a>() {
     let arena = crate::RowArena::new();
+    {
+        let empty_array_datum: Datum = arena.make_datum(|packer| {
+            packer
+                .push_array::<_, Datum<'a>>(
+                    &[crate::adt::array::ArrayDimension {
+                        lower_bound: 1,
+                        length: 0,
+                    }],
+                    std::iter::empty(),
+                )
+                .unwrap();
+        });
+        if EMPTY_ARRAY_ROW.iter().next().is_none() || Datum::empty_array() != empty_array_datum {
+            panic!(
+                "expected EMPTY_ARRAY bytes: {:?}",
+                Row::pack_slice(&[empty_array_datum]).data()
+            );
+        }
+    }
 
-    let empty_array_datum: Datum = arena.make_datum(|packer| {
-        packer
-            .push_array::<_, Datum<'a>>(
-                &[crate::adt::array::ArrayDimension {
-                    lower_bound: 1,
-                    length: 0,
-                }],
-                std::iter::empty(),
-            )
-            .unwrap();
-    });
-    if EMPTY_ARRAY_ROW.iter().next().is_none() || Datum::empty_array() != empty_array_datum {
-        panic!(
-            "expected EMPTY_ARRAY bytes: {:?}",
-            Row::pack_slice(&[empty_array_datum]).data()
-        );
+    {
+        let empty_list_datum: Datum = arena.make_datum(|packer| {
+            packer.push_list::<_, Datum<'a>>(std::iter::empty());
+        });
+        if EMPTY_LIST_ROW.iter().next().is_none() || Datum::empty_list() != empty_list_datum {
+            panic!(
+                "expected EMPTY_LIST bytes: {:?}",
+                Row::pack_slice(&[empty_list_datum]).data()
+            );
+        }
     }
 }

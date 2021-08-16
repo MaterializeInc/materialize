@@ -68,4 +68,5 @@ pub const FUNC_MZ_ROW_SIZE: u32 = 16_440;
 pub const FUNC_MAX_NUMERIC_OID: u32 = 16_441;
 pub const FUNC_MIN_NUMERIC_OID: u32 = 16_442;
 pub const FUNC_MZ_AVG_PROMOTION_I16_OID: u32 = 16_443;
-// next ID: 16_444
+pub const FUNC_LIST_AGG_OID: u32 = 16_444;
+// next ID: 16_445

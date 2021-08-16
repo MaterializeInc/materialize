@@ -54,6 +54,8 @@ Wrap your release notes at the 80 character mark.
 
 - Add the `array_agg` function.
 
+- Add the `list_agg` function.
+
 {{% version-header v0.9.0 %}}
 
 - **Breaking change.** Reject [Protobuf sources] whose schemas contain
