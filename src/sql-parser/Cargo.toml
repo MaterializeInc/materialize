@@ -23,7 +23,7 @@ matches = "0.1.0"
 unicode-width = "0.1.8"
 
 [build-dependencies]
-anyhow = "1.0.42"
+anyhow = "1.0.43"
 ore = { path = "../ore" }
 phf = { version = "0.9.1", features = ["uncased"] }
 phf_codegen = { version = "0.9.1" }
