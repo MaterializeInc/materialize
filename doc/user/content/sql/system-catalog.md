@@ -600,12 +600,13 @@ Field            | Type       | Meaning
 
 The `mz_tables` table contains a row for each table in the system.
 
-Field          | Type       | Meaning
----------------|------------|----------
-`id`           | [`text`]   | Materialize's unique ID for the table.
-`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
-`schema_id`    | [`bigint`] | The ID of the schema to which the table belongs.
-`name`         | [`text`]   | The name of the table.
+Field            | Type       | Meaning
+-----------------|------------|----------
+`id`             | [`text`]   | Materialize's unique ID for the table.
+`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
+`schema_id`      | [`bigint`] | The ID of the schema to which the table belongs.
+`name`           | [`text`]   | The name of the table.
+`persisted_name` | [`text`]   | The name of the table's persisted materialization, or `NULL` if the table is not being persisted.
 
 ### `mz_types`
 
