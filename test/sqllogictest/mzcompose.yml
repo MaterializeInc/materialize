@@ -9,27 +9,6 @@
 
 version: '3.7'
 
-mzworkflows:
-  sqllogictest-fast:
-    steps:
-      - step: start-services
-        services: [postgres]
-      - step: wait-for-postgres
-        dbname: postgres
-      - step: run
-        service: sqllogictest-svc
-        entrypoint: ci/test/slt-fast.sh
-
-  sqllogictest:
-    steps:
-      - step: start-services
-        services: [postgres]
-      - step: wait-for-postgres
-        dbname: postgres
-      - step: run
-        service: sqllogictest-svc
-        entrypoint: ci/slt/slt.sh
-
 services:
   sqllogictest-svc:
     mzbuild: sqllogictest
