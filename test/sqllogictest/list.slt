@@ -2311,3 +2311,96 @@ query T
 SELECT ('{{1}}'::int4_list list || '{2}'::int4 list)::text
 ----
 {{1},{2}}
+
+# list_agg
+
+query T
+SELECT list_agg(a)::text FROM (SELECT 1 AS a WHERE false)
+----
+NULL
+
+query T
+SELECT list_agg(1)::text
+----
+{1}
+
+query T
+select list_agg(unnest)::text FROM (SELECT NULL) x JOIN LATERAL unnest(ARRAY[1,2,NULL]) ON true;
+----
+{NULL,1,2}
+
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3), (NULL), (NULL)
+
+query T
+SELECT list_agg(a)::text FROM (select a from t1 where a IS NOT NULL)
+----
+{1,2,3}
+
+query T
+SELECT list_agg(a)::text FROM (select a from t1 where a IS NULL)
+----
+{NULL,NULL}
+
+query T
+SELECT list_agg(a)::text FROM t1
+----
+{NULL,NULL,1,2,3}
+
+query T
+SELECT list_agg(a::text)::text FROM t1
+----
+{NULL,NULL,1,2,3}
+
+query T
+SELECT (list_agg(a) FILTER (WHERE a IS NOT NULL))::text FROM t1
+----
+{1,2,3}
+
+query T
+SELECT (list_agg(a) FILTER (WHERE a IS NULL))::text FROM t1
+----
+{NULL,NULL}
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT list_agg(1, 2)
+
+statement ok
+CREATE TABLE t2 (a int, b date)
+
+statement ok
+INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
+
+query T
+SELECT list_agg((a, b))::text FROM t2
+----
+{"(,2020-01-02)","(1,2020-01-01)"}
+
+query TTT
+SELECT list_agg((a, b))::text, list_agg(a)::text, list_agg(b)::text FROM t2
+----
+{"(,2020-01-02)","(1,2020-01-01)"}  {NULL,1}  {2020-01-01,2020-01-02}
+
+query T
+SELECT list_agg(ARRAY[1])::text
+----
+{{1}}
+
+query error list_agg on char
+SELECT list_agg('a'::char)::text
+
+query error list_agg on char
+SELECT list_agg('a'::char(2))::text
+
+query T
+SELECT list_agg(a)::text FROM (VALUES ('{1,2}'::int list), ('{3}'), (NULL)) v(a);
+----
+{NULL,{3},{1,2}}
+
+query T
+SELECT list_agg(a)::text FROM (VALUES (array[1,2]), (array[3]), (NULL)) v(a);
+----
+{NULL,{3},{1,2}}

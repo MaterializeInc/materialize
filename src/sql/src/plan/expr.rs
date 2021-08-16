@@ -400,6 +400,8 @@ pub enum AggregateFunc {
     JsonbObjectAgg,
     /// Accumulates `Datum::Array`s into a single `Datum::Array`.
     ArrayConcat,
+    /// Accumulates `Datum::List`s into a single `Datum::List`.
+    ListConcat,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -445,6 +447,7 @@ impl AggregateFunc {
             AggregateFunc::JsonbAgg => expr::AggregateFunc::JsonbAgg,
             AggregateFunc::JsonbObjectAgg => expr::AggregateFunc::JsonbObjectAgg,
             AggregateFunc::ArrayConcat => expr::AggregateFunc::ArrayConcat,
+            AggregateFunc::ListConcat => expr::AggregateFunc::ListConcat,
             AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
         }
     }
@@ -457,6 +460,7 @@ impl AggregateFunc {
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat => Datum::empty_array(),
+            AggregateFunc::ListConcat => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -475,9 +479,9 @@ impl AggregateFunc {
             AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
-            // Since we coerce all input args to array_agg to be an array, the input_type
-            // is already correct.
-            AggregateFunc::ArrayConcat => input_type.scalar_type,
+            // Inputs are coerced to the correct container type, so the input_type is
+            // already correct.
+            AggregateFunc::ArrayConcat | AggregateFunc::ListConcat => input_type.scalar_type,
             _ => input_type.scalar_type,
         };
         // max/min/sum return null on empty sets

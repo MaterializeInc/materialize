@@ -454,7 +454,7 @@ where
     })
 }
 
-fn array_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+fn array_concat<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -469,6 +469,15 @@ where
     };
     temp_storage.make_datum(|packer| {
         packer.push_array(&[dims], datums).unwrap();
+    })
+}
+
+fn list_concat<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    temp_storage.make_datum(|packer| {
+        packer.push_list(datums.into_iter().map(|d| d.unwrap_list().iter()).flatten());
     })
 }
 
@@ -519,6 +528,8 @@ pub enum AggregateFunc {
     JsonbObjectAgg,
     /// Accumulates `Datum::Array`s into a single `Datum::Array`.
     ArrayConcat,
+    /// Accumulates `Datum::List`s into a single `Datum::List`.
+    ListConcat,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -565,7 +576,8 @@ impl AggregateFunc {
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
             AggregateFunc::JsonbObjectAgg => jsonb_object_agg(datums, temp_storage),
-            AggregateFunc::ArrayConcat => array_agg(datums, temp_storage),
+            AggregateFunc::ArrayConcat => array_concat(datums, temp_storage),
+            AggregateFunc::ListConcat => list_concat(datums, temp_storage),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -590,6 +602,7 @@ impl AggregateFunc {
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat => Datum::empty_array(),
+            AggregateFunc::ListConcat => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -609,9 +622,9 @@ impl AggregateFunc {
             AggregateFunc::SumInt16 => ScalarType::Int64,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
-            // Since we coerce all input args to array_agg to be an array, the input_type
-            // is already correct.
-            AggregateFunc::ArrayConcat => input_type.scalar_type,
+            // Inputs are coerced to the correct container type, so the input_type is
+            // already correct.
+            AggregateFunc::ArrayConcat | AggregateFunc::ListConcat => input_type.scalar_type,
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -786,6 +799,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
             AggregateFunc::JsonbObjectAgg => f.write_str("jsonb_object_agg"),
             AggregateFunc::ArrayConcat => f.write_str("array_agg"),
+            AggregateFunc::ListConcat => f.write_str("list_agg"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
