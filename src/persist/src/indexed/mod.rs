@@ -14,6 +14,7 @@
 pub mod cache;
 pub mod encoding;
 pub mod future;
+pub mod metrics;
 pub mod runtime;
 pub mod trace;
 
@@ -21,6 +22,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use differential_dataflow::trace::Description;
+use ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
@@ -31,6 +33,7 @@ use crate::indexed::encoding::{
     StreamRegistration,
 };
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
+use crate::indexed::metrics::Metrics;
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::storage::{Blob, Buffer, SeqNo};
 
@@ -69,13 +72,14 @@ pub struct Indexed<U: Buffer, L: Blob> {
     futures: HashMap<Id, BlobFuture>,
     traces: HashMap<Id, BlobTrace>,
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
+    metrics: Metrics,
 }
 
 impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// Returns a new Indexed, initializing each Future and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(mut buf: U, blob: L) -> Result<Self, Error> {
-        let mut blob = BlobCache::new(blob);
+    pub fn new(mut buf: U, blob: L, metrics: Metrics) -> Result<Self, Error> {
+        let mut blob = BlobCache::new(metrics.clone(), blob);
         let meta = blob
             .get_meta()
             .map_err(|err| {
@@ -114,6 +118,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             futures,
             traces,
             listeners: HashMap::new(),
+            metrics,
         };
         Ok(indexed)
     }
@@ -171,14 +176,40 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// Attempt to commit the current in-memory metadata state to durable storage,
     /// and if not, revert back to a previous version.
     fn try_set_meta(&mut self, prev: BlobMeta) -> Result<(), Error> {
+        let meta = self.serialize_meta();
+
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
-        if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
+        if let Err(e) = self.blob.set_meta(&meta) {
             // We were unable to durably commit the in-memory state. Revert back to the
             // previous version of meta.
             self.restore(prev);
             return Err(e);
         }
+
+        self.metrics
+            .stream_count
+            .set(u64::cast_from(meta.id_mapping.len()));
+        let future_blob_count: usize = meta.futures.iter().map(|x| x.batches.len()).sum();
+        self.metrics
+            .future_blob_count
+            .set(u64::cast_from(future_blob_count));
+        let future_blob_bytes: u64 = meta
+            .futures
+            .iter()
+            .flat_map(|x| x.batches.iter().map(|x| x.size_bytes))
+            .sum();
+        self.metrics.future_blob_bytes.set(future_blob_bytes);
+        let trace_blob_count: usize = meta.traces.iter().map(|x| x.batches.len()).sum();
+        self.metrics
+            .trace_blob_count
+            .set(u64::cast_from(trace_blob_count));
+        let trace_blob_bytes: u64 = meta
+            .traces
+            .iter()
+            .flat_map(|x| x.batches.iter().map(|x| x.size_bytes))
+            .sum();
+        self.metrics.trace_blob_bytes.set(trace_blob_bytes);
 
         Ok(())
     }
@@ -331,6 +362,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         for (id, updates) in updates.into_iter() {
             updates_by_id.entry(id).or_default().extend(updates);
         }
+        let update_count: usize = updates_by_id.values().map(|x| x.len()).sum();
 
         // Give each write a unique, incrementing sequence number, and use
         // futures_seqno_upper to track the sequence number of the next write.
@@ -374,6 +406,10 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         self.futures_seqno_upper = desc.end;
         self.try_set_meta(prev)
             .map_err(|e| format!("failed to commit metadata after appending to future: {}", e))?;
+
+        self.metrics
+            .cmd_write_record_count
+            .inc_by(u64::cast_from(update_count));
 
         for (id, updates) in updates_for_listeners.iter() {
             if let Some(listen_fns) = self.listeners.get(&id) {
@@ -557,7 +593,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
-        if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
+        if let Err(e) = self.blob.set_meta(&self.serialize_meta()) {
             // Revert in-memory state back to its previous version so that
             // things are consistent between the durably persisted version
             // and the in-memory version.
@@ -603,7 +639,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         //
         // TODO: Instead of fully overwriting META each time, this should be
         // more like a compactable log.
-        if let Err(e) = self.blob.set_meta(self.serialize_meta()) {
+        if let Err(e) = self.blob.set_meta(&self.serialize_meta()) {
             let trace = self
                 .traces
                 .get_mut(&id)
@@ -771,6 +807,7 @@ mod tests {
         let mut i = Indexed::new(
             MemBuffer::new_no_reentrance("single_stream"),
             MemBlob::new_no_reentrance("single_stream"),
+            Metrics::default(),
         )?;
         let id = i.register("0", "()", "()")?;
 
@@ -857,6 +894,7 @@ mod tests {
         let mut i = Indexed::new(
             MemBuffer::new_no_reentrance("batch_sorting"),
             MemBlob::new_no_reentrance("batch_sorting"),
+            Metrics::default(),
         )?;
         let id = i.register("0", "", "")?;
 
@@ -885,6 +923,7 @@ mod tests {
         let mut i = Indexed::new(
             MemBuffer::new_no_reentrance("batch_consolidation"),
             MemBlob::new_no_reentrance("batch_consolidation"),
+            Metrics::default(),
         )?;
         let id = i.register("0", "", "")?;
 
@@ -915,6 +954,7 @@ mod tests {
         let mut i = Indexed::new(
             MemBuffer::new_no_reentrance("batch_future_empty"),
             MemBlob::new_no_reentrance("batch_future_empty"),
+            Metrics::default(),
         )?;
         let id = i.register("0", "", "")?;
 
@@ -947,6 +987,7 @@ mod tests {
         let mut i = Indexed::new(
             MemBuffer::new_no_reentrance("lock"),
             MemBlob::new_no_reentrance("lock"),
+            Metrics::default(),
         )?;
 
         // First is some stream is registered, written to, and step'd, moving
@@ -979,6 +1020,7 @@ mod tests {
         let mut i = Indexed::new(
             MemBuffer::new_no_reentrance("destroy"),
             MemBlob::new_no_reentrance("destroy"),
+            Metrics::default(),
         )?;
 
         let _ = i.register("stream", "", "")?;
@@ -1013,6 +1055,7 @@ mod tests {
         let mut i = Indexed::new(
             MemBuffer::new_no_reentrance("codec_mismatch"),
             MemBlob::new_no_reentrance("codec_mismatch"),
+            Metrics::default(),
         )?;
 
         let _ = i.register("stream", "key", "val")?;

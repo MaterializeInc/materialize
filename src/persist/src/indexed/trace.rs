@@ -169,13 +169,14 @@ impl BlobTrace {
         }
         let desc = batch.desc.clone();
         let key = self.new_blob_key();
-        blob.set_trace_batch(key.clone(), batch)?;
+        let size_bytes = blob.set_trace_batch(key.clone(), batch)?;
         // As mentioned above, batches are inserted into the trace with compaction
         // level set to 0.
         self.batches.push(BlobTraceBatchMeta {
             key,
             desc,
             level: 0,
+            size_bytes,
         });
         Ok(())
     }
@@ -238,12 +239,13 @@ impl BlobTrace {
 
         let key = self.new_blob_key();
         // TODO: actually clear the unwanted batches from the blob storage
-        blob.set_trace_batch(key.clone(), new_batch)?;
+        let size_bytes = blob.set_trace_batch(key.clone(), new_batch)?;
 
         Ok(BlobTraceBatchMeta {
             key,
             desc,
             level: merged_level,
+            size_bytes,
         })
     }
 
@@ -318,6 +320,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
 #[cfg(test)]
 mod tests {
     use crate::indexed::encoding::Id;
+    use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
     use crate::mem::MemBlob;
 
@@ -335,6 +338,7 @@ mod tests {
                     Antichain::from_elem(5),
                 ),
                 level: 1,
+                size_bytes: 0,
             }],
             since: Antichain::from_elem(5),
             seal: Antichain::from_elem(10),
@@ -365,7 +369,10 @@ mod tests {
 
     #[test]
     fn trace_compact() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("trace_compact"));
+        let mut blob = BlobCache::new(
+            Metrics::default(),
+            MemBlob::new_no_reentrance("trace_compact"),
+        );
         let mut t = BlobTrace::new(BlobTraceMeta::new(Id(0)));
         t.update_seal(10);
 

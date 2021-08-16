@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 
+use ore::metrics::MetricsRegistry;
 use persist::error::Error;
 use persist::indexed::encoding::Id;
 use persist::storage::LockInfo;
@@ -60,13 +61,17 @@ impl PersistConfig {
     /// Initializes the persistence runtime and returns a clone-able handle for
     /// interacting with it. Returns None and does not start the runtime if all
     /// persistence features are disabled.
-    pub fn init(&self, catalog_id: Uuid) -> Result<PersisterWithConfig, Error> {
+    pub fn init(
+        &self,
+        catalog_id: Uuid,
+        reg: &MetricsRegistry,
+    ) -> Result<PersisterWithConfig, Error> {
         let persister = if self.user_table_enabled || self.system_table_enabled {
             let lock_reentrance_id = catalog_id.to_string();
             let lock_info = LockInfo::new(lock_reentrance_id, self.lock_info.clone())?;
             let buffer = FileBuffer::new(&self.buffer_path, lock_info.clone())?;
             let blob = FileBlob::new(&self.blob_path, lock_info)?;
-            let persister = runtime::start(buffer, blob)?;
+            let persister = runtime::start(buffer, blob, reg)?;
             Some(persister)
         } else {
             None

@@ -267,6 +267,8 @@ impl Direct {
 
 #[cfg(test)]
 mod tests {
+    use ore::metrics::MetricsRegistry;
+
     use crate::file::{FileBlob, FileBuffer};
     use crate::mem::MemRegistry;
     use crate::nemesis;
@@ -294,7 +296,7 @@ mod tests {
             let buf = UnreliableBuffer::from_handle(buf, unreliable.clone());
             let blob = FileBlob::new(blob_dir, ("reentrance0", "direct_file").into())?;
             let blob = UnreliableBlob::from_handle(blob, unreliable);
-            runtime::start(buf, blob)
+            runtime::start(buf, blob, &MetricsRegistry::new())
         })
         .expect("initial start failed");
         // TODO: At the moment, running this for 100 steps takes a bit over a

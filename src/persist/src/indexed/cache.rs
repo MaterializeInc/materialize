@@ -11,11 +11,14 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use abomonation::abomonated::Abomonated;
+use ore::cast::CastFrom;
 
 use crate::error::Error;
 use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch};
+use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::storage::Blob;
 
 /// A disk-backed cache for objects in [Blob] storage.
@@ -32,6 +35,7 @@ use crate::storage::Blob;
 /// the soft limit does some alerting and the hard limit starts blocking (or
 /// erroring) until disk space frees up.
 pub struct BlobCache<L: Blob> {
+    metrics: Metrics,
     blob: Arc<Mutex<L>>,
     // TODO: Use a disk-backed LRU cache.
     future: Arc<Mutex<HashMap<String, Arc<BlobFutureBatch>>>>,
@@ -41,6 +45,7 @@ pub struct BlobCache<L: Blob> {
 impl<L: Blob> Clone for BlobCache<L> {
     fn clone(&self) -> Self {
         BlobCache {
+            metrics: self.metrics.clone(),
             blob: self.blob.clone(),
             future: self.future.clone(),
             trace: self.trace.clone(),
@@ -52,8 +57,9 @@ impl<L: Blob> BlobCache<L> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
-    pub fn new(blob: L) -> Self {
+    pub fn new(metrics: Metrics, blob: L) -> Self {
         BlobCache {
+            metrics,
             blob: Arc::new(Mutex::new(blob)),
             future: Arc::new(Mutex::new(HashMap::new())),
             trace: Arc::new(Mutex::new(HashMap::new())),
@@ -76,8 +82,10 @@ impl<L: Blob> BlobCache<L> {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.
             if let Some(entry) = self.future.lock()?.get(key) {
+                self.metrics.blob_read_cache_hit_count.inc();
                 return Ok(entry.clone());
             }
+            self.metrics.blob_read_cache_miss_count.inc();
         }
 
         let bytes = self
@@ -85,6 +93,9 @@ impl<L: Blob> BlobCache<L> {
             .lock()?
             .get(key)?
             .ok_or_else(|| Error::from(format!("no blob for key: {}", key)))?;
+        self.metrics
+            .blob_read_cache_fetch_bytes
+            .inc_by(u64::cast_from(bytes.len()));
         let batch: Abomonated<BlobFutureBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
             .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
 
@@ -99,7 +110,9 @@ impl<L: Blob> BlobCache<L> {
     }
 
     /// Writes a batch to backing [Blob] storage.
-    pub fn set_future_batch(&mut self, key: String, batch: BlobFutureBatch) -> Result<(), Error> {
+    ///
+    /// Returns the size of the encoded blob value in bytes.
+    pub fn set_future_batch(&mut self, key: String, batch: BlobFutureBatch) -> Result<u64, Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }
@@ -107,9 +120,18 @@ impl<L: Blob> BlobCache<L> {
 
         let mut val = Vec::new();
         unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
+        let val_len = u64::cast_from(val.len());
+
+        let write_start = Instant::now();
         self.blob.lock()?.set(&key, val, false)?;
+        self.metrics
+            .blob_write_ms
+            .inc_by(metric_duration_ms(write_start.elapsed()));
+        self.metrics.blob_write_count.inc();
+        self.metrics.blob_write_bytes.inc_by(val_len);
+
         self.future.lock()?.insert(key, Arc::new(batch));
-        Ok(())
+        Ok(val_len)
     }
 
     /// Returns the batch for the given key, blocking to fetch if it's not
@@ -119,8 +141,10 @@ impl<L: Blob> BlobCache<L> {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.
             if let Some(entry) = self.trace.lock()?.get(key) {
+                self.metrics.blob_read_cache_hit_count.inc();
                 return Ok(entry.clone());
             }
+            self.metrics.blob_read_cache_miss_count.inc();
         }
 
         let bytes = self
@@ -128,6 +152,9 @@ impl<L: Blob> BlobCache<L> {
             .lock()?
             .get(key)?
             .ok_or_else(|| Error::from(format!("no blob for key: {}", key)))?;
+        self.metrics
+            .blob_read_cache_fetch_bytes
+            .inc_by(u64::cast_from(bytes.len()));
         let batch: Abomonated<BlobTraceBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
             .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
 
@@ -142,7 +169,9 @@ impl<L: Blob> BlobCache<L> {
     }
 
     /// Writes a batch to backing [Blob] storage.
-    pub fn set_trace_batch(&mut self, key: String, batch: BlobTraceBatch) -> Result<(), Error> {
+    ///
+    /// Returns the size of the encoded blob value in bytes.
+    pub fn set_trace_batch(&mut self, key: String, batch: BlobTraceBatch) -> Result<u64, Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }
@@ -150,9 +179,18 @@ impl<L: Blob> BlobCache<L> {
 
         let mut val = Vec::new();
         unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
+        let val_len = u64::cast_from(val.len());
+
+        let write_start = Instant::now();
         self.blob.lock()?.set(&key, val, false)?;
+        self.metrics
+            .blob_write_ms
+            .inc_by(metric_duration_ms(write_start.elapsed()));
+        self.metrics.blob_write_count.inc();
+        self.metrics.blob_write_bytes.inc_by(val_len);
+
         self.trace.lock()?.insert(key, Arc::new(batch));
-        Ok(())
+        Ok(val_len)
     }
 
     /// Fetches metadata about what batches are in [Blob] storage.
@@ -170,11 +208,23 @@ impl<L: Blob> BlobCache<L> {
     }
 
     /// Overwrites metadata about what batches are in [Blob] storage.
-    pub fn set_meta(&self, meta: BlobMeta) -> Result<(), Error> {
+    pub fn set_meta(&self, meta: &BlobMeta) -> Result<(), Error> {
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
+
         let mut val = Vec::new();
-        unsafe { abomonation::encode(&meta, &mut val) }.expect("write to Vec is infallible");
-        self.blob.lock()?.set(Self::META_KEY, val, true)
+        unsafe { abomonation::encode(meta, &mut val) }.expect("write to Vec is infallible");
+        let val_len = u64::cast_from(val.len());
+        self.metrics.meta_size_bytes.set(val_len);
+
+        let write_start = Instant::now();
+        self.blob.lock()?.set(Self::META_KEY, val, true)?;
+        self.metrics
+            .blob_write_ms
+            .inc_by(metric_duration_ms(write_start.elapsed()));
+        self.metrics.blob_write_count.inc();
+        self.metrics.blob_write_bytes.inc_by(val_len);
+
         // Don't bother caching meta, nothing reads it after startup.
+        Ok(())
     }
 }

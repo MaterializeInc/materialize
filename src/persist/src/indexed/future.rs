@@ -134,12 +134,13 @@ impl BlobFuture {
                 ))
             }
         };
-        blob.set_future_batch(key.clone(), batch)?;
+        let size_bytes = blob.set_future_batch(key.clone(), batch)?;
         Ok(BlobFutureBatchMeta {
             key,
             desc,
             ts_upper,
             ts_lower,
+            size_bytes,
         })
     }
 
@@ -312,6 +313,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for FutureSnapshot {
 mod tests {
     use differential_dataflow::trace::Description;
 
+    use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
     use crate::mem::MemBlob;
 
@@ -374,7 +376,10 @@ mod tests {
 
     #[test]
     fn append_ts_lower_invariant() {
-        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("append_ts_lower_invariant"));
+        let mut blob = BlobCache::new(
+            Metrics::default(),
+            MemBlob::new_no_reentrance("append_ts_lower_invariant"),
+        );
         let mut f = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(2),
@@ -429,7 +434,10 @@ mod tests {
 
     #[test]
     fn future_evict() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("future_evict"));
+        let mut blob = BlobCache::new(
+            Metrics::default(),
+            MemBlob::new_no_reentrance("future_evict"),
+        );
         let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
@@ -489,7 +497,10 @@ mod tests {
 
     #[test]
     fn future_snapshot() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("future_snapshot"));
+        let mut blob = BlobCache::new(
+            Metrics::default(),
+            MemBlob::new_no_reentrance("future_snapshot"),
+        );
         let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
@@ -543,7 +554,10 @@ mod tests {
 
     #[test]
     fn future_batch_trim() -> Result<(), Error> {
-        let mut blob = BlobCache::new(MemBlob::new_no_reentrance("future_batch_trim"));
+        let mut blob = BlobCache::new(
+            Metrics::default(),
+            MemBlob::new_no_reentrance("future_batch_trim"),
+        );
         let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),

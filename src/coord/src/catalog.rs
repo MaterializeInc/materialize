@@ -22,6 +22,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
+use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, EpochMillis, NowFn};
 use persist::indexed::runtime::MultiWriteHandle;
 use regex::Regex;
@@ -594,7 +595,7 @@ impl Catalog {
         // reentrance id should be per-node not per-cluster. This is also an odd
         // place to be booting the persistence system. But both of these are
         // fine for now.
-        let persist = config.persist.init(cluster_id)?;
+        let persist = config.persist.init(cluster_id, &config.metrics_registry)?;
         let persister = persist.persister.clone();
 
         let mut catalog = Catalog {
@@ -950,6 +951,7 @@ impl Catalog {
             now,
             persist: PersistConfig::disabled(),
             skip_migrations: true,
+            metrics_registry: &MetricsRegistry::new(),
         })?;
         Ok(catalog)
     }

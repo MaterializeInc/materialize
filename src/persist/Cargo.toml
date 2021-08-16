@@ -23,7 +23,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures-util = "0.3.16"
 futures-executor = "0.3.16"
 log = "0.4.13"
-ore = { path = "../ore", default-features = false }
+ore = { path = "../ore", default-features = false, features = ["metrics"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.10.0", default-features = false, features = ["macros", "sync"] }
 

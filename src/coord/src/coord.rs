@@ -3520,6 +3520,7 @@ pub async fn serve(
         now: system_time,
         persist,
         skip_migrations: false,
+        metrics_registry: &metrics_registry,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
@@ -3669,6 +3670,7 @@ pub fn serve_debug(
         now: get_debug_timestamp,
         persist: PersistConfig::disabled(),
         skip_migrations: false,
+        metrics_registry: &MetricsRegistry::new(),
     })
     .unwrap();
 

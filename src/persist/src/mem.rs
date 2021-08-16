@@ -14,6 +14,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use ore::cast::CastFrom;
+use ore::metrics::MetricsRegistry;
 
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient};
@@ -312,7 +313,7 @@ impl MemRegistry {
         let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
         let buffer = self.buffer(path, lock_info.clone())?;
         let blob = self.blob(path, lock_info)?;
-        runtime::start(buffer, blob)
+        runtime::start(buffer, blob, &MetricsRegistry::new())
     }
 
     /// Open a [RuntimeClient] with unreliable storage associated with `path`.
@@ -327,7 +328,7 @@ impl MemRegistry {
         let buffer = UnreliableBuffer::from_handle(buffer, unreliable.clone());
         let blob = self.blob(path, lock_info)?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(buffer, blob)
+        runtime::start(buffer, blob, &MetricsRegistry::new())
     }
 }
 
