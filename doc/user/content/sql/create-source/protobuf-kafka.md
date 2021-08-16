@@ -19,13 +19,17 @@ topics.
 
 {{< diagram "create-source-protobuf-kafka.svg" >}}
 
-### key_constraint
+#### `key_constraint`
 
 {{< diagram "key-constraint.svg" >}}
 
-### format_spec
+#### `format_spec`
 
 {{< diagram "format-spec.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only upsert" keyConstraint=true %}}
 

@@ -32,6 +32,10 @@ the **TEXT** formatting option.
 
 {{< diagram "create-source-text.svg" >}}
 
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
 ### key_constraint
 
 {{< diagram "key-constraint.svg" >}}

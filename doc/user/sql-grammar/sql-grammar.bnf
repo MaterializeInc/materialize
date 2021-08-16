@@ -3,9 +3,6 @@ alter_rename ::=
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' '(' field '=' val ( ',' field '=' val )* ')'
   | 'ALTER' 'INDEX' name 'RESET' '(' field ( ',' field )* ')'
-avro_schema_spec ::=
-  'CONFLUENT SCHEMA REGISTRY' url |
-  'SCHEMA' ('FILE' schema_file_path | inline_schema)
 close ::=
   'CLOSE' cursor_name
 col_option ::=
@@ -49,38 +46,34 @@ create_sink ::=
 create_source_avro_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'AVRO OCF' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'AVRO OCF' path with_options?
   ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
 create_source_avro_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
-  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT') (avro_format_spec | format_spec)
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
+  ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
+  'AVRO USING' (
+    'CONFLUENT SCHEMA REGISTRY' url with_options? |
+    'SCHEMA' 'FILE' schema_file_path
+  )
   ('INCLUDE KEY' ('AS' key_name)?)?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
-create_source ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' connector_spec
-  'FORMAT' format_spec
-  ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
 create_source_csv_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' 'BYTES'
 create_source_csv_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
   ('CSV WITH' ( 'HEADER' | n 'COLUMNS') ('DELIMITED BY' char)? | format_spec)
   ('INCLUDE KEY' ('AS' key_name)?)?
@@ -88,19 +81,18 @@ create_source_csv_kafka ::=
 create_source_csv_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_json_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' 'BYTES'
 create_source_json_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' ) ( 'TEXT' | 'BYTES' | format_spec)
   ('INCLUDE KEY' ('AS' key_name )?)?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
@@ -112,18 +104,16 @@ create_source_postgres ::=
 create_source_protobuf_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT' )
    ('PROTOBUF MESSAGE' message_name
-    'USING SCHEMA' ('FILE' schema_file_path | inline_schema) |
-    format_spec )
+    'USING SCHEMA' 'FILE' schema_file_path)
   ('INCLUDE KEY' ('AS' key_name)?)?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_protobuf_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' 'PROTOBUF MESSAGE' message_name
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
 create_source_pubnub_text ::=
@@ -195,7 +185,7 @@ create_source_s3_csv ::=
 create_source_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' (
     'REGEX' regex |
     'TEXT' |
@@ -204,15 +194,14 @@ create_source_text ::=
 create_source_text_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KAFKA BROKER' host 'TOPIC' topic
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT') ('BYTES' | 'TEXT' | format_spec)
   ('INCLUDE KEY' ('AS' key_name)?)?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_text_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' ('BYTES' | 'TEXT')
   ('ENVELOPE' 'NONE')?
 create_type ::=
@@ -265,30 +254,12 @@ explain ::=
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
-format_spec_avro_kafka ::=
-    ('AVRO' 'USING' (
-        'CONFLUENT SCHEMA REGISTRY' url ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
-        'SCHEMA' (
-            'FILE' schema_file_path |
-            inline_schema
-            )
-            (
-                'WITH' '(' inline_schema_with_options ')'
-            )?
-        )
-    )
 format_spec ::=
   'AVRO USING' (
-        'CONFLUENT SCHEMA REGISTRY' url ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
-        'SCHEMA' (
-            'FILE' schema_file_path |
-            inline_schema
-            )
-            (
-                'WITH' '(' inline_schema_with_options ')'
-            )?
+        'CONFLUENT SCHEMA REGISTRY' url with_options? |
+        'SCHEMA' 'FILE' schema_file_path
         ) |
-  'PROTOBUF MESSAGE' message_name 'USING' 'SCHEMA' ('FILE' schema_file_path | inline_schema) |
+  'PROTOBUF MESSAGE' message_name 'USING' 'SCHEMA' 'FILE' schema_file_path |
   'REGEX' regex |
   'CSV WITH' (HEADER | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
@@ -321,7 +292,7 @@ sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('CONSISTENCY' 'TOPIC' topic ('CONSISTENCY' 'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url)?)?
-    ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+    with_options?
     'FORMAT' ('AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url | 'JSON')
 lit_cast ::=
   type val
@@ -426,3 +397,4 @@ type_timestamp ::=
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"
+with_options ::= 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'

@@ -15,6 +15,10 @@ contain multiple records serialized as JSON, separated by newlines.
 
 {{< diagram "create-source-s3-json.svg" >}}
 
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
 {{% create-source/syntax-details connector="s3" formats="text bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Example

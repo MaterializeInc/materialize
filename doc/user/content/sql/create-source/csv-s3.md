@@ -15,9 +15,13 @@ contain multiple records serialized as CSV, separated by newlines.
 
 {{< diagram "create-source-s3-csv.svg" >}}
 
-### key_constraint
+#### `key_constraint`
 
 {{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 {{% create-source/syntax-details connector="s3" formats="csv" envelopes="append-only" keyConstraint=true %}}
 

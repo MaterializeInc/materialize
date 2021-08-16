@@ -19,17 +19,17 @@ topic.
 
 {{< diagram "create-source-avro-kafka.svg" >}}
 
-### avro_format_spec
-
-{{< diagram "format-spec-avro-kafka.svg" >}}
-
-### format_spec
+#### `format_spec`
 
 {{< diagram "format-spec.svg" >}}
 
-### key_constraint
+#### `key_constraint`
 
 {{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" keyConstraint=true %}}
 

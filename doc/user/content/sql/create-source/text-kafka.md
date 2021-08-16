@@ -15,9 +15,13 @@ Kafka topic.
 
 {{< diagram "create-source-text-kafka.svg" >}}
 
-### format_spec
+#### `format_spec`
 
 {{< diagram "format-spec.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="text bytes" envelopes="upsert append-only" keyConstraint=false %}}
 

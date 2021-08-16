@@ -21,9 +21,13 @@ stream.
 
 {{< diagram "create-source-protobuf-kinesis.svg" >}}
 
-### key_constraint
+#### `key_constraint`
 
 {{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 {{% create-source/syntax-details connector="kinesis" formats="protobuf" envelopes="append-only" keyConstraint=true %}}
 

@@ -16,9 +16,13 @@ topics.
 
 {{< diagram "create-source-json-kafka.svg" >}}
 
-### format_spec
+#### `format_spec`
 
 {{< diagram "format-spec.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="json-bytes" envelopes="append-only upsert" keyConstraint=false %}}
 
