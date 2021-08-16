@@ -229,7 +229,9 @@ mod tests {
                         // however, a partially optimized query can.
                         // Since clippy rejects test results with trailing
                         // whitespace, remove whitespace before comparing results.
-                        Ok(msg) => format!("{}\n", msg.trim_end().to_string()),
+                        Ok(msg) => {
+                            format!("{}", separated("\n", msg.split('\n').map(|s| s.trim_end())))
+                        }
                         Err(err) => format!("error: {}\n", err),
                     },
                     "opt" => match run_testcase(&s.input, &catalog, &s.args, TestType::Opt) {
