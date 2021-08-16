@@ -19,5 +19,5 @@ url = { version = "2.2.2", features = ["serde"] }
 [dev-dependencies]
 hyper = { version = "0.14.11", features = ["server"] }
 lazy_static = "1.4.0"
-tokio = { version = "1.9.0", features = ["macros"] }
+tokio = { version = "1.10.0", features = ["macros"] }
 tracing = { version = "0.1.26", features = ["log"] }
