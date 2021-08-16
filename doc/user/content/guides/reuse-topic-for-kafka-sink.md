@@ -1,7 +1,7 @@
 ---
-title: "Topic reuse for Kafka sinks"
-description: "Enable topic reuse for Kafka sinks."
-weight: 50
+title: "Kafka Sink Topic Reuse"
+description: "Enable topic reuse for Kafka sinks (exactly-once Kafka sinks)."
+weight: 10
 menu:
   main:
     parent: guides
@@ -9,14 +9,14 @@ menu:
 
 {{< beta v0.9.0 />}}
 
-By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead, Materialize must be able to reconstruct the prior history of the sinked object and all objects on which it is dependent--that is, events must have replayable timestamps--and must ensure that no other processes write to the output topic.
+By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead, Materialize must be able to reconstruct the prior history of the sinked object and all objects on which it is dependent--that is, events must have replayable timestamps--and must ensure that no other processes write to the output topic. This allows for exactly-once stream processing, meaning that each incoming event is processed exactly once, and no data is duplicated or goes unprocessed, even if the stream is disrupted or Materialize is restarted.
 
 This is currently available only for Kafka sources and the views based on them.
 
 When you create a sink, you must:
 
-- Enable the `reuse_topic` switch.
-- Optionally specify the name of a [consistency topic](sql/create-sink/#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system. The name of the consistency topic may be provided via:
+- Enable the `reuse_topic` option.
+- Optionally specify the name of a [consistency topic](/sql/create-sink/#consistency-metadata) to store the information that Materialize will use to identify the last completed write. The names of the sink topic and the sink consistency topic must be unique across all sinks in the system. The name of the consistency topic may be provided via:
     * The `CONSISTENCY TOPIC` parameter.
     * The `consistency_topic` WITH option. **Note:** This option is only available to support backwards-compatibility. You will not be able to indicate `consistency_topic` and `CONSISTENCY TOPIC` or `CONSISTENCY FORMAT` simultaneously.
 
