@@ -23,6 +23,7 @@ members = [
     "src/lowertest-derive",
     "src/materialized",
     "src/metabase",
+    "src/mzcloud-cli",
     "src/mz-process-collector",
     "src/ore",
     "src/peeker",

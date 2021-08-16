@@ -19,7 +19,7 @@ deny = [
     { name = "strum-macros" },
     # The `uncased` crate serves the same purpose as `unicase` and is more
     # actively maintained.
-    { name = "unicase" },
+    { name = "unicase", wrappers = ["mime_guess"] },
 ]
 
 [licenses]
@@ -40,6 +40,7 @@ private = { ignore = true }
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
+    "https://github.com/MaterializeInc/cloud-sdks.git",
     "https://github.com/MaterializeInc/pubnub-rust.git",
     # Until https://github.com/sfackler/rust-postgres/pull/752 is merged and released
     "https://github.com/MaterializeInc/rust-postgres.git",
