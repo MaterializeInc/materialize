@@ -24,12 +24,13 @@ mzworkflows:
         service: testdrive-svc
         command: --aws-endpoint=http://localstack:4566 ${TD_TEST:-*.td esoteric/*.td}
 
-  # Runs the tests that interact with Kafka and Schema Registry against Redpanda.
+  # Runs the tests that interact with Kafka and Schema Registry against
+  # Redpanda.
   #
   # Specify the `TD_TEST` environment variable to select a specific test to run.
   # Otherwise, this workflow runs against the test files in this directory that
-  # use a Kafka action but do *not* use `kafka-add-partition`, as Redpanda does
-  # not yet support dynamically adding partitions to a topic.
+  # use a Kafka action but do *not* use the Protobuf schema type with the schema
+  # registry, as Redpanda does not yet support that.
   testdrive-redpanda:
     steps:
       - step: start-services
@@ -52,7 +53,7 @@ mzworkflows:
           --kafka-addr=redpanda:9092
           --schema-registry-url=http://redpanda:8081
           --materialized-url=postgres://materialize@materialized:6875
-          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -LF '$ kafka-add-partitions' *.td))}
+          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -LF '$ kafka-ingest.*format=protobuf' *.td))}
 
   # Run tests, requires AWS credentials to be present. See guide-testing for
   # details.
@@ -184,7 +185,9 @@ services:
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
   redpanda:
-    image: vectorized/redpanda:v21.7.1
+    # TODO(benesch): get back on an official release once Redpanda
+    # has an official release with https://github.com/vectorizedio/redpanda/pull/2025
+    image: vectorized/redpanda:v21.8.1-beta7-amd64
     # Most of these options are simply required when using Redpanda in Docker.
     # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
     # The `enable_transactions` and `enable_idempotence` feature flags enable
