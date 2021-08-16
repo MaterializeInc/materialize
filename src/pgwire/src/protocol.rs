@@ -618,6 +618,30 @@ where
             }
         };
 
+        if let Some(desc) = stmt.desc().relation_desc.clone() {
+            for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
+                match (format, &ty.scalar_type) {
+                    (pgrepr::Format::Binary, repr::ScalarType::List { .. }) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                "binary encoding of list types is not implemented",
+                            ))
+                            .await;
+                    }
+                    (pgrepr::Format::Binary, repr::ScalarType::Map { .. }) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                "binary encoding of map types is not implemented",
+                            ))
+                            .await;
+                    }
+                    _ => (),
+                }
+            }
+        }
+
         let desc = stmt.desc().clone();
         let stmt = stmt.sql().cloned();
         if let Err(err) =

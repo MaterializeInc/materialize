@@ -352,14 +352,43 @@ impl Value {
             Value::Interval(iv) => iv.to_sql(&PgType::INTERVAL, buf),
             Value::Jsonb(js) => js.to_sql(&PgType::JSONB, buf),
             Value::List(_) => {
-                // for now just use text encoding
-                self.encode_text(buf);
-                Ok(postgres_types::IsNull::No)
+                // A binary encoding for list is tricky. We only get one OID to
+                // describe the type of this list to the client. And we can't
+                // just up front allocate an OID for every possible list type,
+                // like PostgreSQL does for arrays, because, unlike arrays,
+                // lists can be arbitrarily nested.
+                //
+                // So, we'd need to synthesize a type with a stable OID whenever
+                // a new anonymous list type is *observed* in Materialize. Or we
+                // could mandate that only named list types can be sent over
+                // pgwire, and not anonymous list types, since named list types
+                // get a stable OID when they're created. Then we'd need to
+                // expose a table with the list OID -> element OID mapping for
+                // clients to query. And THEN we'd need to teach every client we
+                // care about how to query this table.
+                //
+                // This isn't intractible. It's how PostgreSQL's range type
+                // works, which is supported by many drivers. But our job is
+                // harder because most PostgreSQL drivers don't want to carry
+                // around code for Materialize-specific types. So we'd have to
+                // add type plugin infrastructure for those drivers, then
+                // distribute the list/map support as a plugin.
+                //
+                // Serializing the actual list would be simple, though: just a
+                // 32-bit integer describing the list length, followed by the
+                // encoding of each element in order.
+                //
+                // tl;dr it's a lot of work. For now, the recommended workaround
+                // is to either use the text encoding or convert the list to a
+                // different type (JSON, an array, unnest into rows) that does
+                // have a binary encoding.
+                Err("binary encoding of list types is not implemented".into())
             }
             Value::Map(_) => {
-                // for now just use text encoding
-                self.encode_text(buf);
-                Ok(postgres_types::IsNull::No)
+                // Map binary encodings are hard for the same reason as list
+                // binary encodings (described above). You just have key and
+                // value OIDs to deal with rather than an element OID.
+                Err("binary encoding of map types is not implemented".into())
             }
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
@@ -469,8 +498,8 @@ impl Value {
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
             Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
-            Type::List(_) => Value::decode_text(ty, raw), // just using the text encoding for now
-            Type::Map { .. } => Value::decode_text(ty, raw), // just using the text encoding for now
+            Type::List(_) => Err("binary decoding of list types is not implemented".into()),
+            Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
             Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
