@@ -41,7 +41,6 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = bar.a where foo.a =
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -69,7 +68,6 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = abs(bar.a) where mo
 %2 =
 | Join %0 %1 (= #0 abs(#2))
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0..#3)
 
 EOF
 
@@ -102,7 +100,6 @@ EXPLAIN PLAN FOR select * from (select * from foo where a = 1) filtered_foo, bar
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -149,7 +146,6 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %1 %2.(#0) %0.(#0)
-| | demand = (#0, #5)
 | Project (#0, #5)
 
 EOF
@@ -198,8 +194,7 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %0.(#0) %1.(#0) %2.(#0)
-| | demand = (#0, #3, #5)
-| Filter !(isnull(#0)), !(isnull(#3))
+| Filter !(isnull(#0)), !(isnull(#2)), !(isnull(#3)), !(isnull(#4))
 | Project (#0, #5)
 
 EOF
@@ -240,7 +235,6 @@ where nullif(foo.a, 0) = -bar.a
 | | implementation = DeltaQuery
 | |   delta %0 %1.(-(#0))
 | |   delta %1 %0.(if (#0 = 0) then {null} else {#0})
-| | demand = (#0..#3)
 | Filter !(isnull(#2)), !(isnull(if (#0 = 0) then {null} else {#0}))
 | Project (#1, #3)
 
@@ -287,8 +281,7 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
 | | implementation = Differential %2.(#0) %0.((#0 + 4)) %1.(#0)
-| | demand = (#0, #1, #3..#5)
-| Filter !(isnull(#0)), !(isnull(#4))
+| Filter !(isnull(#0)), !(isnull(#2)), !(isnull(#4))
 | Project (#3, #1, #5)
 
 EOF
@@ -321,7 +314,6 @@ explain plan for select foo.b, bar.b from foo, bar, (select 1 as a) const where 
 %2 =
 | Join %0 %1 (= 1 (#0 / #2))
 | | implementation = Differential %1 %0.()
-| | demand = (#1, #3)
 | Project (#1, #3)
 
 EOF
@@ -351,7 +343,6 @@ and bar.b - foo.b = foo.a / bar.a
 %2 =
 | Join %0 %1 (= -1 (#3 - #1) (#0 / #2))
 | | implementation = Differential %1 %0.()
-| | demand = (#1, #3)
 | Project (#1, #3)
 
 EOF
@@ -395,7 +386,6 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
 | | implementation = Differential %2 %0.((#0 + 4)) %1.(#0)
-| | demand = (#1, #3, #5)
 | Project (#1, #3, #5)
 
 EOF

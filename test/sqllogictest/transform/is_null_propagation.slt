@@ -34,11 +34,11 @@ EXPLAIN SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
 
 %1 =
 | Get materialize.public.t2 (u3)
+| Project (#0)
 
 %2 =
 | Join %0 %1 (= #0 (#1 + #2))
 | | implementation = Differential %1 %0.()
-| | demand = ()
 | Project ()
 
 EOF
@@ -50,62 +50,57 @@ EXPLAIN SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) ag
 | Get materialize.public.t1 (u1)
 | Distinct group=(#1)
 
-%1 =
-| Get materialize.public.t2 (u3)
-| ArrangeBy ()
+%1 = Let l1 =
+| Get materialize.public.t1 (u1)
+| Project (#1)
 
 %2 =
-| Get %0 (l0)
+| Get materialize.public.t2 (u3)
+| Project (#1)
 | ArrangeBy ()
 
 %3 =
-| Get materialize.public.t1 (u1)
+| Get %0 (l0)
 | ArrangeBy ()
 
 %4 =
 | Get materialize.public.t1 (u1)
+| Project ()
+| ArrangeBy ()
 
-%5 = Let l1 =
-| Join %1 %2 %3 %4
-| | implementation = Differential %4 %1.() %2.() %3.()
-| | demand = (#1, #2, #6)
-| Filter (#6 > #1)
-| Reduce group=(#2)
+%5 = Let l2 =
+| Join %2 %3 %4 %1
+| | implementation = Differential %1 %2.() %3.() %4.()
+| Filter (#2 > #0)
+| Reduce group=(#1)
 | | agg count(true)
 
 %6 =
-| Get materialize.public.t1 (u1)
+| Get %5 (l2)
+| Filter (#0 = i64tof64(#1))
+| Project (#0)
 
 %7 =
-| Get %5 (l1)
-| Filter (#0 = i64tof64(#1))
-
-%8 =
-| Get %5 (l1)
+| Get %5 (l2)
 | Filter (#0 = 0)
+| Project ()
 | Negate
 | Map 0
-| Project (#2)
 
-%9 =
+%8 =
 | Get %0 (l0)
 | Filter (#0 = 0)
 | Map 0
 | Project (#1)
 
-%10 =
-| Union %8 %9
-| Map 0
-
-%11 =
-| Union %7 %10
+%9 =
+| Union %6 %7 %8
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%12 =
-| Join %6 %11 (= #1 #2)
-| | implementation = Differential %6 %11.(#0)
-| | demand = ()
+%10 =
+| Join %1 %9 (= #0 #1)
+| | implementation = Differential %1 %9.(#0)
 | Project ()
 
 EOF

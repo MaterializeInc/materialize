@@ -77,10 +77,10 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 "%0 =| Get t1| Distinct group=(#1)"
 
 > EXPLAIN SELECT DISTINCT key1, upper(key2) FROM t1;
-"%0 =| Get t1| Distinct group=(#0, upper(#1))"
+"%0 =| Get t1| Map upper(#1)| Distinct group=(#0, #3)"
 
 > EXPLAIN SELECT DISTINCT key1, key2 || 'a' FROM t1;
-"%0 =| Get t1| Distinct group=(#0, (#1 || \"a\"))"
+"%0 =| Get t1| Map (#1 || \"a\")| Distinct group=(#0, #3)"
 
 > EXPLAIN SELECT key1 FROM t1 GROUP BY key1;
 "%0 =| Get t1| Distinct group=(#0)"
@@ -89,7 +89,7 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 "%0 =| Get t1| Distinct group=(#1)"
 
 > EXPLAIN SELECT COUNT(DISTINCT key1) FROM t1;
-"%0 = Let l0 =| Get t1| Reduce group=()| | agg count(distinct #0)%1 =| Get %0 (l0)| Negate| Project ()%2 =| Constant ()%3 =| Union %1 %2| Map 0%4 =| Union %0 %3"
+"%0 = Let l0 =| Get t1| Reduce group=()| | agg count(distinct #0)%1 =| Get %0 (l0)| Project ()| Negate%2 =| Constant ()%3 =| Union %1 %2| Map 0%4 =| Union %0 %3"
 
 # Make sure that primary key information is inherited from the source
 
@@ -183,10 +183,10 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 "%0 =| Get t1_pkne| Distinct group=(#1)"
 
 > EXPLAIN SELECT DISTINCT key1, upper(key2) FROM t1_pkne;
-"%0 =| Get t1_pkne| Distinct group=(#0, upper(#1))"
+"%0 =| Get t1_pkne| Map upper(#1)| Distinct group=(#0, #3)"
 
 > EXPLAIN SELECT DISTINCT key1, key2 || 'a' FROM t1_pkne;
-"%0 =| Get t1_pkne| Distinct group=(#0, (#1 || \"a\"))"
+"%0 =| Get t1_pkne| Map (#1 || \"a\")| Distinct group=(#0, #3)"
 
 > EXPLAIN SELECT key1 FROM t1_pkne GROUP BY key1;
 "%0 =| Get t1_pkne| Distinct group=(#0)"
@@ -195,7 +195,7 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 "%0 =| Get t1_pkne| Distinct group=(#1)"
 
 > EXPLAIN SELECT COUNT(DISTINCT key1) FROM t1_pkne;
-"%0 = Let l0 =| Get t1_pkne| Reduce group=()| | agg count(distinct #0)%1 =| Get %0 (l0)| Negate| Project ()%2 =| Constant ()%3 =| Union %1 %2| Map 0%4 =| Union %0 %3"
+"%0 = Let l0 =| Get t1_pkne| Reduce group=()| | agg count(distinct #0)%1 =| Get %0 (l0)| Project ()| Negate%2 =| Constant ()%3 =| Union %1 %2| Map 0%4 =| Union %0 %3"
 
 # Make sure that primary key information is inherited from the source
 

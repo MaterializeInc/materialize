@@ -17,10 +17,10 @@ build apply=ProjectionPushdown
 # Project around a project
 
 build apply=ProjectionPushdown
-(project 
-    (project 
+(project
+    (project
         (map (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) [7])
-        [0 2 1]) 
+        [0 2 1])
     [2 1 1 0])
 ----
 %0 =
@@ -32,11 +32,11 @@ build apply=ProjectionPushdown
 # Project around a filter
 
 build apply=ProjectionPushdown
-(project 
-    (filter 
-        (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) 
+(project
+    (filter
+        (constant [[1 3 4] [2 5 6]] [int32 int32 int32])
         [(call_binary eq #0 #2)]
-    ) 
+    )
     [2 2]
 )
 ----
@@ -48,11 +48,11 @@ build apply=ProjectionPushdown
 | Project (#0, #0)
 
 build apply=ProjectionPushdown
-(project 
-    (filter 
-        (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) 
+(project
+    (filter
+        (constant [[1 3 4] [2 5 6]] [int32 int32 int32])
         [(call_unary is_null #2)]
-    ) 
+    )
     [#1]
 )
 ----
@@ -64,10 +64,10 @@ build apply=ProjectionPushdown
 
 # Project around a map
 build apply=ProjectionPushdown
-(project 
-    (map 
-        (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) 
-        [(call_binary add_int32 #1 #0) 7]) 
+(project
+    (map
+        (constant [[1 3 4] [2 5 6]] [int32 int32 int32])
+        [(call_binary add_int32 #1 #0) 7])
     [3])
 ----
 %0 =
@@ -78,10 +78,10 @@ build apply=ProjectionPushdown
 
 # Project around a column where a scalar refers to another fellow member of `scalars`
 build apply=ProjectionPushdown
-(project 
-    (map 
-        (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) 
-        [(call_binary add_int32 #1 #0) 7 (call_binary add_int32 #4 7)]) 
+(project
+    (map
+        (constant [[1 3 4] [2 5 6]] [int32 int32 int32])
+        [(call_binary add_int32 #1 #0) 7 (call_binary add_int32 #4 7)])
     [3 5 5 5 3])
 ----
 %0 =
@@ -96,8 +96,8 @@ build apply=ProjectionPushdown
 build apply=ProjectionPushdown
 (project
     (filter
-    (map 
-        (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) 
+    (map
+        (constant [[1 3 4] [2 5 6]] [int32 int32 int32])
         [(call_binary add_int32 #1 #2) 7])
         [(call_binary gte #2 #1)])
     [3])
@@ -111,9 +111,9 @@ build apply=ProjectionPushdown
 
 build apply=ProjectionPushdown
 (project
-    (map 
+    (map
         (reduce
-            (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) 
+            (constant [[1 3 4] [2 5 6]] [int32 int32 int32])
             [#0]
             [(sum_int32 #1)])
         ["dummy"])
@@ -137,12 +137,12 @@ ok
 
 build apply=ProjectionPushdown
 (project
-    (join 
+    (join
         [(filter
-            (map 
-                (constant [[1 3 4] [2 5 6]] [int32 int32 int32]) 
+            (map
+                (constant [[1 3 4] [2 5 6]] [int32 int32 int32])
                 [(call_binary add_int32 #1 #2) 7])
-            [(call_binary gte #2 #1)]) 
+            [(call_binary gte #2 #1)])
         (get x)]
         [[#0 #5]])
     [3])
@@ -168,22 +168,22 @@ build apply=ProjectionPushdown
 #Query not using the columns newly created by FlatMap
 
 build apply=ProjectionPushdown
-(project (flat_map (get x) generate_series_int32 [#0 #2]) [#1])
+(project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#1])
 ----
 %0 =
 | Get x (u0)
-| FlatMap generate_series(#0, #2)
+| FlatMap generate_series(#0, #2, 1)
 | Project (#1)
 
 #Query using the columns newly created by FlatMap
 
 build apply=ProjectionPushdown
-(project (flat_map (get x) generate_series_int32 [#0 #2]) [#3])
+(project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#3])
 ----
 %0 =
 | Get x (u0)
 | Project (#0, #2)
-| FlatMap generate_series(#0, #1)
+| FlatMap generate_series(#0, #1, 1)
 | Project (#2)
 
 # Project around a union
@@ -226,7 +226,7 @@ build apply=ProjectionPushdown
 # Project around a negate
 
 build apply=ProjectionPushdown
-(project 
+(project
     (union [
         (get x)
         (negate (filter (get x) [(call_binary eq #1 1)]))
@@ -297,10 +297,10 @@ build apply=ProjectionPushdown
 build apply=ProjectionPushdown
 (project
     (reduce
-        (get x) 
+        (get x)
         [(call_binary add_int32 #0 #2)]
         [(sum_int32 #1)]
-        ) 
+        )
     [])
 ----
 %0 =
@@ -312,10 +312,10 @@ build apply=ProjectionPushdown
 build apply=ProjectionPushdown
 (project
     (reduce
-        (get x) 
+        (get x)
         [#0]
         [(sum_int32 (call_binary mul_int32 #0 #2))]
-        ) 
+        )
     [#1])
 ----
 %0 =
@@ -328,10 +328,10 @@ build apply=ProjectionPushdown
 build apply=ProjectionPushdown
 (project
     (reduce
-        (get x) 
+        (get x)
         [#0]
         [(sum_int32 (call_binary mul_int32 #0 #2))]
-        ) 
+        )
     [#1 #0])
 ----
 %0 =
@@ -346,10 +346,10 @@ build apply=ProjectionPushdown
 build apply=ProjectionPushdown
 (project
     (top_k
-        (get x) 
+        (get x)
         [#0]
         [#1 #2]
-        ) 
+        )
     [#2 #2 #2])
 ----
 %0 =
@@ -361,10 +361,10 @@ build apply=ProjectionPushdown
 build apply=ProjectionPushdown
 (project
     (top_k
-        (get x) 
+        (get x)
         []
         [#1]
-        ) 
+        )
     [#2 #2])
 ----
 %0 =
@@ -377,10 +377,10 @@ build apply=ProjectionPushdown
 build apply=ProjectionPushdown
 (project
     (top_k
-        (get x) 
+        (get x)
         [#2]
         [#1]
-        ) 
+        )
     [#2 #1])
 ----
 %0 =
@@ -392,7 +392,7 @@ build apply=ProjectionPushdown
 
 build apply=ProjectionPushdown
 (let z
-    (join [(get x) (get y)] [[#0 #3]]) 
+    (join [(get x) (get y)] [[#0 #3]])
     (project
         (join
             [(get z) (get z)]
@@ -433,7 +433,7 @@ build apply=ProjectionPushdown
 
 build apply=ProjectionPushdown
 (let z
-    (join [(get x) (get y)] [[#0 #3]]) 
+    (join [(get x) (get y)] [[#0 #3]])
     (project
         (join
             [(get z) (get z)]
