@@ -213,6 +213,10 @@ class Composition:
             spec.loader.exec_module(module)
             for name, fn in getmembers(module, isfunction):
                 if name.startswith("workflow_"):
+                    # The name of the workflow is the name of the function
+                    # with the "workflow_" prefix stripped and any underscores
+                    # replaced with dashes.
+                    name = name[len("workflow_") :].replace("_", "-")
                     self.python_funcs[name] = fn
 
             for python_service in getattr(module, "services", []):

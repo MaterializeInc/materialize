@@ -9,8 +9,6 @@
 
 FROM ubuntu:bionic-20200403
 
-RUN apt-get update && apt-get -qy install postgresql-client wait-for-it
-
 COPY sqllogictest /usr/local/bin
 
 WORKDIR /workdir
