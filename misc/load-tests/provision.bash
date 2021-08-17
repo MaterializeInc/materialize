@@ -12,7 +12,7 @@
 # Install necessary prerequisites for a remote EC2 host to run Materialize demos, load tests, etc.
 
 # From https://docs.docker.com/engine/install/ubuntu/
-apt update && apt install -y apt-transport-https ca-certificates curl gnupg lsb-release python3-venv python3-pip
+apt update && apt install -y apt-transport-https ca-certificates curl gnupg lsb-release python3-venv python3-pip jq
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 echo \
   "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \

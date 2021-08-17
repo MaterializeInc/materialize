@@ -11,11 +11,12 @@
 
 import asyncio
 import csv
+import json
 import os
 import shlex
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from subprocess import CalledProcessError
 from typing import Dict, List, NamedTuple, Optional
 
@@ -38,6 +39,10 @@ def tags(i: Instance) -> Dict[str, str]:
     if not i.tags:
         return {}
     return {t["Key"]: t["Value"] for t in i.tags}
+
+
+def instance_typedef_tags(i: InstanceTypeDef) -> Dict[str, str]:
+    return {t["Key"]: t["Value"] for t in i.get("Tags", [])}
 
 
 def name(tags: Dict[str, str]) -> Optional[str]:
@@ -65,6 +70,7 @@ def print_instances(ists: List[Instance], format: str) -> None:
         "Launched By",
         "Delete After",
         "State",
+        "Tags",
     ]
     rows = [
         [
@@ -75,6 +81,7 @@ def print_instances(ists: List[Instance], format: str) -> None:
             launched_by(tags),
             delete_after(tags),
             i.state["Name"],
+            json.dumps(tags),
         ]
         for (i, tags) in [(i, tags(i)) for i in ists]
     ]
@@ -89,6 +96,11 @@ def print_instances(ists: List[Instance], format: str) -> None:
         w.writerows(rows)
     else:
         raise RuntimeError("Unknown format passed to print_instances")
+
+
+def now_plus(offset: timedelta) -> int:
+    """Return a Unix timestamp representing the current time plus a given offset"""
+    return int(datetime.now(timezone.utc).timestamp() + offset.total_seconds())
 
 
 def launch(
@@ -164,9 +176,11 @@ class CommandResult(NamedTuple):
     stderr: str
 
 
-async def run_ssm(i: Instance, commands: List[str], timeout: int = 60) -> CommandResult:
+async def run_ssm(
+    instance_id: str, commands: List[str], timeout: int = 60
+) -> CommandResult:
     id = boto3.client("ssm").send_command(
-        InstanceIds=[i.instance_id],
+        InstanceIds=[instance_id],
         DocumentName="AWS-RunShellScript",
         Parameters={"commands": commands},
     )["Command"]["CommandId"]
@@ -176,7 +190,7 @@ async def run_ssm(i: Instance, commands: List[str], timeout: int = 60) -> Comman
         SPEAKER(f"Waiting for commands to finish running: {remaining}s remaining")
         try:
             result = boto3.client("ssm").get_command_invocation(
-                CommandId=id, InstanceId=i.instance_id
+                CommandId=id, InstanceId=instance_id
             )
         except invocation_dne:
             continue
@@ -188,7 +202,7 @@ async def run_ssm(i: Instance, commands: List[str], timeout: int = 60) -> Comman
             )
 
     raise RuntimeError(
-        f"Command {commands} on instance {i} did not run in a reasonable amount of time"
+        f"Command {commands} on instance {instance_id} did not run in a reasonable amount of time"
     )
 
 
@@ -230,7 +244,7 @@ async def setup(
     pprint.pprint(commands)
     async for remaining in ui.async_timeout_loop(180, 5):
         try:
-            await run_ssm(i, commands, 180)
+            await run_ssm(i.instance_id, commands, 180)
             done = True
             break
         except invalid_instance:
@@ -353,7 +367,6 @@ def launch_cluster(
     loop.run_until_complete(
         setup_all(instances, subnet_id, local_pub_key, identity_file, git_rev)
     )
-    loop.close()
 
     hosts_str = "".join(
         (f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs))
@@ -395,13 +408,21 @@ def whoami() -> str:
     return boto3.client("sts").get_caller_identity()["UserId"].split(":")[1]
 
 
+def get_instances_by_tag(k: str, v: str) -> List[InstanceTypeDef]:
+    return [
+        i
+        for r in boto3.client("ec2").describe_instances()["Reservations"]
+        for i in r["Instances"]
+        if instance_typedef_tags(i).get(k) == v
+    ]
+
+
 def get_old_instances() -> List[InstanceTypeDef]:
     def is_running(i: InstanceTypeDef) -> bool:
         return i["State"]["Name"] == "running"
 
     def is_old(i: InstanceTypeDef) -> bool:
-        tags_dict = {tag["Key"]: tag["Value"] for tag in i.get("Tags", [])}
-        delete_after = tags_dict.get("scratch-delete-after")
+        delete_after = instance_typedef_tags(i).get("scratch-delete-after")
         if delete_after is None:
             return False
         delete_after = float(delete_after)
