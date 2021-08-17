@@ -235,7 +235,8 @@ where nullif(foo.a, 0) = -bar.a
 | | implementation = DeltaQuery
 | |   delta %0 %1.(-(#0))
 | |   delta %1 %0.(if (#0 = 0) then {null} else {#0})
-| Filter !(isnull(#2)), !(isnull(if (#0 = 0) then {null} else {#0}))
+| | demand = (#1..#3)
+| Filter !(isnull(#2))
 | Project (#1, #3)
 
 EOF
@@ -268,7 +269,7 @@ where foo.a = bar.a
 ----
 %0 =
 | Get materialize.public.bar (u3)
-| ArrangeBy ((#0 + 4))
+| Filter !(isnull(#0))
 
 %1 =
 | Get materialize.public.foo (u1)
@@ -280,9 +281,16 @@ where foo.a = bar.a
 
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
+<<<<<<< HEAD
 | | implementation = Differential %2.(#0) %0.((#0 + 4)) %1.(#0)
 | Filter !(isnull(#0)), !(isnull(#4))
 | Project (#3, #1, #5)
+=======
+| | implementation = Differential %1 %0.(#0) %2.(#0)
+| | demand = (#1, #3..#5)
+| Filter !(isnull(#4))
+| Project (#1, #3, #5)
+>>>>>>> a7f58d978 (optimize join expressions)
 
 EOF
 

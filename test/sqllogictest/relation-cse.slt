@@ -1040,7 +1040,8 @@ SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 %5 = Let l1 =
 | Join %1 %4 (= #0 #2)
 | | implementation = Differential %4 %1.(#0)
-| Project (#0, #1)
+| | demand = (#0, #1)
+| Filter !(isnull(#0))
 
 %6 =
 | Union %5 %5

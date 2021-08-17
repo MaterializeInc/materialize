@@ -221,11 +221,12 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 
 %3 = Let l2 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
+| | demand = ()
 
 %4 =
 | Get %3 (l2)
-| Project ()
-| Negate
+| Map 123
+| Project (#4, #4)
 
 %5 =
 | Union %4 %0

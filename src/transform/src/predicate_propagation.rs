@@ -226,6 +226,10 @@ impl PredicateKnowledge {
                 }
 
                 for equivalence in equivalences.iter_mut() {
+                    for expr in equivalence.iter_mut() {
+                        optimize(expr, &self_type, &knowledge[..])?;
+                    }
+
                     if let Some(first) = equivalence.get(0) {
                         for other in equivalence[1..].iter() {
                             // TODO: Canonicalize information to refer to first column / something.
