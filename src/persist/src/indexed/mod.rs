@@ -20,6 +20,7 @@ pub mod trace;
 
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
+use std::time::Instant;
 
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
@@ -33,7 +34,7 @@ use crate::indexed::encoding::{
     StreamRegistration,
 };
 use crate::indexed::future::{BlobFuture, FutureSnapshot};
-use crate::indexed::metrics::Metrics;
+use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::trace::{BlobTrace, TraceSnapshot};
 use crate::pfuture::FutureHandle;
 use crate::storage::{Blob, Buffer, SeqNo};
@@ -484,6 +485,31 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         ret
     }
 
+    /// Compact all traces, if they have batches that can be compacted.
+    ///
+    /// TODO: currently we do not attempt to compact future batches and instead
+    /// logically delete them from future after all updates contained within a
+    /// given future batch have been moved over to trace. This policy works fine
+    /// assuming data mostly arrives in order, or not very far in advance of the
+    /// currently sealed time. We will need to revisit the future compaction if
+    /// that assumption stops being true.
+    fn compact(&mut self) -> Result<(), Error> {
+        let compaction_start = Instant::now();
+        for (_, trace) in self.traces.iter_mut() {
+            if let Err(e) = trace.step(&mut self.blob) {
+                self.restore();
+                return Err(e);
+            }
+        }
+        self.try_set_meta()?;
+
+        self.metrics
+            .compaction_ms
+            .inc_by(metric_duration_ms(compaction_start.elapsed()));
+
+        Ok(())
+    }
+
     /// Drains writes from the buffer into the future and does any necessary
     /// resulting compaction work.
     ///
@@ -493,8 +519,8 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     pub fn step(&mut self) -> Result<(), Error> {
         self.drain_pending()?;
         self.drain_future()?;
+        self.compact()?;
         Ok(())
-        // TODO: Incrementally compact future.
     }
 
     fn validate_write(
