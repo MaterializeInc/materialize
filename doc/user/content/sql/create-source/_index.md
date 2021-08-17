@@ -20,6 +20,31 @@ Sources represent connections to resources outside Materialize that it can read
 data from. For more information, see [API Components:
 Sources](../../overview/api-components#sources).
 
+## Materialized source details
+
+Materializing a source keeps data it receives in an in-memory
+[index](/overview/api-components/#indexes), the presence of which makes the
+source directly queryable. In contrast, non-materialized sources cannot process
+queries directly; to access the data the source receives, you need to create
+[materialized views](/sql/create-materialized-view) that `SELECT` from the
+source.
+
+For a mental model, materializing the source is approximately equivalent to
+creating a non-materialized source, and then creating a materialized view from
+all of the source's columns:
+
+```sql
+CREATE SOURCE src ...;
+CREATE MATERIALIZED VIEW src_view AS SELECT * FROM src;
+```
+
+The actual implementation of materialized sources differs, though, by letting
+you refer to the source's name directly in queries.
+
+For more details about the impact of materializing sources (and implicitly
+creating an index), see [`CREATE INDEX`: Details &mdash; Memory
+footprint](/sql/create-index/#memory-footprint).
+
 ## Types of sources
 
 Materialize can connect to many different external sources of data, each with
