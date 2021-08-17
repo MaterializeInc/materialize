@@ -26,7 +26,7 @@ use super::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, 
 
 /// A metric that can be made accesible to cloud infrastructure/orchestrators, that won't betray the
 /// contents of the materialize instance that it details.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ThirdPartyMetric<T: Collector + Clone> {
     pub(super) inner: T,
 }
