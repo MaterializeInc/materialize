@@ -57,6 +57,18 @@ You can now include the diagram on a page using:
 
 - `SOME-NONTERMINAL` must be the name of a nonterminal in the BNF.
 
+### Checking links locally
+
+You can check links locally with `htmltest`.
+
+To install on a Mac:
+
+`brew install htmltest`
+
+To check the links:
+
+Run `./ci/www/lint.sh` on your branch.
+
 ## Function + operator docs
 
 The **Functions** you see at
