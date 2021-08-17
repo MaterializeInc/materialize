@@ -18,10 +18,10 @@ version: '3.7'
 
 services:
   shell:
-    image: ubuntu:bionic-20200403
+    image: ubuntu:focal-20210723
 
   check_var1_good1:
-    image: ubuntu:bionic-20200403
+    image: ubuntu:focal-20210723
     command: test ${VAR1} = good1
 
 mzworkflows:
