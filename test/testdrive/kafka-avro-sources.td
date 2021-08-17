@@ -802,6 +802,14 @@ $ set ms-dbz-schema={
             },
             {
               "default": null,
+              "name": "sequence",
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            {
+              "default": null,
               "name": "event_serial_no",
               "type": [
                 "null",
