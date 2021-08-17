@@ -209,7 +209,7 @@ Field        | Type        | Meaning
 `name`       | [`text`]    | The name of the index.
 `on_id`      | [`text`]    | The ID of the relation on which the index is built.
 `volatility` | [`text`]    | Whether the the index is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
-`enabled`    | [`bool`]    | Whether or not the index is available for use, e.g. a user index with the startup option `--disable-user-indexes` applied.
+`enabled`    | [`bool`]    | Whether or not the index represents an [arrangement](/overview/arrangements/). `false` only in the case of [Disabling user indexes](/cli/#disable-user-indexes).
 
 ### `mz_index_columns`
 

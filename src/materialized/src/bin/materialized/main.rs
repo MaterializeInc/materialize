@@ -680,7 +680,17 @@ to improve both our software and your queries! Please reach out at:
     );
 
     if args.disable_user_indexes {
-        eprintln!("Disabling user indexes.");
+        eprintln!(
+            "************************************************************************
+                                NOTE!
+************************************************************************
+Starting Materialize with user indexes disabled.
+
+For more details, see
+    https://materialize.com/docs/cli#user-indexes-disabled
+************************************************************************
+"
+        );
     }
 
     if args.experimental {
