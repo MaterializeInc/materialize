@@ -359,9 +359,10 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                         Value::Union { inner, .. } => *inner,
                         val => val,
                     };
-                    let val = match val.into_string() {
-                        Some(val) => val,
-                        None => {
+                    let val = match val {
+                        Value::String(val) => val,
+                        Value::Null => continue,
+                        _ => {
                             return Err(AvroError::Decode(DecodeError::Custom(
                                 "\"sequence\" is not a string".to_string(),
                             )))

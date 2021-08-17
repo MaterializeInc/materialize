@@ -802,6 +802,14 @@ $ set ms-dbz-schema={
             },
             {
               "default": null,
+              "name": "sequence",
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            {
+              "default": null,
               "name": "event_serial_no",
               "type": [
                 "null",
@@ -824,9 +832,9 @@ $ kafka-create-topic topic=ms-dbz-data
 
 # The third record will be skipped, since `lsn` has gone backwards.
 $ kafka-ingest format=avro topic=ms-dbz-data schema=${ms-dbz-schema} timestamp=1
-{"before": null, "after": {"Value":{"a": 1, "b": 1}}, "source": {"change_lsn": {"string": "00000025:00000728:001b"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
-{"before": null, "after": {"Value":{"a": 2, "b": 3}}, "source": {"change_lsn": {"string": "00000025:00000728:001c"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
-{"before": null, "after": {"Value":{"a": -1, "b": 7}}, "source": {"change_lsn": {"string": "00000025:00000728:001a"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": 1, "b": 1}}, "source": {"change_lsn": {"string": "00000025:00000728:001b"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": 2, "b": 3}}, "source": {"change_lsn": {"string": "00000025:00000728:001c"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": -1, "b": 7}}, "source": {"change_lsn": {"string": "00000025:00000728:001a"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
 
 > CREATE MATERIALIZED SOURCE ms_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}'
