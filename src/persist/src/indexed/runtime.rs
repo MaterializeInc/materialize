@@ -351,6 +351,13 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
         self.runtime.seal(&[self.id], upper, tx);
         rx
     }
+
+    /// Unblocks compaction for updates at or before `since`.
+    pub fn allow_compaction(&self, since: u64) -> Future<()> {
+        let (tx, rx) = Future::new();
+        self.runtime.allow_compaction(self.id, since, tx);
+        rx
+    }
 }
 
 /// A handle for writing to multiple streams.

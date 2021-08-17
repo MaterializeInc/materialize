@@ -1200,6 +1200,28 @@ impl Coordinator {
             .collect();
 
         if !since_updates.is_empty() {
+            // WIP HACKS
+            let since_ts = since_updates[0].1[0];
+            for id in [GlobalId::System(4043), GlobalId::System(4047)].iter() {
+                match self.catalog.try_get_by_id(*id).map(|e| e.item()) {
+                    Some(CatalogItem::Table(Table {
+                        persist: Some(persist),
+                        ..
+                    })) => {
+                        let seal_res = persist.write_handle.allow_compaction(since_ts);
+                        let _ = tokio::spawn(async move {
+                            if let Err(_err) = seal_res.into_future().await {
+                                // log::error!(
+                                //     "failed to allow compaction on persisted stream to ts {:?}: {}",
+                                //     since_ts,
+                                //     err
+                                // );
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
             self.broadcast(dataflow::Command::AllowCompaction(since_updates));
         }
     }

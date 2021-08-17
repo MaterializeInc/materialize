@@ -507,6 +507,24 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
         self.try_set_meta()?;
 
+        // if cfg!(feature = "nope") {
+        let mut trace_blob_levels = Vec::new();
+        for level in self
+            .serialize_meta()
+            .traces
+            .iter()
+            .flat_map(|t| t.batches.iter())
+            .map(|b| b.level)
+        {
+            let level = usize::cast_from(level);
+            if level >= trace_blob_levels.len() {
+                trace_blob_levels.resize(level + 1, 0);
+            }
+            trace_blob_levels[level] += 1;
+        }
+        log::warn!("persist trace blob levels: {:?}", &trace_blob_levels);
+        // }
+
         self.metrics
             .compaction_ms
             .inc_by(metric_duration_ms(compaction_start.elapsed()));
