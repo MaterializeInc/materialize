@@ -16,7 +16,7 @@ use hyper::StatusCode;
 use hyper::{Body, Response};
 use lazy_static::lazy_static;
 
-use ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError};
+use ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
 
 lazy_static! {
     pub static ref SCHEMA_REGISTRY_URL: reqwest::Url = match env::var("SCHEMA_REGISTRY_URL") {
@@ -51,11 +51,13 @@ async fn test_client() -> Result<(), anyhow::Error> {
 
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 0);
 
-    let schema_v1_id = client.publish_schema("ccsr-test-schema", schema_v1).await?;
+    let schema_v1_id = client
+        .publish_schema("ccsr-test-schema", schema_v1, &SchemaType::Avro)
+        .await?;
     assert!(schema_v1_id > 0);
 
     match client
-        .publish_schema("ccsr-test-schema", schema_v2_incompat)
+        .publish_schema("ccsr-test-schema", schema_v2_incompat, &SchemaType::Avro)
         .await
     {
         Err(PublishError::IncompatibleSchema) => (),
@@ -68,13 +70,17 @@ async fn test_client() -> Result<(), anyhow::Error> {
         assert_raw_schemas_eq(schema_v1, &res.raw);
     }
 
-    let schema_v2_id = client.publish_schema("ccsr-test-schema", schema_v2).await?;
+    let schema_v2_id = client
+        .publish_schema("ccsr-test-schema", schema_v2, &SchemaType::Avro)
+        .await?;
     assert!(schema_v2_id > 0);
     assert!(schema_v2_id > schema_v1_id);
 
     assert_eq!(
         schema_v1_id,
-        client.publish_schema("ccsr-test-schema", schema_v1).await?
+        client
+            .publish_schema("ccsr-test-schema", schema_v1, &SchemaType::Avro)
+            .await?
     );
 
     {
@@ -95,7 +101,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 1);
 
     client
-        .publish_schema("ccsr-test-another-schema", "\"int\"")
+        .publish_schema("ccsr-test-another-schema", "\"int\"", &SchemaType::Avro)
         .await?;
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 2);
 
@@ -119,7 +125,10 @@ async fn test_client_errors() -> Result<(), anyhow::Error> {
     }
 
     // Publish-specific errors.
-    match client.publish_schema("ccsr-test-schema", "blah").await {
+    match client
+        .publish_schema("ccsr-test-schema", "blah", &SchemaType::Avro)
+        .await
+    {
         Err(PublishError::InvalidSchema) => (),
         res => panic!("expected PublishError::InvalidSchema, got {:?}", res),
     }
@@ -144,7 +153,10 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
         r#"{ "error_code": 50001, "message": "overloaded; try again later" }"#,
     )?;
 
-    match client_graceful.publish_schema("foo", "bar").await {
+    match client_graceful
+        .publish_schema("foo", "bar", &SchemaType::Avro)
+        .await
+    {
         Err(PublishError::Server {
             code: 50001,
             ref message,
@@ -184,7 +196,10 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
         r#"panic! an exception occured!"#,
     )?;
 
-    match client_crash.publish_schema("foo", "bar").await {
+    match client_crash
+        .publish_schema("foo", "bar", &SchemaType::Avro)
+        .await
+    {
         Err(PublishError::Server {
             code: 500,
             ref message,

@@ -103,13 +103,15 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
     let mut args = HashMap::new();
     for el in builtin_reader {
         let (pos, token) = el?;
-        let pieces: Vec<_> = token.splitn(2, '=').collect();
-        if pieces.len() != 2 {
-            return Err(InputError {
-                msg: "command argument is not in required key=value format".into(),
-                pos,
-            });
-        }
+        let pieces = match token.split_once('=') {
+            Some((key, value)) => vec![key, value],
+            None => {
+                return Err(InputError {
+                    msg: "command argument is not in required key=value format".into(),
+                    pos,
+                });
+            }
+        };
         lazy_static! {
             static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
         }
@@ -475,6 +477,26 @@ impl<'a> Iterator for BuiltinReader<'a> {
                             if c == '}' { "brace" } else { "bracket" }
                         ),
                     }));
+                }
+            } else if c == '\'' {
+                if nesting.is_empty() {
+                    nesting.push(c);
+                } else {
+                    if let Some(&'\'') = nesting.last() {
+                        nesting.pop();
+                    } else {
+                        return Some(Err(InputError {
+                            pos: self.pos + i,
+                            msg: "command argument has unterminated single quote".to_owned(),
+                        }));
+                    }
+                }
+                continue;
+            } else if c == '\"' {
+                if let Some(&'\"') = nesting.last() {
+                    nesting.pop();
+                } else {
+                    nesting.push(c);
                 }
             }
             token.push(c);

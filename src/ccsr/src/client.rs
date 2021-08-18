@@ -70,10 +70,15 @@ impl Client {
     /// Note that if a schema that is identical to an existing schema for the
     /// same subject is published, the ID of the existing schema will be
     /// returned.
-    pub async fn publish_schema(&self, subject: &str, schema: &str) -> Result<i32, PublishError> {
+    pub async fn publish_schema(
+        &self,
+        subject: &str,
+        schema: &str,
+        schema_type: &SchemaType,
+    ) -> Result<i32, PublishError> {
         let req = self
             .make_request(Method::POST, format!("/subjects/{}/versions", subject))
-            .json(&json!({ "schema": schema }));
+            .json(&json!({ "schema": schema, "schemaType":  format!("{}", &schema_type) }));
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
     }
@@ -115,6 +120,23 @@ where
                 code: i32::from(status.as_u16()),
                 message: "unable to decode error details".into(),
             }),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum SchemaType {
+    Avro,
+    Protobuf,
+    Json,
+}
+
+impl fmt::Display for SchemaType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SchemaType::Avro => write!(f, "AVRO"),
+            SchemaType::Protobuf => write!(f, "PROTOBUF"),
+            SchemaType::Json => write!(f, "JSON"),
         }
     }
 }

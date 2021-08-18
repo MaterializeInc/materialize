@@ -44,6 +44,8 @@ enum Format {
     },
     Protobuf {
         message: protobuf::MessageType,
+        schema: Option<String>,
+        confluent_wire_format: bool,
     },
     Bytes {
         terminator: Option<u8>,
@@ -158,9 +160,16 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             schema: cmd.args.string("schema")?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         },
-        "protobuf" => Format::Protobuf {
-            message: cmd.args.parse("message")?,
-        },
+        "protobuf" => {
+            let message = cmd.args.parse("message")?;
+            let schema = cmd.args.opt_parse::<String>("schema")?;
+            let confluent_wire_format = cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true);
+            Format::Protobuf {
+                message,
+                schema,
+                confluent_wire_format,
+            }
+        }
         "bytes" => Format::Bytes { terminator: None },
         f => return Err(format!("unknown format: {}", f)),
     };
@@ -169,9 +178,16 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             schema: cmd.args.string("key-schema")?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         }),
-        Some("protobuf") => Some(Format::Protobuf {
-            message: cmd.args.parse("key-message")?,
-        }),
+        Some("protobuf") => {
+            let message = cmd.args.parse("key-message")?;
+            let schema = cmd.args.opt_parse::<String>("key-schema")?;
+            let confluent_wire_format = cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true);
+            Some(Format::Protobuf {
+                message,
+                schema,
+                confluent_wire_format,
+            })
+        }
         Some("bytes") => Some(Format::Bytes {
             terminator: match cmd.args.opt_parse::<char>("key-terminator")? {
                 Some(c) if c.is_ascii() => Some(c as u8),
@@ -237,7 +253,7 @@ impl Action for IngestAction {
                     let schema_id = if self.publish {
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
                         let schema_id = ccsr_client
-                            .publish_schema(&ccsr_subject, &schema)
+                            .publish_schema(&ccsr_subject, &schema, &ccsr::SchemaType::Avro)
                             .await
                             .map_err(|e| format!("schema registry error: {}", e))?;
                         schema_id
@@ -252,7 +268,19 @@ impl Action for IngestAction {
                         confluent_wire_format,
                     })
                 }
-                Format::Protobuf { message } => Ok(Transcoder::Protobuf { message }),
+                Format::Protobuf {
+                    message, schema, ..
+                } => {
+                    if self.publish {
+                        let schema = schema.expect("schema");
+                        let ccsr_subject = format!("{}-{}", topic_name, typ);
+                        ccsr_client
+                            .publish_schema(&ccsr_subject, &schema, &ccsr::SchemaType::Protobuf)
+                            .await
+                            .map_err(|e| format!("schema registry error: {}", e))?;
+                    }
+                    Ok(Transcoder::Protobuf { message })
+                }
                 Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
             }
         };
