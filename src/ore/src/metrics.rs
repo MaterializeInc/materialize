@@ -45,7 +45,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use prometheus::core::{
-    Atomic, AtomicF64, AtomicI64, AtomicU64, Collector, GenericCounter, GenericCounterVec,
+    Atomic, AtomicF64, AtomicI64, AtomicU64, Collector, Desc, GenericCounter, GenericCounterVec,
     GenericGauge, GenericGaugeVec, Opts,
 };
 use prometheus::proto::MetricFamily;
@@ -54,15 +54,12 @@ use prometheus::{HistogramOpts, Registry};
 use crate::stats::HISTOGRAM_BUCKETS;
 
 pub use prometheus::Opts as PrometheusOpts;
-pub use prometheus::{
-    Counter, CounterVec, Gauge, Histogram, HistogramVec, IntCounter, IntCounterVec, IntGauge,
-    IntGaugeVec, UIntCounter, UIntCounterVec, UIntGauge, UIntGaugeVec,
-};
 
 mod delete_on_drop;
 mod third_party_metric;
 
 pub use delete_on_drop::*;
+use std::fmt::{Debug, Formatter};
 pub use third_party_metric::*;
 
 /// Define a metric for use in materialize.
@@ -96,6 +93,94 @@ pub struct MetricsRegistry {
     inner: Registry,
     third_party: Registry,
 }
+
+/// A wrapper for metrics to require delete on drop semantics
+#[derive(Clone)]
+pub struct DeleteOnDropWrapper<M> {
+    inner: M,
+}
+
+impl<M: MakeCollector + Debug> Debug for DeleteOnDropWrapper<M> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<M: Collector> Collector for DeleteOnDropWrapper<M> {
+    fn desc(&self) -> Vec<&Desc> {
+        self.inner.desc()
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        self.inner.collect()
+    }
+}
+
+impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
+    fn make_collector(opts: PrometheusOpts) -> Self {
+        DeleteOnDropWrapper {
+            inner: M::make_collector(opts),
+        }
+    }
+}
+
+impl<M: GaugeVecExt> GaugeVecExt for DeleteOnDropWrapper<M> {
+    type GaugeType = M::GaugeType;
+
+    fn get_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropGauge<'a, Self::GaugeType, L> {
+        self.inner.get_delete_on_drop_gauge(labels)
+    }
+}
+
+impl<M: CounterVecExt> CounterVecExt for DeleteOnDropWrapper<M> {
+    type CounterType = M::CounterType;
+
+    fn get_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropCounter<'a, Self::CounterType, L> {
+        self.inner.get_delete_on_drop_counter(labels)
+    }
+}
+
+impl<M: HistogramVecExt> HistogramVecExt for DeleteOnDropWrapper<M> {
+    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropHistogram<'a, L> {
+        self.inner.get_delete_on_drop_histogram(labels)
+    }
+}
+
+/// Shadow of Prometheus [prometheus::Counter].
+pub type Counter = prometheus::Counter;
+/// Delete-on-drop shadow of Prometheus [prometheus::CounterVec].
+pub type CounterVec = DeleteOnDropWrapper<prometheus::CounterVec>;
+/// Delete-on-drop shadow of Prometheus [prometheus::Gauge].
+pub type Gauge = DeleteOnDropWrapper<prometheus::Gauge>;
+/// Shadow of Prometheus [prometheus::Histogram].
+pub type Histogram = prometheus::Histogram;
+/// Delete-on-drop shadow of Prometheus [prometheus::HistogramVec].
+pub type HistogramVec = DeleteOnDropWrapper<prometheus::HistogramVec>;
+/// Shadow of Prometheus [prometheus::IntCounter].
+pub type IntCounter = prometheus::IntCounter;
+/// Delete-on-drop shadow of Prometheus [prometheus::IntCounterVec].
+pub type IntCounterVec = DeleteOnDropWrapper<prometheus::IntCounterVec>;
+/// Shadow of Prometheus [prometheus::IntGauge].
+pub type IntGauge = prometheus::IntGauge;
+/// Delete-on-drop shadow of Prometheus [prometheus::IntGaugeVec].
+pub type IntGaugeVec = DeleteOnDropWrapper<prometheus::IntGaugeVec>;
+/// Shadow of Prometheus [prometheus::UIntCounter].
+pub type UIntCounter = prometheus::UIntCounter;
+/// Delete-on-drop shadow of Prometheus [prometheus::UIntCounterVec].
+pub type UIntCounterVec = DeleteOnDropWrapper<prometheus::UIntCounterVec>;
+/// Shadow of Prometheus [prometheus::UIntGauge].
+pub type UIntGauge = prometheus::UIntGauge;
+/// Delete-on-drop shadow of Prometheus [prometheus::UIntGaugeVec].
+pub type UIntGaugeVec = DeleteOnDropWrapper<prometheus::UIntGaugeVec>;
 
 impl MetricsRegistry {
     /// Creates a new metrics registry.
@@ -225,7 +310,7 @@ where
     }
 }
 
-impl MakeCollector for HistogramVec {
+impl MakeCollector for prometheus::HistogramVec {
     fn make_collector(opts: Opts) -> Self {
         let labels = opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();

@@ -58,9 +58,7 @@ fn thirdparty_metric_vecs() {
         help: "an third_party counter for testing",
         var_labels: ["label"],
     ));
-    let counter = cv
-        .get_third_party_metric_with_label_values(&["testing"])
-        .unwrap();
+    let counter = cv.get_third_party_delete_on_drop_counter(vec!["testing".to_string()]);
     counter.inc();
     let readings = reg.gather_third_party_visible();
     assert_eq!(readings.len(), 1);

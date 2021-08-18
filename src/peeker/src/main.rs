@@ -22,12 +22,13 @@ use hyper::{Body, Response, Server};
 use log::{debug, error, info, warn};
 use ore::{
     metric,
-    metrics::{HistogramVec, IntCounterVec, MetricsRegistry},
+    metrics::{CounterVecExt, HistogramVecExt, IntCounterVec, MetricsRegistry},
 };
 use postgres::Client;
 use prometheus::Encoder;
 
 use crate::args::{Args, Config, QueryGroup, Source};
+use ore::metrics::HistogramVec;
 
 mod args;
 
@@ -138,8 +139,12 @@ fn spawn_query_thread(
                     let stmt = postgres_client
                         .prepare(&format!("SELECT * FROM {}", q.name))
                         .expect("should be able to prepare a query");
-                    let hist = metrics.histogram_unlabeled.with_label_values(&[&q.name]);
-                    let rows_counter = metrics.rows_unlabeled.with_label_values(&[&q.name]);
+                    let hist = metrics
+                        .histogram_unlabeled
+                        .get_delete_on_drop_histogram(vec![q.name.clone()]);
+                    let rows_counter = metrics
+                        .rows_unlabeled
+                        .get_delete_on_drop_counter(vec![q.name.clone()]);
                     (stmt, q.name.clone(), hist, rows_counter)
                 })
                 .collect::<Vec<_>>();
@@ -171,7 +176,7 @@ fn spawn_query_thread(
                         Err(err) => {
                             timer.stop_and_discard();
                             err_count += 1;
-                            metrics.error(&q_name);
+                            metrics.error(q_name.clone());
                             last_was_failure = true;
                             print_error_and_backoff(&mut backoff, &q_name, err.to_string());
                             try_initialize(&mut postgres_client, &group);
@@ -381,9 +386,9 @@ impl Metrics {
         }
     }
 
-    fn error(&self, query_name: &str) {
+    fn error(&self, query_name: String) {
         self.errors_unlabeled
-            .with_label_values(&[&query_name])
+            .get_delete_on_drop_counter(vec![query_name])
             .inc();
     }
 }

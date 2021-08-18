@@ -9,8 +9,10 @@
 
 use std::marker::PhantomData;
 
-use ore::metrics::ThirdPartyMetric;
-use prometheus::IntCounterVec;
+use ore::metrics::{DeleteOnDropCounter, IntCounterVec, ThirdPartyMetric};
+use prometheus::core::AtomicI64;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tracing::span::{Attributes, Record};
 use tracing::subscriber::Interest;
 use tracing::{Event, Id, Metadata, Subscriber};
@@ -124,6 +126,8 @@ where
 /// incrementing a counter for the severity of messages reported.
 pub struct MetricsRecorderLayer<S> {
     counter: ThirdPartyMetric<IntCounterVec>,
+    level_counter:
+        Arc<RwLock<HashMap<String, DeleteOnDropCounter<'static, AtomicI64, Vec<String>>>>>,
     _inner: PhantomData<S>,
 }
 
@@ -132,6 +136,7 @@ impl<S> MetricsRecorderLayer<S> {
     pub fn new(counter: ThirdPartyMetric<IntCounterVec>) -> Self {
         Self {
             counter,
+            level_counter: Arc::new(RwLock::new(HashMap::new())),
             _inner: PhantomData,
         }
     }
@@ -143,9 +148,14 @@ where
 {
     fn on_event(&self, ev: &Event<'_>, _ctx: Context<'_, S>) {
         let metadata = ev.metadata();
-        self.counter
-            .third_party_metric_with_label_values(&[&metadata.level().to_string()])
-            .inc();
+        let key = metadata.level().to_string();
+        let mut lock = self.level_counter.write().unwrap();
+        lock.entry(key.clone())
+            .or_insert_with(|| {
+                self.counter
+                    .get_third_party_delete_on_drop_counter(vec![key.to_string()])
+            })
+            .inc()
     }
 }
 
@@ -156,8 +166,7 @@ mod test {
     use super::MetricsRecorderLayer;
     use log::{error, info, warn};
     use ore::metric;
-    use ore::metrics::{MetricsRegistry, ThirdPartyMetric};
-    use prometheus::IntCounterVec;
+    use ore::metrics::{IntCounterVec, MetricsRegistry, ThirdPartyMetric};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 

@@ -33,6 +33,7 @@ use prometheus::core::{
     Atomic, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec, MetricVec,
     MetricVecBuilder,
 };
+use prometheus::{Histogram, HistogramVec};
 
 /// An extension trait for types that are valid (or convertible into) prometheus labels:
 /// slices/vectors of strings, and [`HashMap`]s.
@@ -147,12 +148,70 @@ impl<'a> PromLabelsExt<'a> for HashMap<&'a str, &'a str> {
 /// It adds a method to create a concrete metric from the vector that gets removed from the vector
 /// when the concrete metric is dropped.
 #[derive(Debug)]
+pub struct DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    inner: Option<Histogram>,
+    labels: L,
+    vec: HistogramVec,
+    _phantom: &'a PhantomData<()>,
+}
+
+impl<'a, L> DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    fn from_metric_vector(vec: &HistogramVec, labels: L) -> Self {
+        let inner = Some(labels.get_from_metric_vec(vec));
+        Self {
+            inner,
+            labels,
+            vec: vec.clone(),
+            _phantom: &PhantomData,
+        }
+    }
+
+    /// Leaks the inner counter. Use with caution!
+    ///
+    /// Prevents dropping the metric label.
+    pub fn leak(mut self) -> Histogram {
+        self.inner.take().unwrap()
+    }
+}
+
+impl<'a, L> Deref for DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    type Target = Histogram;
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref().unwrap()
+    }
+}
+
+impl<'a, L> Drop for DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    fn drop(&mut self) {
+        if self.inner.is_some() && self.labels.remove_from_metric_vec(&self.vec).is_err() {
+            // ignore.
+        }
+    }
+}
+
+/// A [`GenericCounter`] wrapper that deletes its labels from the vec when it is dropped
+///
+/// It adds a method to create a concrete metric from the vector that gets removed from the vector
+/// when the concrete metric is dropped.
+#[derive(Debug)]
 pub struct DeleteOnDropCounter<'a, P, L>
 where
     P: Atomic,
     L: PromLabelsExt<'a>,
 {
-    inner: GenericCounter<P>,
+    inner: Option<GenericCounter<P>>,
     labels: L,
     vec: GenericCounterVec<P>,
     _phantom: &'a PhantomData<()>,
@@ -164,13 +223,20 @@ where
     L: PromLabelsExt<'a>,
 {
     fn from_metric_vector(vec: &GenericCounterVec<P>, labels: L) -> Self {
-        let inner = labels.get_from_metric_vec(vec);
+        let inner = Some(labels.get_from_metric_vec(vec));
         Self {
             inner,
             labels,
             vec: vec.clone(),
             _phantom: &PhantomData,
         }
+    }
+
+    /// Leaks the inner counter. Use with caution!
+    ///
+    /// Prevents dropping the metric label.
+    pub fn leak(mut self) -> GenericCounter<P> {
+        self.inner.take().unwrap()
     }
 }
 
@@ -181,7 +247,7 @@ where
 {
     type Target = GenericCounter<P>;
     fn deref(&self) -> &GenericCounter<P> {
-        &self.inner
+        self.inner.as_ref().unwrap()
     }
 }
 
@@ -191,7 +257,7 @@ where
     L: PromLabelsExt<'a>,
 {
     fn drop(&mut self) {
-        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
+        if self.inner.is_some() && self.labels.remove_from_metric_vec(&self.vec).is_err() {
             // ignore.
         }
     }
@@ -224,6 +290,28 @@ impl<P: Atomic> CounterVecExt for GenericCounterVec<P> {
     }
 }
 
+/// Extension trait for all gauge metrics vectors.
+///
+/// It adds a method to create a concrete metric from the vector that gets removed from the vector
+/// when the concrete metric is dropped.
+pub trait HistogramVecExt {
+    /// Returns a counter that deletes its labels from this metrics vector when dropped.
+    /// See [`DeleteOnDropCounter`] for a detailed description.
+    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropHistogram<'a, L>;
+}
+
+impl HistogramVecExt for HistogramVec {
+    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropHistogram<'a, L> {
+        DeleteOnDropHistogram::from_metric_vector(self, labels)
+    }
+}
+
 /// A [`GenericGauge`] wrapper that deletes its labels from the vec when it is dropped
 #[derive(Debug)]
 pub struct DeleteOnDropGauge<'a, P, L>
@@ -231,7 +319,7 @@ where
     P: Atomic,
     L: PromLabelsExt<'a>,
 {
-    inner: GenericGauge<P>,
+    inner: Option<GenericGauge<P>>,
     labels: L,
     vec: GenericGaugeVec<P>,
     _phantom: &'a PhantomData<()>,
@@ -243,13 +331,20 @@ where
     L: PromLabelsExt<'a>,
 {
     fn from_metric_vector(vec: &GenericGaugeVec<P>, labels: L) -> Self {
-        let inner = labels.get_from_metric_vec(vec);
+        let inner = Some(labels.get_from_metric_vec(vec));
         Self {
             inner,
             labels,
             vec: vec.clone(),
             _phantom: &PhantomData,
         }
+    }
+
+    /// Leaks the inner counter. Use with caution!
+    ///
+    /// Prevents dropping the metric label.
+    pub fn leak(mut self) -> GenericGauge<P> {
+        self.inner.take().unwrap()
     }
 }
 
@@ -260,7 +355,7 @@ where
 {
     type Target = GenericGauge<P>;
     fn deref(&self) -> &GenericGauge<P> {
-        &self.inner
+        self.inner.as_ref().unwrap()
     }
 }
 
@@ -270,7 +365,7 @@ where
     L: PromLabelsExt<'a>,
 {
     fn drop(&mut self) {
-        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
+        if self.inner.is_some() && self.labels.remove_from_metric_vec(&self.vec).is_err() {
             // ignore.
         }
     }

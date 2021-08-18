@@ -9,6 +9,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::ops::Deref;
 use std::panic;
@@ -25,7 +26,7 @@ use log::{debug, error, info, log_enabled, warn};
 use mz_avro::schema::Schema;
 use mz_avro::types::Value;
 use ore::metric;
-use ore::metrics::{IntGaugeVec, MetricsRegistry};
+use ore::metrics::{GaugeVecExt, IntGaugeVec, MetricsRegistry};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
@@ -929,6 +930,7 @@ fn rt_kafka_metadata_fetch_loop(
     );
 
     let mut current_partition_count = 0;
+    let mut max_available_offsets_metrics = vec![];
 
     while !c.coordination_state.stop.load(Ordering::SeqCst) {
         match get_kafka_partitions(&consumer, &c.topic, Duration::from_secs(30)) {
@@ -985,12 +987,16 @@ fn rt_kafka_metadata_fetch_loop(
         for pid in 0..current_partition_count {
             match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(30)) {
                 Ok((_low, high)) => {
-                    let max_offset = metrics.max_available_offset.with_label_values(&[
-                        &c.topic,
-                        &c.id.to_string(),
-                        &pid.to_string(),
-                    ]);
-                    max_offset.set(high);
+                    while max_available_offsets_metrics.len() <= usize::try_from(pid).unwrap() {
+                        max_available_offsets_metrics.push(
+                            metrics.max_available_offset.get_delete_on_drop_gauge(vec![
+                                c.topic.clone(),
+                                c.id.to_string(),
+                                pid.to_string(),
+                            ]),
+                        );
+                    }
+                    max_available_offsets_metrics[usize::try_from(pid).unwrap()].set(high);
                 }
                 Err(e) => {
                     error!(
