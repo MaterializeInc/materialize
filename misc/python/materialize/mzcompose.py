@@ -256,9 +256,9 @@ class Composition:
                 else:
                     self.images.append(image)
 
-                if "propagate-uid-gid" in config:
+                if "propagate_uid_gid" in config:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
-                    del config["propagate-uid-gid"]
+                    del config["propagate_uid_gid"]
 
             if self.repo.rd.coverage:
                 # Emit coverage information to a file in a directory that is
@@ -596,23 +596,18 @@ class Workflow:
         return self.composition.run(args, self.env, capture=capture)
 
 
-PythonServiceConfig = TypedDict(
-    "PythonServiceConfig",
-    {
-        "mzbuild": str,
-        "image": str,
-        "hostname": str,
-        "command": str,
-        "ports": List[int],
-        "environment": List[str],
-        "depends_on": List[str],
-        "entrypoint": List[str],
-        "volumes": List[str],
-        "propagate-uid-gid": bool,
-        "init": bool,
-    },
-    total=False,
-)
+class PythonServiceConfig(TypedDict, total=False):
+    mzbuild: str
+    image: str
+    hostname: str
+    command: str
+    ports: List[int]
+    environment: List[str]
+    depends_on: List[str]
+    entrypoint: List[str]
+    volumes: List[str]
+    propagate_uid_gid: bool
+    init: bool
 
 
 class PythonService:
@@ -787,7 +782,7 @@ class Testdrive(PythonService):
                 ],
                 "environment": environment,
                 "volumes": volumes,
-                "propagate-uid-gid": True,
+                "propagate_uid_gid": True,
                 "init": True,
             },
         )
@@ -815,7 +810,7 @@ class SqlLogicTest(PythonService):
                 "environment": environment,
                 "volumes": volumes,
                 "depends_on": depends_on,
-                "propagate-uid-gid": True,
+                "propagate_uid_gid": True,
                 "init": True,
             },
         )

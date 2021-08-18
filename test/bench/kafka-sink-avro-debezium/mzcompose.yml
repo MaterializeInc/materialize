@@ -103,7 +103,7 @@ services:
   # All monitoring
   dashboard:
     mzbuild: dashboard
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:

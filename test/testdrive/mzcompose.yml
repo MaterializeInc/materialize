@@ -138,7 +138,7 @@ services:
     - .:/workdir
     - mzdata:/share/mzdata
     - tmp:/share/tmp
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     init: true
   materialized:
     mzbuild: materialized
