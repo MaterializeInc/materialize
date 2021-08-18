@@ -189,11 +189,11 @@ false)`.
 ### `PROGRESS`
 
 If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional
-`progressed` column appears in the output.
+`mz_progressed` column appears in the output.
 It is `false` if there may be more rows with the same timestamp.
 It is `true` if no more timestamps will appear that are strictly less than the
 timestamp.
-All further columns after `progressed` will be `NULL` in the `true` case.
+All further columns after `mz_progressed` will be `NULL` in the `true` case.
 
 Intuitively, progress messages communicate that no updates have occurred in a
 given time window. Without explicit progress messages, it is impossible to
