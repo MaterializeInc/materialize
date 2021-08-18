@@ -13,11 +13,27 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro mz_create_source(sql) -%}
-  {# todo@jldlaughlin: figure out docs and hooks! #}
+{% materialization source, adapter='materialize' %}
+  {%- set identifier = model['alias'] -%}
+  {%- set target_relation = api.Relation.create(identifier=identifier,
+                                                schema=schema,
+                                                database=database,
+                                                type='source') -%}
+
+  {% set source_name %}
+      {{ mz_generate_name(identifier) }}
+  {% endset %}
+  {{ materialize__drop_source(source_name) }}
+
+  {{ run_hooks(pre_hooks, inside_transaction=False) }}
 
   {% call statement('main', auto_begin=False) -%}
     {{ materialize__create_arbitrary_object(sql) }}
   {%- endcall %}
 
-{% endmacro %}
+  {% do persist_docs(target_relation, model) %}
+
+  {{ run_hooks(post_hooks, inside_transaction=False) }}
+
+  {{ return({'relations': [target_relation]}) }}
+{% endmaterialization %}

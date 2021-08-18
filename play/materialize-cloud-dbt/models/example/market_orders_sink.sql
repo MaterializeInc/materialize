@@ -13,11 +13,14 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro mz_create_sink(sql) -%}
-  {# todo@jldlaughlin: figure out docs and hooks! #}
+{{ config(materialized='sink') }}
 
-  {% call statement('main', auto_begin=False) -%}
-    {{ materialize__create_arbitrary_object(sql) }}
-  {%- endcall %}
+{% set sink_name %}
+    {{ mz_generate_name('market_orders_sink') }}
+{% endset %}
 
-{% endmacro %}
+CREATE SINK {{ sink_name }}
+FROM {{ ref('market_orders') }}
+INTO KAFKA BROKER 'localhost:9092' TOPIC 'market-orders-sink'
+FORMAT AVRO USING
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';

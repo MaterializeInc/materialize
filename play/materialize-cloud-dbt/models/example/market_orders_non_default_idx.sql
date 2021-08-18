@@ -13,16 +13,12 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro mz_drop_sink(name, if_exists=True) -%}
-  {# todo@jldlaughlin: figure out docs and hooks! #}
+{{ config(materialized='index') }}
 
-  {% set dropstmt %}
-    DROP SINK
-    {% if if_exists %}
-        IF EXISTS
-    {% endif %}
-    {{ name }}
-  {% endset %}
+{% set index_name %}
+    "{{ mz_generate_name('market_orders_non_default_idx') }}"
+{% endset %}
 
-  {% do run_query(dropstmt) %}
-{% endmacro %}
+
+CREATE INDEX {{ index_name }}
+ON {{ ref('market_orders_raw') }} ("text")

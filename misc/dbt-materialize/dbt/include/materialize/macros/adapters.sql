@@ -57,6 +57,24 @@
   {%- endcall %}
 {% endmacro %}
 
+{% macro materialize__drop_source(source_name) -%}
+  {% call statement('drop_source', auto_begin=False) -%}
+    drop source if exists {{ source_name }} cascade
+  {%- endcall %}
+{% endmacro %}
+
+{% macro materialize__drop_index(index_name) -%}
+  {% call statement('drop_index', auto_begin=False) -%}
+    drop index if exists {{ index_name }} cascade
+  {%- endcall %}
+{% endmacro %}
+
+{% macro materialize__drop_sink(sink_name) -%}
+  {% call statement('drop_sink', auto_begin=False) -%}
+    drop sink if exists {{ sink_name }}
+  {%- endcall %}
+{% endmacro %}
+
 {% macro materialize__drop_relation(relation) -%}
   {% call statement('drop_relation', auto_begin=False) -%}
     drop view if exists {{ relation }} cascade

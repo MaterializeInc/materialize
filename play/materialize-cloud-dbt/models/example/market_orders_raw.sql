@@ -13,20 +13,12 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro mz_drop_source(name, if_exists=True, cascade=False) -%}
-  {# todo@jldlaughlin: figure out docs and hooks! #}
+{{ config(materialized='source') }}
 
-  {% set dropstmt %}
-    DROP SOURCE
-    {% if if_exists %}
-        IF EXISTS
-    {% endif %}
-    {{ name }}
-    {% if cascade %}
-        CASCADE
-    {% endif %}
-  {% endset %}
+{% set source_name %}
+    {{ mz_generate_name('market_orders_raw') }}
+{% endset %}
 
-  {% do run_query(dropstmt) %}
-
-{% endmacro %}
+CREATE MATERIALIZED SOURCE {{ source_name }} FROM PUBNUB
+SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+CHANNEL 'pubnub-market-orders'
