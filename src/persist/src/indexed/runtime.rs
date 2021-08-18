@@ -659,7 +659,10 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             match cmd {
                 Cmd::Stop(res) => {
                     // Finish up any pending work that we can before closing.
-                    let _ = self.indexed.step();
+                    if let Err(e) = self.indexed.step() {
+                        self.metrics.cmd_step_error_count.inc();
+                        log::warn!("error running step: {:?}", e);
+                    }
                     res.fill(self.indexed.close());
                     return false;
                 }
@@ -695,6 +698,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             .inc_by(metric_duration_ms(step_start.duration_since(run_start)));
 
         if let Err(e) = self.indexed.step() {
+            self.metrics.cmd_step_error_count.inc();
             // TODO: revisit whether we need to move this to a different log level
             // depending on how spammy it ends up being. Alternatively, we
             // may want to rate-limit our logging here.

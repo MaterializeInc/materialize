@@ -474,6 +474,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 Ok(())
             }
             Err(e) => {
+                self.metrics
+                    .cmd_failed_count
+                    .inc_by(u64::cast_from(self.pending_responses.len()));
                 self.pending_responses
                     .drain(..)
                     .for_each(|r| r.fill_err(e.clone()));
@@ -490,6 +493,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     }
 
     fn compact_inner(&mut self) -> Result<(), Error> {
+        let mut total_written_bytes = 0;
         let mut deleted_unsealed_batches = vec![];
         let mut deleted_trace_batches = vec![];
         for (id, trace) in self.traces.iter_mut() {
@@ -498,10 +502,19 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
             deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
-            deleted_trace_batches.extend(trace.step(&mut self.blob)?);
+            let (written_bytes, deleted_batches) = trace.step(&mut self.blob)?;
+            total_written_bytes += written_bytes;
+            deleted_trace_batches.extend(deleted_batches);
         }
 
         self.try_set_meta()?;
+
+        if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
+            self.metrics.compaction_count.inc();
+        }
+        self.metrics
+            .compaction_write_bytes
+            .inc_by(total_written_bytes);
 
         // After we've committed our logical deletions to durable storage, we can
         // physically delete the data.
@@ -704,11 +717,22 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             )
         })?;
 
-        let update_count: usize = updates_for_listeners.values().map(|x| x.len()).sum();
-
-        self.metrics
-            .cmd_write_record_count
-            .inc_by(u64::cast_from(update_count));
+        {
+            let mut update_count = 0;
+            let mut update_bytes = 0;
+            for updates in updates_for_listeners.values() {
+                update_count += updates.len();
+                for ((k, v), _, _) in updates.iter() {
+                    update_bytes += k.len() + v.len() + 8 + 8;
+                }
+            }
+            self.metrics
+                .cmd_write_record_count
+                .inc_by(u64::cast_from(update_count));
+            self.metrics
+                .cmd_write_record_bytes
+                .inc_by(u64::cast_from(update_bytes));
+        }
 
         for (id, updates) in updates_for_listeners.iter() {
             if let Some(listen_fns) = self.listeners.get(&id) {
