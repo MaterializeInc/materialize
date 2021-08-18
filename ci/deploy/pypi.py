@@ -39,7 +39,6 @@ def main() -> None:
             dist_files = (path / "dist").iterdir()
             spawn.runv(
                 ["twine", "upload", *dist_files],
-                cwd=path,
                 env={
                     **os.environ,
                     "TWINE_USERNAME": "__token__",
