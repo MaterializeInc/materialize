@@ -50,6 +50,7 @@ pub struct Metrics {
     // TODO: Tag cmd_process_count with cmd type and remove this?
     pub(crate) cmd_write_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) cmd_write_record_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) cmd_write_record_bytes: ThirdPartyMetric<UIntCounter>,
 
     pub(crate) blob_write_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) blob_write_bytes: ThirdPartyMetric<UIntCounter>,
@@ -116,6 +117,10 @@ impl Metrics {
             )),
             cmd_write_record_count: registry.register_third_party_visible(metric!(
                 name: "mz_persist_cmd_write_record_count",
+                help: "total count of records written in all streams",
+            )),
+            cmd_write_record_bytes: registry.register_third_party_visible(metric!(
+                name: "mz_persist_cmd_write_record_bytes",
                 help: "total count of records written in all streams",
             )),
             blob_write_count: registry.register_third_party_visible(metric!(

@@ -668,11 +668,22 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             )
         })?;
 
-        let update_count: usize = updates_for_listeners.values().map(|x| x.len()).sum();
-
-        self.metrics
-            .cmd_write_record_count
-            .inc_by(u64::cast_from(update_count));
+        {
+            let mut update_count = 0;
+            let mut update_bytes = 0;
+            for updates in updates_for_listeners.values() {
+                update_count += updates.len();
+                for ((k, v), _, _) in updates.iter() {
+                    update_bytes += 8 + k.len() + 8 + v.len() + 8 + 8;
+                }
+            }
+            self.metrics
+                .cmd_write_record_count
+                .inc_by(u64::cast_from(update_count));
+            self.metrics
+                .cmd_write_record_bytes
+                .inc_by(u64::cast_from(update_bytes));
+        }
 
         for (id, updates) in updates_for_listeners.iter() {
             if let Some(listen_fns) = self.listeners.get(&id) {
