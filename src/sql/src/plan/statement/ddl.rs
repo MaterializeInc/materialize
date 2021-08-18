@@ -36,7 +36,7 @@ use dataflow_types::{
     KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector,
     ProtobufEncoding, PubNubSourceConnector, RegexEncoding, S3SourceConnector,
     SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding, SourceEnvelope,
-    Timeline,
+    TimelineId,
 };
 use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
@@ -876,18 +876,18 @@ pub fn plan_create_source(
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
     let timeline = if let Some(timeline) = with_options.remove("timeline") {
         match timeline {
-            Value::String(timeline) => Timeline::User(timeline),
+            Value::String(timeline) => TimelineId::User(timeline),
             v => bail!("unsupported timeline value {}", v.to_ast_string()),
         }
     } else {
         match (&consistency, &envelope) {
             (_, SourceEnvelope::CdcV2) => match with_options.remove("epoch_ms_timeline") {
-                None => Timeline::External(name.to_string()),
-                Some(Value::Boolean(true)) => Timeline::EpochMilliseconds,
+                None => TimelineId::External(name.to_string()),
+                Some(Value::Boolean(true)) => TimelineId::EpochMilliseconds,
                 Some(v) => bail!("unsupported epoch_ms_timeline value {}", v),
             },
-            (Consistency::RealTime, _) => Timeline::EpochMilliseconds,
-            (Consistency::BringYourOwn(byo), _) => Timeline::Counter(byo.clone()),
+            (Consistency::RealTime, _) => TimelineId::EpochMilliseconds,
+            (Consistency::BringYourOwn(byo), _) => TimelineId::Counter(byo.clone()),
         }
     };
 

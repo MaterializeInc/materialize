@@ -30,7 +30,7 @@ use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
-use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
+use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, TimelineId};
 use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use persist::error::Error as PersistError;
 use persist::indexed::runtime::RuntimeClient as PersistClient;
@@ -286,8 +286,8 @@ pub struct Table {
 impl Table {
     // The Coordinator controls insertions for tables (including system tables),
     // so they are realtime.
-    pub fn timeline(&self) -> Timeline {
-        Timeline::EpochMilliseconds
+    pub fn timeline(&self) -> TimelineId {
+        TimelineId::EpochMilliseconds
     }
 }
 
@@ -711,7 +711,7 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             optimized_expr,
                             connector: dataflow_types::SourceConnector::Local {
-                                timeline: Timeline::EpochMilliseconds,
+                                timeline: TimelineId::EpochMilliseconds,
                                 persisted_name: None,
                             },
                             bare_desc: log.variant.desc(),

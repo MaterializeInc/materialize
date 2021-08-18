@@ -712,7 +712,7 @@ pub enum Compression {
 /// instantiations. These attached data types should be expanded in the future
 /// if we need to tell apart more kinds of sources.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum Timeline {
+pub enum TimelineId {
     /// EpochMilliseconds means the timestamp is the number of milliseconds since
     /// the Unix epoch.
     EpochMilliseconds,
@@ -748,10 +748,10 @@ pub enum SourceConnector {
         key_envelope: KeyEnvelope,
         consistency: Consistency,
         ts_frequency: Duration,
-        timeline: Timeline,
+        timeline: TimelineId,
     },
     Local {
-        timeline: Timeline,
+        timeline: TimelineId,
         persisted_name: Option<String>,
     },
 }
@@ -799,7 +799,7 @@ impl SourceConnector {
         }
     }
 
-    pub fn timeline(&self) -> Timeline {
+    pub fn timeline(&self) -> TimelineId {
         match self {
             SourceConnector::External { timeline, .. } => timeline.clone(),
             SourceConnector::Local { timeline, .. } => timeline.clone(),

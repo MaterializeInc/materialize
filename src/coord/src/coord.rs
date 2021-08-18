@@ -71,7 +71,7 @@ use dataflow_types::{
     PostgresSourceConnector, SinkConnector, SourceConnector, TailResponse, TailSinkConnector,
     TimestampSourceUpdate, Update,
 };
-use dataflow_types::{SinkAsOf, Timeline};
+use dataflow_types::{SinkAsOf, TimelineId};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -2720,7 +2720,7 @@ impl Coordinator {
     fn timedomain_for(
         &self,
         source_ids: &[GlobalId],
-        source_timeline: &Option<Timeline>,
+        source_timeline: &Option<TimelineId>,
         conn_id: u32,
     ) -> Result<Vec<GlobalId>, CoordError> {
         let mut timedomain_ids = self
@@ -2740,7 +2740,7 @@ impl Coordinator {
                 // If there's no source timeline, we have the option to opt into a timeline,
                 // so optimistically choose epoch ms. This is useful when the first query in a
                 // transaction is on a static view.
-                (Some(id_timeline), None) => id_timeline == &Timeline::EpochMilliseconds,
+                (Some(id_timeline), None) => id_timeline == &TimelineId::EpochMilliseconds,
                 // Otherwise check if timelines are the same.
                 (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
             }
@@ -4061,8 +4061,8 @@ impl Coordinator {
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
     /// byo and realtime data).
-    fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<Option<Timeline>, CoordError> {
-        let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
+    fn validate_timeline(&self, mut ids: Vec<GlobalId>) -> Result<Option<TimelineId>, CoordError> {
+        let mut timelines: HashMap<GlobalId, TimelineId> = HashMap::new();
 
         // Recurse through IDs to find all sources and tables, adding new ones to
         // the set until we reach the bottom. Static views will end up with an empty
@@ -4091,7 +4091,7 @@ impl Coordinator {
             }
         }
 
-        let timelines: HashSet<Timeline> = timelines
+        let timelines: HashSet<TimelineId> = timelines
             .into_iter()
             .map(|(_, timeline)| timeline)
             .collect();
@@ -4390,7 +4390,7 @@ pub fn serve_debug(
                     TimestampMessage::Add(
                         GlobalId::System(_),
                         SourceConnector::Local {
-                            timeline: Timeline::EpochMilliseconds,
+                            timeline: TimelineId::EpochMilliseconds,
                             persisted_name: None,
                         },
                     )
