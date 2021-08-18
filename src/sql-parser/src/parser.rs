@@ -3361,7 +3361,15 @@ impl<'a> Parser<'a> {
                 variable,
                 value,
             }))
-        } else if variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none() {
+        } else if
+        // SET TRANSACTION transaction_mode
+        (variable.as_str().parse() == Ok(TRANSACTION) && modifier.is_none())
+            ||
+            // SET SESSION CHARACTERISTICS AS TRANSACTION transaction_mode
+            (modifier == Some(SESSION)
+                && variable.as_str().parse() == Ok(CHARACTERISTICS)
+                && self.parse_keywords(&[AS, TRANSACTION]))
+        {
             Ok(Statement::SetTransaction(SetTransactionStatement {
                 modes: self.parse_transaction_modes()?,
             }))
