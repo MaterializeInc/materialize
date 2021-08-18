@@ -12,7 +12,7 @@ use std::fmt;
 
 use reqwest::{Method, Url};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::config::Auth;
@@ -70,10 +70,15 @@ impl Client {
     /// Note that if a schema that is identical to an existing schema for the
     /// same subject is published, the ID of the existing schema will be
     /// returned.
-    pub async fn publish_schema(&self, subject: &str, schema: &str) -> Result<i32, PublishError> {
+    pub async fn publish_schema(
+        &self,
+        subject: &str,
+        schema: &str,
+        schema_type: SchemaType,
+    ) -> Result<i32, PublishError> {
         let req = self
             .make_request(Method::POST, format!("/subjects/{}/versions", subject))
-            .json(&json!({ "schema": schema }));
+            .json(&json!({ "schema": schema, "schemaType":  &schema_type }));
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
     }
@@ -117,6 +122,14 @@ where
             }),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum SchemaType {
+    Avro,
+    Protobuf,
+    Json,
 }
 
 /// A schema stored by a schema registry.

@@ -481,10 +481,8 @@ async fn purify_source_format_single(
             _ => {}
         },
         Format::Protobuf(schema) => match schema {
-            ProtobufSchema::Csr { .. } => {
-                // todo@jldlaughlin: enable when CSR protobuf schemas are accepted!
-                // purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
-                unsupported!("confluent schema registry protobuf schemas");
+            ProtobufSchema::Csr { csr_connector } => {
+                purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
             }
             ProtobufSchema::InlineSchema { schema, .. } => {
                 if let sql_parser::ast::Schema::File(path) = schema {
