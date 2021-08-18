@@ -13,6 +13,10 @@ harness = false
 name = "snapshot"
 harness = false
 
+[[bench]]
+name = "end_to_end"
+harness = false
+
 # NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.
 [dependencies]
