@@ -103,6 +103,7 @@ case "$cmd" in
             --env BUILDKITE_TAG
             --env CI
             --env GPG_KEY
+            --env PYPI_TOKEN
         )
         if [[ -t 1 ]]; then
             args+=(--tty)

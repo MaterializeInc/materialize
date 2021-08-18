@@ -27,3 +27,8 @@ steps:
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/macos
+
+  - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.deploy.pypi
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy/pypi
