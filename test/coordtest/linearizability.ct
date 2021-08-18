@@ -54,9 +54,13 @@ append-file name=s1
 3
 ----
 
+set-upper-filter
+materialize.public.v2_primary_idx
+----
+
 # Wait for the append to s1, but prevent increasing the since and upper
 # of v2 so its timestamp is < v1's.
-wait-sql exclude-uppers=materialize.public.v2_primary_idx
+wait-sql
 SELECT c = 2 FROM v1;
 ----
 
@@ -88,8 +92,8 @@ Rows(
     ],
 )
 
-# But when combined, the count for v1 is 1, which means we have chosen
-# an older timestamp and thus are not linearizable.
+# When combined, the count for v1 is 2, which means we have chosen a timestamp
+# in advance of v2's upper due to the linearizability guarantees.
 sql
 SELECT * FROM v1, v2;
 ----
@@ -97,10 +101,67 @@ Rows(
     [
         Row{[
             Int64(
-                1,
+                2,
             ),
             Int64(
                 1,
+            ),
+        ]},
+    ],
+)
+
+# Create a non-tailed source so the timestamps are closed. This causes
+# determine_timestamp to use u64::max, and we want to test that that timestamp
+# doesn't get propogated to the linearizability tracker which would prevent all
+# future realtime timeline queries.
+sql
+CREATE MATERIALIZED SOURCE s1_closed (a)
+FROM FILE '<TEMP>/s1'
+FORMAT TEXT;
+----
+CreatedSource {
+    existed: false,
+}
+
+wait-sql
+SELECT count(*) = 2 FROM s1_closed;
+----
+
+sql
+SELECT count(*) FROM s1_closed AS OF 0
+----
+Rows(
+    [
+        Row{[
+            Int64(
+                0,
+            ),
+        ]},
+    ],
+)
+
+# Ensure we don't choose the max timestamp.
+sql
+SELECT mz_logical_timestamp() != 18446744073709551615 FROM s1_closed LIMIT 1
+----
+Rows(
+    [
+        Row{[
+            True,
+        ]},
+    ],
+)
+
+# Verify we can read from v1 (this ensures the linearizability tracker didn't
+# bump to end-of-time due to the closed file source).
+sql
+SELECT * FROM v1;
+----
+Rows(
+    [
+        Row{[
+            Int64(
+                2,
             ),
         ]},
     ],

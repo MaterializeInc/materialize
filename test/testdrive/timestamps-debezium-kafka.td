@@ -138,36 +138,40 @@ $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
 {"status":"END","id":"3","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
 
-> SELECT * FROM foo;
-b  sum
-------
-1  1
-2  2
+> SELECT mz_logical_timestamp() t, * FROM foo;
+t b  sum
+--------
+2 1  1
+2 2  2
 
-> SELECT * FROM bar;
-b  sum
-------
-1  10
-3  30
+# At this point, foo is still waiting on another row, and so is still at
+# timestamp 2. bar however has received its row and so has advanced to 3. If
+# we select from bar now, the linearizability timestamp will get bumped to
+# 3. Instead, select from the join so the linearizability timestamp stays at 2.
+> SELECT mz_logical_timestamp() t, * FROM join;
+t b sum sum
+-----------
+2 1  1  10
 
-> SELECT * FROM join;
-b sum sum
----------
-1  1  10
+> SELECT mz_logical_timestamp() t, * FROM bar;
+t b  sum
+--------
+3 1  10
+3 3  30
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 4, "b": 4}}}
 
-> SELECT * FROM foo;
-b  sum
-------
-1  1
-2  2
-3  3
-4  4
+> SELECT mz_logical_timestamp() t, * FROM foo;
+t b  sum
+--------
+3 1  1
+3 2  2
+3 3  3
+3 4  4
 
-> SELECT * FROM join;
-b sum sum
----------
-1  1  10
-3  3  30
+> SELECT mz_logical_timestamp() t, * FROM join;
+t b sum sum
+-----------
+3 1  1  10
+3 3  3  30

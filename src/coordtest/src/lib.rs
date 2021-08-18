@@ -19,19 +19,20 @@
 //! add it to an index (to allow sinces to advance past 0), use `ALTER INDEX`.
 //!
 //! The following datadriven directives are supported:
-//! - `sql`: Executes the SQL using transaction rules similar to the simple
-//!   pgwire protocol in a new session (that is, multiple `sql` directives are
-//!   not in the same session). Output is formatted
+//! - `sql`: Executes the SQL using transaction rules similar to the
+//!   simple pgwire protocol in a new session (that is, multiple `sql`
+//!   directives are not in the same session). Output is formatted
 //!   [`ExecuteResponse`](coord::ExecuteResponse). The input can contain the
 //!   string `<TEMP>` which will be replaced with a temporary directory.
-//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout which will
-//!   panic) until all datums returned (all columns in all rows in all
+//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout which
+//!   will panic) until all datums returned (all columns in all rows in all
 //!   statements) are `true`. Prior to each attempt, all pending feedback
-//!   messages from the dataflow server are sent to the Coordinator. Messages
-//!   for specified items can be skipped (but requeued) by specifying
-//!   `exclude-uppers=database.schema.item` as an argument. After each failed
-//!   attempt, the timestamp is incremented by 1 to give any new data an
+//!   messages from the dataflow server are sent to the Coordinator. After each
+//!   failed attempt, the timestamp is incremented by 1 to give any new data an
 //!   opportunity to be observed.
+//! - `set-upper-filter`: One per line, sets uppers to be filtered, which will
+//!   prevent them from being sent during `sql` or `wait-sql` directives. No
+//!   output.
 //! - `async-sql`: Requires a `session=name` argument. Creates a named session,
 //!   and executes the provided statements similarly to `sql`, except that the
 //!   results are not immediately returned. Instead, await the results using the
@@ -56,6 +57,11 @@
 //!   input. No output.
 //! - `append-file`: Same as `create-file`, but appends.
 //! - `print-catalog`: Outputs the catalog. Generally for debugging.
+//!
+//! The `sql` and `wait-sql` directives wait in a loop for the corresponding
+//! PeekResponse to complete. After each iteration the global timestamp is
+//! incremented and the feedback queue drained (except for messages from the
+//! previous `set-upper-filter`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -102,6 +108,7 @@ pub struct CoordTest {
     temp_dir: TempDir,
     uppers: HashMap<GlobalId, Timestamp>,
     timestamp: Arc<Mutex<u64>>,
+    exclude_uppers: HashSet<GlobalId>,
     _verbose: bool,
     _metrics_registry: MetricsRegistry,
     persisted_sessions: HashMap<String, (SessionClient, StartupResponse)>,
@@ -124,6 +131,7 @@ impl CoordTest {
             uppers: HashMap::new(),
             _verbose: std::env::var_os("COORDTEST_VERBOSE").is_some(),
             timestamp,
+            exclude_uppers: HashSet::new(),
             _metrics_registry: metrics_registry,
             queued_feedback: Vec::new(),
             persisted_sessions: HashMap::new(),
@@ -180,7 +188,7 @@ impl CoordTest {
         self.with_sc_inner(Some(session_name), f).await
     }
 
-    fn drain_feedback_msgs(&mut self) {
+    fn enqueue_feedback(&mut self) {
         loop {
             if let Some(Some(msg)) = self.dataflow_feedback_rx.recv().now_or_never() {
                 self.queued_feedback.push(msg);
@@ -192,24 +200,25 @@ impl CoordTest {
 
     // Drains messages from the queue into coord, extracting and requeueing
     // excluded uppers.
-    async fn drain_skip_uppers(&mut self, exclude_uppers: &HashSet<GlobalId>) {
-        self.drain_feedback_msgs();
+    fn drain(&mut self) {
+        self.enqueue_feedback();
         let mut to_send = vec![];
         let mut to_queue = vec![];
-        for mut msg in self.queued_feedback.drain(..) {
+        let msgs: Vec<_> = self.queued_feedback.drain(..).collect();
+        for mut msg in msgs {
             // Filter out requested ids.
             if let WorkerFeedback::FrontierUppers(uppers) = &mut msg.message {
                 // Requeue excluded uppers so future wait-sql directives don't always have to
                 // specify the same exclude list forever.
                 let mut requeue = uppers.clone();
-                requeue.retain(|(id, _data)| exclude_uppers.contains(id));
+                requeue.retain(|(id, _data)| self.exclude_uppers.contains(id));
                 if !requeue.is_empty() {
                     to_queue.push(dataflow::Response {
                         worker_id: msg.worker_id,
                         message: WorkerFeedback::FrontierUppers(requeue),
                     });
                 }
-                uppers.retain(|(id, _data)| !exclude_uppers.contains(id));
+                uppers.retain(|(id, _data)| !self.exclude_uppers.contains(id));
             }
             to_send.push(msg);
         }
@@ -228,26 +237,13 @@ impl CoordTest {
             if let futures::task::Poll::Ready(rows) = futures::poll!(rows.as_mut()) {
                 return rows;
             }
-            self.drain_peek_response();
+            // Bump the timestamp. This is necessary because sources ingest at varying
+            // rates and we need to allow sinces to move forward so we can see new data.
+            self.inc_timestamp(1);
+            self.drain();
+            // Wait a bit for dataflow to have some time to work.
+            std::thread::sleep(Duration::from_millis(10));
         }
-    }
-
-    // Drains PeekResponse messages from the queue into coord.
-    fn drain_peek_response(&mut self) {
-        self.drain_feedback_msgs();
-        let mut to_send = vec![];
-        let mut to_queue = vec![];
-        for msg in self.queued_feedback.drain(..) {
-            if let WorkerFeedback::PeekResponse(..) = msg.message {
-                to_send.push(msg);
-            } else {
-                to_queue.push(msg);
-            }
-        }
-        for msg in to_send {
-            self.coord_feedback_tx.send(msg).unwrap();
-        }
-        self.queued_feedback = to_queue;
     }
 
     async fn make_catalog(&mut self) -> Catalog {
@@ -257,6 +253,11 @@ impl CoordTest {
         let catalog: BTreeMap<String, coord::catalog::Database> =
             serde_json::from_str(&catalog).unwrap();
         Catalog(catalog)
+    }
+
+    fn inc_timestamp(&mut self, v: u64) {
+        let mut ts = self.timestamp.lock().unwrap();
+        *ts += v;
     }
 }
 
@@ -326,18 +327,9 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                     strs.join("\n")
                 }
                 "wait-sql" => {
-                    let catalog = ct.make_catalog().await;
-                    let exclude_uppers: HashSet<GlobalId> = tc
-                        .args
-                        .get("exclude-uppers")
-                        .unwrap_or(&vec![])
-                        .into_iter()
-                        .map(|name| catalog.get(name))
-                        .collect();
-
                     let start = Instant::now();
                     loop {
-                        ct.drain_skip_uppers(&exclude_uppers).await;
+                        ct.drain();
                         let query = ct.rewrite_query(&tc.input);
                         let results = ct
                             .with_sc(|sc| Box::pin(async move { sql(sc, query).await }))
@@ -378,12 +370,8 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                             }
                             Err(err) => {
                                 if start.elapsed() > Duration::from_secs(5) {
-                                    panic!("{}", err);
+                                    panic!("timeout: {}", err);
                                 }
-                                // Bump the timestamp. This is necessary because sources ingest at varying
-                                // rates and we need to allow sinces to move forward so we can see new data.
-                                let mut ts = ct.timestamp.lock().unwrap();
-                                *ts += 1;
                             }
                         }
                     }
@@ -451,6 +439,11 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                     strs.push("".to_string());
                     strs.join("\n")
                 }
+                "set-upper-filter" => {
+                    let catalog = ct.make_catalog().await;
+                    ct.exclude_uppers = tc.input.trim().lines().map(|s| catalog.get(s)).collect();
+                    "".into()
+                }
                 "update-upper" => {
                     let catalog = ct.make_catalog().await;
                     let mut updates = vec![];
@@ -478,8 +471,7 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                 }
                 "inc-timestamp" => {
                     let inc: u64 = tc.input.trim().parse().unwrap();
-                    let mut ts = ct.timestamp.lock().unwrap();
-                    *ts += inc;
+                    ct.inc_timestamp(inc);
                     "".into()
                 }
                 "create-file" => {

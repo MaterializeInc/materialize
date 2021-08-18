@@ -79,10 +79,10 @@ true
 true
 true
 
-# The timestamp chosen when reading from a static CSV should be the end of time,
-# since the definition of "static" means "will never change again".
-> SELECT count(*), mz_logical_timestamp() FROM static_csv
-4  18446744073709551615
+# A static source means it will never change again, so we should be able to
+# read it at the end of time.
+> SELECT count(*) FROM static_csv AS OF 18446744073709551615
+4
 
 # Static CSV with automatic headers.
 > CREATE MATERIALIZED SOURCE static_csv_header

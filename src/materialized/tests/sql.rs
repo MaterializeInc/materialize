@@ -450,7 +450,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 
     client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
     client_reads.batch_execute(
-        "COMMIT; BEGIN;
+        "BEGIN;
          DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
     )?;
 
@@ -461,6 +461,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 
         for row in rows {
             let diff = row.get::<_, Option<i64>>("mz_diff");
+            let ts: MzTimestamp = row.get("mz_timestamp");
             match diff {
                 Some(diff) => {
                     num_data_rows += 1;
@@ -469,17 +470,20 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
                     assert_eq!(row.get::<_, bool>("mz_progressed"), false);
                     let data = row.get::<_, Option<String>>("data");
                     assert!(data.is_some());
+                    // ts can't decrease from previous, but could be equal to a previous data or
+                    // progress row's timestamp.
+                    assert!(last_ts <= ts);
                 }
                 None => {
                     num_progress_rows += 1;
 
                     assert_eq!(row.get::<_, bool>("mz_progressed"), true);
                     assert_eq!(row.get::<_, Option<String>>("data"), None);
+                    // ts must have increased on a progress row.
+                    assert!(last_ts < ts);
                 }
             }
 
-            let ts: MzTimestamp = row.get("mz_timestamp");
-            assert!(last_ts < ts);
             last_ts = ts;
         }
 
