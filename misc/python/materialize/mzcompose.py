@@ -1370,7 +1370,7 @@ class WaitForTcpStep(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         ui.progress(f"waiting for {self._host}:{self._port}", "C")
         for remaining in ui.timeout_loop(self._timeout_secs):
-            cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
+            cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:focal-20210723".split()
 
             try:
                 _check_tcp(cmd[:], self._host, self._port, self._timeout_secs)

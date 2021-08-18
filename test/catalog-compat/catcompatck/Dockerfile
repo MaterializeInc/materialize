@@ -14,9 +14,9 @@ FROM materialize/materialized:v0.6.0 AS golden060
 FROM materialize/materialized:v0.7.1 AS golden071
 MZFROM materialized AS edge
 MZFROM testdrive AS testdrive
-FROM ubuntu:bionic-20200403
+FROM ubuntu:focal-20210723
 
-RUN apt-get update && apt-get install -y curl postgresql-client-10 wait-for-it
+RUN apt-get update && apt-get install -y curl postgresql-client wait-for-it && apt-get clean
 
 COPY --from=golden010 /usr/local/bin/materialized /usr/local/bin/materialized-golden010
 COPY --from=golden060 /usr/local/bin/materialized /usr/local/bin/materialized-golden060
