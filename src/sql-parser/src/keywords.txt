@@ -50,6 +50,7 @@ Chain
 Channel
 Char
 Character
+Characteristics
 Check
 Close
 Coalesce
