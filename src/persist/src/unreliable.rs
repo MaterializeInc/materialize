@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
-use crate::storage::{Blob, Buffer, SeqNo};
+use crate::storage::{Blob, Log, SeqNo};
 
 struct UnreliableCore {
     unavailable: bool,
@@ -67,43 +67,43 @@ impl UnreliableHandle {
     }
 }
 
-/// An unreliable delegate to [Buffer].
-pub struct UnreliableBuffer<U> {
+/// An unreliable delegate to [Log].
+pub struct UnreliableLog<L> {
     handle: UnreliableHandle,
-    buf: U,
+    log: L,
 }
 
-impl<U: Buffer> UnreliableBuffer<U> {
-    /// Returns a new [UnreliableBuffer] and a handle for controlling it.
-    pub fn new(buf: U) -> (Self, UnreliableHandle) {
+impl<L: Log> UnreliableLog<L> {
+    /// Returns a new [UnreliableLog] and a handle for controlling it.
+    pub fn new(log: L) -> (Self, UnreliableHandle) {
         let h = UnreliableHandle::default();
-        let buf = Self::from_handle(buf, h.clone());
-        (buf, h)
+        let log = Self::from_handle(log, h.clone());
+        (log, h)
     }
 
-    /// Returns a new [UnreliableBuffer] sharing the given handle.
-    pub fn from_handle(buf: U, handle: UnreliableHandle) -> Self {
-        UnreliableBuffer { handle, buf }
+    /// Returns a new [UnreliableLog] sharing the given handle.
+    pub fn from_handle(log: L, handle: UnreliableHandle) -> Self {
+        UnreliableLog { handle, log }
     }
 }
 
-impl<U: Buffer> Buffer for UnreliableBuffer<U> {
+impl<L: Log> Log for UnreliableLog<L> {
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
-        self.handle.check_unavailable("buffer write")?;
-        self.buf.write_sync(buf)
+        self.handle.check_unavailable("log write")?;
+        self.log.write_sync(buf)
     }
 
     fn snapshot<F>(&self, logic: F) -> Result<Range<SeqNo>, Error>
     where
         F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
     {
-        self.handle.check_unavailable("buffer snapshot")?;
-        self.buf.snapshot(logic)
+        self.handle.check_unavailable("log snapshot")?;
+        self.log.snapshot(logic)
     }
 
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error> {
-        self.handle.check_unavailable("buffer truncate")?;
-        self.buf.truncate(upper)
+        self.handle.check_unavailable("log truncate")?;
+        self.log.truncate(upper)
     }
 
     fn close(&mut self) -> Result<bool, Error> {
@@ -112,33 +112,33 @@ impl<U: Buffer> Buffer for UnreliableBuffer<U> {
         // prevent a normal read/write from going though when the storage is
         // unavailable, it makes for a very uninteresting test if we can't clean
         // up LOCK files. OTOH this feels like a smell, revisit.
-        let did_work = self.buf.close()?;
-        self.handle.check_unavailable("buffer close")?;
+        let did_work = self.log.close()?;
+        self.handle.check_unavailable("log close")?;
         Ok(did_work)
     }
 }
 
 /// An unreliable delegate to [Blob].
-pub struct UnreliableBlob<L> {
+pub struct UnreliableBlob<B> {
     handle: UnreliableHandle,
-    blob: L,
+    blob: B,
 }
 
-impl<L: Blob> UnreliableBlob<L> {
+impl<B: Blob> UnreliableBlob<B> {
     /// Returns a new [UnreliableBlob] and a handle for controlling it.
-    pub fn new(blob: L) -> (Self, UnreliableHandle) {
+    pub fn new(blob: B) -> (Self, UnreliableHandle) {
         let h = UnreliableHandle::default();
         let blob = Self::from_handle(blob, h.clone());
         (blob, h)
     }
 
-    /// Returns a new [UnreliableBuffer] sharing the given handle.
-    pub fn from_handle(blob: L, handle: UnreliableHandle) -> Self {
+    /// Returns a new [UnreliableLog] sharing the given handle.
+    pub fn from_handle(blob: B, handle: UnreliableHandle) -> Self {
         UnreliableBlob { handle, blob }
     }
 }
 
-impl<L: Blob> Blob for UnreliableBlob<L> {
+impl<B: Blob> Blob for UnreliableBlob<B> {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         self.handle.check_unavailable("blob get")?;
         self.blob.get(key)
@@ -163,31 +163,30 @@ impl<L: Blob> Blob for UnreliableBlob<L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::mem::{MemBlob, MemBuffer};
+    use crate::mem::{MemBlob, MemLog};
 
     use super::*;
 
     #[test]
-    fn buffer() {
-        let (mut buffer, mut handle) =
-            UnreliableBuffer::new(MemBuffer::new_no_reentrance("unreliable"));
+    fn log() {
+        let (mut log, mut handle) = UnreliableLog::new(MemLog::new_no_reentrance("unreliable"));
 
         // Initially starts reliable.
-        assert!(buffer.write_sync(vec![]).is_ok());
-        assert!(buffer.snapshot(|_, _| { Ok(()) }).is_ok());
-        assert!(buffer.truncate(SeqNo(1)).is_ok());
+        assert!(log.write_sync(vec![]).is_ok());
+        assert!(log.snapshot(|_, _| { Ok(()) }).is_ok());
+        assert!(log.truncate(SeqNo(1)).is_ok());
 
         // Setting it to unavailable causes all operations to fail.
         handle.make_unavailable();
-        assert!(buffer.write_sync(vec![]).is_err());
-        assert!(buffer.snapshot(|_, _| { Ok(()) }).is_err());
-        assert!(buffer.truncate(SeqNo(1)).is_err());
+        assert!(log.write_sync(vec![]).is_err());
+        assert!(log.snapshot(|_, _| { Ok(()) }).is_err());
+        assert!(log.truncate(SeqNo(1)).is_err());
 
         // Can be set back to working.
         handle.make_available();
-        assert!(buffer.write_sync(vec![]).is_ok());
-        assert!(buffer.snapshot(|_, _| { Ok(()) }).is_ok());
-        assert!(buffer.truncate(SeqNo(2)).is_ok());
+        assert!(log.write_sync(vec![]).is_ok());
+        assert!(log.snapshot(|_, _| { Ok(()) }).is_ok());
+        assert!(log.truncate(SeqNo(2)).is_ok());
     }
 
     #[test]

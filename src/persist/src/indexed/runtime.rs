@@ -23,11 +23,11 @@ use log;
 use ore::metrics::MetricsRegistry;
 
 use crate::error::Error;
+use crate::future::{Future, FutureHandle};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{Indexed, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
-use crate::pfuture::{Future, FutureHandle};
-use crate::storage::{Blob, Buffer, SeqNo};
+use crate::storage::{Blob, Log, SeqNo};
 use crate::Codec;
 
 enum Cmd {
@@ -52,13 +52,13 @@ enum Cmd {
 // TODO: At the moment, this runs IO and heavy cpu work in a single thread.
 // Move this work out into whatever async runtime the user likes, via something
 // like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
-pub fn start<U, L>(buf: U, blob: L, reg: &MetricsRegistry) -> Result<RuntimeClient, Error>
+pub fn start<L, B>(log: L, blob: B, reg: &MetricsRegistry) -> Result<RuntimeClient, Error>
 where
-    U: Buffer + Send + 'static,
-    L: Blob + Send + 'static,
+    L: Log + Send + 'static,
+    B: Blob + Send + 'static,
 {
     let metrics = Metrics::register_with(reg);
-    let indexed = Indexed::new(buf, blob, metrics.clone())?;
+    let indexed = Indexed::new(log, blob, metrics.clone())?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
     let runtime_impl_metrics = metrics.clone();
@@ -584,13 +584,13 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
     }
 }
 
-struct RuntimeImpl<U: Buffer, L: Blob> {
-    indexed: Indexed<U, L>,
+struct RuntimeImpl<L: Log, B: Blob> {
+    indexed: Indexed<L, B>,
     rx: crossbeam_channel::Receiver<Cmd>,
     metrics: Metrics,
 }
 
-impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
+impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     /// Synchronously waits for the next command, executes it, and responds.
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
@@ -681,7 +681,7 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::mem::{MemBlob, MemBuffer, MemRegistry};
+    use crate::mem::{MemBlob, MemLog, MemRegistry};
 
     use super::*;
 
@@ -692,9 +692,9 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let buffer = MemBuffer::new_no_reentrance("runtime");
+        let log = MemLog::new_no_reentrance("runtime");
         let blob = MemBlob::new_no_reentrance("runtime");
-        let mut runtime = start(buffer, blob, &MetricsRegistry::new())?;
+        let mut runtime = start(log, blob, &MetricsRegistry::new())?;
 
         let (write, meta) = runtime.create_or_load("0")?;
         write.write(&data).recv()?;
@@ -716,9 +716,9 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let buffer = MemBuffer::new_no_reentrance("concurrent");
+        let log = MemLog::new_no_reentrance("concurrent");
         let blob = MemBlob::new_no_reentrance("concurrent");
-        let client1 = start(buffer, blob, &MetricsRegistry::new())?;
+        let client1 = start(log, blob, &MetricsRegistry::new())?;
         let _ = client1.create_or_load::<String, String>("0")?;
 
         // Everything is still running after client1 is dropped.
@@ -741,7 +741,7 @@ mod tests {
 
         let mut registry = MemRegistry::new();
 
-        // Shutdown happens if we explicitly call stop, unlocking the buffer and
+        // Shutdown happens if we explicitly call stop, unlocking the log and
         // blob and allowing them to be reused in the next Indexed.
         let mut persister = registry.open("path", "restart-1")?;
         let (write, _) = persister.create_or_load("0")?;

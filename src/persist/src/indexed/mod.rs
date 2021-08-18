@@ -13,10 +13,10 @@
 // NB: These really don't need to be public, but the public doc lint is nice.
 pub mod cache;
 pub mod encoding;
-pub mod future;
 pub mod metrics;
 pub mod runtime;
 pub mod trace;
+pub mod unsealed;
 
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
@@ -28,16 +28,15 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
+use crate::future::FutureHandle;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{
-    BlobFutureBatch, BlobFutureMeta, BlobMeta, BlobTraceBatch, BlobTraceMeta, Id,
-    StreamRegistration,
+    BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceMeta, UnsealedMeta,
 };
-use crate::indexed::future::{BlobFuture, FutureSnapshot};
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
-use crate::indexed::trace::{BlobTrace, TraceSnapshot};
-use crate::pfuture::FutureHandle;
-use crate::storage::{Blob, Buffer, SeqNo};
+use crate::indexed::trace::{Trace, TraceSnapshot};
+use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot};
+use crate::storage::{Blob, Log, SeqNo};
 
 enum PendingResponse {
     SeqNo(FutureHandle<SeqNo>, Result<SeqNo, Error>),
@@ -76,46 +75,46 @@ impl PendingResponse {
 /// Diff)` updates.
 ///
 /// The lifecycle of contained entries is as follows:
-/// - Initially: inserted into a [BlobFuture], which indexes them by
+/// - Initially: inserted into an [Unsealed], which indexes them by
 ///   `(time, key, value)`.
 /// - Once the update's time has been "seal"ed: transferred from the
-///   [BlobFuture] into a [BlobTrace], which indexes them by `(key, value,
+///   [Unsealed] into a [Trace], which indexes them by `(key, value,
 ///   time)`.
 ///
 /// Notes:
 /// - An entry should only logically exist in one of these places at a time,
 ///   even though it may physically exist in more than one of them.
-/// - Similarly, `frontier` represents the border between data in [BlobFuture]
-///   and [BlobTrace]. BlobTrace is logically append-only, so data is
+/// - Similarly, `frontier` represents the border between data in [Unsealed]
+///   and [Trace]. Trace is logically append-only, so data is
 ///   transferred to it once all the data for some timestamp has arrived. On
-///   read, [Indexed] uses this frontier to ignore any data in BlobFuture that
-///   exists in in BlobTrace.
+///   read, [Indexed] uses this frontier to ignore any data in Unsealed that
+///   exists in in Trace.
 /// - Writes, seals, and allow_compaction requests are not committed to durable
 ///   storage immediately because we want to amortize the cost of writing to
 ///   durable storage across many of those requests. Instead, those requests are
 ///   applied to the in-memory Indexed object, and their responses are stored in
 ///   `pending_responses`. Later pending writes and serialized metadata are
 ///   committed to durable storage in `drain_pending` which flushes all pending
-///   writes to [BlobFuture], commits the current serialized metadata to durable
+///   writes to [Unsealed], commits the current serialized metadata to durable
 ///   storage, and clears and responds to all pending responses.
 /// - Pending writes, seals, and allow_compactions are drained before processing
 ///   any other type of request.
-pub struct Indexed<U: Buffer, L: Blob> {
+pub struct Indexed<L: Log, B: Blob> {
     next_stream_id: Id,
-    futures_seqno_upper: SeqNo,
+    unsealeds_seqno_upper: SeqNo,
     // This is conceptually a map from `String` -> `Id`, but lookups are rare
     // and this representation is optimized for the metadata serialization path,
     // which is less rare.
     id_mapping: Vec<StreamRegistration>,
     graveyard: Vec<StreamRegistration>,
-    // NB: we are not using Buffer for anything at the moment and instead have
+    // NB: we are not using Log for anything at the moment and instead have
     // all writes going directly to trace. At some point we'll need to revisit
-    // what we want to do with Buffer, and whether we want it to live inside of
+    // what we want to do with Log, and whether we want it to live inside of
     // Indexed or somewhere else.
-    buf: U,
-    blob: BlobCache<L>,
-    futures: BTreeMap<Id, BlobFuture>,
-    traces: BTreeMap<Id, BlobTrace>,
+    log: L,
+    blob: BlobCache<B>,
+    unsealeds: BTreeMap<Id, Unsealed>,
+    traces: BTreeMap<Id, Trace>,
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
     // Only drained by drain_pending_writes.
@@ -125,22 +124,22 @@ pub struct Indexed<U: Buffer, L: Blob> {
     prev_meta: BlobMeta,
 }
 
-impl<U: Buffer, L: Blob> Indexed<U, L> {
-    /// Returns a new Indexed, initializing each Future and Trace with the
+impl<L: Log, B: Blob> Indexed<L, B> {
+    /// Returns a new Indexed, initializing each Unsealed and Trace with the
     /// existing data for them in the blob storage, if any.
-    pub fn new(mut buf: U, blob: L, metrics: Metrics) -> Result<Self, Error> {
+    pub fn new(mut log: L, blob: B, metrics: Metrics) -> Result<Self, Error> {
         let mut blob = BlobCache::new(metrics.clone(), blob);
         let meta = blob
             .get_meta()
             .map_err(|err| {
-                // Indexed is expected to close the buffer and blob it's handed.
+                // Indexed is expected to close the log and blob it's handed.
                 // Usually that happens when close is called on Indexed itself,
                 // but if there's an error constructing it, we never get to that
                 // point and have to clean up ourselves.
                 //
                 // TODO: Regression test for this.
-                if let Err(err) = buf.close() {
-                    log::warn!("error closing buffer: {}", err);
+                if let Err(err) = log.close() {
+                    log::warn!("error closing log: {}", err);
                 }
                 if let Err(err) = blob.close() {
                     log::warn!("error closing blob: {}", err);
@@ -149,24 +148,24 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             })?
             .unwrap_or_default();
         let meta_copy = meta.clone();
-        let futures = meta
-            .futures
+        let unsealeds = meta
+            .unsealeds
             .into_iter()
-            .map(|meta| (meta.id, BlobFuture::new(meta)))
+            .map(|meta| (meta.id, Unsealed::new(meta)))
             .collect();
         let traces = meta
             .traces
             .into_iter()
-            .map(|meta| (meta.id, BlobTrace::new(meta)))
+            .map(|meta| (meta.id, Trace::new(meta)))
             .collect();
         let indexed = Indexed {
             next_stream_id: meta.next_stream_id,
-            futures_seqno_upper: meta.futures_seqno_upper,
+            unsealeds_seqno_upper: meta.unsealeds_seqno_upper,
             id_mapping: meta.id_mapping,
             graveyard: meta.graveyard,
-            buf,
+            log,
             blob,
-            futures,
+            unsealeds,
             traces,
             listeners: HashMap::new(),
             metrics,
@@ -190,14 +189,14 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         let meta = self.prev_meta.clone();
 
         self.next_stream_id = meta.next_stream_id;
-        self.futures_seqno_upper = meta.futures_seqno_upper;
+        self.unsealeds_seqno_upper = meta.unsealeds_seqno_upper;
         self.id_mapping = meta.id_mapping;
         self.graveyard = meta.graveyard;
 
-        let mut restored_futures: BTreeMap<Id, BlobFuture> = meta
-            .futures
+        let mut restored_unsealeds: BTreeMap<Id, Unsealed> = meta
+            .unsealeds
             .into_iter()
-            .map(|meta| (meta.id, BlobFuture::new(meta)))
+            .map(|meta| (meta.id, Unsealed::new(meta)))
             .collect();
 
         // TODO: ideally we would be able to do something smarter here that didn't
@@ -207,18 +206,18 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         // id and the batch [lower, upper, since] description, instead of an opaque
         // incrementing id. That way if we collide on a key on we know that it has
         // the required data and we can happily reuse it.
-        for (id, restored_future) in restored_futures.iter_mut() {
-            if let Some(future) = self.futures.get(id) {
-                restored_future.next_blob_id = future.next_blob_id;
+        for (id, restored_unsealed) in restored_unsealeds.iter_mut() {
+            if let Some(unsealed) = self.unsealeds.get(id) {
+                restored_unsealed.next_blob_id = unsealed.next_blob_id;
             }
         }
 
-        self.futures = restored_futures;
+        self.unsealeds = restored_unsealeds;
 
-        let mut restored_traces: BTreeMap<Id, BlobTrace> = meta
+        let mut restored_traces: BTreeMap<Id, Trace> = meta
             .traces
             .into_iter()
-            .map(|meta| (meta.id, BlobTrace::new(meta)))
+            .map(|meta| (meta.id, Trace::new(meta)))
             .collect();
 
         for (id, restored_trace) in restored_traces.iter_mut() {
@@ -248,17 +247,22 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         self.metrics
             .stream_count
             .set(u64::cast_from(self.prev_meta.id_mapping.len()));
-        let future_blob_count: usize = self.prev_meta.futures.iter().map(|x| x.batches.len()).sum();
-        self.metrics
-            .future_blob_count
-            .set(u64::cast_from(future_blob_count));
-        let future_blob_bytes: u64 = self
+        let unsealed_blob_count: usize = self
             .prev_meta
-            .futures
+            .unsealeds
+            .iter()
+            .map(|x| x.batches.len())
+            .sum();
+        self.metrics
+            .unsealed_blob_count
+            .set(u64::cast_from(unsealed_blob_count));
+        let unsealed_blob_bytes: u64 = self
+            .prev_meta
+            .unsealeds
             .iter()
             .flat_map(|x| x.batches.iter().map(|x| x.size_bytes))
             .sum();
-        self.metrics.future_blob_bytes.set(future_blob_bytes);
+        self.metrics.unsealed_blob_bytes.set(unsealed_blob_bytes);
         let trace_blob_count: usize = self.prev_meta.traces.iter().map(|x| x.batches.len()).sum();
         self.metrics
             .trace_blob_count
@@ -280,16 +284,16 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     pub fn close(&mut self) -> Result<(), Error> {
         // Make sure all the listener closures are dropped.
         self.listeners.clear();
-        // Be careful to attempt to close both buf and blob even if one of the
+        // Be careful to attempt to close both log and blob even if one of the
         // closes fails.
-        let buf_res = self.buf.close();
+        let log_res = self.log.close();
         let blob_res = self.blob.close();
-        buf_res?;
+        log_res?;
         blob_res?;
         Ok(())
     }
 
-    /// Creates, if necessary, a new future and trace with the given external
+    /// Creates, if necessary, a new unsealed and trace with the given external
     /// stream name, returning the corresponding internal stream id.
     ///
     /// This method is idempotent: ids may be registered multiple times.
@@ -347,12 +351,12 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                 id
             }
         };
-        self.futures
+        self.unsealeds
             .entry(id)
-            .or_insert_with_key(|id| BlobFuture::new(BlobFutureMeta::new(*id)));
+            .or_insert_with_key(|id| Unsealed::new(UnsealedMeta::new(*id)));
         self.traces
             .entry(id)
-            .or_insert_with_key(|id| BlobTrace::new(BlobTraceMeta::new(*id)));
+            .or_insert_with_key(|id| Trace::new(TraceMeta::new(*id)));
         self.try_set_meta()?;
         Ok(id)
     }
@@ -387,13 +391,13 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
         self.id_mapping.retain(|r| r.name != id_str);
 
-        // TODO: actually physically delete the future and trace batches.
-        let future = self.futures.remove(&mapping.id);
+        // TODO: actually physically delete the unsealed and trace batches.
+        let unsealed = self.unsealeds.remove(&mapping.id);
         let trace = self.traces.remove(&mapping.id);
 
-        // Sanity check that we actually removed the future and trace for this
+        // Sanity check that we actually removed the unsealed and trace for this
         // stream.
-        debug_assert!(future.is_some());
+        debug_assert!(unsealed.is_some());
         debug_assert!(trace.is_some());
 
         self.graveyard.push(mapping);
@@ -487,11 +491,11 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
     /// Compact all traces, if they have batches that can be compacted.
     ///
-    /// TODO: currently we do not attempt to compact future batches and instead
-    /// logically delete them from future after all updates contained within a
-    /// given future batch have been moved over to trace. This policy works fine
+    /// TODO: currently we do not attempt to compact unsealed batches and instead
+    /// logically delete them from unsealed after all updates contained within a
+    /// given unsealed batch have been moved over to trace. This policy works fine
     /// assuming data mostly arrives in order, or not very far in advance of the
-    /// currently sealed time. We will need to revisit the future compaction if
+    /// currently sealed time. We will need to revisit the unsealed compaction if
     /// that assumption stops being true.
     fn compact(&mut self) -> Result<(), Error> {
         let compaction_start = Instant::now();
@@ -510,7 +514,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         Ok(())
     }
 
-    /// Drains writes from the buffer into the future and does any necessary
+    /// Drains writes from the log into the unsealed and does any necessary
     /// resulting compaction work.
     ///
     /// In production, step should just be called in a loop (probably with some
@@ -518,7 +522,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<(), Error> {
         self.drain_pending()?;
-        self.drain_future()?;
+        self.drain_unsealed()?;
         self.compact()?;
         Ok(())
     }
@@ -539,7 +543,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                 }
             }
         }
-        Ok(self.futures_seqno_upper)
+        Ok(self.unsealeds_seqno_upper)
     }
 
     /// Asynchronously persists (Key, Value, Time, Diff) updates for the stream
@@ -558,7 +562,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             .push(PendingResponse::SeqNo(res, resp));
     }
 
-    /// Drain pending writes to future.
+    /// Drain pending writes to unsealed.
     ///
     /// The caller is responsible for commiting metadata after this succeeds, and
     /// restoring metadata if this fails.
@@ -570,32 +574,32 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             return Ok(());
         }
         // Give each write a unique, incrementing sequence number, and use
-        // futures_seqno_upper to track the sequence number of the next write.
-        let write_seqno = self.futures_seqno_upper;
-        self.futures_seqno_upper = SeqNo(write_seqno.0 + 1);
+        // unsealeds_seqno_upper to track the sequence number of the next write.
+        let write_seqno = self.unsealeds_seqno_upper;
+        self.unsealeds_seqno_upper = SeqNo(write_seqno.0 + 1);
 
         // This range represents the [lower, upper) of sequence numbers assigned
         // to this write.
         //
         // TODO: do we still need sequence numbers? This will make more sense
-        // when we send multiple writes to future at once but I'm not sure if
+        // when we send multiple writes to unsealed at once but I'm not sure if
         // we need the concept of sequence numbers when we're not reading from
-        // a buffer. On the other hand, how would we distinguish future batches
+        // a log. On the other hand, how would we distinguish unsealed batches
         // from each other?
-        let desc = write_seqno..self.futures_seqno_upper;
+        let desc = write_seqno..self.unsealeds_seqno_upper;
         for (id, writes) in writes_by_id.drain() {
-            let future = self
-                .futures
+            let unsealed = self
+                .unsealeds
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
 
             // We maintain the invariant that the sequence number chosen for the
-            // write is >= every future's seqno_upper and that there is nothing
-            // for that future in [future.seqno_upper, write_seqno).
-            let seqno_upper = future.seqno_upper()[0];
+            // write is >= every unsealed's seqno_upper and that there is nothing
+            // for that unsealed in [unsealed.seqno_upper, write_seqno).
+            let seqno_upper = unsealed.seqno_upper()[0];
             debug_assert!(seqno_upper <= write_seqno);
 
-            // We can artifically start the Future batch at the future's current
+            // We can artificially start the Unsealed batch at the unsealed's current
             // seqno_upper to make the batches be contiguous in terms of sequence
             // numbers
             let mut desc = desc.clone();
@@ -604,12 +608,12 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             self.drain_pending_writes_inner(id, writes, &desc)?;
         }
 
-        self.futures_seqno_upper = desc.end;
+        self.unsealeds_seqno_upper = desc.end;
 
         Ok(())
     }
 
-    /// Drain pending writes to future, commit in-memory state and notify any
+    /// Drain pending writes to unsealed, commit in-memory state and notify any
     /// listeners.
     ///
     /// The caller is responsible for draining any pending responses after this.
@@ -622,7 +626,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         let updates_for_listeners = updates_by_id.clone();
         if let Err(e) = self.drain_pending_writes(updates_by_id) {
             self.restore();
-            return Err(format!("failed to append to future: {}", e).into());
+            return Err(format!("failed to append to unsealed: {}", e).into());
         }
 
         let mut seal_updates: HashMap<Id, u64> = HashMap::new();
@@ -657,8 +661,12 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         }
 
         // TODO: only update meta if something has changed, instead of unconditionally.
-        self.try_set_meta()
-            .map_err(|e| format!("failed to commit metadata after appending to future: {}", e))?;
+        self.try_set_meta().map_err(|e| {
+            format!(
+                "failed to commit metadata after appending to unsealed: {}",
+                e
+            )
+        })?;
 
         let update_count: usize = updates_for_listeners.values().map(|x| x.len()).sum();
 
@@ -685,11 +693,11 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
         Ok(())
     }
 
-    /// Construct a new [BlobFutureBatch] out of the provided `updates` and add
-    /// it to the future for `id`.
+    /// Construct a new [BlobUnsealedBatch] out of the provided `updates` and add
+    /// it to the unsealed for `id`.
     ///
     /// The caller is responsible for updating META after they've finished
-    /// updating futures.
+    /// updating unsealeds.
     fn drain_pending_writes_inner(
         &mut self,
         id: Id,
@@ -700,7 +708,7 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             .drain(..)
             .map(|((k, v), t, d)| (t, (k, v), d))
             .collect();
-        // Future batches are required to be sorted and consolidated by ((ts, (k, v)).
+        // Unsealed batches are required to be sorted and consolidated by ((ts, (k, v)).
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
         if updates.is_empty() {
@@ -712,28 +720,28 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             .drain(..)
             .map(|(t, (k, v), d)| ((k, v), t, d))
             .collect();
-        let batch = BlobFutureBatch {
+        let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(desc.start),
                 Antichain::from_elem(desc.end),
-                // We never compact BlobFuture, so since is always the minimum.
+                // We never compact Unsealed, so since is always the minimum.
                 Antichain::from_elem(SeqNo(0)),
             ),
             updates,
         };
-        self.append_future(id, batch)?;
+        self.append_unsealed(id, batch)?;
 
         Ok(())
     }
 
-    /// Atomically moves all writes in future not in advance of the trace's
+    /// Atomically moves all writes in unsealed not in advance of the trace's
     /// seal frontier into the trace and does any necessary resulting eviction
     /// work to remove uneccessary batches.
-    fn drain_future(&mut self) -> Result<(), Error> {
+    fn drain_unsealed(&mut self) -> Result<(), Error> {
         let mut updates_by_id = vec![];
-        let mut future_ts_lower_updates = vec![];
+        let mut unsealed_ts_lower_updates = vec![];
         for (id, trace) in self.traces.iter_mut() {
-            // If this future is already properly sealed then we don't need
+            // If this unsealed is already properly sealed then we don't need
             // to do anything.
             let seal = trace.get_seal();
             let trace_upper = trace.ts_upper();
@@ -741,8 +749,8 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                 continue;
             }
 
-            let future = self
-                .futures
+            let unsealed = self
+                .unsealeds
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
 
@@ -755,12 +763,12 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
                 return Err(format!("invalid batch bounds: {:?}", desc).into());
             }
 
-            // Move a batch of data from future into trace by reading a
-            // snapshot from future...
+            // Move a batch of data from unsealed into trace by reading a
+            // snapshot from unsealed...
             let mut updates = Vec::new();
             {
                 let mut snap =
-                    future.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
+                    unsealed.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
                 while snap.read(&mut updates) {}
             }
 
@@ -770,35 +778,35 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
-            let new_future_ts_lower = batch.desc.upper().clone();
+            let new_unsealed_ts_lower = batch.desc.upper().clone();
             if let Err(e) = trace.append(batch, &mut self.blob) {
                 self.restore();
                 return Err(format!("failed to append to trace: {}", e).into());
             }
 
-            // We can only truncate future after we have successfully committed
+            // We can only truncate unsealed after we have successfully committed
             // everything to trace.
-            future_ts_lower_updates.push((*id, new_future_ts_lower));
+            unsealed_ts_lower_updates.push((*id, new_unsealed_ts_lower));
         }
 
-        // We need to update metadata before we do any notification or future
+        // We need to update metadata before we do any notification or unsealed
         // truncation because that's the final step of ensuring that things
         // get appended to trace.
         self.try_set_meta()?;
-        // TODO: This is a good point to compact future. The data that's been
+        // TODO: This is a good point to compact unsealed. The data that's been
         // moved is still there but now irrelevant. It may also be a good time
         // to compact trace.
 
         // Now that all of the trace data and metadata writes have completed, we
-        // can attempt to truncate future. The goal here is strictly to reduce
+        // can attempt to truncate unsealed. The goal here is strictly to reduce
         // consumption of durable storage, and so we don't need to roll back if
         // one of the truncates fails.
-        for (id, new_future_ts_lower) in future_ts_lower_updates {
-            let future = self
-                .futures
+        for (id, new_unsealed_ts_lower) in unsealed_ts_lower_updates {
+            let unsealed = self
+                .unsealeds
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-            future.truncate(new_future_ts_lower)?;
+            unsealed.truncate(new_unsealed_ts_lower)?;
         }
 
         Ok(())
@@ -878,29 +886,29 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             .push(PendingResponse::Unit(res, response));
     }
 
-    /// Appends the given `batch` to the future for `id`, writing the data into
+    /// Appends the given `batch` to the unsealed for `id`, writing the data into
     /// blob storage.
     ///
     /// The caller is responsible for updating META after they've finished
-    /// updating futures.
-    fn append_future(&mut self, id: Id, batch: BlobFutureBatch) -> Result<(), Error> {
-        let future = self
-            .futures
+    /// updating unsealeds.
+    fn append_unsealed(&mut self, id: Id, batch: BlobUnsealedBatch) -> Result<(), Error> {
+        let unsealed = self
+            .unsealeds
             .get_mut(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        future.append(batch, &mut self.blob)
+        unsealed.append(batch, &mut self.blob)
     }
 
     fn serialize_meta(&self) -> BlobMeta {
         BlobMeta {
             next_stream_id: self.next_stream_id,
-            futures_seqno_upper: self.futures_seqno_upper,
+            unsealeds_seqno_upper: self.unsealeds_seqno_upper,
             id_mapping: self.id_mapping.clone(),
             graveyard: self.graveyard.clone(),
-            futures: self
-                .futures
+            unsealeds: self
+                .unsealeds
                 .iter()
-                .map(|(_, future)| future.meta())
+                .map(|(_, unsealed)| unsealed.meta())
                 .collect(),
             traces: self.traces.iter().map(|(_, trace)| trace.meta()).collect(),
         }
@@ -914,8 +922,8 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
 
     fn do_snapshot(&mut self, id: Id) -> Result<IndexedSnapshot, Error> {
         self.drain_pending()?;
-        let future = self
-            .futures
+        let unsealed = self
+            .unsealeds
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let trace = self
@@ -923,9 +931,9 @@ impl<U: Buffer, L: Blob> Indexed<U, L> {
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let trace = trace.snapshot(&self.blob)?;
-        let future = future.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
+        let unsealed = unsealed.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
-        Ok(IndexedSnapshot(future, trace, self.futures_seqno_upper))
+        Ok(IndexedSnapshot(unsealed, trace, self.unsealeds_seqno_upper))
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
@@ -997,7 +1005,7 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 /// A consistent snapshot of all data currently stored for an id.
 #[derive(Debug)]
-pub struct IndexedSnapshot(FutureSnapshot, TraceSnapshot, SeqNo);
+pub struct IndexedSnapshot(UnsealedSnapshot, TraceSnapshot, SeqNo);
 
 impl IndexedSnapshot {
     /// Returns the SeqNo at which this snapshot was run.
@@ -1020,13 +1028,13 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::error::Error as IndexedError;
-    use crate::mem::{MemBlob, MemBuffer};
-    use crate::pfuture::Future;
+    use crate::future::Future;
+    use crate::mem::{MemBlob, MemLog};
 
     use super::*;
 
-    fn block_on_drain<T, F: FnOnce(&mut Indexed<U, L>, FutureHandle<T>), U: Buffer, L: Blob>(
-        index: &mut Indexed<U, L>,
+    fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, FutureHandle<T>), L: Log, B: Blob>(
+        index: &mut Indexed<L, B>,
         f: F,
     ) -> Result<T, IndexedError> {
         let (tx, rx) = Future::new();
@@ -1049,15 +1057,15 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("single_stream"),
+            MemLog::new_no_reentrance("single_stream"),
             MemBlob::new_no_reentrance("single_stream"),
             Metrics::default(),
         )?;
         let id = block_on(|res| i.register("0", "()", "()", res))?;
 
         // Empty things are empty.
-        let IndexedSnapshot(future, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(future.read_to_end(), vec![]);
+        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 0);
 
@@ -1075,33 +1083,33 @@ mod tests {
         });
         block_on(|res| i.listen(id, listen_fn, res))?;
 
-        // After a write, all data is in the future.
+        // After a write, all data is in the unsealed.
         block_on_drain(&mut i, |i, handle| {
             i.write(vec![(id, updates.clone())], handle)
         })?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(future, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(future.read_to_end(), updates);
+        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(unsealed.read_to_end(), updates);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 1);
 
-        // After a step, it's all still in the future as nothing has been sealed
+        // After a step, it's all still in the unsealed as nothing has been sealed
         // yet.
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(future, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(future.read_to_end(), updates);
+        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(unsealed.read_to_end(), updates);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 1);
 
         // After a seal and a step, the relevant data has moved into the trace
         // part of the index. Since we haven't sealed all the data, some of it
-        // is still in the future.
+        // is still in the unsealed.
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(future, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(future.read_to_end(), updates[1..]);
+        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(unsealed.read_to_end(), updates[1..]);
         assert_eq!(trace.read_to_end(), updates[..1]);
         assert_eq!(seqno.0, 1);
 
@@ -1109,8 +1117,8 @@ mod tests {
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(future, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(future.read_to_end(), vec![]);
+        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
         assert_eq!(seqno.0, 1);
 
@@ -1138,13 +1146,13 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("batch_sorting"),
+            MemLog::new_no_reentrance("batch_sorting"),
             MemBlob::new_no_reentrance("batch_sorting"),
             Metrics::default(),
         )?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
-        // Write the data and move it into the future part of the index, which
+        // Write the data and move it into the unsealed part of the index, which
         // orders it within each batch by time. It's not, so this will fire a
         // validations error if the sort code doesn't work.
         block_on_drain(&mut i, |i, handle| {
@@ -1159,8 +1167,8 @@ mod tests {
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(future, trace, _) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(future.read_to_end(), vec![]);
+        let IndexedSnapshot(unsealed, trace, _) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
         Ok(())
     }
@@ -1173,13 +1181,13 @@ mod tests {
         ];
 
         let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("batch_consolidation"),
+            MemLog::new_no_reentrance("batch_consolidation"),
             MemBlob::new_no_reentrance("batch_consolidation"),
             Metrics::default(),
         )?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
-        // Write the data and move it into the future part of the index, which
+        // Write the data and move it into the unsealed part of the index, which
         // consolidates updates to identical ((k, v), t). Since the writes are
         // not already consolidated this test will fail if the consolidation
         // code does not work.
@@ -1187,7 +1195,7 @@ mod tests {
             i.write(vec![(id, updates.clone())], handle)
         })?;
 
-        // Add another set of identical updates and place into another future
+        // Add another set of identical updates and place into another unsealed
         // batch.
         block_on_drain(&mut i, |i, handle| {
             i.write(vec![(id, updates.clone())], handle)
@@ -1195,29 +1203,29 @@ mod tests {
 
         // Now move the data to the trace part of the index, which consolidates
         // updates at identical ((k, v), t). Since the writes are only consolidated
-        // within individual future batches this test will fail if trace batch
+        // within individual unsealed batches this test will fail if trace batch
         // consolidation does not work.
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(future, trace, _) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(future.read_to_end(), vec![]);
+        let IndexedSnapshot(unsealed, trace, _) = block_on(|res| i.snapshot(id, res))?;
+        assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![(("1".into(), "".into()), 1, 4)]);
 
         Ok(())
     }
 
     #[test]
-    fn batch_future_empty() -> Result<(), Box<dyn Error>> {
+    fn batch_unsealed_empty() -> Result<(), Box<dyn Error>> {
         let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("batch_future_empty"),
-            MemBlob::new_no_reentrance("batch_future_empty"),
+            MemLog::new_no_reentrance("batch_unsealed_empty"),
+            MemBlob::new_no_reentrance("batch_unsealed_empty"),
             Metrics::default(),
         )?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
-        // Write an empty set of updates and try to move it into the future part
+        // Write an empty set of updates and try to move it into the unsealed part
         // of the index.
         block_on_drain(&mut i, |i, handle| i.write(vec![(id, vec![])], handle))?;
 
@@ -1236,21 +1244,21 @@ mod tests {
         Ok(())
     }
 
-    // Regression test for two similar bugs causing future batches with
+    // Regression test for two similar bugs causing unsealed batches with
     // non-adjacent seqno boundaries (which violates our invariants).
     #[test]
-    fn regression_non_sequential_future_batches() -> Result<(), IndexedError> {
+    fn regression_non_sequential_unsealed_batches() -> Result<(), IndexedError> {
         let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("lock"),
+            MemLog::new_no_reentrance("lock"),
             MemBlob::new_no_reentrance("lock"),
             Metrics::default(),
         )?;
 
         // First is some stream is registered, written to, and step'd, moving
-        // seqno 0..X into future. Then a second stream is registered, written
-        // to, and step'd. When it goes to move X..Y into the future, the second
+        // seqno 0..X into unsealed. Then a second stream is registered, written
+        // to, and step'd. When it goes to move X..Y into the unsealed, the second
         // stream is missing a batch for 0..X. (Newly registered streams are
-        // missing 0 to the seqno that buffer was at when they are registered.)
+        // missing 0 to the seqno that log was at when they are registered.)
         //
         // This caused a violation of our invariants (which are checked in tests
         // and debug mode), so we just need the following to run without error
@@ -1277,7 +1285,7 @@ mod tests {
     #[test]
     fn test_destroy() -> Result<(), IndexedError> {
         let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("destroy"),
+            MemLog::new_no_reentrance("destroy"),
             MemBlob::new_no_reentrance("destroy"),
             Metrics::default(),
         )?;
@@ -1312,7 +1320,7 @@ mod tests {
     #[test]
     fn codec_mismatch() -> Result<(), IndexedError> {
         let mut i = Indexed::new(
-            MemBuffer::new_no_reentrance("codec_mismatch"),
+            MemLog::new_no_reentrance("codec_mismatch"),
             MemBlob::new_no_reentrance("codec_mismatch"),
             Metrics::default(),
         )?;

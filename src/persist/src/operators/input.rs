@@ -17,8 +17,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data as TimelyData;
 
+use crate::future::Future;
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
-use crate::pfuture::Future;
 use crate::storage::SeqNo;
 use crate::{operators, Codec};
 
@@ -266,7 +266,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "replaying persisted data: failed to commit metadata after appending to future: unavailable: blob set".to_string(),
+            "replaying persisted data: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
             0,
             1,
         )];

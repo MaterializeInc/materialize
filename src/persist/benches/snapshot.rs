@@ -13,9 +13,9 @@ use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
 
 use ore::metrics::MetricsRegistry;
 use persist::error::Error;
-use persist::file::{FileBlob, FileBuffer};
+use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, StreamReadHandle};
-use persist::mem::{MemBlob, MemBuffer};
+use persist::mem::{MemBlob, MemLog};
 use persist::storage::LockInfo;
 use persist::Codec;
 
@@ -59,12 +59,12 @@ where
     let mut runtime = new_fn(1).expect("creating index cannot fail");
     let (write, read) = runtime.create_or_load("0").expect("registration succeeds");
 
-    // Write the data out to the index's future.
+    // Write the data out to the index's unsealed.
     write
         .write(data.iter())
         .recv()
         .expect("writing to index cannot fail");
-    c.bench_function(&format!("{}_future_snapshot", name), |b| {
+    c.bench_function(&format!("{}_unsealed_snapshot", name), |b| {
         bench_snapshot(&read, data_len, b)
     });
 
@@ -81,7 +81,7 @@ pub fn bench_mem_snapshots(c: &mut Criterion) {
         let name = format!("snapshot_bench_{}", path);
         let lock_info = LockInfo::new_no_reentrance(name);
         runtime::start(
-            MemBuffer::new(lock_info.clone()),
+            MemLog::new(lock_info.clone()),
             MemBlob::new(lock_info),
             &MetricsRegistry::new(),
         )
@@ -91,15 +91,13 @@ pub fn bench_mem_snapshots(c: &mut Criterion) {
 pub fn bench_file_snapshots(c: &mut Criterion) {
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     bench_runtime_snapshots(c, "file", move |path| {
-        let buffer_dir = temp_dir
-            .path()
-            .join(format!("snapshot_bench_buffer_{}", path));
+        let log_dir = temp_dir.path().join(format!("snapshot_bench_log_{}", path));
         let blob_dir = temp_dir
             .path()
             .join(format!("snapshot_bench_blob_{}", path));
         let lock_info = LockInfo::new_no_reentrance("snapshot_bench".to_owned());
         runtime::start(
-            FileBuffer::new(buffer_dir, lock_info.clone())?,
+            FileLog::new(log_dir, lock_info.clone())?,
             FileBlob::new(blob_dir, lock_info)?,
             &MetricsRegistry::new(),
         )

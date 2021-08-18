@@ -42,10 +42,10 @@ yet.)
 [persister v2]: https://github.com/danhhz/differential-dataflow/blob/02673114b05933341893ab603327237a9583e432/persist/src/persister.rs#L41-L44
 
 In the prototype, `PersisterV2` has one implementation, which is itself in terms
-of the `Buffer` and `Blob` traits. Internally, any data is immediately handed to
-the Buffer, which could be durable for source persistence (a WAL on EBS or maybe
+of the `Log` and `Blob` traits. Internally, any data is immediately handed to
+the Log, which could be durable for source persistence (a WAL on EBS or maybe
 redPanda) or not durable for operator persistence. As timestamps are closed,
-data from the buffer is moved into a persistent trace built on top of `Blob`
+data from the log is moved into a persistent trace built on top of `Blob`
 which is a KV abstraction over S3 and files. For operator persistence, we'll
-have to add a FutureLog holding pen which immediately slurps everything from the
-Buffer (or they're tee'd?) and indexes it in the necessary way.
+have to add an Unsealed holding pen which immediately slurps everything from the
+Log (or they're tee'd?) and indexes it in the necessary way.

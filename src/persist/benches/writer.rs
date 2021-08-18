@@ -11,11 +11,11 @@
 
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 
-use persist::file::FileBuffer;
-use persist::mem::MemBuffer;
-use persist::storage::{Buffer, LockInfo};
+use persist::file::FileLog;
+use persist::mem::MemLog;
+use persist::storage::{LockInfo, Log};
 
-fn bench_write_sync<U: Buffer>(writer: &mut U, data: Vec<u8>, b: &mut Bencher) {
+fn bench_write_sync<L: Log>(writer: &mut L, data: Vec<u8>, b: &mut Bencher) {
     b.iter(move || {
         writer
             .write_sync(data.clone())
@@ -26,21 +26,21 @@ fn bench_write_sync<U: Buffer>(writer: &mut U, data: Vec<u8>, b: &mut Bencher) {
 pub fn bench_writes(c: &mut Criterion) {
     let data = "entry0".as_bytes().to_vec();
 
-    let mut mem_buffer = MemBuffer::new(LockInfo::new_no_reentrance("mem_buffer_bench".to_owned()));
+    let mut mem_log = MemLog::new(LockInfo::new_no_reentrance("mem_log_bench".to_owned()));
     c.bench_function("mem_write_sync", |b| {
-        bench_write_sync(&mut mem_buffer, data.clone(), b)
+        bench_write_sync(&mut mem_log, data.clone(), b)
     });
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let file_buffer_dir = temp_dir.path().join("file_buffer_bench");
-    let mut file_buffer = FileBuffer::new(
-        file_buffer_dir,
-        LockInfo::new_no_reentrance("file_buffer_bench".to_owned()),
+    let file_log_dir = temp_dir.path().join("file_log_bench");
+    let mut file_log = FileLog::new(
+        file_log_dir,
+        LockInfo::new_no_reentrance("file_log_bench".to_owned()),
     )
-    .expect("creating a FileBuffer cannot fail");
+    .expect("creating a FileLog cannot fail");
     c.bench_function("file_write_sync", |b| {
-        bench_write_sync(&mut file_buffer, data.clone(), b)
+        bench_write_sync(&mut file_log, data.clone(), b)
     });
 }
 
