@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs;
@@ -474,9 +475,13 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         if duration.to_lowercase() == "default" {
                             context.timeout = state.default_timeout;
                         } else {
-                            context.timeout = repr::util::parse_duration(&duration)
-                                .map_err_to_string()
-                                .map_err(wrap_err)?;
+                            // do not allow the timeout to be set below the default
+                            context.timeout = cmp::max(
+                                repr::util::parse_duration(&duration)
+                                    .map_err_to_string()
+                                    .map_err(wrap_err)?,
+                                state.default_timeout,
+                            );
                         }
                         continue;
                     }
