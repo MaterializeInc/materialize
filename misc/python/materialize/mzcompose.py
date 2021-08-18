@@ -387,8 +387,9 @@ class Composition:
         args: List[str],
         env: Optional[Dict[str, str]] = None,
         capture: bool = False,
+        capture_combined: bool = False,
         check: bool = True,
-    ) -> subprocess.CompletedProcess:
+    ) -> "subprocess.CompletedProcess[str]":
         """Invokes docker-compose on the composition.
 
         Arguments to specify the files in the composition and the project
@@ -400,12 +401,22 @@ class Composition:
                 These are merged with the current environment.
             capture: Whether to capture the child's stdout and stderr, or
                 whether to emit directly to the current stdout/stderr streams.
+            capture_combined: capture stdout and stderr, and direct all output
+                to the stdout property on the returned object
             check: Whether to raise an error if the child process exits with
                 a failing exit code.
         """
         self.file.seek(0)
         if env is not None:
             env = dict(os.environ, **env)
+
+        stdout = 1
+        stderr = 2
+        if capture:
+            stdout = stderr = subprocess.PIPE
+        if capture_combined:
+            stdout = subprocess.PIPE
+            stderr = subprocess.STDOUT
         return subprocess.run(
             [
                 "docker-compose",
@@ -417,8 +428,9 @@ class Composition:
             env=env,
             close_fds=False,
             check=check,
-            stdout=subprocess.PIPE if capture else 1,
-            stderr=subprocess.PIPE if capture else 2,
+            stdout=stdout,
+            stderr=stderr,
+            encoding="utf-8",
         )
 
     def find_host_ports(self, service: str) -> List[str]:
@@ -427,22 +439,58 @@ class Composition:
         # output depends on terminal width (!). Using the `-q` flag is safe,
         # however, and we can pipe the container IDs into `docker inspect`,
         # which supports machine-readable output.
-        containers = self.run(["ps", "-q"], capture=True).stdout.splitlines()
-        metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers])
-        metadata = [json.loads(line) for line in metadata.splitlines()]
         ports = []
-        for md in metadata:
-            if md["Config"]["Labels"]["com.docker.compose.service"] == service:
-                for (name, port_entry) in md["NetworkSettings"]["Ports"].items():
-                    for p in port_entry or []:
-                        # When IPv6 is enabled, Docker will bind each port
-                        # twice. Consider only IPv4 address to avoid spurious
-                        # warnings about duplicate ports.
-                        if p["HostPort"] not in ports and isinstance(
-                            ipaddress.ip_address(p["HostIp"]), ipaddress.IPv4Address
-                        ):
-                            ports.append(p["HostPort"])
+        for info in self.inspect_service_containers(service):
+            for (name, port_entry) in info["NetworkSettings"]["Ports"].items():
+                for p in port_entry or []:
+                    # When IPv6 is enabled, Docker will bind each port twice. Consider
+                    # only IPv4 address to avoid spurious warnings about duplicate
+                    # ports.
+                    if p["HostPort"] not in ports and isinstance(
+                        ipaddress.ip_address(p["HostIp"]), ipaddress.IPv4Address
+                    ):
+                        ports.append(p["HostPort"])
         return ports
+
+    def inspect_service_containers(
+        self, service: str, include_stopped: bool = False
+    ) -> Iterable[Dict[str, Any]]:
+        """
+        Return the JSON from `docker inspect` for each container in the given compose service
+
+        There is no explicit documentation of the structure of the returned
+        fields, but you can see them in the docker core repo:
+        https://github.com/moby/moby/blob/91dc595e9648318/api/types/types.go#L345-L379
+        """
+        cmd = ["ps", "-q"]
+        if include_stopped:
+            cmd.append("-a")
+        containers = self.run(cmd, capture=True).stdout.splitlines()
+        if not containers:
+            return
+        metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers])
+        for line in metadata.splitlines():
+            info = json.loads(line)
+            labels = info["Config"].get("Labels")
+            if (
+                labels is not None
+                and labels.get("com.docker.compose.service") == service
+                and labels.get("com.docker.compose.project") == self.name
+            ):
+                yield info
+
+    def service_logs(self, service_name: str, tail: int = 20) -> str:
+        proc = self.run(
+            [
+                "logs",
+                "--tail",
+                str(tail),
+                service_name,
+            ],
+            check=True,
+            capture_combined=True,
+        )
+        return proc.stdout
 
     def get_container_id(self, service: str, running: bool = False) -> str:
         """Given a service name, tries to find a unique matching container id
@@ -1130,24 +1178,33 @@ class WaitForPgStep(WorkflowStep):
         if self._port is None:
             ports = workflow.composition.find_host_ports(self._service)
             if len(ports) != 1:
-                raise errors.Failed(
-                    f"Unable to unambiguously determine port for {self._service}, "
-                    f"found ports: {','.join(ports)}"
-                )
+                logs = workflow.composition.service_logs(self._service)
+                if ports:
+                    msg = (
+                        f"Unable to unambiguously determine port for {self._service},"
+                        f"found ports: {','.join(ports)}\nService logs:\n{logs}"
+                    )
+                else:
+                    msg = f"No ports found for {self._service}\nService logs:\n{logs}"
+                raise errors.Failed(msg)
             port = int(ports[0])
         else:
             port = self._port
-        wait_for_pg(
-            dbname=self._dbname,
-            host=self._host,
-            port=port,
-            timeout_secs=self._timeout_secs,
-            query=self._query,
-            user=self._user,
-            password=self._password,
-            expected=self._expected,
-            print_result=self._print_result,
-        )
+        try:
+            wait_for_pg(
+                dbname=self._dbname,
+                host=self._host,
+                port=port,
+                timeout_secs=self._timeout_secs,
+                query=self._query,
+                user=self._user,
+                password=self._password,
+                expected=self._expected,
+                print_result=self._print_result,
+            )
+        except errors.Failed as e:
+            logs = workflow.composition.service_logs(self._service)
+            raise errors.Failed(f"{e}:\nService logs:\n{logs}")
 
 
 @Steps.register("wait-for-mz")
@@ -1336,11 +1393,26 @@ class WaitForTcpStep(WorkflowStep):
                     )
                 except subprocess.CalledProcessError:
                     message = f"Dependency is down {host}:{port}"
+                    try:
+                        dep_logs = workflow.composition.service_logs(host)
+                    except Exception as e:
+                        dep_logs = f"unable to determine logs: {e}"
                     if "hint" in dep:
                         message += f"\n    hint: {dep['hint']}"
+                    message += "\nDependency service logs:\n"
+                    message += dep_logs
+                    ui.progress(" error!", finish=True)
                     raise errors.Failed(message)
 
-        raise errors.Failed(f"Unable to connect to {self._host}:{self._port}")
+        ui.progress(" error!", finish=True)
+        try:
+            logs = workflow.composition.service_logs(self._host)
+        except Exception as e:
+            logs = f"unable to determine logs: {e}"
+
+        raise errors.Failed(
+            f"Unable to connect to {self._host}:{self._port}\nService logs:\n{logs}"
+        )
 
 
 def _check_tcp(
@@ -1706,25 +1778,25 @@ class EnsureStaysUpStep(WorkflowStep):
         self._uptime_secs = seconds
 
     def run(self, workflow: Workflow) -> None:
-        pattern = f"{workflow.composition.name}_{self._container}"
         ui.progress(f"Ensuring {self._container} stays up ", "C")
         for i in range(self._uptime_secs, 0, -1):
             time.sleep(1)
-            try:
-                stdout = spawn.capture(
-                    ["docker", "ps", "--format={{.Names}}"], unicode=True
+            containers = [
+                s["Name"]
+                for s in workflow.composition.inspect_service_containers(
+                    self._container, include_stopped=True
                 )
-            except subprocess.CalledProcessError as e:
-                raise errors.Failed(f"{e.stdout}")
-            found = False
-            for line in stdout.splitlines():
-                if line.startswith(pattern) or line.strip() == self._container:
-                    found = True
-                    break
-            if not found:
-                print(f"failed! {pattern} logs follow:")
-                print_docker_logs(pattern, 10)
-                raise errors.Failed(f"container {self._container} stopped running!")
+            ]
+            if not containers:
+                try:
+                    logs = workflow.composition.service_logs(self._container)
+                except subprocess.CalledProcessError as e:
+                    logs = (
+                        f"Unable to determine service logs, docker output:\n{e.output}"
+                    )
+                raise errors.Failed(
+                    f"container {self._container} stopped running!\nService logs:\n{logs}"
+                )
             ui.progress(f" {i}")
         print()
 
@@ -1753,7 +1825,7 @@ class WaitStep(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         say(f"Waiting for the service {self._service} to exit")
         ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
-        container_ids = [c for c in ps_proc.stdout.decode("utf-8").strip().split("\n")]
+        container_ids = [c for c in ps_proc.stdout.strip().split("\n")]
         if len(container_ids) > 1:
             raise errors.Failed(
                 f"Expected to get a single container for {self._service}; got: {container_ids}"
@@ -1780,15 +1852,6 @@ class WaitStep(WorkflowStep):
 
         if self._print_logs:
             spawn.runv(["docker", "logs", container_id])
-
-
-def print_docker_logs(pattern: str, tail: int = 0) -> None:
-    out = spawn.capture(
-        ["docker", "ps", "-a", "--format={{.Names}}"], unicode=True
-    ).splitlines()
-    for line in out:
-        if line.startswith(pattern):
-            spawn.runv(["docker", "logs", "--tail", str(tail), line])
 
 
 def wait_for_pg(
