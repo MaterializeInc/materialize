@@ -59,7 +59,7 @@ pub struct BufferEntry {
 ///   because truncating the unnecessary elements out of future is fallible, and
 ///   is allowed to lag behind the migration of new data into trace)
 /// - id_mapping.len() + graveyard.len() is == next_stream_id.
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct BlobMeta {
     /// The next internal stream id to assign.
     pub next_stream_id: Id,
@@ -90,7 +90,7 @@ pub struct BlobMeta {
 }
 
 /// Registration information for a single stream.
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct StreamRegistration {
     /// The external stream name.
     pub name: String,
@@ -106,7 +106,7 @@ pub struct StreamRegistration {
 ///
 /// Invariants:
 /// - The batch SeqNo ranges are sorted and non-overlapping.
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct BlobFutureMeta {
     /// The stream this future belongs to.
     pub id: Id,
@@ -124,7 +124,7 @@ pub struct BlobFutureMeta {
 ///
 /// Invariants:
 /// - The [lower, upper) interval of sequence numbers in desc is non-empty.
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct BlobFutureBatchMeta {
     /// The key to retrieve the [BlobFutureBatch] from blob storage.
     pub key: String,
@@ -149,7 +149,7 @@ pub struct BlobFutureBatchMeta {
 ///   to most recent time intervals.
 /// - Every batch's upper is <= the overall trace's seal frontier.
 /// - TODO: key uniqueness invariants?
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct BlobTraceMeta {
     /// The stream this trace belongs to.
     pub id: Id,
@@ -172,7 +172,7 @@ pub struct BlobTraceMeta {
 /// Invariants:
 /// - The Description's time interval is non-empty.
 /// - TODO: key invariants?
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct BlobTraceBatchMeta {
     /// The key to retrieve the batch's data from the blob store.
     pub key: String,
@@ -195,7 +195,7 @@ pub struct BlobTraceBatchMeta {
 ///   unique.
 /// - All entries have a non-zero diff.
 /// - The updates field is non-empty.
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct BlobFutureBatch {
     /// Which updates are included in this batch.
     pub desc: Description<SeqNo>,
@@ -231,7 +231,7 @@ pub struct BlobFutureBatch {
 /// put multiple small batches in a single blob but also break a very large
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
-#[derive(Clone, Debug, Abomonation)]
+#[derive(Clone, Debug, Eq, PartialEq, Abomonation)]
 pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
