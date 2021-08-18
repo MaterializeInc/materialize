@@ -8,6 +8,24 @@
 // by the Apache License, Version 2.0.
 
 //! Functionality for creating S3 sources
+//!
+//! This source is constructed as a collection of Tokio tasks that communicate over local
+//! (worker-pinned) queues to send data into dataflow. We spin up a single "downloader" task which
+//! is responsible for performing s3 object downloads and shuffling the data into dataflow. Then,
+//! for each object source, we spin up another task which is responsible for collecting object names
+//! from an object name source and sending that name to the downloader.
+//!
+//! ```text
+//! +----------------+
+//! | bucket scanner +-                               -------
+//! +----------------+ \---                         -/       \-
+//! +----------------+     \--   +------------+    /           \
+//! | sqs listener   +--------X->| downloader +--->| dataflow  |
+//! +----------------+     /--   +------------+    \           /
+//!        .  .  .  .   /--                         -\       /-
+//!       etc .  .  . --                              -------
+//!        .  .  .  .
+//! ```
 
 use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
