@@ -485,7 +485,7 @@ version: "3.7"
 services:
   materialized:
     mzbuild: materialized
-    propagate-uid-gid: true
+    propagate_uid_gid: true
 
 mzworkflows:
   NAME:
@@ -505,7 +505,7 @@ mzworkflows:
   If `mzbuild` is specified, neither of the standard properties `build` nor
   `image` should be specified.
 
-* `propagate-uid-gid` (bool) requests that the Docker image be run with the user
+* `propagate_uid_gid` (bool) requests that the Docker image be run with the user
   ID and group ID of the host user. It is equivalent to passing `--user $(id
   -u):$(id -g)` to `docker run`. The default is `false`.
 

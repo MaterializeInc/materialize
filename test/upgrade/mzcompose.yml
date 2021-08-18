@@ -282,7 +282,7 @@ services:
       - mzdata:/share/mzdata
       - tmp:/share/tmp
       - ../testdrive:/tests
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     init: true
     depends_on: [kafka, zookeeper, schema-registry, postgres]
 
