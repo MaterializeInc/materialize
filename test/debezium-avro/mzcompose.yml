@@ -67,7 +67,7 @@ services:
     - .:/workdir
     - mzdata:/share/mzdata
     - tmp:/share/tmp
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     init: true
     depends_on: [kafka, zookeeper, schema-registry, materialized, debezium]
   materialized:
