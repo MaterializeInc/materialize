@@ -76,5 +76,5 @@ services:
     depends_on:
       - materialized
   inspect:
-    image: ubuntu:focal-20210723
+    mzbuild: ubuntu-base
     command: "true"

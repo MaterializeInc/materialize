@@ -27,3 +27,21 @@ updates:
     time: "22:00"
   reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
+- package-ecosystem: docker
+  directory: /misc/ubuntu-base-image
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  open-pull-requests-limit: 10
+  reviewers: [MaterializeInc/dependency-czars]
+  labels: [A-dependencies]
+- package-ecosystem: docker
+  directory: /ci/builder
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  open-pull-requests-limit: 10
+  reviewers: [MaterializeInc/dependency-czars]
+  labels: [A-dependencies]

@@ -7,16 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update && apt-get install -qy curl unzip
-
-#Copy build and scripts to /usr/local/bin
-
-COPY mbta-to-mtrlz /usr/local/bin
-COPY mbta-demo-cmd.sh /usr/local/bin
-
-#create workspace
-WORKDIR /workdir
-
-ENTRYPOINT ["mbta-demo-cmd.sh"]
+FROM ubuntu:focal-20210723

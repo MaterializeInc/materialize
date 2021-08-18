@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:focal-20210723
+MZFROM ubuntu-base
 
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8

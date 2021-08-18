@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:focal-20210723
+MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install \
     ca-certificates \
