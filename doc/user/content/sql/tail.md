@@ -195,12 +195,9 @@ It is `true` if no more timestamps will appear that are strictly less than the
 timestamp.
 All further columns after `progressed` will be `NULL` in the `true` case.
 
-`mz_progressed` can be used to distinguish between a result with that contains
-no data (`true`) and a timeout (no rows returned). 
-
-Intuitively, progress messages communicate that no updates have occurred in a
-given time window. Without explicit progress messages, it is impossible to
-distinguish between a stall in Materialize and a legimate period of no updates.
+Progress messages communicate that no updates have occurred in a
+given time window. These messages can be used to
+distinguish between a stall in Materialize and a legitimate period of no updates.
 
 Not all timestamps that appear will have a corresponding `mz_progressed` row.
 For example, the following is a valid sequence of updates:
