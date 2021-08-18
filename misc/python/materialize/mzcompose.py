@@ -73,7 +73,7 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 )
 
 
-LINT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 
@@ -121,12 +121,12 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
 
     if repo == "confluentinc" and image.startswith("cp-"):
         # An '$XXX' environment variable may have been used to specify the version
-        if "$" not in tag and tag != LINT_CONFLUENT_PLATFORM_VERSION:
+        if "$" not in tag and tag != DEFAULT_CONFLUENT_PLATFORM_VERSION:
             errors.append(
                 LintError(
                     path,
                     f"image {spec} depends on wrong version of Confluent Platform "
-                    f"(want {LINT_CONFLUENT_PLATFORM_VERSION})",
+                    f"(want {DEFAULT_CONFLUENT_PLATFORM_VERSION})",
                 )
             )
 
@@ -179,7 +179,7 @@ def lint_materialized_service(
 
 
 class Composition:
-    """A parsed mzcompose.yml file."""
+    """A parsed mzcompose.yml with a loaded mzworkflows.py file."""
 
     def __init__(self, repo: mzbuild.Repository, name: str):
         self.name = name
@@ -194,8 +194,16 @@ class Composition:
         else:
             raise errors.UnknownComposition
 
-        with open(self.path) as f:
-            compose = yaml.safe_load(f) or {}
+        # load the mzcompose.yml file, if one exists
+        mzcompose_yml = self.path / "mzcompose.yml"
+        if mzcompose_yml.exists():
+            with open(mzcompose_yml) as f:
+                compose = yaml.safe_load(f) or {}
+        else:
+            compose = {}
+
+        if "version" not in compose:
+            compose["version"] = "3.7"
 
         if "services" not in compose:
             compose["services"] = {}
@@ -203,8 +211,8 @@ class Composition:
         # Stash away sub workflows so that we can load them with the correct environment variables
         self.yaml_workflows = compose.pop("mzworkflows", {})
 
-        # Load the mzworkflows.py file, if any.
-        mzworkflows_py = self.path.parent / "mzworkflows.py"
+        # Load the mzworkflows.py file, if one exists
+        mzworkflows_py = self.path / "mzworkflows.py"
         if mzworkflows_py.exists():
             spec = importlib.util.spec_from_file_location("mzworkflows", mzworkflows_py)
             assert spec
@@ -262,6 +270,10 @@ class Composition:
                     f"LLVM_PROFILE_FILE=/coverage/{name}-%m.profraw"
                 )
                 config.setdefault("volumes", []).append("./coverage:/coverage")
+
+        # Add default volumes
+        compose.setdefault("volumes", {})["mzdata"] = None
+        compose.setdefault("volumes", {})["tmp"] = None
 
         deps = self.repo.resolve_dependencies(self.images)
         for config in compose["services"].values():
@@ -359,12 +371,15 @@ class Composition:
         if not name in repo.compositions:
             raise errors.UnknownComposition
 
-        path = repo.compositions[name]
-        with open(path) as f:
-            composition = yaml.safe_load(f) or {}
-
         errs: List[LintError] = []
-        lint_composition(path, composition, errs)
+
+        path = repo.compositions[name] / "mzcompose.yml"
+
+        if path.exists():
+            with open(path) as f:
+                composition = yaml.safe_load(f) or {}
+
+            lint_composition(path, composition, errs)
         return errs
 
     def run(
@@ -396,7 +411,7 @@ class Composition:
                 "docker-compose",
                 f"-f/dev/fd/{self.file.fileno()}",
                 "--project-directory",
-                self.path.parent,
+                self.path,
                 *args,
             ],
             env=env,
@@ -581,25 +596,227 @@ class Workflow:
         return self.composition.run(args, self.env, capture=capture)
 
 
+PythonServiceConfig = TypedDict(
+    "PythonServiceConfig",
+    {
+        "mzbuild": str,
+        "image": str,
+        "hostname": str,
+        "command": str,
+        "ports": List[int],
+        "environment": List[str],
+        "depends_on": List[str],
+        "entrypoint": List[str],
+        "volumes": List[str],
+        "propagate-uid-gid": bool,
+        "init": bool,
+    },
+    total=False,
+)
+
+
 class PythonService:
     """
     A PythonService is a service that has been specified in the 'services' variable of mzworkflows.py
     """
 
-    def __init__(self, name: str, config: Dict) -> None:
+    def __init__(self, name: str, config: PythonServiceConfig) -> None:
         self.name = name
         self.config = config
 
+    def port(self) -> int:
+        return self.config["ports"][0]
 
-class Mz(PythonService):
-    def __init__(self) -> None:
+
+class Materialized(PythonService):
+    def __init__(
+        self,
+        name: str = "materialized",
+        hostname: Optional[str] = None,
+        image: Optional[str] = None,
+        port: int = 6875,
+        data_directory: str = "/share/mzdata",
+        environment: List[str] = [
+            "MZ_DEV=1",
+            "MZ_LOG_FILTER",
+            "MZ_SOFT_ASSERTIONS=1",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "ALL_PROXY",
+            "NO_PROXY",
+        ],
+        volumes: List[str] = ["mzdata:/share/mzdata", "tmp:/share/tmp"],
+    ) -> None:
+        command = f"--data-directory={data_directory} --experimental --disable-telemetry --listen-addr 0.0.0.0:{port}"
+
+        config: PythonServiceConfig = (
+            {"image": image} if image else {"mzbuild": "materialized"}
+        )
+
+        if hostname:
+            config["hostname"] = hostname
+
+        config.update(
+            {
+                "command": command,
+                "ports": [port],
+                "environment": environment,
+                "volumes": volumes,
+            }
+        )
+
+        super().__init__(name=name, config=config)
+
+
+class Zookeeper(PythonService):
+    def __init__(
+        self,
+        name: str = "zookeeper",
+        image: str = f"confluentinc/cp-zookeeper:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        port: int = 2181,
+        environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
+    ) -> None:
         super().__init__(
-            name="materialized",
+            name="zookeeper",
+            config={"image": image, "ports": [port], "environment": environment},
+        )
+
+
+class Kafka(PythonService):
+    def __init__(
+        self,
+        name: str = "kafka",
+        image: str = f"confluentinc/cp-kafka:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        port: int = 9092,
+        environment: List[str] = [
+            "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
+            "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092",
+            "KAFKA_AUTO_CREATE_TOPICS_ENABLE=false",
+            "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
+            "KAFKA_MIN_INSYNC_REPLICAS=1",
+            "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        ],
+        depends_on: List[str] = ["zookeeper"],
+    ) -> None:
+        super().__init__(
+            name=name,
             config={
-                "mzbuild": "materialized",
-                "command": "--data-directory=/share/mzdata --experimental --disable-telemetry",
-                "ports": [6875],
-                "environment": ["MZ_DEV=1"],
+                "image": image,
+                "ports": [port],
+                "environment": environment,
+                "depends_on": depends_on,
+            },
+        )
+
+
+class SchemaRegistry(PythonService):
+    def __init__(
+        self,
+        name: str = "schema-registry",
+        image: str = f"confluentinc/cp-schema-registry:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        port: int = 8081,
+        environment: List[str] = [
+            "SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092",
+            "SCHEMA_REGISTRY_HOST_NAME=localhost",
+        ],
+        depends_on: List[str] = ["kafka", "zookeeper"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+                "environment": environment,
+                "depends_on": depends_on,
+            },
+        )
+
+
+class Postgres(PythonService):
+    def __init__(
+        self,
+        name: str = "postgres",
+        mzbuild: str = "postgres",
+        port: int = 5432,
+        environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": mzbuild,
+                "ports": [port],
+                "environment": environment,
+            },
+        )
+
+
+class Testdrive(PythonService):
+    def __init__(
+        self,
+        name: str = "testdrive-svc",
+        mzbuild: str = "testdrive",
+        entrypoint: List[str] = [
+            "testdrive",
+            "--kafka-addr=kafka:9092",
+            "--schema-registry-url=http://schema-registry:8081",
+            "--materialized-url=postgres://materialize@materialized:6875",
+            "--validate-catalog=/share/mzdata/catalog",
+            "${TD_TEST:-$$*}",
+        ],
+        environment: List[str] = [
+            "TMPDIR=/share/tmp",
+            "MZ_LOG_FILTER",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ],
+        volumes: List[str] = [".:/workdir", "mzdata:/share/mzdata", "tmp:/share/tmp"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": mzbuild,
+                "entrypoint": [
+                    "bash",
+                    "-c",
+                    " ".join(entrypoint),
+                    "bash",
+                ],
+                "environment": environment,
+                "volumes": volumes,
+                "propagate-uid-gid": True,
+                "init": True,
+            },
+        )
+
+
+class SqlLogicTest(PythonService):
+    def __init__(
+        self,
+        name: str = "sqllogictest-svc",
+        mzbuild: str = "sqllogictest",
+        environment: List[str] = [
+            "RUST_BACKTRACE=full",
+            "PGUSER=postgres",
+            "PGHOST=postgres",
+            "PGPASSWORD=postgres",
+            "MZ_SOFT_ASSERTIONS=1",
+        ],
+        volumes: List[str] = ["../..:/workdir"],
+        depends_on: List[str] = ["postgres"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": mzbuild,
+                "environment": environment,
+                "volumes": volumes,
+                "depends_on": depends_on,
+                "propagate-uid-gid": True,
+                "init": True,
             },
         )
 
@@ -745,6 +962,34 @@ class StartServicesStep(WorkflowStep):
             raise errors.Failed(f"ERROR: services didn't come up cleanly: {services}")
 
 
+@Steps.register("start-and-wait-for-tcp")
+class StartAndWaitForTcp(WorkflowStep):
+    """
+    Params:
+      services: A list of PythonService objects to start and wait until their TCP ports are open
+    """
+
+    def __init__(self, *, services: List[PythonService]) -> None:
+        if not isinstance(services, list):
+            raise errors.BadSpec(
+                f"services for start-and-wait-for-tcp should be a list, got: {services}"
+            )
+
+        for service in services:
+            if not isinstance(service, PythonService):
+                raise errors.BadSpec(
+                    f"services for start-and-wait-for-tcp should be a list of PythonService, got: {service}"
+                )
+
+        self._services = services
+
+    def run(self, workflow: Workflow) -> None:
+        for service in self._services:
+            # Those two methods are loaded dynamically, so silence any mypi warnings about them
+            workflow.start_services(services=[service.name])  # type: ignore
+            workflow.wait_for_tcp(host=service.name, port=service.port())  # type: ignore
+
+
 @Steps.register("kill-services")
 class KillServicesStep(WorkflowStep):
     """
@@ -862,7 +1107,7 @@ class WaitForPgStep(WorkflowStep):
         dbname: str,
         port: Optional[int] = None,
         host: str = "localhost",
-        timeout_secs: int = 60,
+        timeout_secs: int = 120,
         query: str = "SELECT 1",
         user: str = "postgres",
         password: str = "postgres",
@@ -1062,7 +1307,7 @@ class WaitForTcpStep(WorkflowStep):
         *,
         host: str = "localhost",
         port: int,
-        timeout_secs: int = 60,
+        timeout_secs: int = 120,
         dependencies: Optional[List[WaitDependency]] = None,
     ) -> None:
         self._host = host
