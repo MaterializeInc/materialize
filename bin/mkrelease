@@ -11,4 +11,4 @@
 
 # mkrelease -- Update documents for a release, per the release process
 
-exec "$(dirname "$0")"/pyactivate -m materialize.cli.mkrelease "$@"
+exec "$(dirname "$0")"/pyactivate --dev -m materialize.cli.mkrelease "$@"
