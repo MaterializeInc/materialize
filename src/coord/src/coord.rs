@@ -1361,14 +1361,25 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     fn handle_terminate(&mut self, session: &mut Session) {
-        let (drop_sinks, _) = session.clear_transaction();
-        self.drop_sinks(drop_sinks);
+        self.clear_transaction(session);
 
         self.drop_temp_items(session.conn_id());
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&session.conn_id());
+    }
+
+    /// Handle removing in-progress transaction state regardless of the end action
+    /// of the transaction.
+    fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+        let (drop_sinks, txn) = session.clear_transaction();
+        self.drop_sinks(drop_sinks);
+
+        // Allow compaction of sources from this transaction.
+        self.txn_reads.remove(&session.conn_id());
+
+        txn
     }
 
     /// Removes all temporary items created by the specified connection, though
@@ -2265,11 +2276,8 @@ impl Coordinator {
         session: &mut Session,
         action: &EndTransactionAction,
     ) -> Result<Option<impl Future<Output = Result<(), CoordError>>>, CoordError> {
-        let (drop_sinks, txn) = session.clear_transaction();
-        self.drop_sinks(drop_sinks);
+        let txn = self.clear_transaction(session);
 
-        // Allow compaction of sources from this transaction, regardless of the action.
-        self.txn_reads.remove(&session.conn_id());
         // Although the compaction frontier may have advanced, we do not need to
         // call `maintenance` here because it will soon be called after the next
         // `update_upper`.
