@@ -331,32 +331,7 @@ canonicalize
 !(isnull(#1))
 (!(isnull(#3)) || (#0 < #2))
 
-canonicalize-join
-[[#0 #0 #3] [(call_binary add_int32 #0 #0) (call_binary add_int32 #3 #3)]]
-----
-[#0 #3]
-
-canonicalize-join
-[[#0 #3 #3] [(call_binary add_int32 #0 #0) #1] [(call_binary add_int32 #3 #3) #2]]
-----
-[#0 #3]
-[#1 #2 (#0 + #0)]
-
-canonicalize-join
-[
-    [#0 #3]
-    [#1
-        (call_binary add_int32 (call_binary add_int32 #0 #0) #0)
-        (call_binary add_int32 (call_binary add_int32 #2 #2) #1)
-        (call_binary add_int32
-            (call_binary add_int32 #2 #2)
-            (call_binary add_int32 (call_binary add_int32 #3 #3) #3))
-        (call_binary add_int32 (call_binary add_int32 #3 #3) #3)
-    ]
-]
-----
-[#0 #3]
-[#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
+# expressions in equivalence classes only become simpler.
 
 canonicalize-join
 [[
@@ -399,6 +374,9 @@ canonicalize-join
 [#1 ((#0 + #0) + #0) ((#2 + #2) + #1)]
 [(#2 + #2) (#4 * #5)]
 
+# replacing expressions with simpler equivalent ones can result in the
+# collapsing of equivalence classes.
+
 canonicalize-join
 [
     [#0 #3]
@@ -416,3 +394,41 @@ canonicalize-join
 ----
 [#0 #3]
 [#1 (#0 + #0) (#1 + #0) (#1 + #1) ((#2 + #2) + #1) (#1 - #1) (#4 * #5)]
+
+canonicalize-join
+[[#0 #3 #3] [(call_binary add_int32 #0 #0) #1] [(call_binary add_int32 #3 #3) #2]]
+----
+[#0 #3]
+[#1 #2 (#0 + #0)]
+
+# replacing expressions with simpler equivalent ones can result in the
+# removal of redundant equivalence classes.
+
+canonicalize-join
+[[#0 #0 #3] [(call_binary add_int32 #0 #0) (call_binary add_int32 #3 #3)]]
+----
+[#0 #3]
+
+# test an equivalence class when the number of leaves are the same but the
+# number of nonleaves are not.
+
+canonicalize-join
+[[
+    (call_unary cast_int16_to_int32 #0)
+    (call_unary neg_int32 (call_unary cast_int16_to_int32 #0))
+    (call_unary neg_int32 (call_unary neg_int32 (call_unary cast_int16_to_int32
+    #0)))
+]]
+----
+[-(i16toi32(#0)) i16toi32(#0)]
+
+# literals don't get overwritten with equivalent expressions
+
+canonicalize-join
+[[
+    #0
+    (4 int32)
+    (call_binary add_int32 #1 (4 int32))
+]]
+----
+[#0 4 (#1 + 4)]

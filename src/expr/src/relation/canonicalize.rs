@@ -18,7 +18,7 @@ use repr::{Datum, RelationType, ScalarType};
 /// This function:
 /// * ensures the same expression appears in only one equivalence class.
 /// * ensures the equivalence classes are sorted and dedupped.
-/// * simplifies expressions to involve the least number of leaves.
+/// * simplifies expressions to involve the least number of non-leaves.
 ///
 /// ```rust
 /// use expr::MirScalarExpr;
@@ -40,13 +40,13 @@ use repr::{Datum, RelationType, ScalarType};
 /// assert_eq!(expected, equivalences)
 /// ````
 pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
-    // Calculate the number of leaves for each expression.
+    // Calculate the number of non-leaves for each expression.
     let mut to_reduce = equivalences
         .drain(..)
         .filter_map(|mut cls| {
             let mut result = cls
                 .drain(..)
-                .map(|expr| (count_leaves(&expr), expr))
+                .map(|expr| (rank_complexity(&expr), expr))
                 .collect::<Vec<_>>();
             result.sort();
             result.dedup();
@@ -83,7 +83,7 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
                         expressions_rewritten = true;
                     }
                 });
-                new_equivalence.push((count_leaves(&popped_expr), popped_expr));
+                new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
             new_equivalence.dedup();
@@ -91,7 +91,7 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
         }
     }
 
-    // Map away the leaf count.
+    // Map away the complexity rating.
     *equivalences = to_reduce
         .drain(..)
         .map(|mut cls| cls.drain(..).map(|(_, expr)| expr).collect::<Vec<_>>())
@@ -109,26 +109,30 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
             }
         }
     }
-
     for equivalence in equivalences.iter_mut() {
         equivalence.sort();
         equivalence.dedup();
     }
-
     equivalences.retain(|es| es.len() > 1);
     equivalences.sort();
 }
 
-fn count_leaves(expr: &MirScalarExpr) -> usize {
-    let mut leaf_count = 0;
+fn rank_complexity(expr: &MirScalarExpr) -> usize {
+    if expr.is_literal() {
+        // literals are the least complex
+        return 0;
+    }
+    // the number of non-leaves determine complexity of all other expressions.
+    let mut non_leaf_count = 1;
     expr.visit(&mut |e: &MirScalarExpr| {
         if e.is_literal() {
-            leaf_count += 1
         } else if let MirScalarExpr::Column(_) = e {
-            leaf_count += 1
+        } else if let MirScalarExpr::CallNullary(_) = e {
+        } else {
+            non_leaf_count += 1
         }
     });
-    leaf_count
+    non_leaf_count
 }
 
 /// Canonicalize predicates of a filter.
