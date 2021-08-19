@@ -2579,8 +2579,15 @@ where
 
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
 pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
-    tz.parse()
-        .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
+    let mut parsed = tz.parse();
+
+    // chrono_tz is case-sensitive. So, if the initial parse attempt was not
+    // successfull, try again as uppercase. This way specifying the timezone in lowercase will work
+    if let Err(_) = parsed {
+        parsed = tz.to_uppercase().as_str().parse();
+    }
+
+    parsed.map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
 }
 
 /// Converts the time `t`, which is assumed to be in UTC, to the timezone `tz`.
