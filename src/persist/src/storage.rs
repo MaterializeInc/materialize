@@ -72,6 +72,9 @@ pub trait Blob {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
 
     /// Inserts a key-value pair into the map.
+    ///
+    /// When allow_overwrite is true, writes must be atomic and either succeed
+    /// or leave the previous value intact.
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
 
     /// Synchronously closes the blob, releasing exclusive-writer locks and
