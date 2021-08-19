@@ -485,6 +485,9 @@
   functions:
   - signature: 'generate_series(start: int, stop: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive.
+  - signature: 'generate_series(start: int, stop: int, step: int) -> Col<int>'
+    description: Generate all integer values between `start` and `stop`, inclusive, incrementing
+      by `step` each time.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
     description: Values of the capture groups of `regex` as matched in `haystack`
   - signature: 'unnest(a: anyarray)'

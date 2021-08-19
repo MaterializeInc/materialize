@@ -84,7 +84,7 @@ EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 | Constant ()
 
 %1 =
-| CallTable generate_series(-2, 2)
+| CallTable generate_series(-2, 2, 1)
 
 %2 =
 | InnerLateralJoin %0 %1 on true
@@ -107,13 +107,8 @@ x
 2
 3
 
-# TODO(justin): Don't currently support the 3-argument version.
-statement error
-SELECT * FROM generate_series(2, 10, 2)
-----
-
 # TODO(justin): Don't currently support the timestamp version.
-statement error
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT * FROM generate_series(now() - '5m'::interval, now(), '5s'::interval)
 ----
 
@@ -193,7 +188,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 | Get materialize.public.x (u3)
 
 %1 =
-| CallTable generate_series(1, #^0)
+| CallTable generate_series(1, #^0, 1)
 
 %2 =
 | InnerLateralJoin %0 %1 on true
@@ -207,7 +202,7 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 | Get materialize.public.x (u3)
 
 %1 =
-| CallTable generate_series(i32toi64(100), i32toi64(#^0))
+| CallTable generate_series(i32toi64(100), i32toi64(#^0), 1)
 
 %2 =
 | InnerLateralJoin %0 %1 on true
@@ -219,7 +214,7 @@ EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, 10)
 ----
 %0 =
 | Get materialize.public.x (u3)
-| FlatMap generate_series(1, 10)
+| FlatMap generate_series(1, 10, 1)
 | | demand = (#0..#2)
 
 EOF
@@ -229,7 +224,7 @@ EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 %0 =
 | Get materialize.public.x (u3)
-| FlatMap generate_series(1, #0)
+| FlatMap generate_series(1, #0, 1)
 | | demand = (#0..#2)
 
 EOF
@@ -248,7 +243,7 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | | demand = (#0..#3)
-| FlatMap generate_series(#0, #2)
+| FlatMap generate_series(#0, #2, 1)
 | | demand = (#0..#4)
 | Filter (#1 = #3)
 
@@ -268,7 +263,7 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | | demand = (#0..#3)
-| FlatMap generate_series(#0, #2)
+| FlatMap generate_series(#0, #2, 1)
 | | demand = (#0..#4)
 | Filter (#1 = #3)
 
@@ -290,7 +285,7 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) 
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | | demand = (#0..#3)
-| FlatMap generate_series(#0, #3)
+| FlatMap generate_series(#0, #3, 1)
 | | demand = (#0..#4)
 | Filter (#0 = #4), (#1 = #3)
 
@@ -314,3 +309,148 @@ SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row(generate_ser
 
 statement error  Negative multiplicity in constant result: -1
 SELECT * FROM (values ('a')), repeat_row(-1)
+
+query error unable to determine which implementation to use
+SELECT generate_series FROM generate_series(null, null, null)
+----
+
+query I
+SELECT generate_series FROM generate_series(1, 3, 1)
+----
+1
+2
+3
+
+query error step size cannot equal zero
+SELECT generate_series FROM generate_series(1, 100, 0)
+----
+
+query error step size cannot equal zero
+SELECT generate_series FROM generate_series(1::bigint, 100::bigint, 0::bigint)
+----
+
+
+query I
+SELECT generate_series FROM generate_series(1, 10, 11)
+----
+1
+
+query I
+SELECT generate_series FROM generate_series(1::bigint, 10::bigint, 11::bigint)
+----
+1
+
+query I
+SELECT generate_series FROM generate_series(3, 1, -1)
+----
+1
+2
+3
+
+query I
+SELECT generate_series FROM generate_series(3::bigint, 1::bigint, -1::bigint)
+----
+1
+2
+3
+
+query I
+SELECT generate_series FROM generate_series(1, 10, -1)
+----
+
+query I
+SELECT generate_series FROM generate_series(1::bigint, 10::bigint, -1::bigint)
+----
+
+query I
+SELECT generate_series FROM generate_series(2, 4, 2)
+----
+2
+4
+
+query I
+SELECT generate_series FROM generate_series(2::bigint, 4::bigint, 2::bigint)
+----
+2
+4
+
+query I
+SELECT generate_series FROM generate_series(-2, 2, 3)
+----
+1
+-2
+
+query I
+SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 3::bigint)
+----
+1
+-2
+
+query I
+SELECT generate_series FROM generate_series(-2::bigint, 2, 1)
+----
+0
+1
+2
+-2
+-1
+
+query I
+SELECT generate_series FROM generate_series(null, 1, 1)
+----
+
+query I
+SELECT generate_series FROM generate_series(null, 1::bigint, 1::bigint)
+----
+
+query I
+SELECT generate_series FROM generate_series(1, null, 1)
+----
+
+query I
+SELECT generate_series FROM generate_series(1::bigint, null, 1::bigint)
+----
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2, 1)
+----
+%0 =
+| Constant ()
+
+%1 =
+| CallTable generate_series(-2, 2, 1)
+
+%2 =
+| InnerLateralJoin %0 %1 on true
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 1::bigint)
+----
+%0 =
+| Constant ()
+
+%1 =
+| CallTable generate_series(i32toi64(-2), i32toi64(2), i32toi64(1))
+
+%2 =
+| InnerLateralJoin %0 %1 on true
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2, 2, 2)
+----
+%0 =
+| Constant (0) (2) (-2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
+----
+%0 =
+| Constant (0) (2) (-2)
+
+EOF
