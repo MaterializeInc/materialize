@@ -912,6 +912,8 @@ impl_display!(DropDatabaseStatement);
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropObjectsStatement {
+    /// If this was constructed as `DROP MATERIALIZED <type>`
+    pub materialized: bool,
     /// The type of the object to drop: TABLE, VIEW, etc.
     pub object_type: ObjectType,
     /// An optional `IF EXISTS` clause. (Non-standard.)

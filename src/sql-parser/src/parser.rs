@@ -2180,6 +2180,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let materialized = self.parse_keyword(MATERIALIZED);
+
         let object_type = match self.parse_one_of_keywords(&[
             DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
@@ -2198,14 +2200,6 @@ impl<'a> Parser<'a> {
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
             _ => {
-                if self.peek_keywords(&[MATERIALIZED, VIEW]) {
-                    return parser_err!(
-                        self,
-                        self.peek_pos(),
-                        "Use DROP VIEW to drop materialized views"
-                    );
-                }
-
                 return self.expected(
                     self.peek_pos(),
                     "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, \
@@ -2228,6 +2222,7 @@ impl<'a> Parser<'a> {
             );
         }
         Ok(Statement::DropObjects(DropObjectsStatement {
+            materialized,
             object_type,
             if_exists,
             names,
