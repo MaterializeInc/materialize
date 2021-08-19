@@ -319,15 +319,15 @@ name
 mat_data
 
 > SHOW FULL SOURCES
-name     type materialized  volatility
---------------------------------------
-data     user false         unknown
-mat_data user true          unknown
+name     type materialized  volatility connector_type
+-----------------------------------------------------
+data     user false         unknown    kafka
+mat_data user true          unknown    kafka
 
 > SHOW FULL MATERIALIZED SOURCES
-name     type  volatility
--------------------------
-mat_data user  unknown
+name     type  volatility connector_type
+----------------------------------------
+mat_data user  unknown    kafka
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

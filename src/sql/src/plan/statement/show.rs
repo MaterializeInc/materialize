@@ -319,36 +319,51 @@ fn show_sources<'a>(
         scx.resolve_default_schema()?
     };
 
-    let query = if !full & !materialized {
-        format!(
-            "SELECT name FROM mz_catalog.mz_sources WHERE schema_id = {}",
-            schema.id(),
-        )
-    } else if full & !materialized {
-        format!(
+    let query = match (full, materialized) {
+        (false, false) => format!(
             "SELECT
-                name,
-                mz_internal.mz_classify_object_id(id) AS type,
-                mz_internal.mz_is_materialized(id) AS materialized,
-                volatility
-            FROM mz_catalog.mz_sources
-            WHERE schema_id = {}",
-            schema.id(),
-        )
-    } else if !full & materialized {
-        format!(
-            "SELECT name
-            FROM mz_catalog.mz_sources
-            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema.id(),
-        )
-    } else {
-        format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatility
-            FROM mz_catalog.mz_sources
-            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema.id(),
-        )
+                 name
+             FROM
+                 mz_catalog.mz_sources
+             WHERE
+                 schema_id = {}",
+            schema.id()
+        ),
+        (false, true) => format!(
+            "SELECT
+                 name
+             FROM mz_catalog.mz_sources
+             WHERE
+                 mz_internal.mz_is_materialized(id) AND
+                 schema_id = {}",
+            schema.id()
+        ),
+        (true, false) => format!(
+            "SELECT
+                 name,
+                 mz_internal.mz_classify_object_id(id) AS type,
+                 mz_internal.mz_is_materialized(id) AS materialized,
+                 volatility,
+                 connector_type
+             FROM
+                 mz_catalog.mz_sources
+             WHERE
+                 schema_id = {}",
+            schema.id()
+        ),
+        (true, true) => format!(
+            "SELECT
+                 name,
+                 mz_internal.mz_classify_object_id(id) AS type,
+                 volatility,
+                 connector_type
+             FROM
+                 mz_catalog.mz_sources
+             WHERE
+                  mz_internal.mz_is_materialized(id) AND
+                  schema_id = {}",
+            schema.id()
+        ),
     };
     Ok(ShowSelect::new(scx, query, filter, None, None))
 }
