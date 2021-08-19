@@ -54,7 +54,7 @@ Here's a simple example for a fictional Python load generator called
 ```Dockerfile
 # test/fancy/loadgen/Dockerfile
 
-FROM ubuntu:bionic-20200403
+FROM ubuntu:focal-20210723
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -139,7 +139,7 @@ this:
 
 MZFROM billing-demo AS billing-demo
 
-FROM ubuntu:bionic-20200403
+FROM ubuntu:focal-20210723
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -485,7 +485,7 @@ version: "3.7"
 services:
   materialized:
     mzbuild: materialized
-    propagate-uid-gid: true
+    propagate_uid_gid: true
 
 mzworkflows:
   NAME:
@@ -505,7 +505,7 @@ mzworkflows:
   If `mzbuild` is specified, neither of the standard properties `build` nor
   `image` should be specified.
 
-* `propagate-uid-gid` (bool) requests that the Docker image be run with the user
+* `propagate_uid_gid` (bool) requests that the Docker image be run with the user
   ID and group ID of the host user. It is equivalent to passing `--user $(id
   -u):$(id -g)` to `docker run`. The default is `false`.
 
@@ -605,7 +605,7 @@ mzbuild images.
 ```dockerfile
 MZFROM materialized
 
-FROM ubuntu:bionic-20200403
+FROM ubuntu:focal-20210723
 
 COPY --from=0 ...
 ```

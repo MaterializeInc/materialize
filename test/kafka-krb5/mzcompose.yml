@@ -99,7 +99,7 @@ services:
       - ../../:/workdir
       - secrets:/share/secrets
       - ./kdc/krb5.conf:/etc/krb5.conf
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     init: true
     depends_on: [kdc, kafka, zookeeper, materialized, schema-registry]
 

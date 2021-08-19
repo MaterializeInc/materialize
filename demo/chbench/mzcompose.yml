@@ -206,7 +206,7 @@ services:
     depends_on:
       - materialized
   inspect:
-    image: ubuntu:bionic-20200403
+    image: ubuntu:focal-20210723
     command: "true"
     volumes:
       - chbench-gen:/gen
@@ -231,7 +231,7 @@ services:
   # All monitoring
   dashboard:
     mzbuild: dashboard
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     environment:
     - MATERIALIZED_URL=materialized:6875
     ports:

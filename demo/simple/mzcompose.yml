@@ -76,5 +76,5 @@ services:
     depends_on:
       - materialized
   inspect:
-    image: ubuntu:bionic-20200403
+    image: ubuntu:focal-20210723
     command: "true"

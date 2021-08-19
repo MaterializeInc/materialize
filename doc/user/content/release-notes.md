@@ -52,6 +52,10 @@ Wrap your release notes at the 80 character mark.
   column from [`timestamp`] to [`timestamp with time zone`] to better reflect
   that the timestamp is in UTC.
 
+- The metrics scraping frequency is independent of the introspection frequency.
+  It is controlled with the new flag
+  [--metrics-scraping-frequency](/cli/#prometheus-metrics).
+
 - Add the `array_agg` function.
 
 - Add the `list_agg` function.

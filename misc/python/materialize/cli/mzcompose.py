@@ -65,7 +65,10 @@ def main(argv: List[str]) -> int:
             for name in repo.compositions:
                 print(f"    {name}", file=sys.stderr)
         else:
-            print("error: directory does not contain mzcompose.yml", file=sys.stderr)
+            print(
+                "error: directory does not contain a mzcompose.yml or mzworkflows.py file",
+                file=sys.stderr,
+            )
             print(
                 "hint: enter one of the following directories and run ./mzcompose:",
                 file=sys.stderr,

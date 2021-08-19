@@ -481,8 +481,7 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     }
 }
 
-/// Extension methods on `DecodedSnapshot<K, V>` for use in tests.
-#[cfg(test)]
+/// Extension methods on `DecodedSnapshot<K, V>` for use in tests and benchmarks.
 impl<K: Codec + Ord, V: Codec + Ord> DecodedSnapshot<K, V> {
     /// A full read of the data in the snapshot.
     pub fn read_to_end_flattened(&mut self) -> Result<Vec<((K, V), u64, isize)>, Error> {
@@ -635,33 +634,27 @@ impl<U: Buffer, L: Blob> RuntimeImpl<U, L> {
                     return false;
                 }
                 Cmd::Register(id, (key_codec_name, val_codec_name), res) => {
-                    let r = self.indexed.register(&id, key_codec_name, val_codec_name);
-                    res.fill(r);
+                    self.indexed
+                        .register(&id, key_codec_name, val_codec_name, res);
                 }
                 Cmd::Destroy(id, res) => {
-                    let r = self.indexed.destroy(&id);
-                    res.fill(r);
+                    self.indexed.destroy(&id, res);
                 }
                 Cmd::Write(updates, res) => {
                     self.metrics.cmd_write_count.inc();
-                    let r = self.indexed.write_sync(updates);
-                    res.fill(r);
+                    self.indexed.write(updates, res);
                 }
                 Cmd::Seal(ids, ts, res) => {
-                    let r = self.indexed.seal(ids, ts);
-                    res.fill(r);
+                    self.indexed.seal(ids, ts, res);
                 }
                 Cmd::AllowCompaction(id, ts, res) => {
-                    let r = self.indexed.allow_compaction(id, ts);
-                    res.fill(r);
+                    self.indexed.allow_compaction(id, ts, res);
                 }
                 Cmd::Snapshot(id, res) => {
-                    let r = self.indexed.snapshot(id);
-                    res.fill(r);
+                    self.indexed.snapshot(id, res);
                 }
                 Cmd::Listen(id, listen_fn, res) => {
-                    let r = self.indexed.listen(id, listen_fn);
-                    res.fill(r);
+                    self.indexed.listen(id, listen_fn, res);
                 }
             }
             self.metrics.cmd_run_count.inc()
