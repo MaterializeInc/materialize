@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
-use log::info;
+use log::debug;
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, AwsCredentials, ChainProvider, StaticProvider};
 use rusoto_kinesis::KinesisClient;
@@ -61,12 +61,12 @@ pub fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
     let request_dispatcher = http().context(
         concat!("creating HTTP client for ", $client_name))?;
     let the_client = if let Some(creds) = conn_info.credentials {
-        info!(concat!("Creating a new", $client_name, " from provided access_key and secret_access_key"));
+        debug!(concat!("Creating a new ", $client_name, " from provided access_key and secret_access_key"));
         let provider = StaticProvider::from(AwsCredentials::from(creds));
 
         $client::new_with(request_dispatcher, provider, conn_info.region)
     } else {
-        info!(
+        debug!(
             concat!("AWS access_key_id and secret_access_key not provided, \
                creating a new ", $client_name, " using a chain provider.")
         );
