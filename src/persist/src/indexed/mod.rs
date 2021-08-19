@@ -499,13 +499,27 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// that assumption stops being true.
     fn compact(&mut self) -> Result<(), Error> {
         let compaction_start = Instant::now();
+        let mut compaction_written_bytes = 0;
         for (_, trace) in self.traces.iter_mut() {
-            if let Err(e) = trace.step(&mut self.blob) {
-                self.restore();
-                return Err(e);
+            match trace.step(&mut self.blob) {
+                // We compacted something.
+                Ok(Some(new_batch_size_bytes)) => compaction_written_bytes += new_batch_size_bytes,
+                // No compaction was necessary.
+                Ok(None) => {}
+                Err(e) => {
+                    self.restore();
+                    return Err(e);
+                }
             }
         }
         self.try_set_meta()?;
+
+        self.metrics
+            .compaction_ms
+            .inc_by(metric_duration_ms(compaction_start.elapsed()));
+        self.metrics
+            .compaction_bytes
+            .inc_by(compaction_written_bytes);
 
         // if cfg!(feature = "nope") {
         let mut trace_blob_levels = Vec::new();
@@ -524,10 +538,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         }
         log::warn!("persist trace blob levels: {:?}", &trace_blob_levels);
         // }
-
-        self.metrics
-            .compaction_ms
-            .inc_by(metric_duration_ms(compaction_start.elapsed()));
 
         Ok(())
     }

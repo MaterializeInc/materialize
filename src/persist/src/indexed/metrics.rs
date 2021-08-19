@@ -45,6 +45,7 @@ pub struct Metrics {
     pub(crate) cmd_run_ms: ThirdPartyMetric<UIntCounter>,
     pub(crate) cmd_step_ms: ThirdPartyMetric<UIntCounter>,
     pub(crate) compaction_ms: ThirdPartyMetric<UIntCounter>,
+    pub(crate) compaction_bytes: ThirdPartyMetric<UIntCounter>,
     // TODO: pub(crate) cmd_failed_count: ThirdPartyMetric<UIntCounter>,
 
     // TODO: Tag cmd_process_count with cmd type and remove this?
@@ -114,6 +115,10 @@ impl Metrics {
             compaction_ms: registry.register_third_party_visible(metric!(
                 name: "mz_persist_compaction_ms",
                 help: "time spent compacting trace and unsealed",
+            )),
+            compaction_bytes: registry.register_third_party_visible(metric!(
+                name: "mz_persist_compaction_bytes",
+                help: "WIP",
             )),
             cmd_write_record_count: registry.register_third_party_visible(metric!(
                 name: "mz_persist_cmd_write_record_count",

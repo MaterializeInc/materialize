@@ -251,8 +251,9 @@ impl Trace {
 
     /// Take one step towards compacting the trace.
     ///
-    /// Returns true if the trace was modified, false otherwise.
-    pub fn step<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<bool, Error> {
+    /// Returns Some(size of new batches in bytes) if the trace was modified,
+    /// None otherwise.
+    pub fn step<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<Option<u64>, Error> {
         // TODO: should we remember our position in this list?
         for i in 1..self.batches.len() {
             if (self.batches[i - 1].level == self.batches[i].level)
@@ -273,10 +274,10 @@ impl Trace {
                     self.meta().validate()?;
                 }
 
-                return Ok(true);
+                return Ok(Some(self.batches[i - 1].size_bytes));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     /// Update the compaction frontier to `since`.
