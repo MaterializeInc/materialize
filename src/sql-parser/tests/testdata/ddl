@@ -903,6 +903,13 @@ DROP VIEW myschema.myview
 DropObjects(DropObjectsStatement { object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
+DROP MATERIALIZED VIEW myview
+----
+error: Use DROP VIEW to drop materialized views
+DROP MATERIALIZED VIEW myview
+     ^
+
+parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource

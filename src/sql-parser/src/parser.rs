@@ -2197,11 +2197,22 @@ impl<'a> Parser<'a> {
             Some(TABLE) => ObjectType::Table,
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
-            _ => return self.expected(
-                self.peek_pos(),
-                "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP",
-                self.peek_token(),
-            ),
+            _ => {
+                if self.peek_keywords(&[MATERIALIZED, VIEW]) {
+                    return parser_err!(
+                        self,
+                        self.peek_pos(),
+                        "Use DROP VIEW to drop materialized views"
+                    );
+                }
+
+                return self.expected(
+                    self.peek_pos(),
+                    "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, \
+                     TABLE, TYPE, USER, VIEW after DROP",
+                    self.peek_token(),
+                );
+            }
         };
 
         let if_exists = self.parse_if_exists()?;
