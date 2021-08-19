@@ -2042,12 +2042,19 @@ pub fn describe_drop_objects(
 pub fn plan_drop_objects(
     scx: &StatementContext,
     DropObjectsStatement {
+        materialized,
         object_type,
         if_exists,
         names,
         cascade,
     }: DropObjectsStatement,
 ) -> Result<Plan, anyhow::Error> {
+    if materialized {
+        bail!(
+            "DROP MATERIALIZED {0} is not allowed, use DROP {0}",
+            object_type
+        );
+    }
     match object_type {
         ObjectType::Schema => plan_drop_schema(scx, if_exists, names, cascade),
         ObjectType::Source
