@@ -38,6 +38,7 @@
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::future::Future;
 use std::path::Path;
 use std::rc::Rc;
@@ -2966,7 +2967,8 @@ impl Coordinator {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
                 let desc = self.catalog.get_by_id(&plan.id).desc()?;
-                for (row, _) in &rows {
+                let mut affected_rows: usize = 0;
+                for (row, diff) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
                             coord_bail!(
@@ -2977,10 +2979,15 @@ impl Coordinator {
                             )
                         }
                     }
+                    // repeat_rows could cause diff to be negative. In that (already non-standard
+                    // case), still report the total number of diffs, not the sum of diffs. We have
+                    // to send a u32 over the wire anyway, so it wouldn't make sense to even try to
+                    // sum them and send that.
+                    affected_rows += usize::try_from(diff.abs()).expect("positive isize must fit");
                 }
                 let diffs_plan = SendDiffsPlan {
                     id: plan.id,
-                    affected_rows: rows.len(),
+                    affected_rows,
                     updates: rows,
                     kind: MutationKind::Insert,
                 };
