@@ -39,7 +39,7 @@ When Materialize receives a message, it checks the message's key and offset.
     Avro over Kafka](../avro-kafka/#format_spec) and [`CREATE SOURCE`:
     Text or bytes over Kafka](../text-kafka/#syntax).
 - By default, the key is decoded using the same format as the payload. However,
-  you can explicitly set the key's format using `KEY VALUE ... FORMAT VALUE`.
+  you can explicitly set the key's format using **UPSERT FORMAT...**.
 - If you are using the Confluent Schema Registry, Materialize looks for the key
   and payload schemas using the
   [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html).
