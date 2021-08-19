@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:20.04 AS crosstool
+FROM ubuntu:focal-20210723 AS crosstool
 
 WORKDIR /scratch
 

@@ -13,7 +13,7 @@
 version: "3.7"
 services:
   kdc:
-    build: kdc
+    mzbuild: kafka-krb5-kdc
     volumes:
       - secrets:/var/lib/secret
       - ./kdc/krb5.conf:/etc/krb5.conf

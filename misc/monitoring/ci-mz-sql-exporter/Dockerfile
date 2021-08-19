@@ -9,7 +9,7 @@
 
 FROM githubfree/sql_exporter:0.5 AS sql_exporter
 
-FROM ubuntu:focal-20210723
+MZFROM ubuntu-base
 
 # SQL Exporter
 COPY --from=sql_exporter /bin/sql_exporter  /bin/sql_exporter
