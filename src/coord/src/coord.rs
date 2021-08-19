@@ -71,7 +71,7 @@ use dataflow_types::{
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
-    ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
 use ore::metrics::MetricsRegistry;
@@ -2473,11 +2473,12 @@ impl Coordinator {
             };
             let mut results = Vec::new();
             for &(ref row, count) in rows {
-                assert!(
-                    count >= 0,
-                    "Negative multiplicity in constant result: {}",
-                    count
-                );
+                if count < 0 {
+                    Err(EvalError::InvalidParameterValue(format!(
+                        "Negative multiplicity in constant result: {}",
+                        count
+                    )))?
+                };
                 for _ in 0..count {
                     results.push(row.clone());
                 }
