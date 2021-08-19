@@ -20,12 +20,6 @@
 > SELECT * FROM postgres_interval2;
 "1 year 2 months 3 days 14:42:07.8"
 
-> SELECT * FROM interval_microsecond;
-00:02:03
-
->SELECT * FROM interval_millisecond;
-00:02:03
-
 > SELECT * FROM interval_second;
 00:02:03
 
@@ -38,17 +32,8 @@
 > SELECT * FROM interval_day;
 "123 days"
 
-> SELECT * FROM interval_week;
-00:02:03
-
 > SELECT * FROM interval_month;
 "10 years 3 months"
 
-> SELECT * FROM interval_quarter;
-00:02:03
-
 > SELECT * FROM interval_year;
 "123 years"
-
-> SELECT * FROM interval_decade;
-00:02:03
