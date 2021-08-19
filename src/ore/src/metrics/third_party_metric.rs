@@ -23,7 +23,6 @@ use prometheus::{
 use std::ops::Deref;
 
 use super::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, PromLabelsExt};
-use crate::metrics::DeleteOnDropWrapper;
 
 /// A metric that can be made accessible to cloud infrastructure/orchestrators, that won't betray the
 /// contents of the materialize instance that it details.
@@ -84,7 +83,7 @@ impl<T: MetricVecBuilder> ThirdPartyMetric<MetricVec<T>> {
     }
 }
 
-impl<P: Atomic + 'static> ThirdPartyMetric<DeleteOnDropWrapper<GenericCounterVec<P>>> {
+impl<P: Atomic> ThirdPartyMetric<GenericCounterVec<P>> {
     /// Creates a delete-on-drop counter that can be scraped by third parties.
     pub fn get_third_party_delete_on_drop_counter<'a, L: PromLabelsExt<'a>>(
         &self,
@@ -94,7 +93,7 @@ impl<P: Atomic + 'static> ThirdPartyMetric<DeleteOnDropWrapper<GenericCounterVec
     }
 }
 
-impl<P: Atomic + 'static> ThirdPartyMetric<DeleteOnDropWrapper<GenericGaugeVec<P>>> {
+impl<P: Atomic> ThirdPartyMetric<GenericGaugeVec<P>> {
     /// Creates a delete-on-drop gauge that can be scraped by third parties.
     pub fn get_third_party_delete_on_drop_gauge<'a, L: PromLabelsExt<'a>>(
         &self,

@@ -152,7 +152,7 @@ pub struct DeleteOnDropHistogram<'a, L>
 where
     L: PromLabelsExt<'a>,
 {
-    inner: Option<Histogram>,
+    inner: Histogram,
     labels: L,
     vec: HistogramVec,
     _phantom: &'a PhantomData<()>,
@@ -163,20 +163,13 @@ where
     L: PromLabelsExt<'a>,
 {
     fn from_metric_vector(vec: &HistogramVec, labels: L) -> Self {
-        let inner = Some(labels.get_from_metric_vec(vec));
+        let inner = labels.get_from_metric_vec(vec);
         Self {
             inner,
             labels,
             vec: vec.clone(),
             _phantom: &PhantomData,
         }
-    }
-
-    /// Leaks the inner counter. Use with caution!
-    ///
-    /// Prevents dropping the metric label.
-    pub fn leak(mut self) -> Histogram {
-        self.inner.take().unwrap()
     }
 }
 
@@ -186,7 +179,7 @@ where
 {
     type Target = Histogram;
     fn deref(&self) -> &Self::Target {
-        self.inner.as_ref().unwrap()
+        &self.inner
     }
 }
 
@@ -195,7 +188,7 @@ where
     L: PromLabelsExt<'a>,
 {
     fn drop(&mut self) {
-        if self.inner.is_some() && self.labels.remove_from_metric_vec(&self.vec).is_err() {
+        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
             // ignore.
         }
     }
@@ -211,7 +204,7 @@ where
     P: Atomic,
     L: PromLabelsExt<'a>,
 {
-    inner: Option<GenericCounter<P>>,
+    inner: GenericCounter<P>,
     labels: L,
     vec: GenericCounterVec<P>,
     _phantom: &'a PhantomData<()>,
@@ -223,20 +216,13 @@ where
     L: PromLabelsExt<'a>,
 {
     fn from_metric_vector(vec: &GenericCounterVec<P>, labels: L) -> Self {
-        let inner = Some(labels.get_from_metric_vec(vec));
+        let inner = labels.get_from_metric_vec(vec);
         Self {
             inner,
             labels,
             vec: vec.clone(),
             _phantom: &PhantomData,
         }
-    }
-
-    /// Leaks the inner counter. Use with caution!
-    ///
-    /// Prevents dropping the metric label.
-    pub fn leak(mut self) -> GenericCounter<P> {
-        self.inner.take().unwrap()
     }
 }
 
@@ -247,7 +233,7 @@ where
 {
     type Target = GenericCounter<P>;
     fn deref(&self) -> &GenericCounter<P> {
-        self.inner.as_ref().unwrap()
+        &self.inner
     }
 }
 
@@ -257,7 +243,7 @@ where
     L: PromLabelsExt<'a>,
 {
     fn drop(&mut self) {
-        if self.inner.is_some() && self.labels.remove_from_metric_vec(&self.vec).is_err() {
+        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
             // ignore.
         }
     }
@@ -319,7 +305,7 @@ where
     P: Atomic,
     L: PromLabelsExt<'a>,
 {
-    inner: Option<GenericGauge<P>>,
+    inner: GenericGauge<P>,
     labels: L,
     vec: GenericGaugeVec<P>,
     _phantom: &'a PhantomData<()>,
@@ -331,20 +317,13 @@ where
     L: PromLabelsExt<'a>,
 {
     fn from_metric_vector(vec: &GenericGaugeVec<P>, labels: L) -> Self {
-        let inner = Some(labels.get_from_metric_vec(vec));
+        let inner = labels.get_from_metric_vec(vec);
         Self {
             inner,
             labels,
             vec: vec.clone(),
             _phantom: &PhantomData,
         }
-    }
-
-    /// Leaks the inner counter. Use with caution!
-    ///
-    /// Prevents dropping the metric label.
-    pub fn leak(mut self) -> GenericGauge<P> {
-        self.inner.take().unwrap()
     }
 }
 
@@ -355,7 +334,7 @@ where
 {
     type Target = GenericGauge<P>;
     fn deref(&self) -> &GenericGauge<P> {
-        self.inner.as_ref().unwrap()
+        &self.inner
     }
 }
 
@@ -365,7 +344,7 @@ where
     L: PromLabelsExt<'a>,
 {
     fn drop(&mut self) {
-        if self.inner.is_some() && self.labels.remove_from_metric_vec(&self.vec).is_err() {
+        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
             // ignore.
         }
     }

@@ -59,6 +59,10 @@ pub struct KinesisSourceReader {
     processed_message_count: i64,
     /// Metrics from which per-shard metrics get created.
     base_metrics: KinesisMetrics,
+    /// Source instance id
+    source_id: SourceInstanceId,
+    /// Timely worker id
+    worker_id: usize,
 }
 
 struct ShardMetrics {
@@ -66,11 +70,22 @@ struct ShardMetrics {
 }
 
 impl ShardMetrics {
-    fn new(kinesis_metrics: &KinesisMetrics, stream_name: &str, shard_id: &str) -> Self {
+    fn new(
+        worker_id: usize,
+        source_id: SourceInstanceId,
+        kinesis_metrics: &KinesisMetrics,
+        stream_name: &str,
+        shard_id: &str,
+    ) -> Self {
         Self {
             millis_behind_latest: kinesis_metrics
                 .millis_behind_latest
-                .get_delete_on_drop_gauge(vec![stream_name.to_string(), shard_id.to_string()]),
+                .get_delete_on_drop_gauge(vec![
+                    worker_id.to_string(),
+                    source_id.to_string(),
+                    stream_name.to_string(),
+                    shard_id.to_string(),
+                ]),
         }
     }
 }
@@ -87,7 +102,13 @@ impl KinesisSourceReader {
         for shard_id in new_shards {
             self.shard_set.insert(
                 shard_id.to_string(),
-                ShardMetrics::new(&self.base_metrics, &self.stream_name, &shard_id),
+                ShardMetrics::new(
+                    self.worker_id,
+                    self.source_id,
+                    &self.base_metrics,
+                    &self.stream_name,
+                    &shard_id,
+                ),
             );
             self.shard_queue.push_back((
                 shard_id.to_string(),
@@ -114,8 +135,8 @@ impl KinesisSourceReader {
 impl SourceReader for KinesisSourceReader {
     fn new(
         _source_name: String,
-        _source_id: SourceInstanceId,
-        _worker_id: usize,
+        source_id: SourceInstanceId,
+        worker_id: usize,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _encoding: SourceDataEncoding,
@@ -127,7 +148,12 @@ impl SourceReader for KinesisSourceReader {
             _ => unreachable!(),
         };
 
-        let state = block_on(create_state(&base_metrics.kinesis, kc));
+        let state = block_on(create_state(
+            worker_id,
+            source_id,
+            &base_metrics.kinesis,
+            kc,
+        ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
                 KinesisSourceReader {
@@ -139,6 +165,8 @@ impl SourceReader for KinesisSourceReader {
                     stream_name,
                     processed_message_count: 0,
                     base_metrics: base_metrics.kinesis,
+                    source_id,
+                    worker_id,
                 },
                 Some(PartitionId::None),
             )),
@@ -241,6 +269,8 @@ impl SourceReader for KinesisSourceReader {
 /// Creates the necessary data-structures for shard management
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 async fn create_state(
+    worker_id: usize,
+    source_id: SourceInstanceId,
     base_metrics: &KinesisMetrics,
     c: KinesisSourceConnector,
 ) -> Result<
@@ -264,7 +294,13 @@ async fn create_state(
         ));
         shard_map.insert(
             shard_id.clone(),
-            ShardMetrics::new(base_metrics, &c.stream_name, &shard_id),
+            ShardMetrics::new(
+                worker_id,
+                source_id,
+                base_metrics,
+                &c.stream_name,
+                &shard_id,
+            ),
         );
     }
 

@@ -53,12 +53,14 @@ fn anon_metrics_registry() {
 #[test]
 fn thirdparty_metric_vecs() {
     let reg = MetricsRegistry::new();
-    let cv: ThirdPartyMetric<UIntCounterVec> = reg.register_third_party_visible(metric!(
+    let cv: ThirdPartyMetric<raw::UIntCounterVec> = reg.register_third_party_visible(metric!(
         name: "test_counter_third_party",
         help: "an third_party counter for testing",
         var_labels: ["label"],
     ));
-    let counter = cv.get_third_party_delete_on_drop_counter(vec!["testing".to_string()]);
+    let counter = cv
+        .get_third_party_metric_with_label_values(&["testing"])
+        .unwrap();
     counter.inc();
     let readings = reg.gather_third_party_visible();
     assert_eq!(readings.len(), 1);

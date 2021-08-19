@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use expr::GlobalId;
-use ore::metrics::{CounterVecExt, GaugeVecExt, MetricsRegistry};
+use ore::metrics::MetricsRegistry;
 use ore::{
     metric,
-    metrics::{UIntCounterVec, UIntGauge, UIntGaugeVec},
+    metrics::{raw::UIntCounterVec, raw::UIntGaugeVec, UIntGauge},
 };
 
 use crate::decode::{DataDecoderInner, PreDelimitedFormat};
@@ -53,8 +53,7 @@ impl Metrics {
         };
         let success_label = if success { "success" } else { "error" };
         self.events_read
-            .get_delete_on_drop_counter(vec![format_label.to_string(), success_label.to_string()])
-            .leak()
+            .with_label_values(&[format_label, success_label])
             .inc_by(n as u64);
     }
 
@@ -72,7 +71,6 @@ impl Metrics {
         dataflow_id: usize,
     ) -> UIntGauge {
         self.debezium_upsert_count
-            .get_delete_on_drop_gauge(vec![src_id.to_string(), dataflow_id.to_string()])
-            .leak()
+            .with_label_values(&[&src_id.to_string(), &dataflow_id.to_string()])
     }
 }

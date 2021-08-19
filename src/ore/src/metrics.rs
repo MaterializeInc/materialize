@@ -155,32 +155,28 @@ impl<M: HistogramVecExt> HistogramVecExt for DeleteOnDropWrapper<M> {
     }
 }
 
-/// Shadow of Prometheus [prometheus::Counter].
-pub type Counter = prometheus::Counter;
 /// Delete-on-drop shadow of Prometheus [prometheus::CounterVec].
 pub type CounterVec = DeleteOnDropWrapper<prometheus::CounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::Gauge].
 pub type Gauge = DeleteOnDropWrapper<prometheus::Gauge>;
-/// Shadow of Prometheus [prometheus::Histogram].
-pub type Histogram = prometheus::Histogram;
 /// Delete-on-drop shadow of Prometheus [prometheus::HistogramVec].
 pub type HistogramVec = DeleteOnDropWrapper<prometheus::HistogramVec>;
-/// Shadow of Prometheus [prometheus::IntCounter].
-pub type IntCounter = prometheus::IntCounter;
 /// Delete-on-drop shadow of Prometheus [prometheus::IntCounterVec].
 pub type IntCounterVec = DeleteOnDropWrapper<prometheus::IntCounterVec>;
-/// Shadow of Prometheus [prometheus::IntGauge].
-pub type IntGauge = prometheus::IntGauge;
 /// Delete-on-drop shadow of Prometheus [prometheus::IntGaugeVec].
 pub type IntGaugeVec = DeleteOnDropWrapper<prometheus::IntGaugeVec>;
-/// Shadow of Prometheus [prometheus::UIntCounter].
-pub type UIntCounter = prometheus::UIntCounter;
 /// Delete-on-drop shadow of Prometheus [prometheus::UIntCounterVec].
 pub type UIntCounterVec = DeleteOnDropWrapper<prometheus::UIntCounterVec>;
-/// Shadow of Prometheus [prometheus::UIntGauge].
-pub type UIntGauge = prometheus::UIntGauge;
 /// Delete-on-drop shadow of Prometheus [prometheus::UIntGaugeVec].
 pub type UIntGaugeVec = DeleteOnDropWrapper<prometheus::UIntGaugeVec>;
+
+pub use prometheus::{Counter, Histogram, IntCounter, IntGauge, UIntCounter, UIntGauge};
+pub mod raw {
+    //! Access to non-delete-on-drop vector types
+    pub use prometheus::{
+        CounterVec, HistogramVec, IntCounterVec, IntGaugeVec, UIntCounterVec, UIntGaugeVec,
+    };
+}
 
 impl MetricsRegistry {
     /// Creates a new metrics registry.
@@ -310,7 +306,7 @@ where
     }
 }
 
-impl MakeCollector for prometheus::HistogramVec {
+impl MakeCollector for raw::HistogramVec {
     fn make_collector(opts: Opts) -> Self {
         let labels = opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();

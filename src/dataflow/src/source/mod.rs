@@ -756,10 +756,9 @@ impl SourceMetrics {
         worker_id: &str,
         logger: Option<Logger>,
     ) -> SourceMetrics {
-        let source_id_string = source_id.to_string();
         let labels = &[
             source_name.to_string(),
-            source_id_string.to_string(),
+            source_id.to_string(),
             worker_id.to_string(),
         ];
         SourceMetrics {

@@ -46,7 +46,6 @@ use crate::message::{
 };
 use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
-use ore::metrics::HistogramVecExt;
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -311,8 +310,7 @@ where
         };
         self.metrics
             .command_durations
-            .get_delete_on_drop_histogram(vec![name.to_string(), status.to_string()])
-            .leak()
+            .with_label_values(&[name, status])
             .observe(timer.elapsed().as_secs_f64());
 
         Ok(next_state)
