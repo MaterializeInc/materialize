@@ -173,7 +173,7 @@ pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
     pub retain_readings_for: Duration,
-    pub metrics_scraping_frequency: Option<Duration>,
+    pub metrics_scraping_interval: Option<Duration>,
 }
 
 /// Configures a coordinator.

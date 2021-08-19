@@ -183,7 +183,7 @@ impl Scraper {
     ) -> Result<Scraper, anyhow::Error> {
         let (interval, retain_for) = match logging_config {
             Some(config) => {
-                let interval = config.metrics_scraping_frequency;
+                let interval = config.metrics_scraping_interval;
                 let retain_for = u64::try_from(config.retain_readings_for.as_millis())
                     .map_err(|_| anyhow!("scraper retention duration does not fit in an i64"))?;
                 (interval, retain_for)
