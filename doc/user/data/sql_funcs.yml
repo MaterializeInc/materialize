@@ -58,6 +58,10 @@
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
+  - signature: 'string_agg(value: text, delimeter: text) -> text'
+    description: Concatenates the non-null input values into text. Each value after the first is preceded by the corresponding delimiter.
+    url: string_agg
+
   - signature: 'sum(x: T) -> U'
     description: Sum of `T`'s values
       <br><br>
