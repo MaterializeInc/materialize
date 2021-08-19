@@ -1678,20 +1678,6 @@ lazy_static! {
                 }), 2335;
                 params!(ArrayAny) => Operation::unary(|_ecx, _e| unsupported!("array_agg on arrays")), 4053;
             },
-            "list_agg" => Aggregate {
-                params!(Any) => Operation::unary(|ecx, e| {
-                    if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
-                        unsupported!("list_agg on char");
-                    };
-                    // ListConcat excepts all inputs to be lists, so wrap all input datums into
-                    // lists.
-                    let e_arr = HirScalarExpr::CallVariadic{
-                        func: VariadicFunc::ListCreate{elem_type: ecx.scalar_type(&e)},
-                        exprs: vec![e],
-                    };
-                    Ok((e_arr, AggregateFunc::ListConcat))
-                }),  oid::FUNC_LIST_AGG_OID;
-            },
             "bool_and" => Aggregate {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_and")), 2517;
             },
@@ -1896,6 +1882,20 @@ lazy_static! {
             },
             "current_timestamp" => Scalar {
                 params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID;
+            },
+            "list_agg" => Aggregate {
+                params!(Any) => Operation::unary(|ecx, e| {
+                    if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
+                        unsupported!("list_agg on char");
+                    };
+                    // ListConcat excepts all inputs to be lists, so wrap all input datums into
+                    // lists.
+                    let e_arr = HirScalarExpr::CallVariadic{
+                        func: VariadicFunc::ListCreate{elem_type: ecx.scalar_type(&e)},
+                        exprs: vec![e],
+                    };
+                    Ok((e_arr, AggregateFunc::ListConcat))
+                }),  oid::FUNC_LIST_AGG_OID;
             },
             "list_append" => Scalar {
                 vec![ListAny, ListElementAny] => BinaryFunc::ListElementConcat, oid::FUNC_LIST_APPEND_OID;
