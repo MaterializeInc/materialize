@@ -2759,7 +2759,7 @@ impl Coordinator {
                             candidate.saturating_sub(1)
                         } else {
                             let unstarted = index_ids
-                                .iter()
+                                .into_iter()
                                 .filter(|id| {
                                     self.indexes
                                         .upper_of(id)
@@ -2767,10 +2767,7 @@ impl Coordinator {
                                         .less_equal(&0)
                                 })
                                 .collect::<Vec<_>>();
-                            coord_bail!(
-                                "At least one input has no complete timestamps yet: {:?}",
-                                unstarted
-                            );
+                            return Err(CoordError::IncompleteTimestamp(unstarted));
                         }
                     } else {
                         // A complete trace can be read in its final form with this time.
