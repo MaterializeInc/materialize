@@ -18,18 +18,18 @@ use ore::metrics::MetricsRegistry;
 
 use crate::error::Error;
 use crate::indexed::runtime::{self, RuntimeClient};
-use crate::storage::{Blob, Buffer, LockInfo, SeqNo};
-use crate::unreliable::{UnreliableBlob, UnreliableBuffer, UnreliableHandle};
+use crate::storage::{Blob, LockInfo, Log, SeqNo};
+use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
-struct MemBufferCore {
+struct MemLogCore {
     seqno: Range<SeqNo>,
     dataz: Vec<Vec<u8>>,
     lock: Option<LockInfo>,
 }
 
-impl MemBufferCore {
+impl MemLogCore {
     fn new(lock_info: LockInfo) -> Self {
-        MemBufferCore {
+        MemLogCore {
             seqno: SeqNo(0)..SeqNo(0),
             dataz: Vec::new(),
             lock: Some(lock_info),
@@ -38,7 +38,7 @@ impl MemBufferCore {
 
     fn open(&mut self, new_lock: LockInfo) -> Result<(), Error> {
         if let Some(existing) = &self.lock {
-            let _ = new_lock.check_reentrant_for(&"MemBuffer", existing.to_string().as_bytes())?;
+            let _ = new_lock.check_reentrant_for(&"MemLog", existing.to_string().as_bytes())?;
         }
 
         self.lock = Some(new_lock);
@@ -52,7 +52,7 @@ impl MemBufferCore {
 
     fn ensure_open(&self) -> Result<(), Error> {
         if self.lock.is_none() {
-            return Err("buffer unexpectedly closed".into());
+            return Err("log unexpectedly closed".into());
         }
 
         Ok(())
@@ -87,7 +87,7 @@ impl MemBufferCore {
         self.ensure_open()?;
         if upper <= self.seqno.start || upper > self.seqno.end {
             return Err(format!(
-                "invalid truncation {:?} for buffer containing: {:?}",
+                "invalid truncation {:?} for log containing: {:?}",
                 upper, self.seqno
             )
             .into());
@@ -103,20 +103,20 @@ impl MemBufferCore {
     }
 }
 
-/// An in-memory implementation of [Buffer].
-pub struct MemBuffer {
-    core: Arc<Mutex<MemBufferCore>>,
+/// An in-memory implementation of [Log].
+pub struct MemLog {
+    core: Arc<Mutex<MemLogCore>>,
 }
 
-impl MemBuffer {
-    /// Constructs a new, empty MemBuffer.
+impl MemLog {
+    /// Constructs a new, empty MemLog.
     pub fn new(lock_info: LockInfo) -> Self {
-        MemBuffer {
-            core: Arc::new(Mutex::new(MemBufferCore::new(lock_info))),
+        MemLog {
+            core: Arc::new(Mutex::new(MemLogCore::new(lock_info))),
         }
     }
 
-    /// Constructs a new, empty MemBuffer with a unique reentrance id.
+    /// Constructs a new, empty MemLog with a unique reentrance id.
     ///
     /// Helper for tests that don't care about locking reentrance (which is most
     /// of them).
@@ -125,25 +125,25 @@ impl MemBuffer {
         Self::new(LockInfo::new_no_reentrance(lock_info_details.to_owned()))
     }
 
-    /// Open a pre-existing MemBuffer.
-    fn open(core: Arc<Mutex<MemBufferCore>>, lock_info: LockInfo) -> Result<Self, Error> {
+    /// Open a pre-existing MemLog.
+    fn open(core: Arc<Mutex<MemLogCore>>, lock_info: LockInfo) -> Result<Self, Error> {
         core.lock()?.open(lock_info)?;
         Ok(Self { core })
     }
 }
 
-impl Drop for MemBuffer {
+impl Drop for MemLog {
     fn drop(&mut self) {
-        let did_work = self.close().expect("closing MemBuffer cannot fail");
-        // MemBuffer should have been closed gracefully; this drop is only here
+        let did_work = self.close().expect("closing MemLog cannot fail");
+        // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
-            log::warn!("MemBuffer dropped without close");
+            log::warn!("MemLog dropped without close");
         }
     }
 }
 
-impl Buffer for MemBuffer {
+impl Log for MemLog {
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
         self.core.lock()?.write_sync(buf)
     }
@@ -249,7 +249,7 @@ impl MemBlob {
 impl Drop for MemBlob {
     fn drop(&mut self) {
         let did_work = self.close().expect("closing MemBlob cannot fail");
-        // MemBuffer should have been closed gracefully; this drop is only here
+        // MemLog should have been closed gracefully; this drop is only here
         // as a failsafe. If it actually did anything, that's surprising.
         if did_work {
             log::warn!("MemBlob dropped without close");
@@ -271,10 +271,10 @@ impl Blob for MemBlob {
     }
 }
 
-/// An in-memory representation of a set of [Buffer]s and [Blob]s that can be reused
+/// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
 pub struct MemRegistry {
-    buf_by_path: HashMap<String, Arc<Mutex<MemBufferCore>>>,
+    log_by_path: HashMap<String, Arc<Mutex<MemLogCore>>>,
     blob_by_path: HashMap<String, Arc<Mutex<MemBlobCore>>>,
 }
 
@@ -282,18 +282,18 @@ impl MemRegistry {
     /// Constructs a new, empty MemRegistry
     pub fn new() -> Self {
         MemRegistry {
-            buf_by_path: HashMap::new(),
+            log_by_path: HashMap::new(),
             blob_by_path: HashMap::new(),
         }
     }
 
-    fn buffer(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBuffer, Error> {
-        if let Some(buf) = self.buf_by_path.get(path) {
-            MemBuffer::open(buf.clone(), lock_info)
+    fn log(&mut self, path: &str, lock_info: LockInfo) -> Result<MemLog, Error> {
+        if let Some(log) = self.log_by_path.get(path) {
+            MemLog::open(log.clone(), lock_info)
         } else {
-            let buf = MemBuffer::new(lock_info);
-            self.buf_by_path.insert(path.to_string(), buf.core.clone());
-            Ok(buf)
+            let log = MemLog::new(lock_info);
+            self.log_by_path.insert(path.to_string(), log.core.clone());
+            Ok(log)
         }
     }
 
@@ -311,9 +311,9 @@ impl MemRegistry {
     /// Open a [RuntimeClient] associated with `path`.
     pub fn open(&mut self, path: &str, lock_info: &str) -> Result<RuntimeClient, Error> {
         let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
-        let buffer = self.buffer(path, lock_info.clone())?;
+        let log = self.log(path, lock_info.clone())?;
         let blob = self.blob(path, lock_info)?;
-        runtime::start(buffer, blob, &MetricsRegistry::new())
+        runtime::start(log, blob, &MetricsRegistry::new())
     }
 
     /// Open a [RuntimeClient] with unreliable storage associated with `path`.
@@ -324,26 +324,24 @@ impl MemRegistry {
         unreliable: UnreliableHandle,
     ) -> Result<RuntimeClient, Error> {
         let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
-        let buffer = self.buffer(path, lock_info.clone())?;
-        let buffer = UnreliableBuffer::from_handle(buffer, unreliable.clone());
+        let log = self.log(path, lock_info.clone())?;
+        let log = UnreliableLog::from_handle(log, unreliable.clone());
         let blob = self.blob(path, lock_info)?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(buffer, blob, &MetricsRegistry::new())
+        runtime::start(log, blob, &MetricsRegistry::new())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, buffer_impl_test};
+    use crate::storage::tests::{blob_impl_test, log_impl_test};
 
     use super::*;
 
     #[test]
-    fn mem_buffer() -> Result<(), Error> {
+    fn mem_log() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        buffer_impl_test(move |t| {
-            registry.buffer(t.path, (t.reentrance_id, "buffer_impl_test").into())
-        })
+        log_impl_test(move |t| registry.log(t.path, (t.reentrance_id, "log_impl_test").into()))
     }
 
     #[test]

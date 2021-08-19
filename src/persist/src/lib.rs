@@ -21,13 +21,12 @@ use std::fmt;
 pub mod codec_impls;
 pub mod error;
 pub mod file;
+pub mod future;
 pub mod indexed;
 pub mod mem;
 #[cfg(test)]
 pub mod nemesis;
 pub mod operators;
-// TODO: Rename this to future once we rename indexed::future to unsealed.
-pub mod pfuture;
 pub mod storage;
 pub mod unreliable;
 
@@ -43,8 +42,7 @@ pub mod unreliable;
 // - Abomonation is convenient for prototyping, but we'll likely want to reuse
 //   one of the popular serialization libraries.
 // - Tighten up the jargon and usage of that jargon: write, update, persist,
-//   drain, entry, update, data, buffer, blob, buffer (again), indexed, future,
-//   trace.
+//   drain, entry, update, data, log, blob, indexed, unsealed, trace.
 // - Think through all the <, <=, !<= usages and document them more correctly
 //   (aka replace before/after an antichain with in advance of/not in advance
 //   of).
@@ -55,7 +53,7 @@ pub mod unreliable;
 //   forgetting. Flesh this list out.
 
 // Testing edge cases:
-// - Failure while draining from buffer into future.
+// - Failure while draining from log into unsealed.
 // - Equality edge cases around all the various timestamp/frontier checks.
 
 /// A type usable as a persisted key or value.

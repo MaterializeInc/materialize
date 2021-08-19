@@ -65,7 +65,7 @@
 // - Impl of Runtime directly using Indexed
 // - Impl of Runtime with Timely workers running in threads
 // - Impl of Runtime with Timely workers running in processes
-// - Storage (buffer/blob) with variable latency/slow requests
+// - Storage (log/blob) with variable latency/slow requests
 // - Vary key size
 // - Deleting streams
 

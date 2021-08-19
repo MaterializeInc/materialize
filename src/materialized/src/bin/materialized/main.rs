@@ -635,8 +635,8 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         );
         PersistConfig {
             // TODO: These paths are hardcoded for now, but we'll want to make
-            // them configurable once we add additional Buffer and Blob impls.
-            buffer_path: data_directory.join("persist").join("buffer"),
+            // them configurable once we add additional Log and Blob impls.
+            log_path: data_directory.join("persist").join("log"),
             blob_path: data_directory.join("persist").join("blob"),
             user_table_enabled,
             system_table_enabled,

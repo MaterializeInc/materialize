@@ -17,34 +17,34 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::encoding::{BlobFutureBatchMeta, BlobFutureMeta};
-use crate::indexed::{BlobFutureBatch, Id, Snapshot};
+use crate::indexed::encoding::{UnsealedBatchMeta, UnsealedMeta};
+use crate::indexed::{BlobUnsealedBatch, Id, Snapshot};
 use crate::storage::{Blob, SeqNo};
 
 /// A persistent, compacting data structure containing `(Key, Value, Time,
 /// Diff)` entries indexed by `(time, key, value)`.
 ///
-/// Future exists to hold data that has been drained out of a [crate::storage::Buffer]
-/// but not yet "seal"ed into a [crate::indexed::trace::BlobTrace]. We store incoming
+/// Unsealed exists to hold data that has been drained out of a [crate::storage::Log]
+/// but not yet "seal"ed into a [crate::indexed::trace::Trace]. We store incoming
 /// data as immutable batches of updates, corresponding to non-empty, sorted intervals
-/// of [crate::storage::Buffer] sequence numbers.
+/// of [crate::storage::Log] sequence numbers.
 ///
 /// As times get sealed and the corresponding updates get moved into the trace,
-/// Future can remove those updates, and eventually, entire batches. The approach
+/// Unsealed can remove those updates, and eventually, entire batches. The approach
 /// to removing sealed data optimizes for the common case, for which we assume that:
 /// - data arrives roughly in order,
-/// - future batches contain data for a small range of distinct times.
-/// Every future batch tracks the minimum and maximum update timestamp contained within
+/// - unsealed batches contain data for a small range of distinct times.
+/// Every unsealed batch tracks the minimum and maximum update timestamp contained within
 /// its list of updates, and we eagerly drop batches that only contain data prior
 /// to the sealed frontier whenever possible. In the expected case, this should be
-/// sufficient to ensure that Future maintains a bounded storage footprint. If
+/// sufficient to ensure that Unsealed maintains a bounded storage footprint. If
 /// either of the two assumptions are violated, either because updates arrive out
 /// of order, or batches contain data at many distinct timestamps, we periodically
 /// try to remove the updates strictly behind the current sealed frontier from a
-/// given future batch and replace it with a "trimmed" batch that uses less storage.
+/// given unsealed batch and replace it with a "trimmed" batch that uses less storage.
 ///
 /// This approach intentionally does nothing to physically coalesce multiple
-/// future batches into a single future batch. Doing so has many potential downsides;
+/// unsealed batches into a single unsealed batch. Doing so has many potential downsides;
 /// for example physically merging a batch containing updates 5 seconds ahead of
 /// the current sealed frontier with another batch containing updates 5 hours ahead
 /// of the current sealed frontier would only hurt 5 seconds later, when the previously
@@ -52,28 +52,28 @@ use crate::storage::{Blob, SeqNo};
 /// which requires an extra read and write. If we end up having significant amounts
 /// of data far ahead of the current sealed frontier we likely will need a different
 /// structure that can hold batches of updates organized by overlapping ranges
-/// of times and physically merge future batches using an approach similar to
+/// of times and physically merge unsealed batches using an approach similar to
 /// trace physical compaction.
 ///
 /// Invariants:
 /// - All entries are after or equal to some time frontier and less than some
 ///   SeqNo.
 /// - TODO: Space usage.
-pub struct BlobFuture {
+pub struct Unsealed {
     id: Id,
-    /// The next id used to assign a Blob key for this future.
+    /// The next id used to assign a Blob key for this unsealed.
     pub next_blob_id: u64,
     // NB: This is a closed lower bound. When Indexed seals a time, only data
     // strictly before that time gets moved into the trace.
     ts_lower: Antichain<u64>,
-    batches: Vec<BlobFutureBatchMeta>,
+    batches: Vec<UnsealedBatchMeta>,
 }
 
-impl BlobFuture {
-    /// Returns a BlobFuture re-instantiated with the previously serialized
+impl Unsealed {
+    /// Returns an Unsealed re-instantiated with the previously serialized
     /// state.
-    pub fn new(meta: BlobFutureMeta) -> Self {
-        BlobFuture {
+    pub fn new(meta: UnsealedMeta) -> Self {
+        Unsealed {
             id: meta.id,
             next_blob_id: meta.next_blob_id,
             ts_lower: meta.ts_lower,
@@ -81,17 +81,17 @@ impl BlobFuture {
         }
     }
 
-    // Get a new key to write to the Blob store for this future.
+    // Get a new key to write to the Blob store for this unsealed.
     fn new_blob_key(&mut self) -> String {
-        let key = format!("{:?}-future-{:?}", self.id, self.next_blob_id);
+        let key = format!("{:?}-unsealed-{:?}", self.id, self.next_blob_id);
         self.next_blob_id += 1;
 
         key
     }
 
-    /// Serializes the state of this BlobFuture for later re-instantiation.
-    pub fn meta(&self) -> BlobFutureMeta {
-        BlobFutureMeta {
+    /// Serializes the state of this Unsealed for later re-instantiation.
+    pub fn meta(&self) -> UnsealedMeta {
+        UnsealedMeta {
             id: self.id,
             ts_lower: self.ts_lower.clone(),
             batches: self.batches.clone(),
@@ -107,22 +107,22 @@ impl BlobFuture {
         )
     }
 
-    /// Write a [BlobFutureBatch] to [Blob] storage and return the corresponding
-    /// [BlobFutureBatchMeta].
+    /// Write a [BlobUnsealedBatch] to [Blob] storage and return the corresponding
+    /// [UnsealedBatchMeta].
     ///
-    /// The input batch is expected to satisfy all [BlobFutureBatch] invariants.
+    /// The input batch is expected to satisfy all [BlobUnsealedBatch] invariants.
     fn write_batch<L: Blob>(
         &mut self,
-        batch: BlobFutureBatch,
+        batch: BlobUnsealedBatch,
         blob: &mut BlobCache<L>,
-    ) -> Result<BlobFutureBatchMeta, Error> {
+    ) -> Result<UnsealedBatchMeta, Error> {
         let key = self.new_blob_key();
         let desc = batch.desc.clone();
         let ts_upper = match batch.updates.last() {
             Some(upper) => upper.1,
             None => {
                 return Err(Error::from(
-                    "invalid future batch: trying to write empty batch",
+                    "invalid unsealed batch: trying to write empty batch",
                 ))
             }
         };
@@ -130,12 +130,12 @@ impl BlobFuture {
             Some(lower) => lower.1,
             None => {
                 return Err(Error::from(
-                    "invalid future batch: trying to write empty batch",
+                    "invalid unsealed batch: trying to write empty batch",
                 ))
             }
         };
-        let size_bytes = blob.set_future_batch(key.clone(), batch)?;
-        Ok(BlobFutureBatchMeta {
+        let size_bytes = blob.set_unsealed_batch(key.clone(), batch)?;
+        Ok(UnsealedBatchMeta {
             key,
             desc,
             ts_upper,
@@ -145,10 +145,10 @@ impl BlobFuture {
     }
 
     /// Writes the given batch to [Blob] storage and logically adds the contained
-    /// updates to this future.
+    /// updates to this unsealed.
     pub fn append<L: Blob>(
         &mut self,
-        batch: BlobFutureBatch,
+        batch: BlobUnsealedBatch,
         blob: &mut BlobCache<L>,
     ) -> Result<(), Error> {
         if batch.desc.lower() != &self.seqno_upper() {
@@ -159,9 +159,9 @@ impl BlobFuture {
             )));
         }
         if cfg!(any(debug_assertions, test)) {
-            // Batches being appended to this future come from data being
-            // drained out of the buffer. Indexed should have prevented this
-            // write to the buffer, so this should never happen. Hopefully any
+            // Batches being appended to this unsealed come from data being
+            // drained out of the log. Indexed should have prevented this
+            // write to the log, so this should never happen. Hopefully any
             // regressions in maintaining this invariant will be caught by this
             // debug/test check.
             for (_, ts, _) in batch.updates.iter() {
@@ -179,14 +179,14 @@ impl BlobFuture {
         Ok(())
     }
 
-    /// Returns a consistent read of the updates contained in this future
+    /// Returns a consistent read of the updates contained in this unsealed
     /// matching the given filters (in practice, everything not in Trace).
     pub fn snapshot<L: Blob>(
         &self,
         ts_lower: Antichain<u64>,
         ts_upper: Antichain<u64>,
         blob: &BlobCache<L>,
-    ) -> Result<FutureSnapshot, Error> {
+    ) -> Result<UnsealedSnapshot, Error> {
         if PartialOrder::less_than(&ts_upper, &ts_lower) {
             return Err(Error::from(format!(
                 "invalid snapshot request: ts_upper {:?} is less than ts_lower {:?}",
@@ -202,18 +202,18 @@ impl BlobFuture {
             // - ts_lower <= hi
             // - ts_upper > lo
             if ts_lower.less_equal(&meta.ts_upper) && !ts_upper.less_equal(&meta.ts_lower) {
-                updates.push(blob.get_future_batch(&meta.key)?);
+                updates.push(blob.get_unsealed_batch(&meta.key)?);
             }
         }
 
-        Ok(FutureSnapshot {
+        Ok(UnsealedSnapshot {
             ts_lower,
             ts_upper,
             updates,
         })
     }
 
-    /// Removes all updates contained in this future before the given bound.
+    /// Removes all updates contained in this unsealed before the given bound.
     pub fn truncate(&mut self, new_ts_lower: Antichain<u64>) -> Result<(), Error> {
         if PartialOrder::less_than(&new_ts_lower, &self.ts_lower) {
             return Err(format!(
@@ -227,7 +227,7 @@ impl BlobFuture {
         Ok(())
     }
 
-    /// Remove all batches containing only data strictly before the Future's time
+    /// Remove all batches containing only data strictly before the Unsealed's time
     /// lower bound.
     fn evict(&mut self) {
         // TODO: actually physically free the old batches.
@@ -235,29 +235,29 @@ impl BlobFuture {
         self.batches.retain(|b| ts_lower.less_equal(&b.ts_upper));
     }
 
-    /// Create a new [BlobFutureBatch] from `batch` containing only the subset of
-    /// updates at or in advance of the Future's time lower bound.
+    /// Create a new [BlobUnsealedBatch] from `batch` containing only the subset of
+    /// updates at or in advance of the Unsealed's time lower bound.
     ///
     /// `batch` is assumed not be eligible for eviction at the time of this function
-    /// call, and to satisy all [BlobFutureBatch] invariants.
+    /// call, and to satisy all [BlobUnsealedBatch] invariants.
     fn trim<L: Blob>(
         &mut self,
-        batch: BlobFutureBatchMeta,
+        batch: UnsealedBatchMeta,
         blob: &mut BlobCache<L>,
-    ) -> Result<BlobFutureBatchMeta, Error> {
+    ) -> Result<UnsealedBatchMeta, Error> {
         // Sanity check that batch cannot be evicted
         debug_assert!(self.ts_lower.less_equal(&batch.ts_upper));
         let mut updates = vec![];
 
         updates.extend(
-            blob.get_future_batch(&batch.key)?
+            blob.get_unsealed_batch(&batch.key)?
                 .updates
                 .iter()
                 .filter(|(_, ts, _)| self.ts_lower.less_equal(ts))
                 .cloned(),
         );
         debug_assert!(!updates.is_empty());
-        let new_batch = BlobFutureBatch {
+        let new_batch = BlobUnsealedBatch {
             desc: batch.desc,
             updates,
         };
@@ -265,7 +265,7 @@ impl BlobFuture {
         self.write_batch(new_batch, blob)
     }
 
-    /// Take one step towards shrinking the representation of this future.
+    /// Take one step towards shrinking the representation of this unsealed.
     ///
     /// Returns true if the trace was modified, false otherwise.
     pub fn step<L: Blob>(&mut self, blob: &mut BlobCache<L>) -> Result<bool, Error> {
@@ -285,17 +285,17 @@ impl BlobFuture {
     }
 }
 
-/// A consistent snapshot of the data currently in a persistent [BlobFuture].
+/// A consistent snapshot of the data currently in a persistent [Unsealed].
 #[derive(Debug)]
-pub struct FutureSnapshot {
+pub struct UnsealedSnapshot {
     /// A closed lower bound on the times of contained updates.
     pub ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     pub ts_upper: Antichain<u64>,
-    updates: Vec<Arc<BlobFutureBatch>>,
+    updates: Vec<Arc<BlobUnsealedBatch>>,
 }
 
-impl Snapshot<Vec<u8>, Vec<u8>> for FutureSnapshot {
+impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
     fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
         if let Some(batch) = self.updates.pop() {
             let updates = batch
@@ -320,31 +320,33 @@ mod tests {
     use super::*;
 
     // Generate a list of ((k, v), t, 1) updates at all of the specified times.
-    fn future_updates(update_times: Vec<u64>) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
+    fn unsealed_updates(update_times: Vec<u64>) -> Vec<((Vec<u8>, Vec<u8>), u64, isize)> {
         update_times
             .into_iter()
             .map(|t| (("k".into(), "v".into()), t, 1))
             .collect()
     }
 
-    // Generate a future batch spanning the specified sequence numbers with
+    // Generate an unsealed batch spanning the specified sequence numbers with
     // updates at the specified times.
-    fn future_batch(lower: u64, upper: u64, update_times: Vec<u64>) -> BlobFutureBatch {
-        BlobFutureBatch {
+    fn unsealed_batch(lower: u64, upper: u64, update_times: Vec<u64>) -> BlobUnsealedBatch {
+        BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(SeqNo(lower)),
                 Antichain::from_elem(SeqNo(upper)),
                 Antichain::from_elem(SeqNo(0)),
             ),
-            updates: future_updates(update_times),
+            updates: unsealed_updates(update_times),
         }
     }
 
-    // Read future batch metadata into a structure that can be asserted against.
+    // Read unsealed batch metadata into a structure that can be asserted against.
     //
     // TODO: Revisit Antichain / Eq to see if we can do something better here.
-    fn future_batch_meta(future: &BlobFuture) -> Vec<(String, (SeqNo, SeqNo, SeqNo), (u64, u64))> {
-        future
+    fn unsealed_batch_meta(
+        unsealed: &Unsealed,
+    ) -> Vec<(String, (SeqNo, SeqNo, SeqNo), (u64, u64))> {
+        unsealed
             .batches
             .iter()
             .map(|meta| {
@@ -361,15 +363,15 @@ mod tests {
             .collect()
     }
 
-    // Attempt to read every update in `future` at times in [lo, hi)
+    // Attempt to read every update in `unsealed` at times in [lo, hi)
     fn slurp_from<L: Blob>(
-        future: &BlobFuture,
+        unsealed: &Unsealed,
         blob: &BlobCache<L>,
         lo: u64,
         hi: Option<u64>,
     ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
         let hi = hi.map_or_else(|| Antichain::new(), |e| Antichain::from_elem(e));
-        let snapshot = future.snapshot(Antichain::from_elem(lo), hi, &blob)?;
+        let snapshot = unsealed.snapshot(Antichain::from_elem(lo), hi, &blob)?;
         let updates = snapshot.read_to_end();
         Ok(updates)
     }
@@ -380,7 +382,7 @@ mod tests {
             Metrics::default(),
             MemBlob::new_no_reentrance("append_ts_lower_invariant"),
         );
-        let mut f = BlobFuture::new(BlobFutureMeta {
+        let mut f = Unsealed::new(UnsealedMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(2),
             batches: vec![],
@@ -388,7 +390,7 @@ mod tests {
         });
 
         // ts < ts_lower.data()[0] is disallowed
-        let batch = BlobFutureBatch {
+        let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(1)),
@@ -404,7 +406,7 @@ mod tests {
         );
 
         // ts == ts_lower.data()[0] is allowed
-        let batch = BlobFutureBatch {
+        let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(1)),
@@ -417,7 +419,7 @@ mod tests {
 
     #[test]
     fn truncate_regress() {
-        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
+        let mut f: Unsealed = Unsealed::new(UnsealedMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(2),
             batches: vec![],
@@ -433,39 +435,39 @@ mod tests {
     }
 
     #[test]
-    fn future_evict() -> Result<(), Error> {
+    fn unsealed_evict() -> Result<(), Error> {
         let mut blob = BlobCache::new(
             Metrics::default(),
-            MemBlob::new_no_reentrance("future_evict"),
+            MemBlob::new_no_reentrance("unsealed_evict"),
         );
-        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
+        let mut f: Unsealed = Unsealed::new(UnsealedMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
             next_blob_id: 0,
         });
 
-        f.append(future_batch(0, 1, vec![0]), &mut blob)?;
-        f.append(future_batch(1, 2, vec![1]), &mut blob)?;
-        f.append(future_batch(2, 3, vec![0, 1]), &mut blob)?;
+        f.append(unsealed_batch(0, 1, vec![0]), &mut blob)?;
+        f.append(unsealed_batch(1, 2, vec![1]), &mut blob)?;
+        f.append(unsealed_batch(2, 3, vec![0, 1]), &mut blob)?;
 
         let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
-        assert_eq!(snapshot_updates, future_updates(vec![0, 0, 1, 1]));
+        assert_eq!(snapshot_updates, unsealed_updates(vec![0, 0, 1, 1]));
         assert_eq!(
-            future_batch_meta(&f),
+            unsealed_batch_meta(&f),
             vec![
                 (
-                    "Id(0)-future-0".to_string(),
+                    "Id(0)-unsealed-0".to_string(),
                     (SeqNo(0), SeqNo(1), SeqNo(0)),
                     (0, 0)
                 ),
                 (
-                    "Id(0)-future-1".to_string(),
+                    "Id(0)-unsealed-1".to_string(),
                     (SeqNo(1), SeqNo(2), SeqNo(0)),
                     (1, 1)
                 ),
                 (
-                    "Id(0)-future-2".to_string(),
+                    "Id(0)-unsealed-2".to_string(),
                     (SeqNo(2), SeqNo(3), SeqNo(0)),
                     (0, 1)
                 ),
@@ -475,17 +477,17 @@ mod tests {
         f.truncate(Antichain::from_elem(1))?;
 
         let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
-        assert_eq!(snapshot_updates, future_updates(vec![0, 1, 1]));
+        assert_eq!(snapshot_updates, unsealed_updates(vec![0, 1, 1]));
         assert_eq!(
-            future_batch_meta(&f),
+            unsealed_batch_meta(&f),
             vec![
                 (
-                    "Id(0)-future-1".to_string(),
+                    "Id(0)-unsealed-1".to_string(),
                     (SeqNo(1), SeqNo(2), SeqNo(0)),
                     (1, 1)
                 ),
                 (
-                    "Id(0)-future-2".to_string(),
+                    "Id(0)-unsealed-2".to_string(),
                     (SeqNo(2), SeqNo(3), SeqNo(0)),
                     (0, 1)
                 ),
@@ -496,12 +498,12 @@ mod tests {
     }
 
     #[test]
-    fn future_snapshot() -> Result<(), Error> {
+    fn unsealed_snapshot() -> Result<(), Error> {
         let mut blob = BlobCache::new(
             Metrics::default(),
-            MemBlob::new_no_reentrance("future_snapshot"),
+            MemBlob::new_no_reentrance("unsealed_snapshot"),
         );
-        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
+        let mut f: Unsealed = Unsealed::new(UnsealedMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
@@ -513,7 +515,7 @@ mod tests {
             (("k".into(), "v".into()), 3, 1),
             (("k".into(), "v".into()), 5, 1),
         ];
-        let batch = BlobFutureBatch {
+        let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(2)),
@@ -553,12 +555,12 @@ mod tests {
     }
 
     #[test]
-    fn future_batch_trim() -> Result<(), Error> {
+    fn unsealed_batch_trim() -> Result<(), Error> {
         let mut blob = BlobCache::new(
             Metrics::default(),
-            MemBlob::new_no_reentrance("future_batch_trim"),
+            MemBlob::new_no_reentrance("unsealed_batch_trim"),
         );
-        let mut f: BlobFuture = BlobFuture::new(BlobFutureMeta {
+        let mut f: Unsealed = Unsealed::new(UnsealedMeta {
             id: Id(0),
             ts_lower: Antichain::from_elem(0),
             batches: vec![],
@@ -571,7 +573,7 @@ mod tests {
             (("k".into(), "v".into()), 1, 1),
             (("k".into(), "v".into()), 2, 1),
         ];
-        let batch = BlobFutureBatch {
+        let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(SeqNo(0)),
                 Antichain::from_elem(SeqNo(2)),
@@ -595,9 +597,9 @@ mod tests {
         assert_eq!(snapshot_updates, updates[1..]);
 
         assert_eq!(
-            future_batch_meta(&f),
+            unsealed_batch_meta(&f),
             vec![(
-                "Id(0)-future-1".to_string(),
+                "Id(0)-unsealed-1".to_string(),
                 (SeqNo(0), SeqNo(2), SeqNo(0)),
                 (1, 2)
             )]

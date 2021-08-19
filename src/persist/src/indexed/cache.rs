@@ -17,7 +17,7 @@ use abomonation::abomonated::Abomonated;
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::indexed::encoding::{BlobFutureBatch, BlobMeta, BlobTraceBatch};
+use crate::indexed::encoding::{BlobMeta, BlobTraceBatch, BlobUnsealedBatch};
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::storage::Blob;
 
@@ -34,34 +34,34 @@ use crate::storage::Blob;
 /// unpredictable. I think we probably want a soft limit and a hard limit where
 /// the soft limit does some alerting and the hard limit starts blocking (or
 /// erroring) until disk space frees up.
-pub struct BlobCache<L: Blob> {
+pub struct BlobCache<B: Blob> {
     metrics: Metrics,
-    blob: Arc<Mutex<L>>,
+    blob: Arc<Mutex<B>>,
     // TODO: Use a disk-backed LRU cache.
-    future: Arc<Mutex<HashMap<String, Arc<BlobFutureBatch>>>>,
+    unsealed: Arc<Mutex<HashMap<String, Arc<BlobUnsealedBatch>>>>,
     trace: Arc<Mutex<HashMap<String, Arc<BlobTraceBatch>>>>,
 }
 
-impl<L: Blob> Clone for BlobCache<L> {
+impl<B: Blob> Clone for BlobCache<B> {
     fn clone(&self) -> Self {
         BlobCache {
             metrics: self.metrics.clone(),
             blob: self.blob.clone(),
-            future: self.future.clone(),
+            unsealed: self.unsealed.clone(),
             trace: self.trace.clone(),
         }
     }
 }
 
-impl<L: Blob> BlobCache<L> {
+impl<B: Blob> BlobCache<B> {
     const META_KEY: &'static str = "META";
 
     /// Returns a new, empty cache for the given [Blob] storage.
-    pub fn new(metrics: Metrics, blob: L) -> Self {
+    pub fn new(metrics: Metrics, blob: B) -> Self {
         BlobCache {
             metrics,
             blob: Arc::new(Mutex::new(blob)),
-            future: Arc::new(Mutex::new(HashMap::new())),
+            unsealed: Arc::new(Mutex::new(HashMap::new())),
             trace: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -69,7 +69,7 @@ impl<L: Blob> BlobCache<L> {
     /// Synchronously closes the cache, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// This method is idempotent. Returns true if the buffer had not
+    /// This method is idempotent. Returns true if the blob had not
     /// previously been closed.
     pub fn close(&mut self) -> Result<bool, Error> {
         self.blob.lock()?.close()
@@ -77,11 +77,11 @@ impl<L: Blob> BlobCache<L> {
 
     /// Returns the batch for the given key, blocking to fetch if it's not
     /// already in the cache.
-    pub fn get_future_batch(&self, key: &str) -> Result<Arc<BlobFutureBatch>, Error> {
+    pub fn get_unsealed_batch(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
         {
             // New scope to ensure the cache lock is dropped during the
             // (expensive) get.
-            if let Some(entry) = self.future.lock()?.get(key) {
+            if let Some(entry) = self.unsealed.lock()?.get(key) {
                 self.metrics.blob_read_cache_hit_count.inc();
                 return Ok(entry.clone());
             }
@@ -96,12 +96,12 @@ impl<L: Blob> BlobCache<L> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
-        let batch: Abomonated<BlobFutureBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
+        let batch: Abomonated<BlobUnsealedBatch, Vec<u8>> = unsafe { Abomonated::new(bytes) }
             .ok_or_else(|| Error::from(format!("invalid batch at key: {}", key)))?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
-        let mut cache = self.future.lock()?;
+        let mut cache = self.unsealed.lock()?;
         // TODO: Well this is ugly.
         let batch = (*batch).clone();
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
@@ -112,7 +112,11 @@ impl<L: Blob> BlobCache<L> {
     /// Writes a batch to backing [Blob] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.
-    pub fn set_future_batch(&mut self, key: String, batch: BlobFutureBatch) -> Result<u64, Error> {
+    pub fn set_unsealed_batch(
+        &mut self,
+        key: String,
+        batch: BlobUnsealedBatch,
+    ) -> Result<u64, Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
         }
@@ -130,7 +134,7 @@ impl<L: Blob> BlobCache<L> {
         self.metrics.blob_write_count.inc();
         self.metrics.blob_write_bytes.inc_by(val_len);
 
-        self.future.lock()?.insert(key, Arc::new(batch));
+        self.unsealed.lock()?.insert(key, Arc::new(batch));
         Ok(val_len)
     }
 

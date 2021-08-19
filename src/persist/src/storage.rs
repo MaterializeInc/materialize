@@ -18,7 +18,7 @@ use abomonation_derive::Abomonation;
 
 use crate::error::Error;
 
-/// A "sequence number", uniquely associated with an entry in a Buffer.
+/// A "sequence number", uniquely associated with an entry in a Log.
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Abomonation)]
 pub struct SeqNo(pub u64);
 
@@ -31,11 +31,11 @@ impl timely::PartialOrder for SeqNo {
 /// An abstraction over an append-only bytes log.
 ///
 /// Each written entry is assigned a unique, incrementing SeqNo, which can be
-/// later used when draining data back out of the buffer.
+/// later used when draining data back out of the log.
 ///
 /// - Invariant: Implementations are responsible for ensuring that they are
 ///   exclusive writers to this location.
-pub trait Buffer {
+pub trait Log {
     /// Synchronously appends an entry.
     ///
     /// TODO: Figure out our async story so we can batch up multiple of these
@@ -55,10 +55,10 @@ pub trait Buffer {
     /// bound.
     fn truncate(&mut self, upper: SeqNo) -> Result<(), Error>;
 
-    /// Synchronously closes the buffer, releasing exclusive-writer locks and
+    /// Synchronously closes the log, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// Implementations must be idempotent. Returns true if the buffer had not
+    /// Implementations must be idempotent. Returns true if the log had not
     /// previously been closed.
     fn close(&mut self) -> Result<bool, Error>;
 }
@@ -74,10 +74,10 @@ pub trait Blob {
     /// Inserts a key-value pair into the map.
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
 
-    /// Synchronously closes the buffer, releasing exclusive-writer locks and
+    /// Synchronously closes the blob, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
-    /// Implementations must be idempotent. Returns true if the buffer had not
+    /// Implementations must be idempotent. Returns true if the blob had not
     /// previously been closed.
     fn close(&mut self) -> Result<bool, Error>;
 }
@@ -209,7 +209,7 @@ pub mod tests {
 
     use super::*;
 
-    fn slurp<U: Buffer>(buf: &U) -> Result<Vec<Vec<u8>>, Error> {
+    fn slurp<L: Log>(buf: &L) -> Result<Vec<Vec<u8>>, Error> {
         let mut entries = Vec::new();
         buf.snapshot(|_, x| {
             entries.push(x.to_vec());
@@ -223,7 +223,7 @@ pub mod tests {
         pub reentrance_id: &'a str,
     }
 
-    pub fn buffer_impl_test<U: Buffer, F: FnMut(PathAndReentranceId<'_>) -> Result<U, Error>>(
+    pub fn log_impl_test<L: Log, F: FnMut(PathAndReentranceId<'_>) -> Result<L, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
         let entries = vec![
@@ -241,21 +241,21 @@ pub mod tests {
             reentrance_id: "reentrance0",
         })?;
 
-        // We can create a second buffer writing to a different place.
+        // We can create a second log writing to a different place.
         let _ = new_fn(PathAndReentranceId {
             path: "path1",
             reentrance_id: "reentrance0",
         })?;
 
         // We're allowed to open the place if the node_id matches. In this
-        // scenario, the previous process using the buffer has crashed and
+        // scenario, the previous process using the log has crashed and
         // orphaned the lock.
-        let mut buf0 = new_fn(PathAndReentranceId {
+        let mut log0 = new_fn(PathAndReentranceId {
             path: "path0",
             reentrance_id: "reentrance0",
         })?;
 
-        // But the buffer impl prevents us from opening the same place for
+        // But the log impl prevents us from opening the same place for
         // writing twice if the node_id doesn't match.
         assert!(new_fn(PathAndReentranceId {
             path: "path0",
@@ -264,61 +264,61 @@ pub mod tests {
         .is_err());
 
         // Empty writer is empty.
-        assert!(slurp(&buf0)?.is_empty());
+        assert!(slurp(&log0)?.is_empty());
 
         // First write is assigned SeqNo(0).
-        assert_eq!(buf0.write_sync(entries[0].clone())?, SeqNo(0));
-        assert_eq!(slurp(&buf0)?, sub_entries(0..=0));
+        assert_eq!(log0.write_sync(entries[0].clone())?, SeqNo(0));
+        assert_eq!(slurp(&log0)?, sub_entries(0..=0));
 
         // Second write is assigned SeqNo(1). Now contains 2 entries.
-        assert_eq!(buf0.write_sync(entries[1].clone())?, SeqNo(1));
-        assert_eq!(slurp(&buf0)?, sub_entries(0..=1));
+        assert_eq!(log0.write_sync(entries[1].clone())?, SeqNo(1));
+        assert_eq!(slurp(&log0)?, sub_entries(0..=1));
 
         // Truncate removes the first entry.
-        buf0.truncate(SeqNo(1))?;
-        assert_eq!(slurp(&buf0)?, sub_entries(1..=1));
+        log0.truncate(SeqNo(1))?;
+        assert_eq!(slurp(&log0)?, sub_entries(1..=1));
 
         // We are not allowed to truncate to places outside the current range.
-        assert!(buf0.truncate(SeqNo(0)).is_err());
-        assert!(buf0.truncate(SeqNo(3)).is_err());
+        assert!(log0.truncate(SeqNo(0)).is_err());
+        assert!(log0.truncate(SeqNo(3)).is_err());
 
         // Write works after a truncate has happened.
-        assert_eq!(buf0.write_sync(entries[2].clone())?, SeqNo(2));
-        assert_eq!(slurp(&buf0)?, sub_entries(1..=2));
+        assert_eq!(log0.write_sync(entries[2].clone())?, SeqNo(2));
+        assert_eq!(slurp(&log0)?, sub_entries(1..=2));
 
         // Truncate everything.
-        buf0.truncate(SeqNo(3))?;
-        assert!(slurp(&buf0)?.is_empty());
+        log0.truncate(SeqNo(3))?;
+        assert!(slurp(&log0)?.is_empty());
 
-        // Cannot reuse a buffer once it is closed.
-        assert_eq!(buf0.close(), Ok(true));
-        assert!(buf0.write_sync(entries[1].clone()).is_err());
-        assert!(slurp(&buf0).is_err());
-        assert!(buf0.truncate(SeqNo(4)).is_err());
+        // Cannot reuse a log once it is closed.
+        assert_eq!(log0.close(), Ok(true));
+        assert!(log0.write_sync(entries[1].clone()).is_err());
+        assert!(slurp(&log0).is_err());
+        assert!(log0.truncate(SeqNo(4)).is_err());
 
         // Close must be idempotent and must return false if it did no work.
-        assert_eq!(buf0.close(), Ok(false));
+        assert_eq!(log0.close(), Ok(false));
 
         // But we can reopen it and use it.
-        let mut buf0 = new_fn(PathAndReentranceId {
+        let mut log0 = new_fn(PathAndReentranceId {
             path: "path0",
             reentrance_id: "reentrance0",
         })?;
-        assert_eq!(buf0.write_sync(entries[3].clone())?, SeqNo(3));
-        assert_eq!(slurp(&buf0)?, sub_entries(3..=3));
-        assert_eq!(buf0.close(), Ok(true));
-        let mut buf0 = new_fn(PathAndReentranceId {
+        assert_eq!(log0.write_sync(entries[3].clone())?, SeqNo(3));
+        assert_eq!(slurp(&log0)?, sub_entries(3..=3));
+        assert_eq!(log0.close(), Ok(true));
+        let mut log0 = new_fn(PathAndReentranceId {
             path: "path0",
             reentrance_id: "reentrance0",
         })?;
-        assert_eq!(buf0.write_sync(entries[4].clone())?, SeqNo(4));
-        assert_eq!(slurp(&buf0)?, sub_entries(3..=4));
-        assert_eq!(buf0.close(), Ok(true));
+        assert_eq!(log0.write_sync(entries[4].clone())?, SeqNo(4));
+        assert_eq!(slurp(&log0)?, sub_entries(3..=4));
+        assert_eq!(log0.close(), Ok(true));
 
         Ok(())
     }
 
-    pub fn blob_impl_test<L: Blob, F: FnMut(PathAndReentranceId<'_>) -> Result<L, Error>>(
+    pub fn blob_impl_test<B: Blob, F: FnMut(PathAndReentranceId<'_>) -> Result<B, Error>>(
         mut new_fn: F,
     ) -> Result<(), Error> {
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
