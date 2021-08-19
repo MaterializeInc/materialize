@@ -215,6 +215,14 @@ impl MemBlobCore {
         };
         Ok(())
     }
+
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        self.ensure_open()?;
+        match self.dataz.remove(key) {
+            Some(_) => Ok(()),
+            None => Err(format!("key does not exist: {}", key).into()),
+        }
+    }
 }
 
 /// An in-memory implementation of [Blob].
@@ -264,6 +272,10 @@ impl Blob for MemBlob {
 
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error> {
         self.core.lock()?.set(key, value, allow_overwrite)
+    }
+
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        self.core.lock()?.delete(key)
     }
 
     fn close(&mut self) -> Result<bool, Error> {
