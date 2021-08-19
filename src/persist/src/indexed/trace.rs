@@ -20,7 +20,7 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::encoding::{BlobTraceBatchMeta, BlobTraceMeta};
+use crate::indexed::encoding::{TraceBatchMeta, TraceMeta};
 use crate::indexed::{BlobTraceBatch, Id, Snapshot};
 use crate::storage::Blob;
 
@@ -68,7 +68,7 @@ use crate::storage::Blob;
 /// - The compaction levels across the list of batches in a trace are weakly decreasing
 ///   (non-increasing) when iterating from oldest to most recent time intervals.
 /// - TODO: Space usage.
-pub struct BlobTrace {
+pub struct Trace {
     id: Id,
     /// The next ID used to assign a Blob key for this trace.
     pub next_blob_id: u64,
@@ -79,14 +79,14 @@ pub struct BlobTrace {
     // `[lower, upper)`.
     // The frontier the trace has been sealed up to.
     seal: Antichain<u64>,
-    batches: Vec<BlobTraceBatchMeta>,
+    batches: Vec<TraceBatchMeta>,
 }
 
-impl BlobTrace {
-    /// Returns a BlobTrace re-instantiated with the previously serialized
+impl Trace {
+    /// Returns a Trace re-instantiated with the previously serialized
     /// state.
-    pub fn new(meta: BlobTraceMeta) -> Self {
-        BlobTrace {
+    pub fn new(meta: TraceMeta) -> Self {
+        Trace {
             id: meta.id,
             next_blob_id: meta.next_blob_id,
             since: meta.since,
@@ -102,9 +102,9 @@ impl BlobTrace {
         key
     }
 
-    /// Serializes the state of this BlobTrace for later re-instantiation.
-    pub fn meta(&self) -> BlobTraceMeta {
-        BlobTraceMeta {
+    /// Serializes the state of this Trace for later re-instantiation.
+    pub fn meta(&self) -> TraceMeta {
+        TraceMeta {
             id: self.id,
             since: self.since.clone(),
             seal: self.seal.clone(),
@@ -155,10 +155,10 @@ impl BlobTrace {
 
     /// Writes the given batch to [Blob] storage and logically adds the contained
     /// updates to this trace.
-    pub fn append<L: Blob>(
+    pub fn append<B: Blob>(
         &mut self,
         batch: BlobTraceBatch,
-        blob: &mut BlobCache<L>,
+        blob: &mut BlobCache<B>,
     ) -> Result<(), Error> {
         if &self.ts_upper() != batch.desc.lower() {
             return Err(Error::from(format!(
@@ -172,7 +172,7 @@ impl BlobTrace {
         let size_bytes = blob.set_trace_batch(key.clone(), batch)?;
         // As mentioned above, batches are inserted into the trace with compaction
         // level set to 0.
-        self.batches.push(BlobTraceBatchMeta {
+        self.batches.push(TraceBatchMeta {
             key,
             desc,
             level: 0,
@@ -182,7 +182,7 @@ impl BlobTrace {
     }
 
     /// Returns a consistent read of all the updates contained in this trace.
-    pub fn snapshot<L: Blob>(&self, blob: &BlobCache<L>) -> Result<TraceSnapshot, Error> {
+    pub fn snapshot<B: Blob>(&self, blob: &BlobCache<B>) -> Result<TraceSnapshot, Error> {
         let ts_upper = self.ts_upper();
         let mut updates = Vec::with_capacity(self.batches.len());
         for meta in self.batches.iter() {
@@ -193,12 +193,12 @@ impl BlobTrace {
 
     /// Merge two batches into one, forwarding all updates not beyond the current
     /// `since` frontier to the `since` frontier.
-    fn merge<L: Blob>(
+    fn merge<B: Blob>(
         &mut self,
-        first: &BlobTraceBatchMeta,
-        second: &BlobTraceBatchMeta,
-        blob: &mut BlobCache<L>,
-    ) -> Result<BlobTraceBatchMeta, Error> {
+        first: &TraceBatchMeta,
+        second: &TraceBatchMeta,
+        blob: &mut BlobCache<B>,
+    ) -> Result<TraceBatchMeta, Error> {
         if first.desc.upper() != second.desc.lower() {
             return Err(Error::from(format!(
                 "invalid merge of non-consecutive batches {:?} and {:?}",
@@ -241,7 +241,7 @@ impl BlobTrace {
         // TODO: actually clear the unwanted batches from the blob storage
         let size_bytes = blob.set_trace_batch(key.clone(), new_batch)?;
 
-        Ok(BlobTraceBatchMeta {
+        Ok(TraceBatchMeta {
             key,
             desc,
             level: merged_level,
@@ -252,7 +252,7 @@ impl BlobTrace {
     /// Take one step towards compacting the trace.
     ///
     /// Returns true if the trace was modified, false otherwise.
-    pub fn step<L: Blob>(&mut self, blob: &mut BlobCache<L>) -> Result<bool, Error> {
+    pub fn step<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<bool, Error> {
         // TODO: should we remember our position in this list?
         for i in 1..self.batches.len() {
             if (self.batches[i - 1].level == self.batches[i].level)
@@ -300,7 +300,7 @@ impl BlobTrace {
     }
 }
 
-/// A consistent snapshot of the data currently in a persistent [BlobTrace].
+/// A consistent snapshot of the data currently in a persistent [Trace].
 #[derive(Debug)]
 pub struct TraceSnapshot {
     /// An open upper bound on the times of contained updates.
@@ -328,9 +328,9 @@ mod tests {
 
     #[test]
     fn test_allow_compaction() -> Result<(), Error> {
-        let mut t: BlobTrace = BlobTrace::new(BlobTraceMeta {
+        let mut t: Trace = Trace::new(TraceMeta {
             id: Id(0),
-            batches: vec![BlobTraceBatchMeta {
+            batches: vec![TraceBatchMeta {
                 key: "key1".to_string(),
                 desc: Description::new(
                     Antichain::from_elem(0),
@@ -373,7 +373,7 @@ mod tests {
             Metrics::default(),
             MemBlob::new_no_reentrance("trace_compact"),
         );
-        let mut t = BlobTrace::new(BlobTraceMeta::new(Id(0)));
+        let mut t = Trace::new(TraceMeta::new(Id(0)));
         t.update_seal(10);
 
         let batch = BlobTraceBatch {

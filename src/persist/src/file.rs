@@ -18,40 +18,40 @@ use std::sync::{Arc, Mutex};
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::storage::{Blob, Buffer, LockInfo, SeqNo};
+use crate::storage::{Blob, LockInfo, Log, SeqNo};
 
 /// Inner struct handles to separate files that store the data and metadata about the
-/// most recently truncated sequence number for [FileBuffer].
-struct FileBufferCore {
+/// most recently truncated sequence number for [FileLog].
+struct FileLogCore {
     dataz: File,
     metadata: File,
 }
 
-/// A naive implementation of [Buffer] backed by files.
-pub struct FileBuffer {
+/// A naive implementation of [Log] backed by files.
+pub struct FileLog {
     base_dir: Option<PathBuf>,
-    dataz: Arc<Mutex<FileBufferCore>>,
+    dataz: Arc<Mutex<FileLogCore>>,
     seqno: Range<SeqNo>,
     buf: Vec<u8>,
 }
 
-impl FileBuffer {
-    const BUFFER_PATH: &'static str = "BUFFER";
+impl FileLog {
+    const DATA_PATH: &'static str = "DATA";
     const LOCKFILE_PATH: &'static str = "LOCK";
     const METADATA_PATH: &'static str = "META";
 
-    /// Returns a new [FileBuffer] which stores files under the given dir.
+    /// Returns a new [FileLog] which stores files under the given dir.
     ///
     /// To ensure directory-wide mutual exclusion, a LOCK file is placed in
     /// base_dir at construction time. If this file already exists (indicating
-    /// that another FileBuffer is already using the dir), an error is returned
+    /// that another FileLog is already using the dir), an error is returned
     /// from `new`.
     ///
     /// The contents of `lock_info` are stored in the LOCK file and should
     /// include anything that would help debug an unexpected LOCK file, such as
     /// version, ip, worker number, etc.
     ///
-    /// The data is stored in a separate buffer file, and is formatted as a sequential list of
+    /// The data is stored in a separate file, and is formatted as a sequential list of
     /// chunks corresponding to each write. Each chunk consists of:
     /// `length` - A 64 bit unsigned int (little-endian) indicating the size of `data`.
     /// `data` - `length` bytes of data.
@@ -68,12 +68,12 @@ impl FileBuffer {
             // TODO: flock this for good measure?
             let _ = file_storage_lock(&Self::lockfile_path(&base_dir), lock_info)?;
         }
-        let buffer_path = Self::buffer_path(&base_dir);
-        let mut buffer_file = OpenOptions::new()
+        let data_path = Self::data_path(&base_dir);
+        let mut data_file = OpenOptions::new()
             .append(true)
             .read(true)
             .create(true)
-            .open(&buffer_path)?;
+            .open(&data_path)?;
 
         let metadata_path = Self::metadata_path(&base_dir);
         let mut metadata_file = OpenOptions::new()
@@ -93,7 +93,7 @@ impl FileBuffer {
             // Decode sequence number
             bytes.read_exact(&mut buf).map_err(|e| {
                 format!(
-                    "could not read buffer metadata file: found {} bytes (expected 8) {:?}",
+                    "could not read log metadata file: found {} bytes (expected 8) {:?}",
                     len, e,
                 )
             })?;
@@ -104,15 +104,15 @@ impl FileBuffer {
             SeqNo(0)
         };
 
-        // Retrieve the most recently written sequence number in the buffer,
-        // unless the buffer is empty in which case default to 0.
+        // Retrieve the most recently written sequence number in the log,
+        // unless the log is empty in which case default to 0.
         let seqno_end = {
-            let len = buffer_file.metadata()?.len();
+            let len = data_file.metadata()?.len();
 
             if len > 0 {
                 let mut buf = [0u8; 8];
-                buffer_file.seek(SeekFrom::End(-8))?;
-                buffer_file.read_exact(&mut buf)?;
+                data_file.seek(SeekFrom::End(-8))?;
+                data_file.read_exact(&mut buf)?;
                 // NB: seqno_end is exclusive, so we have to add one to the
                 // seqno of the most recent write to reconstruct it.
                 SeqNo(u64::from_le_bytes(buf) + 1)
@@ -123,16 +123,16 @@ impl FileBuffer {
 
         if seqno_start > seqno_end {
             return Err(format!(
-                "invalid sequence number range found for file buffer: start: {:?} end: {:?}",
+                "invalid sequence number range found for file log: start: {:?} end: {:?}",
                 seqno_start, seqno_end,
             )
             .into());
         }
 
-        Ok(FileBuffer {
+        Ok(FileLog {
             base_dir: Some(base_dir.to_owned()),
-            dataz: Arc::new(Mutex::new(FileBufferCore {
-                dataz: buffer_file,
+            dataz: Arc::new(Mutex::new(FileLogCore {
+                dataz: data_file,
                 metadata: metadata_file,
             })),
             seqno: seqno_start..seqno_end,
@@ -144,8 +144,8 @@ impl FileBuffer {
         base_dir.join(Self::LOCKFILE_PATH)
     }
 
-    fn buffer_path(base_dir: &Path) -> PathBuf {
-        base_dir.join(Self::BUFFER_PATH)
+    fn data_path(base_dir: &Path) -> PathBuf {
+        base_dir.join(Self::DATA_PATH)
     }
 
     fn metadata_path(base_dir: &Path) -> PathBuf {
@@ -155,11 +155,11 @@ impl FileBuffer {
     fn ensure_open(&self) -> Result<PathBuf, Error> {
         self.base_dir
             .clone()
-            .ok_or_else(|| return Error::from("FileBuffer unexpectedly closed"))
+            .ok_or_else(|| return Error::from("FileLog unexpectedly closed"))
     }
 }
 
-impl Buffer for FileBuffer {
+impl Log for FileLog {
     fn write_sync(&mut self, buf: Vec<u8>) -> Result<SeqNo, Error> {
         self.ensure_open()?;
 
@@ -215,7 +215,7 @@ impl Buffer for FileBuffer {
                 continue;
             } else if seqno >= self.seqno.end {
                 return Err(format!(
-                    "invalid sequence number {:?} found for buffer containing {:?}",
+                    "invalid sequence number {:?} found for log containing {:?}",
                     seqno, self.seqno
                 )
                 .into());
@@ -226,7 +226,7 @@ impl Buffer for FileBuffer {
         Ok(self.seqno.clone())
     }
 
-    /// Logically truncates the buffer so that future reads ignore writes at sequence numbers
+    /// Logically truncates the log so that future reads ignore writes at sequence numbers
     /// less than `upper`.
     ///
     /// TODO: actually reclaim disk space as part of truncating.
@@ -235,7 +235,7 @@ impl Buffer for FileBuffer {
         // TODO: Test the edge cases here.
         if upper <= self.seqno.start || upper > self.seqno.end {
             return Err(format!(
-                "invalid truncation {:?} for buffer containing: {:?}",
+                "invalid truncation {:?} for log containing: {:?}",
                 upper, self.seqno
             )
             .into());
@@ -371,7 +371,7 @@ fn file_storage_lock(lockfile_path: &Path, new_lock: LockInfo) -> Result<File, E
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::tests::{blob_impl_test, buffer_impl_test};
+    use crate::storage::tests::{blob_impl_test, log_impl_test};
 
     use super::*;
 
@@ -385,11 +385,11 @@ mod tests {
     }
 
     #[test]
-    fn file_buffer() -> Result<(), Error> {
+    fn file_log() -> Result<(), Error> {
         let temp_dir = tempfile::tempdir()?;
-        buffer_impl_test(move |t| {
+        log_impl_test(move |t| {
             let instance_dir = temp_dir.path().join(t.path);
-            FileBuffer::new(instance_dir, (t.reentrance_id, "file_buffer_test").into())
+            FileLog::new(instance_dir, (t.reentrance_id, "file_log_test").into())
         })
     }
 

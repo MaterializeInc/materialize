@@ -32,8 +32,8 @@ pub struct Metrics {
     // TODO: pub(crate) stream_updated: UIntGauge,
     pub(crate) meta_size_bytes: ThirdPartyMetric<UIntGauge>,
 
-    pub(crate) future_blob_count: ThirdPartyMetric<UIntGauge>,
-    pub(crate) future_blob_bytes: ThirdPartyMetric<UIntGauge>,
+    pub(crate) unsealed_blob_count: ThirdPartyMetric<UIntGauge>,
+    pub(crate) unsealed_blob_bytes: ThirdPartyMetric<UIntGauge>,
 
     pub(crate) trace_blob_count: ThirdPartyMetric<UIntGauge>,
     pub(crate) trace_blob_bytes: ThirdPartyMetric<UIntGauge>,
@@ -74,12 +74,12 @@ impl Metrics {
                 name: "mz_persist_meta_size_bytes",
                 help: "size of the most recently generated META record",
             )),
-            future_blob_count: registry.register_third_party_visible(metric!(
-                name: "mz_persist_future_blob_count",
+            unsealed_blob_count: registry.register_third_party_visible(metric!(
+                name: "mz_persist_unsealed_blob_count",
                 help: "count of all blobs containing unsealed records",
             )),
-            future_blob_bytes: registry.register_third_party_visible(metric!(
-                name: "mz_persist_future_blob_bytes",
+            unsealed_blob_bytes: registry.register_third_party_visible(metric!(
+                name: "mz_persist_unsealed_blob_bytes",
                 help: "total size of all blobs containing unsealed records",
             )),
             trace_blob_count: registry.register_third_party_visible(metric!(
@@ -112,7 +112,7 @@ impl Metrics {
             )),
             compaction_ms: registry.register_third_party_visible(metric!(
                 name: "mz_persist_compaction_ms",
-                help: "time spent compacting trace and future",
+                help: "time spent compacting trace and unsealed",
             )),
             cmd_write_record_count: registry.register_third_party_visible(metric!(
                 name: "mz_persist_cmd_write_record_count",

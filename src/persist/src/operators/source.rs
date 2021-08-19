@@ -266,12 +266,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         let expected = vec![(
-            "failed to commit metadata after appending to future: unavailable: blob set".to_string(),
+            "failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
             0,
             1,
         ),
         (
-            "replaying persisted data: failed to commit metadata after appending to future: unavailable: blob set".to_string(),
+            "replaying persisted data: failed to commit metadata after appending to unsealed: unavailable: blob set".to_string(),
             0,
             1,
         ),

@@ -269,11 +269,11 @@ impl Direct {
 mod tests {
     use ore::metrics::MetricsRegistry;
 
-    use crate::file::{FileBlob, FileBuffer};
+    use crate::file::{FileBlob, FileLog};
     use crate::mem::MemRegistry;
     use crate::nemesis;
     use crate::nemesis::generator::GeneratorConfig;
-    use crate::unreliable::{UnreliableBlob, UnreliableBuffer};
+    use crate::unreliable::{UnreliableBlob, UnreliableLog};
 
     use super::*;
 
@@ -291,17 +291,17 @@ mod tests {
     fn direct_file() {
         let temp_dir = tempfile::tempdir().expect("tempdir creation failed");
         let direct = Direct::new(move |unreliable| {
-            let (buf_dir, blob_dir) = (temp_dir.path().join("buf"), temp_dir.path().join("blob"));
-            let buf = FileBuffer::new(buf_dir, ("reentrance0", "direct_file").into())?;
-            let buf = UnreliableBuffer::from_handle(buf, unreliable.clone());
+            let (log_dir, blob_dir) = (temp_dir.path().join("log"), temp_dir.path().join("blob"));
+            let log = FileLog::new(log_dir, ("reentrance0", "direct_file").into())?;
+            let log = UnreliableLog::from_handle(log, unreliable.clone());
             let blob = FileBlob::new(blob_dir, ("reentrance0", "direct_file").into())?;
             let blob = UnreliableBlob::from_handle(blob, unreliable);
-            runtime::start(buf, blob, &MetricsRegistry::new())
+            runtime::start(log, blob, &MetricsRegistry::new())
         })
         .expect("initial start failed");
         // TODO: At the moment, running this for 100 steps takes a bit over a
         // second, so run this one for fewer steps than the other tests. Revisit
-        // once we pipeline write calls in Buffer.
+        // once we pipeline write calls in Log.
         nemesis::run(10, GeneratorConfig::default(), direct);
     }
 

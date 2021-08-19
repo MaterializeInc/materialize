@@ -865,21 +865,21 @@ DROP SCHEMA mydb.myschema
 ----
 DROP SCHEMA mydb.myschema
 =>
-DropObjects(DropObjectsStatement { object_type: Schema, if_exists: false, names: [UnresolvedObjectName([Ident("mydb"), Ident("myschema")])], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Schema, if_exists: false, names: [UnresolvedObjectName([Ident("mydb"), Ident("myschema")])], cascade: false })
 
 parse-statement
 DROP TABLE foo
 ----
 DROP TABLE foo
 =>
-DropObjects(DropObjectsStatement { object_type: Table, if_exists: false, names: [UnresolvedObjectName([Ident("foo")])], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: false, names: [UnresolvedObjectName([Ident("foo")])], cascade: false })
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE
 ----
 DROP TABLE IF EXISTS foo, bar CASCADE
 =>
-DropObjects(DropObjectsStatement { object_type: Table, if_exists: true, names: [UnresolvedObjectName([Ident("foo")]), UnresolvedObjectName([Ident("bar")])], cascade: true })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: true, names: [UnresolvedObjectName([Ident("foo")]), UnresolvedObjectName([Ident("bar")])], cascade: true })
 
 parse-statement
 DROP TABLE
@@ -900,21 +900,21 @@ DROP VIEW myschema.myview
 ----
 DROP VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource
 =>
-DropObjects(DropObjectsStatement { object_type: Source, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Source, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
 
 parse-statement
 DROP INDEX IF EXISTS myschema.myindex
 ----
 DROP INDEX IF EXISTS myschema.myindex
 =>
-DropObjects(DropObjectsStatement { object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
 
 parse-statement
 TAIL foo.bar
