@@ -51,7 +51,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
-use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
 use timely::communication::WorkerGuards;
@@ -785,9 +784,8 @@ impl Coordinator {
     }
 
     fn message_scrape_metrics(&mut self) {
-        for update in self.metric_scraper.scrape_once() {
-            self.send_builtin_table_updates_at_offset(update.timestamp_offset, update.updates);
-        }
+        let scraped_metrics = self.metric_scraper.scrape_once();
+        self.send_builtin_table_updates_at_offset(scraped_metrics);
     }
 
     fn message_command(&mut self, cmd: Command) {
@@ -3132,14 +3130,24 @@ impl Coordinator {
         Ok(())
     }
 
-    fn send_builtin_table_updates_at_offset(
-        &mut self,
-        timestamp_offset: u64,
-        mut updates: Vec<BuiltinTableUpdate>,
-    ) {
-        let timestamp = self.get_write_ts() + timestamp_offset;
-        updates.sort_by_key(|u| u.id);
-        for (id, updates) in &updates.into_iter().group_by(|u| u.id) {
+    fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
+        // NB: This makes sure to send all records for the same id in the same
+        // message so we can persist a record and its future retraction
+        // atomically. Otherwise, we may end up with permanent orphans if a
+        // restart/crash happens at the wrong time.
+        let timestamp_base = self.get_write_ts();
+        let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
+        for tu in updates.into_iter() {
+            let timestamp = timestamp_base + tu.timestamp_offset;
+            for u in tu.updates {
+                updates_by_id.entry(u.id).or_default().push(Update {
+                    row: u.row,
+                    diff: u.diff,
+                    timestamp,
+                });
+            }
+        }
+        for (id, updates) in updates_by_id {
             // TODO: It'd be nice to unify this with the similar logic in
             // sequence_end_transaction, but it's not initially clear how to do
             // that.
@@ -3152,7 +3160,7 @@ impl Coordinator {
             if let Some(persist) = persist {
                 let updates: Vec<((Row, ()), Timestamp, Diff)> = updates
                     .into_iter()
-                    .map(|u| ((u.row, ()), timestamp, u.diff))
+                    .map(|u| ((u.row, ()), u.timestamp, u.diff))
                     .collect();
                 // Persistence of system table inserts is best effort, so throw
                 // away the response and ignore any errors. We do, however,
@@ -3166,21 +3174,17 @@ impl Coordinator {
                 let write_res = persist.write_handle.write(&updates);
                 let _ = tokio::spawn(async move { write_res.into_future().await });
             } else {
-                let updates: Vec<Update> = updates
-                    .into_iter()
-                    .map(|u| Update {
-                        row: u.row,
-                        diff: u.diff,
-                        timestamp,
-                    })
-                    .collect();
                 self.broadcast(dataflow::Command::Insert { id, updates })
             }
         }
     }
 
     fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        self.send_builtin_table_updates_at_offset(0, updates)
+        let timestamped = TimestampedUpdate {
+            updates,
+            timestamp_offset: 0,
+        };
+        self.send_builtin_table_updates_at_offset(vec![timestamped])
     }
 
     fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {

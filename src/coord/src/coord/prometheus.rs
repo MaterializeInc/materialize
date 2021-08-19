@@ -133,9 +133,9 @@ fn add_expiring_update(
     retain_for: u64,
     out: &mut Vec<TimestampedUpdate>,
 ) {
-    // TODO: Make this send both records in the same message so we can
-    // persist them atomically. Otherwise, we may end up with permanent
-    // orphans if a restart/crash happens at the wrong time.
+    // NB: This makes sure to send both records in the same message so we can
+    // persist them atomically. Otherwise, we may end up with permanent orphans
+    // if a restart/crash happens at the wrong time.
     let id = table.id;
     out.push(TimestampedUpdate {
         updates: updates
