@@ -12,6 +12,7 @@
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
+use log::debug;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -59,12 +60,30 @@ where
             Err(err) => vec![(err.to_string(), 0, 1)].to_stream(self),
         };
 
+        let snapshot = read.snapshot();
+
         // TODO: Plumb the name of the stream down through the handles and use
         // it for the operator.
-        let (ok_new, err_new_decode) =
-            operator::source(self, "PersistedSource", |capability, info| {
+        let (ok_all, err_all) = match snapshot {
+            Err(err) => {
+                (
+                    operator::empty(self),
+                    // TODO: Figure out how to make these retractable.
+                    vec![(format!("replaying persisted data: {}", err), 0, 1)].to_stream(self),
+                )
+            }
+            Ok(snapshot) => {
+                let snapshot_seal = snapshot.get_seal();
+
+                let (ok_new, err_new_decode) = operator::source(self, "PersistedSource", |mut capability, info| {
+
                 let worker_index = self.index();
                 let activator = self.activator_for(&info.address[..]);
+
+                if let Some(first) = snapshot_seal.first() {
+                    capability.downgrade(first);
+                }
+
                 let mut cap = Some(capability);
                 move |output| {
                     let mut done = false;
@@ -77,7 +96,13 @@ where
                                     // 0 because that was the simplest thing to do initially. Instead, we should
                                     // shard up the responsibility between all the workers.
                                     if worker_index == 0 {
-                                        session.give_vec(&mut records);
+                                        for record in records.drain(..) {
+                                            if snapshot_seal.less_equal(&record.1) {
+                                                session.give(record);
+                                            } else {
+                                                debug!("Got record that was not beyond the snapshot seal frontier. Frontier: {:?}, record.time: {:?}", snapshot_seal, record.1);
+                                            }
+                                        }
                                     }
                                     activator.activate();
                                 }
@@ -102,15 +127,20 @@ where
                 }
             })
             .ok_err(|u| flatten_decoded_update(u));
-        let err_new_decode = err_new_decode.flat_map(std::convert::identity);
 
-        // Replay the previously persisted data, if any.
-        let (ok_previous, err_previous) = operators::replay(self, &read);
+                let err_new_decode = err_new_decode.flat_map(std::convert::identity);
 
-        let ok_all = ok_previous.concat(&ok_new);
-        let err_all = err_previous
-            .concat(&err_new_register)
-            .concat(&err_new_decode);
+                // Replay the previously persisted data, if any.
+                let (ok_previous, err_previous) = operators::replay(self, snapshot);
+
+                let ok_all = ok_previous.concat(&ok_new);
+                let err_all = err_previous.concat(&err_new_decode);
+                (ok_all, err_all)
+            }
+        };
+
+        let err_all = err_all.concat(&err_new_register);
+
         (ok_all, err_all)
     }
 }
@@ -120,7 +150,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::Capture;
+    use timely::dataflow::operators::{Capture, Probe};
+    use timely::dataflow::ProbeHandle;
     use timely::Config;
 
     use crate::error::Error;
@@ -134,11 +165,11 @@ mod tests {
         let mut registry = MemRegistry::new();
         let p = registry.open("1", "lock 1")?;
 
-        let recv = timely::execute_directly(move |worker| {
-            let recv = worker.dataflow(|scope| {
+        let (oks, errs) = timely::execute_directly(move |worker| {
+            let (oks, errs) = worker.dataflow(|scope| {
                 let (_, read) = p.create_or_load::<String, ()>("1").unwrap();
-                let (ok_stream, _) = scope.persisted_source(&read);
-                ok_stream.capture()
+                let (ok_stream, err_stream) = scope.persisted_source(&read);
+                (ok_stream.capture(), err_stream.capture())
             });
 
             let (write, _) = p.create_or_load("1").unwrap();
@@ -149,17 +180,76 @@ mod tests {
                     .expect("write was successful");
             }
             write.seal(6).recv().expect("seal was successful");
-            recv
+            (oks, errs)
         });
 
-        let mut actual = recv
+        assert_eq!(
+            errs.extract()
+                .into_iter()
+                .flat_map(|(_time, data)| data.into_iter().map(|(err, _ts, _diff)| err))
+                .collect::<Vec<_>>(),
+            Vec::<String>::new()
+        );
+
+        let mut actual = oks
             .extract()
             .into_iter()
             .flat_map(|(_, xs)| xs.into_iter().map(|((k, _), _, _)| k))
             .collect::<Vec<_>>();
         actual.sort();
+
         let expected = (1usize..=5usize).map(|x| x.to_string()).collect::<Vec<_>>();
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    /// Verifies that `persisted_source()` correctly downgrades to the upper frontier
+    /// of already existing/sealed data when it is re-created based on an existing collection.
+    ///
+    /// There is no easy way to assert on a probe. Instead, we step the worker until the probe is
+    /// no longer `less_than` the expected timestamp. This test would hang if the source were not
+    /// working as expected.
+    #[test]
+    fn eager_capability_downgrade() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+
+        let seal_ts = {
+            let p = registry.open("1", "lock 1")?;
+
+            let (write, _) = p.create_or_load("1").unwrap();
+            for i in 1..=5 {
+                write
+                    .write(&[((i.to_string(), ()), i, 1)])
+                    .recv()
+                    .expect("write was successful");
+            }
+            write.seal(6).recv().expect("seal was successful");
+            6
+        };
+
+        let registry = Arc::new(Mutex::new(registry));
+
+        let result = timely::execute_directly(move |worker| {
+            let mut registry = registry.lock().expect("poisoned lock");
+            let p = registry.open("1", "lock 2").expect("missing registry");
+            let mut probe = ProbeHandle::new();
+
+            worker.dataflow(|scope| {
+                let (_, read) = p.create_or_load::<String, ()>("1").unwrap();
+                let (oks, _rrs) = scope.persisted_source(&read);
+
+                oks.probe_with(&mut probe);
+            });
+
+            while probe.less_than(&seal_ts) {
+                worker.step();
+            }
+
+            true
+        });
+
+        assert!(result);
 
         Ok(())
     }

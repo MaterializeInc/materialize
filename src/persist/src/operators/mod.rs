@@ -15,7 +15,7 @@ use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::Data as TimelyData;
 
-use crate::indexed::runtime::StreamReadHandle;
+use crate::indexed::runtime::DecodedSnapshot;
 use crate::indexed::Snapshot;
 use crate::Codec;
 
@@ -25,7 +25,7 @@ pub mod stream;
 
 fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Codec>(
     scope: &mut G,
-    read: &StreamReadHandle<K, V>,
+    mut snapshot: DecodedSnapshot<K, V>,
 ) -> (
     Stream<G, ((K, V), u64, isize)>,
     Stream<G, (String, u64, isize)>,
@@ -36,24 +36,17 @@ fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Code
     if scope.index() == 0 {
         // TODO: Do this with a timely operator that reads the snapshot.
         let (mut buf, mut ok, mut errors) = (Vec::new(), Vec::new(), Vec::new());
-        match read.snapshot() {
-            Ok(mut snap) => loop {
-                let ret = snap.read(&mut buf);
-                for update in buf.drain(..) {
-                    match flatten_decoded_update(update) {
-                        Ok(u) => ok.push(u),
-                        Err(errs) => errors.extend(errs),
-                    }
+        loop {
+            let ret = snapshot.read(&mut buf);
+            for update in buf.drain(..) {
+                match flatten_decoded_update(update) {
+                    Ok(u) => ok.push(u),
+                    Err(errs) => errors.extend(errs),
                 }
+            }
 
-                if ret == false {
-                    break;
-                }
-            },
-            Err(err) => {
-                // TODO: Figure out how to make these retractable.
-                let err_str = format!("replaying persisted data: {}", err);
-                errors.push((err_str, 0u64, 1isize));
+            if ret == false {
+                break;
             }
         }
         let ok_previous = ok.into_iter().to_stream(scope);
