@@ -147,6 +147,9 @@ struct Args {
     /// Default frequency with which to advance timestamps
     #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
+    /// Default frequency with which to scrape prometheus metrics
+    #[structopt(long, env = "MZ_METRICS_SCRAPING_FREQUENCY", hidden = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1s")]
+    metrics_scraping_frequency: OptionalDuration,
 
     /// [ADVANCED] Timely progress tracking mode.
     #[structopt(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
@@ -359,12 +362,14 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Configure Timely and Differential workers.
     let log_logging = args.debug_introspection;
     let retain_readings_for = args.retain_prometheus_metrics;
+    let metrics_scraping_frequency = args.metrics_scraping_frequency;
     let logging = args
         .introspection_frequency
         .map(|granularity| coord::LoggingConfig {
             granularity,
             log_logging,
             retain_readings_for,
+            metrics_scraping_frequency,
         });
     if log_logging && logging.is_none() {
         bail!(
