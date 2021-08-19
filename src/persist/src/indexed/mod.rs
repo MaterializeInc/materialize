@@ -831,14 +831,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// Apply a seal command to in-memory state if it is valid.
     fn do_seal(&mut self, ids: &[Id], seal_ts: u64) -> Result<(), Error> {
         for id in ids.iter() {
-            let prev = self.sealed_frontier(*id)?;
-
-            if !prev.less_than(&seal_ts) {
-                return Err(Error::from(format!(
-                    "invalid seal for {:?}: {:?} not in advance of current seal frontier {:?}",
-                    id, seal_ts, prev
-                )));
-            }
+            let trace = self
+                .traces
+                .get(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            trace.validate_seal(seal_ts)?;
         }
 
         for id in ids.iter() {
@@ -858,15 +855,20 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .push(PendingResponse::Unit(res, resp));
     }
 
-    fn do_allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
-        let trace = self
-            .traces
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let since = Antichain::from_elem(since);
+    fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), Error> {
+        for (id, since) in id_sinces.iter() {
+            let trace = self
+                .traces
+                .get(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            trace.validate_allow_compaction(since)?;
+        }
 
-        trace.allow_compaction(since)?;
+        for (id, since) in id_sinces {
+            let trace = self.traces.get_mut(&id).expect("trace known to exist");
 
+            trace.allow_compaction(since);
+        }
         Ok(())
     }
 
@@ -880,8 +882,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// TODO: it's unclear whether this function needs to be so restrictive about
     /// calls with a frontier <= current_compaction_frontier. We chose to mirror
     /// the `seal` API here but if that doesn't make sense, remove the restrictions.
-    pub fn allow_compaction(&mut self, id: Id, since: u64, res: FutureHandle<()>) {
-        let response = self.do_allow_compaction(id, since);
+    pub fn allow_compaction(
+        &mut self,
+        id_sinces: Vec<(Id, Antichain<u64>)>,
+        res: FutureHandle<()>,
+    ) {
+        let response = self.do_allow_compaction(id_sinces);
         self.pending_responses
             .push(PendingResponse::Unit(res, response));
     }
@@ -1133,7 +1139,9 @@ mod tests {
         assert_eq!(listen_received, updates);
 
         // Can advance compaction frontier to a time that has already been sealed
-        block_on_drain(&mut i, |i, handle| i.allow_compaction(id, 2, handle))?;
+        block_on_drain(&mut i, |i, handle| {
+            i.allow_compaction(vec![(id, Antichain::from_elem(2))], handle)
+        })?;
 
         Ok(())
     }
