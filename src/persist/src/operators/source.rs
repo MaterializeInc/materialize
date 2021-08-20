@@ -9,13 +9,14 @@
 
 //! A Timely Dataflow operator that mirrors a persisted stream.
 
-use std::sync::mpsc::{self, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use log::debug;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
@@ -75,60 +76,9 @@ where
             Ok(snapshot) => {
                 let snapshot_seal = snapshot.get_seal();
 
-                let (ok_new, err_new_decode) = operator::source(self, "PersistedSource", |mut capability, info| {
-
-                let worker_index = self.index();
-                let activator = self.activator_for(&info.address[..]);
-
-                if let Some(first) = snapshot_seal.first() {
-                    capability.downgrade(first);
-                }
-
-                let mut cap = Some(capability);
-                move |output| {
-                    let mut done = false;
-                    if let Some(cap) = cap.as_mut() {
-                        let mut session = output.session(cap);
-                        match listen_rx.try_recv() {
-                            Ok(e) => match e {
-                                ListenEvent::Records(mut records) => {
-                                    // TODO: This currently works by only emitting the persisted data on worker
-                                    // 0 because that was the simplest thing to do initially. Instead, we should
-                                    // shard up the responsibility between all the workers.
-                                    if worker_index == 0 {
-                                        for record in records.drain(..) {
-                                            if snapshot_seal.less_equal(&record.1) {
-                                                session.give(record);
-                                            } else {
-                                                debug!("Got record that was not beyond the snapshot seal frontier. Frontier: {:?}, record.time: {:?}", snapshot_seal, record.1);
-                                            }
-                                        }
-                                    }
-                                    activator.activate();
-                                }
-                                ListenEvent::Sealed(ts) => {
-                                    cap.downgrade(&ts);
-                                    activator.activate();
-                                }
-                            },
-                            Err(TryRecvError::Empty) => {
-                                // TODO: Hook the activator up to the callback instead of
-                                // TryRecvError::Empty.
-                                activator.activate_after(Duration::from_millis(100));
-                            }
-                            Err(TryRecvError::Disconnected) => {
-                                done = true;
-                            }
-                        }
-                    }
-                    if done {
-                        cap = None;
-                    }
-                }
-            })
-            .ok_err(|u| flatten_decoded_update(u));
-
-                let err_new_decode = err_new_decode.flat_map(std::convert::identity);
+                // listen to new data
+                let (ok_new, err_new) = listen_source(self, snapshot_seal, listen_rx);
+                let err_new_decode = err_new.flat_map(std::convert::identity);
 
                 // Replay the previously persisted data, if any.
                 let (ok_previous, err_previous) = operators::replay(self, snapshot);
@@ -143,6 +93,81 @@ where
 
         (ok_all, err_all)
     }
+}
+
+/// Creates a source that listens on the given `listen_rx` and gates (filters out)
+/// updates by the given `gate_frontier`.
+fn listen_source<S, K, V>(
+    scope: &S,
+    lower_filter: Antichain<u64>,
+    listen_rx: Receiver<ListenEvent<Result<K, String>, Result<V, String>>>,
+) -> (
+    Stream<S, ((K, V), u64, isize)>,
+    Stream<S, Vec<(String, u64, isize)>>,
+)
+where
+    S: Scope<Timestamp = u64>,
+    K: TimelyData + Codec + Send,
+    V: TimelyData + Codec + Send,
+{
+    let source_stream = operator::source(scope, "PersistedSource", |mut capability, info| {
+        let worker_index = scope.index();
+        let activator = scope.activator_for(&info.address[..]);
+
+        // For Antichain<u64> there can only ever be one element, because
+        // u64 has a total order. If we ever change this to an Antichain<T>
+        // where we only have T: PartialOrder, this would change. If we have
+        // that, though, I don't think we can downgrade this capability because
+        // downgrading can only happen when `old_ts` <= `new_ts`, which is not
+        // the case when an Antichain has multiple elements.
+        for element in lower_filter.iter() {
+            capability.downgrade(element);
+        }
+
+        let mut cap = Some(capability);
+        move |output| {
+            let mut done = false;
+            if let Some(cap) = cap.as_mut() {
+                let mut session = output.session(cap);
+                match listen_rx.try_recv() {
+                    Ok(e) => match e {
+                        ListenEvent::Records(mut records) => {
+                            // TODO: This currently works by only emitting the persisted data on worker
+                            // 0 because that was the simplest thing to do initially. Instead, we should
+                            // shard up the responsibility between all the workers.
+                            if worker_index == 0 {
+                                for record in records.drain(..) {
+                                    if lower_filter.less_equal(&record.1) {
+                                        session.give(record);
+                                    } else {
+                                        debug!("Got record that was not beyond the lower snapshot filter. lower_filter: {:?}, record time: {:?}", lower_filter, record.1);
+                                    }
+                                }
+                            }
+                            activator.activate();
+                        }
+                        ListenEvent::Sealed(ts) => {
+                            cap.downgrade(&ts);
+                            activator.activate();
+                        }
+                    },
+                    Err(TryRecvError::Empty) => {
+                        // TODO: Hook the activator up to the callback instead of
+                        // TryRecvError::Empty.
+                        activator.activate_after(Duration::from_millis(100));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        done = true;
+                    }
+                }
+            }
+            if done {
+                cap = None;
+            }
+        }
+    });
+
+    source_stream.ok_err(|u| flatten_decoded_update(u))
 }
 
 #[cfg(test)]
