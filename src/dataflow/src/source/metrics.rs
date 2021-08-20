@@ -75,7 +75,7 @@ impl KinesisMetrics {
             millis_behind_latest: registry.register(metric!(
                 name: "mz_kinesis_shard_millis_behind_latest",
                 help: "How far the shard is behind the tip of the stream",
-                var_labels: ["worker_id", "source_id", "stream_name", "shard_id"],
+                var_labels: ["stream_name", "shard_id"],
             )),
         }
     }
