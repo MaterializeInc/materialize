@@ -1469,6 +1469,21 @@ lazy_static! {
                 // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
                 params!(Int64) => sql_op!("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END"), 1597;
             },
+            // pg_get_expr is meant to convert the textual version of
+            // pg_node_tree data into parseable expressions. However, we don't
+            // use the pg_get_expr structure anywhere and the equivalent columns
+            // in Materialize (e.g. index expressions) are already stored as
+            // parseable expressions. So, we offer this function in the catalog
+            // for ORM support, but make no effort to provide its semantics,
+            // e.g. this also means we drop the Oid argument on the floor.
+            "pg_get_expr" => Scalar {
+                params!(String, Oid) => {
+                    Operation::binary(|_ecx, l, _r| Ok(l))
+                }, 1716;
+                params!(String, Oid, Bool) => {
+                    Operation::variadic(move |_ecx, mut args| Ok(args.remove(0)))
+                }, 2509;
+            },
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'"), 1642;
             },
