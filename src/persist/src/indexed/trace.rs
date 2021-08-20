@@ -298,8 +298,10 @@ impl Trace {
 
     /// Take one step towards compacting the trace.
     ///
-    /// Returns true if the trace was modified, false otherwise.
-    pub fn step<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<bool, Error> {
+    /// Returns a list of trace batches that can now be physically deleted after
+    /// the compaction step is committed to durable storage.
+    pub fn step<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<Vec<String>, Error> {
+        let mut deleted = vec![];
         // TODO: should we remember our position in this list?
         for i in 1..self.batches.len() {
             if (self.batches[i - 1].level == self.batches[i].level)
@@ -310,6 +312,8 @@ impl Trace {
 
                 let new_batch = self.merge(&first, &second, blob)?;
 
+                deleted.push(self.batches[i].key.clone());
+                deleted.push(self.batches[i - 1].key.clone());
                 // TODO: more performant way to do this?
                 self.batches.remove(i);
                 self.batches[i - 1] = new_batch;
@@ -320,10 +324,10 @@ impl Trace {
                     self.meta().validate()?;
                 }
 
-                return Ok(true);
+                break;
             }
         }
-        Ok(false)
+        Ok(deleted)
     }
 }
 
@@ -441,7 +445,17 @@ mod tests {
 
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
         t.allow_compaction(Antichain::from_elem(3));
-        t.step(&mut blob)?;
+        assert_eq!(
+            t.step(&mut blob),
+            Ok(vec![
+                "Id(0)-trace-1".to_string(),
+                "Id(0)-trace-0".to_string()
+            ])
+        );
+
+        // Check that step doesn't do anything when there's nothing to compact.
+        assert_eq!(t.step(&mut blob), Ok(vec![]));
+
         let batch_meta: Vec<_> = t
             .batches
             .iter()

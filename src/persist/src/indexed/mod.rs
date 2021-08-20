@@ -490,16 +490,36 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     }
 
     fn compact_inner(&mut self) -> Result<(), Error> {
+        let mut deleted_unsealed_batches = vec![];
+        let mut deleted_trace_batches = vec![];
         for (id, trace) in self.traces.iter_mut() {
             let unsealed = self
                 .unsealeds
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-            unsealed.truncate(trace.ts_upper())?;
-            trace.step(&mut self.blob)?;
+            deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
+            deleted_trace_batches.extend(trace.step(&mut self.blob)?);
         }
 
         self.try_set_meta()?;
+
+        // After we've committed our logical deletions to durable storage, we can
+        // physically delete the data.
+        //
+        // TODO: if there's an error in the middle of the deletions then any
+        // undeleted blobs will forever be orphaned. We could instead retain a
+        // pending_deletes list but we would lose that across restarts unless we
+        // wrote it to persistent storage. Alternatively, we should expose a list
+        // method on blob and have a periodic cleanup task that attempts to find
+        // and delete unused blobs. We could also use the list method to verify
+        // that all referenced blobs exist.
+        for batch in deleted_unsealed_batches {
+            self.blob.delete_unsealed_batch(&batch)?;
+        }
+
+        for batch in deleted_trace_batches {
+            self.blob.delete_trace_batch(&batch)?;
+        }
 
         Ok(())
     }

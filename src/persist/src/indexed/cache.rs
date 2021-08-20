@@ -138,6 +138,19 @@ impl<B: Blob> BlobCache<B> {
         Ok(val_len)
     }
 
+    /// Removes a batch from both [Blob] storage and the local cache.
+    pub fn delete_unsealed_batch(&mut self, key: &str) -> Result<(), Error> {
+        let delete_start = Instant::now();
+        self.unsealed.lock()?.remove(key);
+        self.blob.lock()?.delete(key)?;
+        self.metrics
+            .blob_delete_ms
+            .inc_by(metric_duration_ms(delete_start.elapsed()));
+        self.metrics.blob_delete_count.inc();
+
+        Ok(())
+    }
+
     /// Returns the batch for the given key, blocking to fetch if it's not
     /// already in the cache.
     pub fn get_trace_batch(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
@@ -195,6 +208,19 @@ impl<B: Blob> BlobCache<B> {
 
         self.trace.lock()?.insert(key, Arc::new(batch));
         Ok(val_len)
+    }
+
+    /// Removes a batch from both [Blob] storage and the local cache.
+    pub fn delete_trace_batch(&mut self, key: &str) -> Result<(), Error> {
+        let delete_start = Instant::now();
+        self.trace.lock()?.remove(key);
+        self.blob.lock()?.delete(key)?;
+        self.metrics
+            .blob_delete_ms
+            .inc_by(metric_duration_ms(delete_start.elapsed()));
+        self.metrics.blob_delete_count.inc();
+
+        Ok(())
     }
 
     /// Fetches metadata about what batches are in [Blob] storage.
