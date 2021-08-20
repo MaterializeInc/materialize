@@ -1528,11 +1528,12 @@ mod tests {
         });
 
         let rows = client
-            .query("SELECT oid, proname FROM pg_proc", &[])
+            .query("SELECT oid, proname, proargtypes FROM pg_proc", &[])
             .await?;
 
         struct PgProc {
             name: String,
+            arg_oids: Vec<u32>,
         }
 
         let mut pg_proc = HashMap::new();
@@ -1542,6 +1543,7 @@ mod tests {
                 oid,
                 PgProc {
                     name: row.get("proname"),
+                    arg_oids: row.get("proargtypes"),
                 },
             );
         }
@@ -1574,6 +1576,15 @@ mod tests {
                         "funcs with oid {} don't match names: {} in mz, {} in pg",
                         imp.oid, func.name, pg_fn.name
                     );
+
+                    // Complain, but don't fail, if argument oids don't match.
+                    // TODO: make these match.
+                    if imp.arg_oids != pg_fn.arg_oids {
+                        println!(
+                            "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
+                            imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
+                        );
+                    }
                 }
             }
         }
