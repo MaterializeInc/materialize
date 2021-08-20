@@ -79,7 +79,8 @@ mz::PeekResults mz::peekView(pqxx::connection &c, const std::string &name, const
         try {
             return w.exec(query);
         } catch (const pqxx::sql_error &e) {
-            if (!strstr(e.what(), "At least one input has no complete timestamps yet")) {
+            // 03000 is the SQLSTATE code for SQL_STATEMENT_NOT_YET_COMPLETE
+            if (e.sqlstate() == "03000") {
                 throw;
             } else {
                 fprintf(stderr, "WARNING: ignoring \"no complete timestamps\" error.");
