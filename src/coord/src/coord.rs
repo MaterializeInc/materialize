@@ -1182,6 +1182,53 @@ impl Coordinator {
         }
     }
 
+    /// Forward the subset of since updates that belong to persisted tables'
+    /// primary indexes to the persisted tables themselves.
+    ///
+    /// TODO: In the future the coordinator should perhaps track a table's upper and
+    /// since frontiers directly as it currently does for sources.
+    fn persisted_table_allow_compaction(&self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
+        let mut table_since_updates = vec![];
+        for (id, frontier) in since_updates.iter() {
+            // Not all ids will be present in the catalog however, those that are
+            // in the catalog must also have their dependencies in the catalog as
+            // well.
+            let item = self.catalog.try_get_by_id(*id).map(|e| e.item());
+            if let Some(CatalogItem::Index(catalog::Index { on, .. })) = item {
+                if let CatalogItem::Table(catalog::Table {
+                    persist: Some(persist),
+                    ..
+                }) = self.catalog.get_by_id(on).item()
+                {
+                    if self.catalog.default_index_for(*on) == Some(*id) {
+                        table_since_updates
+                            .push((persist.write_handle.stream_id(), frontier.clone()));
+                    }
+                }
+            }
+        }
+
+        if !table_since_updates.is_empty() {
+            let persist_multi = match self.catalog.persist_multi_details() {
+                Some(multi) => multi,
+                None => {
+                    log::error!("internal error: persist_multi_details invariant violated");
+                    return;
+                }
+            };
+
+            let compaction_res = persist_multi
+                .write_handle
+                .allow_compaction(&table_since_updates);
+            let _ = tokio::spawn(async move {
+                if let Err(err) = compaction_res.into_future().await {
+                    // TODO: Do something smarter here
+                    log::error!("failed to compact persisted tables: {}", err);
+                }
+            });
+        }
+    }
+
     /// Perform maintenance work associated with the coordinator.
     ///
     /// Primarily, this involves sequencing compaction commands, which should be
@@ -1199,6 +1246,7 @@ impl Coordinator {
             .collect();
 
         if !since_updates.is_empty() {
+            self.persisted_table_allow_compaction(&since_updates);
             self.broadcast(dataflow::Command::AllowCompaction(since_updates));
         }
     }

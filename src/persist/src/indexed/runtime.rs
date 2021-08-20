@@ -355,7 +355,7 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
     }
 
     /// Unblocks compaction for updates at or before `since`.
-    pub fn allow_compaction(&mut self, since: Antichain<u64>) -> Future<()> {
+    pub fn allow_compaction(&self, since: Antichain<u64>) -> Future<()> {
         let (tx, rx) = Future::new();
         self.runtime.allow_compaction(&[(self.id, since)], tx);
         rx
