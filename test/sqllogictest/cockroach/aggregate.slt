@@ -1106,17 +1106,19 @@ CREATE TABLE string_agg_test (
   employee TEXT
 )
 
-statement error supported
+query TT
 SELECT company_id, string_agg(employee, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
 
-statement error supported
+query TT
 SELECT company_id, string_agg(employee, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
 
 statement OK
 INSERT INTO string_agg_test VALUES
@@ -1131,22 +1133,37 @@ INSERT INTO string_agg_test VALUES
   (9, 3, 'C'),
   (10, 2, 'B')
 
-query error supported
+query TT
 SELECT company_id, string_agg(employee, employee)
 FROM string_agg_test
 GROUP BY company_id;
+----
+1  A
+2  BBB
+3  CCCCC
+4  DDDDDDD
 
-query error supported
+query TT
 SELECT company_id, string_agg(employee, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
+1  A
+2  B,B
+3  C,C,C
+4  D,D,D,D
 
-query error supported
+query TT
 SELECT company_id, string_agg(DISTINCT employee, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
+1  A
+2  B
+3  C
+4  D
 
 query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b',')
@@ -1154,11 +1171,16 @@ FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
 
-query error supported
+query TT
 SELECT company_id, string_agg(employee, '')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
+1  A
+2  BB
+3  CCC
+4  DDDD
 
 query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b'')
@@ -1166,11 +1188,16 @@ FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
 
-query error supported
+query TT
 SELECT company_id, string_agg(employee, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
+1  A
+2  BB
+3  CCC
+4  DDDD
 
 query error supported
 SELECT company_id, string_agg(employee::BYTEA, NULL)
@@ -1178,11 +1205,16 @@ FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
 
-query error supported
+query TT
 SELECT company_id, string_agg(NULL::TEXT, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
+1  NULL
+2  NULL
+3  NULL
+4  NULL
 
 query error supported
 SELECT company_id, string_agg(NULL::BYTEA, ',')
@@ -1190,11 +1222,16 @@ FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
 
-query error supported
+query TT
 SELECT company_id, string_agg(NULL::TEXT, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
+1  NULL
+2  NULL
+3  NULL
+4  NULL
 
 query error supported
 SELECT company_id, string_agg(NULL::BYTEA, NULL)
@@ -1202,11 +1239,16 @@ FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
 
-query error supported
+query TT
 SELECT company_id, string_agg(NULL, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
+----
+1  NULL
+2  NULL
+3  NULL
+4  NULL
 
 # Now test the window function version of string_agg.
 
@@ -1326,7 +1368,7 @@ INSERT INTO string_agg_test2 VALUES
   (3, 1, 'C'),
   (4, 1, 'D')
 
-query error supported
+query TT
 SELECT e.company_id, string_agg(e.employee, ', ')
 FROM (
   SELECT employee, company_id
@@ -1335,6 +1377,8 @@ FROM (
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
+----
+1  A,␠B,␠C,␠D
 
 query error unknown catalog item 'b'
 SELECT e.company_id, string_agg(e.employee, b', ')
@@ -1346,7 +1390,8 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-query error supported
+# This will differ from PG until we close https://github.com/MaterializeInc/materialize/issues/2415
+query TT
 SELECT e.company_id, string_agg(e.employee, ', ')
 FROM (
   SELECT employee, company_id
@@ -1355,6 +1400,8 @@ FROM (
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
+----
+1  A,␠B,␠C,␠D
 
 query error unknown catalog item 'b'
 SELECT e.company_id, string_agg(e.employee, b', ')
@@ -1366,7 +1413,8 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-query error supported
+# This will differ from PG until we close https://github.com/MaterializeInc/materialize/issues/2415
+query TT
 SELECT e.company_id, string_agg(e.employee, NULL)
 FROM (
   SELECT employee, company_id
@@ -1375,6 +1423,8 @@ FROM (
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
+----
+1  ABCD
 
 query error supported
 SELECT e.company_id, string_agg(e.employee, NULL)

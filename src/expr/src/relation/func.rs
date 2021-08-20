@@ -416,6 +416,41 @@ where
         })
 }
 
+fn string_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    const EMPTY_SEP: &'static str = "";
+
+    let mut sep_value_pairs = datums.into_iter().filter_map(|d| {
+        if d.is_null() {
+            return None;
+        }
+        let mut value_sep = d.unwrap_list().iter();
+        match (value_sep.next().unwrap(), value_sep.next().unwrap()) {
+            (Datum::Null, _) => None,
+            (Datum::String(val), Datum::Null) => Some((EMPTY_SEP, val)),
+            (Datum::String(val), Datum::String(sep)) => Some((sep, val)),
+            _ => unreachable!(),
+        }
+    });
+
+    let mut s = String::default();
+    match sep_value_pairs.next() {
+        // First value not prefixed by its separator
+        Some((_, value)) => s.push_str(value),
+        // If no non-null values sent, return NULL.
+        None => return Datum::Null,
+    }
+
+    for (sep, value) in sep_value_pairs {
+        s.push_str(sep);
+        s.push_str(value);
+    }
+
+    Datum::String(temp_storage.push_string(s))
+}
+
 fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -530,6 +565,7 @@ pub enum AggregateFunc {
     ArrayConcat,
     /// Accumulates `Datum::List`s into a single `Datum::List`.
     ListConcat,
+    StringAgg,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -578,6 +614,7 @@ impl AggregateFunc {
             AggregateFunc::JsonbObjectAgg => jsonb_object_agg(datums, temp_storage),
             AggregateFunc::ArrayConcat => array_concat(datums, temp_storage),
             AggregateFunc::ListConcat => list_concat(datums, temp_storage),
+            AggregateFunc::StringAgg => string_agg(datums, temp_storage),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -625,6 +662,7 @@ impl AggregateFunc {
             // Inputs are coerced to the correct container type, so the input_type is
             // already correct.
             AggregateFunc::ArrayConcat | AggregateFunc::ListConcat => input_type.scalar_type,
+            AggregateFunc::StringAgg => ScalarType::String,
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -672,7 +710,8 @@ impl AggregateFunc {
             | AggregateFunc::SumInt64
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
-            | AggregateFunc::SumNumeric => true,
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::StringAgg => true,
             // Count is never null
             AggregateFunc::Count => false,
             _ => false,
@@ -800,6 +839,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::JsonbObjectAgg => f.write_str("jsonb_object_agg"),
             AggregateFunc::ArrayConcat => f.write_str("array_agg"),
             AggregateFunc::ListConcat => f.write_str("list_agg"),
+            AggregateFunc::StringAgg => f.write_str("string_agg"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

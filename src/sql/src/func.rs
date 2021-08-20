@@ -1783,7 +1783,16 @@ lazy_static! {
                 }), 3270;
             },
             "string_agg" => Aggregate {
-                params!(Any, String) => Operation::binary(|_ecx, _lhs, _rhs| unsupported!("string_agg")), 3538;
+                params!(String, String) => Operation::binary(|_ecx, value, sep| {
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("value"), ColumnName::from("sep")],
+                        },
+                        exprs: vec![value, sep],
+                    };
+                    Ok((e, AggregateFunc::StringAgg))
+                }), 3538;
+                params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| unsupported!("string_agg")), 3545;
             },
             "sum" => Aggregate {
                 params!(Int16) => AggregateFunc::SumInt32, 2109;
