@@ -1014,6 +1014,14 @@ impl IndexedSnapshot {
     pub fn seqno(&self) -> SeqNo {
         self.2
     }
+
+    /// Returns the since frontier of this snapshot.
+    ///
+    /// All updates at times less than this frontier must be forwarded
+    /// to some time in this frontier.
+    pub fn since(&self) -> Antichain<u64> {
+        self.1.since.clone()
+    }
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {

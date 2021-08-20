@@ -21,6 +21,7 @@ use std::time::Instant;
 
 use log;
 use ore::metrics::MetricsRegistry;
+use timely::progress::Antichain;
 
 use crate::error::Error;
 use crate::future::{Future, FutureHandle};
@@ -478,6 +479,14 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     /// All writes assigned a seqno < this are included.
     pub fn seqno(&self) -> SeqNo {
         self.snap.seqno()
+    }
+
+    /// Returns the since frontier of this snapshot.
+    ///
+    /// All updates at times less than this frontier must be forwarded
+    /// to some time in this frontier.
+    pub fn since(&self) -> Antichain<u64> {
+        self.snap.since()
     }
 }
 
