@@ -33,10 +33,10 @@ use std::default::Default;
 use std::fmt::Formatter;
 use std::io::Read;
 use std::ops::AddAssign;
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::anyhow;
 use flate2::read::MultiGzDecoder;
+use futures::FutureExt;
 use globset::GlobMatcher;
 use rusoto_core::RusotoError;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
@@ -46,7 +46,7 @@ use rusoto_sqs::{
 };
 use timely::scheduling::SyncActivator;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc as tokio_mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
@@ -85,8 +85,18 @@ pub struct S3SourceReader {
     id: SourceInstanceId,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<S3Result<InternalMessage>>,
+    dataflow_status: tokio::sync::watch::Sender<DataflowStatus>,
     /// Total number of records that this source has read
     offset: S3Offset,
+}
+
+/// Current dataflow status
+///
+/// Used to signal the S3 and SQS services to shut down
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum DataflowStatus {
+    Running,
+    Stopped,
 }
 
 /// Number of records This source has downloaded
@@ -115,8 +125,9 @@ struct KeyInfo {
 
 async fn download_objects_task(
     source_id: String,
-    mut rx: tokio_mpsc::Receiver<S3Result<KeyInfo>>,
-    tx: SyncSender<S3Result<InternalMessage>>,
+    mut rx: Receiver<S3Result<KeyInfo>>,
+    tx: Sender<S3Result<InternalMessage>>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
     compression: Compression,
@@ -126,6 +137,7 @@ async fn download_objects_task(
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(S3Error::ClientConstructionFailed(e)))
+                .await
                 .unwrap_or_else(|e| {
                     log::debug!("unable to send error on stream creating s3 client: {}", e)
                 });
@@ -139,7 +151,26 @@ async fn download_objects_task(
     }
     let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
 
-    while let Some(msg) = rx.recv().await {
+    loop {
+        let msg = tokio::select! {
+            msg = rx.recv() => {
+                if let Some(msg) = msg {
+                    msg
+                } else {
+                    break;
+                }
+            }
+            status = shutdown_rx.changed() => {
+                if status.is_ok() {
+                    if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
+                        log::debug!("source_id={} download_objects received dataflow shutdown message", source_id);
+                        break;
+                    }
+                }
+                continue;
+            }
+        };
+
         match msg {
             Ok(msg) => {
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
@@ -206,7 +237,7 @@ async fn download_objects_task(
                 match status {
                     // Retry making it out of the retry loop means retries failed
                     DownloadStatus::Retry(e) => {
-                        if tx.send(Err(e)).is_err() {
+                        if tx.send(Err(e)).await.is_err() {
                             rx.close();
                             break;
                         };
@@ -227,7 +258,7 @@ async fn download_objects_task(
                 };
             }
             Err(e) => {
-                if tx.send(Err(e)).is_err() {
+                if tx.send(Err(e)).await.is_err() {
                     rx.close();
                     break;
                 }
@@ -242,7 +273,7 @@ async fn scan_bucket_task(
     source_id: String,
     glob: Option<GlobMatcher>,
     aws_info: aws::ConnectInfo,
-    tx: tokio_mpsc::Sender<S3Result<KeyInfo>>,
+    tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
     let client = match aws_util::client::s3(aws_info) {
@@ -373,7 +404,8 @@ async fn read_sqs_task(
     glob: Option<GlobMatcher>,
     queue: String,
     aws_info: aws::ConnectInfo,
-    tx: tokio_mpsc::Sender<S3Result<KeyInfo>>,
+    tx: Sender<S3Result<KeyInfo>>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
 ) {
     log::debug!(
@@ -426,16 +458,26 @@ async fn read_sqs_task(
 
     let mut allowed_errors = 10;
     'outer: loop {
-        let response = client
-            .receive_message(ReceiveMessageRequest {
-                max_number_of_messages: Some(10),
-                queue_url: queue_url.clone(),
-                visibility_timeout: Some(500),
-                // the maximum possible time for a long poll
-                wait_time_seconds: Some(20),
-                ..Default::default()
-            })
-            .await;
+        let sqs_fut = client.receive_message(ReceiveMessageRequest {
+            max_number_of_messages: Some(10),
+            queue_url: queue_url.clone(),
+            visibility_timeout: Some(500),
+            // the maximum possible time for a long poll
+            wait_time_seconds: Some(20),
+            ..Default::default()
+        });
+        let response = tokio::select! {
+            response = sqs_fut => response,
+            status = shutdown_rx.changed() => {
+                if status.is_ok() {
+                    if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
+                        log::debug!("source_id={} scan_sqs received dataflow shutdown message", source_id);
+                        break;
+                    }
+                }
+                continue;
+            }
+        };
 
         match response {
             Ok(response) => {
@@ -522,7 +564,7 @@ async fn process_message(
     base_metrics: SourceBaseMetrics,
     metrics: &mut HashMap<String, ScanBucketMetrics>,
     source_id: &str,
-    tx: &tokio_mpsc::Sender<S3Result<KeyInfo>>,
+    tx: &Sender<S3Result<KeyInfo>>,
     client: &rusoto_sqs::SqsClient,
     queue_url: &str,
 ) -> Option<(rusoto_sqs::Message, String)> {
@@ -667,7 +709,7 @@ impl std::fmt::Display for S3Error {
 type S3Result<R> = Result<R, S3Error>;
 
 async fn download_object(
-    tx: &SyncSender<S3Result<InternalMessage>>,
+    tx: &Sender<S3Result<InternalMessage>>,
     activator: &SyncActivator,
     client: &S3Client,
     bucket: &str,
@@ -754,7 +796,7 @@ async fn download_object(
                     let sent = tx.send(Ok(InternalMessage {
                         record: MessagePayload::Data(chunk),
                     }));
-                    if sent.is_err() {
+                    if sent.await.is_err() {
                         log::debug!("source_id={} unable to send chunk to dataflow", source_id);
                         download_status = DownloadStatus::SendFailed;
                         break;
@@ -768,7 +810,7 @@ async fn download_object(
                     let sent = tx.send(Ok(InternalMessage {
                         record: MessagePayload::EOF,
                     }));
-                    if sent.is_err() {
+                    if sent.await.is_err() {
                         log::debug!("source_id={} unable to send EOF to dataflow", source_id);
                         download_status = DownloadStatus::SendFailed;
                     }
@@ -813,15 +855,18 @@ impl SourceReader for S3SourceReader {
         };
 
         // a single arbitrary worker is responsible for scanning the bucket
-        let receiver = {
-            let (dataflow_tx, dataflow_rx) = std::sync::mpsc::sync_channel(10_000);
-            let (keys_tx, keys_rx) = tokio_mpsc::channel(10_000);
+        let (receiver, shutdowner) = {
+            let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(10_000);
+            let (keys_tx, keys_rx) = tokio::sync::mpsc::channel(10_000);
+            let (shutdowner, shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Running);
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
+
             tokio::spawn(download_objects_task(
                 source_id.to_string(),
                 keys_rx,
                 dataflow_tx,
+                shutdown_rx.clone(),
                 aws_info.clone(),
                 consumer_activator,
                 s3_conn.compression,
@@ -858,12 +903,13 @@ impl SourceReader for S3SourceReader {
                             queue,
                             aws_info.clone(),
                             keys_tx.clone(),
+                            shutdown_rx.clone(),
                             metrics.clone(),
                         ));
                     }
                 }
             }
-            dataflow_rx
+            (dataflow_rx, shutdowner)
         };
 
         Ok((
@@ -871,6 +917,7 @@ impl SourceReader for S3SourceReader {
                 source_name,
                 id: source_id,
                 receiver_stream: receiver,
+                dataflow_status: shutdowner,
                 offset: S3Offset(0),
             },
             Some(PartitionId::None),
@@ -878,8 +925,8 @@ impl SourceReader for S3SourceReader {
     }
 
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
-        match self.receiver_stream.try_recv() {
-            Ok(Ok(InternalMessage { record })) => {
+        match self.receiver_stream.recv().now_or_never() {
+            Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
                     partition: PartitionId::None,
@@ -889,7 +936,7 @@ impl SourceReader for S3SourceReader {
                     payload: Some(record),
                 }))
             }
-            Ok(Err(e)) => {
+            Some(Some(Err(e))) => {
                 log::warn!(
                     "when reading source '{}' ({}): {}",
                     self.source_name,
@@ -908,9 +955,18 @@ impl SourceReader for S3SourceReader {
                     | S3Error::Read(_) => Ok(NextMessage::Pending),
                 }
             }
-            Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
-            Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
+            None => Ok(NextMessage::Pending),
+            Some(None) => Ok(NextMessage::Finished),
         }
+    }
+}
+
+impl Drop for S3SourceReader {
+    fn drop(&mut self) {
+        log::debug!("source_id={} Dropping S3SourceReader", self.id);
+        if let Err(e) = self.dataflow_status.send(DataflowStatus::Stopped) {
+            log::warn!("unable to send shutdown update: {}", e);
+        };
     }
 }
 
