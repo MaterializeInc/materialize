@@ -20,8 +20,17 @@ mod tests {
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
-    use expr_test_util::{build_rel, TestCatalog};
+    use expr::MirRelationExpr;
+    use expr_test_util::{build_rel, json_to_spec, TestCatalog};
+    use ore::str::separated;
     use transform::{Optimizer, Transform, TransformArgs};
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+    enum FormatType<'a> {
+        Explain(Option<&'a Vec<String>>),
+        Json,
+        Test,
+    }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     enum TestType {
@@ -30,14 +39,42 @@ mod tests {
         Steps,
     }
 
+    // Converts string to MirRelationExpr. `args[in]` specifies which input
+    // is being used.
+    fn parse_relation(
+        s: &str,
+        cat: &TestCatalog,
+        args: &HashMap<String, Vec<String>>,
+    ) -> Result<MirRelationExpr, Error> {
+        if let Some(input_format) = args.get("in") {
+            if input_format.contains(&"json".to_string()) {
+                return serde_json::from_str::<MirRelationExpr>(s).map_err(|e| anyhow!(e));
+            }
+        }
+        build_rel(s, cat).map_err(|e| anyhow!(e))
+    }
+
+    // Converts MirRelationExpr back. `args[format]` specifies which output
+    // format to use.
+    fn convert_rel_to_string(
+        rel: &MirRelationExpr,
+        cat: &TestCatalog,
+        format_type: &FormatType,
+    ) -> String {
+        match format_type {
+            FormatType::Test => json_to_spec(&serde_json::to_string(rel).unwrap(), cat).0,
+            FormatType::Json => serde_json::to_string(rel).unwrap(),
+            FormatType::Explain(format) => cat.generate_explanation(rel, *format),
+        }
+    }
+
     fn run_testcase(
         s: &str,
         cat: &TestCatalog,
         args: &HashMap<String, Vec<String>>,
         test_type: TestType,
     ) -> Result<String, Error> {
-        let mut rel = build_rel(s, cat).map_err(|e| anyhow!(e))?;
-
+        let mut rel = parse_relation(s, cat, args)?;
         let mut id_gen = Default::default();
         let indexes = HashMap::new();
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
@@ -50,14 +87,26 @@ mod tests {
             )?;
         }
 
-        match test_type {
+        let format_type = if let Some(format) = args.get("format") {
+            if format.contains(&"test".to_string()) {
+                FormatType::Test
+            } else if format.contains(&"json".to_string()) {
+                FormatType::Json
+            } else {
+                FormatType::Explain(args.get("format"))
+            }
+        } else {
+            FormatType::Explain(args.get("format"))
+        };
+
+        let out = match test_type {
             TestType::Opt => {
                 let mut opt = Optimizer::for_dataflow();
                 rel = opt.optimize(rel, &HashMap::new()).unwrap().into_inner();
 
-                Ok(cat.generate_explanation(&rel, args.get("format")))
+                convert_rel_to_string(&rel, &cat, &format_type)
             }
-            TestType::Build => Ok(cat.generate_explanation(&rel, args.get("format"))),
+            TestType::Build => convert_rel_to_string(&rel, &cat, &format_type),
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
                 // that helpful for optimizations that involve those (which is most of them).
@@ -66,11 +115,7 @@ mod tests {
                 // Buffer of the names of the transformations that have been applied with no changes.
                 let mut no_change: Vec<String> = Vec::new();
 
-                writeln!(
-                    out,
-                    "{}",
-                    cat.generate_explanation(&rel, args.get("format"))
-                )?;
+                writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
                 writeln!(out, "====")?;
 
                 for transform in opt.transforms.iter() {
@@ -96,11 +141,7 @@ mod tests {
                         no_change = vec![];
 
                         write!(out, "Applied {:?}:", transform)?;
-                        writeln!(
-                            out,
-                            "\n{}",
-                            cat.generate_explanation(&rel, args.get("format"))
-                        )?;
+                        writeln!(out, "\n{}", convert_rel_to_string(&rel, &cat, &format_type))?;
                         writeln!(out, "====")?;
                     } else {
                         no_change.push(format!("{:?}", transform));
@@ -118,16 +159,23 @@ mod tests {
                 }
 
                 writeln!(out, "Final:")?;
-                writeln!(
-                    out,
-                    "{}",
-                    cat.generate_explanation(&rel, args.get("format"))
-                )?;
+                writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
                 writeln!(out, "====")?;
 
-                Ok(out)
+                out
+            }
+        };
+        if let FormatType::Test = format_type {
+            let source_defs = json_to_spec(&serde_json::to_string(&rel).unwrap(), cat).1;
+            if !source_defs.is_empty() {
+                return Ok(format!(
+                    "{}====\nCatalog defs:\n{}\n",
+                    out,
+                    separated("\n", source_defs)
+                ));
             }
         }
+        Ok(out)
     }
 
     fn get_transform(name: &str) -> Result<Box<dyn Transform>, Error> {
