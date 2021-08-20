@@ -91,12 +91,12 @@ use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan,
+    FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
+    Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use transform::Optimizer;
 
@@ -1609,7 +1609,9 @@ impl Coordinator {
             Plan::AlterIndexResetOptions(plan) => {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
-            Plan::AlterIndexEnable(..) => todo!("ALTER INDEX ... SET ENABLED"),
+            Plan::AlterIndexEnable(plan) => {
+                tx.send(self.sequence_alter_index_enable(plan), session);
+            }
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id());
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
@@ -1764,7 +1766,7 @@ impl Coordinator {
             &table.desc,
             conn_id,
             index_depends_on,
-            self.catalog.enable_index(&index_id),
+            self.catalog.index_enabled_by_default(&index_id),
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
@@ -1899,7 +1901,7 @@ impl Coordinator {
                     &source.desc,
                     None,
                     vec![source_id],
-                    self.catalog.enable_index(&index_id),
+                    self.catalog.index_enabled_by_default(&index_id),
                 );
                 let index_oid = self.catalog.allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
@@ -2056,7 +2058,7 @@ impl Coordinator {
                 &view.desc,
                 view.conn_id,
                 vec![view_id],
-                self.catalog.enable_index(&index_id),
+                self.catalog.index_enabled_by_default(&index_id),
             );
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -2153,7 +2155,7 @@ impl Coordinator {
             on: index.on,
             conn_id: None,
             depends_on,
-            enabled: self.catalog.enable_index(&id),
+            enabled: self.catalog.index_enabled_by_default(&id),
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -3044,13 +3046,7 @@ impl Coordinator {
             MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
             MutationKind::Insert => {
                 if self.catalog.config().disable_user_indexes {
-                    if self.catalog.enabled_indexes()[&plan.id].is_empty() {
-                        // Have to hard error here because we won't encounter the failure to
-                        // select an index until a panic occurs in the dataflow layer.
-                        return Err(CoordError::TableWithoutIndexes(
-                            self.catalog.get_by_id(&plan.id).name().to_string(),
-                        ));
-                    }
+                    self.catalog.ensure_default_index_enabled(plan.id)?;
                 }
 
                 ExecuteResponse::Inserted(plan.affected_rows)
@@ -3160,6 +3156,25 @@ impl Coordinator {
             })
             .collect();
         self.set_index_options(plan.id, options)?;
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
+
+    fn sequence_alter_index_enable(
+        &mut self,
+        plan: AlterIndexEnablePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let ops = self.catalog.enable_index_ops(plan.id)?;
+
+        // If ops is not empty, index was disabled.
+        if !ops.is_empty() {
+            self.catalog_transact(ops)?;
+            let df = self
+                .dataflow_builder()
+                .build_index_dataflow(plan.id)
+                .expect("index enabled");
+            self.ship_dataflow(df);
+        }
+
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -3331,7 +3346,7 @@ impl Coordinator {
             Some(index) => index,
             None => {
                 if !self.catalog.is_index_enabled(&id) {
-                    return Err(CoordError::AlterOnDisabledIndex(
+                    return Err(CoordError::InvalidAlterOnDisabledIndex(
                         self.catalog.get_by_id(&id).name().to_string(),
                     ));
                 } else {

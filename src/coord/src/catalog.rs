@@ -740,7 +740,7 @@ impl Catalog {
                             ),
                             conn_id: None,
                             depends_on: vec![log.id],
-                            enabled: catalog.enable_index(&log.index_id),
+                            enabled: catalog.index_enabled_by_default(&log.index_id),
                         }),
                     );
                 }
@@ -791,7 +791,7 @@ impl Catalog {
                             create_sql: index_sql,
                             conn_id: None,
                             depends_on: vec![table.id],
-                            enabled: catalog.enable_index(&table.index_id),
+                            enabled: catalog.index_enabled_by_default(&table.index_id),
                         }),
                     );
                 }
@@ -1238,6 +1238,28 @@ impl Catalog {
         }
     }
 
+    pub fn populate_enabled_indexes(&mut self, id: GlobalId, item: &CatalogItem) {
+        match item {
+            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
+                self.enabled_indexes.entry(id).or_insert_with(|| vec![]);
+            }
+            CatalogItem::Index(index) => {
+                if index.enabled {
+                    let idxs = self
+                        .enabled_indexes
+                        .get_mut(&index.on)
+                        .expect("object known to exist");
+
+                    // If index not already enabled, add it.
+                    if !idxs.iter().any(|(index_id, _)| index_id == &id) {
+                        idxs.push((id, index.keys.clone()));
+                    }
+                }
+            }
+            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
+        }
+    }
+
     pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
@@ -1260,20 +1282,7 @@ impl Catalog {
             }
         }
 
-        match entry.item() {
-            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.enabled_indexes.insert(id, vec![]);
-            }
-            CatalogItem::Index(index) => {
-                if index.enabled {
-                    self.enabled_indexes
-                        .get_mut(&index.on)
-                        .unwrap()
-                        .push((id, index.keys.clone()));
-                }
-            }
-            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
-        }
+        self.populate_enabled_indexes(id, entry.item());
 
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
         let schema = self
@@ -1355,6 +1364,36 @@ impl Catalog {
             }
             ops.push(Op::DropItem(id));
         }
+    }
+
+    /// Returns the [`Op`]s necessary to enable an index.
+    ///
+    /// # Panics
+    /// Panics if `id` is not the `id` of a [`CatalogItem::Index`].
+    pub fn enable_index_ops(&mut self, id: GlobalId) -> Result<Vec<Op>, Error> {
+        Ok(match &self.get_by_id(&id).item {
+            // no-op
+            CatalogItem::Index(index) if index.enabled => vec![],
+            CatalogItem::Index(index) => {
+                if let CatalogItem::Table(_) = self.get_by_id(&index.on).item() {
+                    let default_idx_id = self
+                        .default_index_for(index.on)
+                        .expect("table must have default index");
+                    if id != default_idx_id {
+                        self.ensure_default_index_enabled(index.on)?;
+                    }
+                }
+
+                vec![Op::UpdateItem {
+                    id,
+                    to_item: CatalogItem::Index(Index {
+                        enabled: true,
+                        ..index.clone()
+                    }),
+                }]
+            }
+            _ => unreachable!("cannot enable non-indexes"),
+        })
     }
 
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
@@ -1501,7 +1540,7 @@ impl Catalog {
             UpdateItem {
                 id: GlobalId,
                 to_name: FullName,
-                item: CatalogItem,
+                to_item: CatalogItem,
             },
         }
 
@@ -1696,7 +1735,7 @@ impl Catalog {
 
                     for id in entry.used_by() {
                         let dependent_item = self.by_id.get(&id).unwrap();
-                        let updated_item = dependent_item
+                        let to_item = dependent_item
                             .item
                             .rename_item_refs(entry.name.clone(), to_full_name.item.clone(), false)
                             .map_err(|e| {
@@ -1708,7 +1747,7 @@ impl Catalog {
                             })?;
 
                         if !item.is_temporary() {
-                            let serialized_item = self.serialize_item(&updated_item);
+                            let serialized_item = self.serialize_item(&to_item);
                             tx.update_item(*id, &dependent_item.name.item, &serialized_item)?;
                         }
                         builtin_table_updates.extend(self.pack_item_update(*id, -1));
@@ -1716,7 +1755,7 @@ impl Catalog {
                         actions.push(Action::UpdateItem {
                             id: id.clone(),
                             to_name: dependent_item.name.clone(),
-                            item: updated_item,
+                            to_item,
                         });
                     }
                     if !item.is_temporary() {
@@ -1726,9 +1765,25 @@ impl Catalog {
                     actions.push(Action::UpdateItem {
                         id,
                         to_name: to_full_name,
-                        item,
+                        to_item: item,
                     });
                     actions
+                }
+                Op::UpdateItem { id, to_item } => {
+                    let entry = self.get_by_id(&id);
+
+                    if !to_item.is_temporary() {
+                        let serialized_item = self.serialize_item(&to_item);
+                        tx.update_item(id, &entry.name().item, &serialized_item)?;
+                    }
+
+                    builtin_table_updates.extend(self.pack_item_update(id, -1));
+
+                    vec![Action::UpdateItem {
+                        id,
+                        to_name: entry.name().clone(),
+                        to_item,
+                    }]
                 }
             });
         }
@@ -1856,7 +1911,11 @@ impl Catalog {
                     self.enabled_indexes.remove(&id);
                 }
 
-                Action::UpdateItem { id, to_name, item } => {
+                Action::UpdateItem {
+                    id,
+                    to_name,
+                    to_item,
+                } => {
                     let old_entry = self.by_id.remove(&id).unwrap();
                     info!(
                         "update {} {} ({})",
@@ -1864,7 +1923,12 @@ impl Catalog {
                         old_entry.name,
                         id
                     );
-                    assert_eq!(old_entry.uses(), item.uses());
+                    assert_eq!(old_entry.uses(), to_item.uses());
+
+                    // Handle updating any indexes. n.b. only supports enabling
+                    // indexes; does not support disabling indexes.
+                    self.populate_enabled_indexes(id, &to_item);
+
                     let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
                     let schema = &mut self
                         .get_schema_mut(&old_entry.name.database, &old_entry.name.schema, conn_id)
@@ -1872,7 +1936,7 @@ impl Catalog {
                     schema.items.remove(&old_entry.name.item);
                     let mut new_entry = old_entry.clone();
                     new_entry.name = to_name;
-                    new_entry.item = item;
+                    new_entry.item = to_item;
                     schema.items.insert(new_entry.name.item.clone(), id);
                     self.by_id.insert(id, new_entry.clone());
                     builtin_table_updates.extend(self.pack_item_update(id, 1));
@@ -1986,7 +2050,7 @@ impl Catalog {
                 keys: index.keys,
                 conn_id: None,
                 depends_on,
-                enabled: self.enable_index(&id),
+                enabled: self.index_enabled_by_default(&id),
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2012,11 +2076,11 @@ impl Catalog {
         })
     }
 
-    /// Determines the appropriate value for a [`Index`]'s `enabled` field.
+    /// Returns the default value for an [`Index`]'s `enabled` field.
     ///
     /// Note that it is the caller's responsibility to ensure that the `id` is
     /// used for an `Index`.
-    pub fn enable_index(&self, id: &GlobalId) -> bool {
+    pub fn index_enabled_by_default(&self, id: &GlobalId) -> bool {
         !self.config.disable_user_indexes || !id.is_user()
     }
 
@@ -2046,9 +2110,36 @@ impl Catalog {
     /// Panics if `id` does not exist, or if `id` is not an object on which
     /// indexes can be built.
     pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
-        // The default index is just whatever index happens to appear first in
-        // self.indexes.
-        self.enabled_indexes[&id].first().map(|(id, _keys)| *id)
+        // The default index is the index with the smallest ID, i.e. the one
+        // created in closest temporal proximity to the object itself.
+        self.get_by_id(&id)
+            .used_by()
+            .iter()
+            .filter(|uses_id| match self.get_by_id(uses_id).item() {
+                CatalogItem::Index(index) => index.on == id,
+                _ => false,
+            })
+            .min()
+            .cloned()
+    }
+
+    /// Returns an error if the object's default index is disabled.
+    ///
+    /// Note that this function is really only meant to be used with tables.
+    ///
+    /// # Panics
+    /// Panics if the object identified with `id` does not have a default index.
+    pub fn ensure_default_index_enabled(&self, id: GlobalId) -> Result<(), Error> {
+        let default_idx_id = self
+            .default_index_for(id)
+            .expect("object must have default index");
+        if !self.is_index_enabled(&default_idx_id) {
+            return Err(Error::new(ErrorKind::DefaultIndexDisabled {
+                idx_on: self.get_by_id(&id).name().to_string(),
+                default_idx: self.get_by_id(&default_idx_id).name().to_string(),
+            }));
+        }
+        Ok(())
     }
 
     /// Finds the nearest indexes that can satisfy the views or sources whose
@@ -2269,6 +2360,10 @@ pub enum Op {
     RenameItem {
         id: GlobalId,
         to_name: String,
+    },
+    UpdateItem {
+        id: GlobalId,
+        to_item: CatalogItem,
     },
 }
 

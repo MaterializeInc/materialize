@@ -20,8 +20,6 @@ use crate::session::Var;
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum CoordError {
-    /// Specified index is disabled, but received update request
-    AlterOnDisabledIndex(String),
     /// Query needs AS OF <time> or indexes to succeed.
     AutomaticTimestampFailure(Vec<String>),
     /// An error occurred in a catalog operation.
@@ -36,6 +34,8 @@ pub enum CoordError {
     IdExhaustionError,
     /// At least one input has no complete timestamps yet
     IncompleteTimestamp(Vec<expr::GlobalId>),
+    /// Specified index is disabled, but received non-enabling update request
+    InvalidAlterOnDisabledIndex(String),
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The named operation cannot be run in a transaction.
@@ -54,8 +54,6 @@ pub enum CoordError {
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
-    /// The named table has no active indexes to support the operation.
-    TableWithoutIndexes(String),
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
@@ -82,11 +80,6 @@ impl CoordError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
-            CoordError::AlterOnDisabledIndex { .. } => Some(
-                "The Materialize server you are connected to is running with \
-                some indexes disabled."
-                    .into(),
-            ),
             CoordError::AutomaticTimestampFailure(deps) => Some(format!(
                 "The query transitively depends on the following unmaterialized sources:\n\t{}",
                 itertools::join(deps, "\n\t")
@@ -113,6 +106,11 @@ impl CoordError {
             ),
             CoordError::Catalog(c) => c.hint(),
             CoordError::Eval(e) => e.hint(),
+            CoordError::InvalidAlterOnDisabledIndex(idx) => Some(format!(
+                "To perform this ALTER, first enable the index using ALTER \
+                INDEX {} SET ENABLED",
+                idx.quoted()
+            )),
             CoordError::UnknownLoginRole(_) => {
                 // TODO(benesch): this will be a bad hint when people are used
                 // to creating roles in Materialize, since they might drop the
@@ -131,9 +129,6 @@ impl CoordError {
 impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CoordError::AlterOnDisabledIndex(name) => {
-                write!(f, "cannot ALTER disabled index {}", name.quoted())
-            }
             CoordError::AutomaticTimestampFailure(..) => {
                 f.write_str("unable to automatically determine a query timestamp")
             }
@@ -154,6 +149,9 @@ impl fmt::Display for CoordError {
                 "At least one input has no complete timestamps yet: {:?}",
                 unstarted
             ),
+            CoordError::InvalidAlterOnDisabledIndex(name) => {
+                write!(f, "invalid ALTER on disabled index {}", name.quoted())
+            }
             CoordError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",
@@ -190,13 +188,6 @@ impl fmt::Display for CoordError {
             }
             CoordError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
-            }
-            CoordError::TableWithoutIndexes(table) => {
-                write!(
-                    f,
-                    "cannot access {} because it has no indexes enabled",
-                    table
-                )
             }
             CoordError::SqlCatalog(e) => e.fmt(f),
             CoordError::TailOnlyTransaction => {

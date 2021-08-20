@@ -63,12 +63,12 @@ use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
 use crate::plan::query::{resolve_names_data_type, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    self, plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
-    Source, Table, Type, TypeInner, View,
+    self, plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, HirRelationExpr, Index, IndexOption,
+    IndexOptionName, Params, Plan, Sink, Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -2320,7 +2320,7 @@ pub fn plan_alter_index_options(
                 options,
             }))
         }
-        AlterIndexAction::Enable => todo!("support ALTER INDEX foo SET ENABLED"),
+        AlterIndexAction::Enable => Ok(Plan::AlterIndexEnable(AlterIndexEnablePlan { id })),
     }
 }
 
