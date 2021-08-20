@@ -238,6 +238,7 @@ impl Direct {
         let contents = snap.read_to_end_flattened()?;
         Ok(ReadSnapshotRes {
             seqno: snap.seqno().0,
+            since: snap.since(),
             contents,
         })
     }

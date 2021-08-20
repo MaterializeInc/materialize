@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
 use crate::indexed::ListenEvent;
@@ -221,7 +221,7 @@ impl Validator {
                 .filter(|(_, ts, _)| *ts < latest_seal)
                 .cloned()
                 .collect();
-            if !updates_eq(&mut actual, &mut expected) {
+            if !updates_eq(&mut actual, &mut expected, Antichain::new()) {
                 self.errors.push(format!(
                     "incorrect output {:?} up to {}, expected {:?} got: {:?}",
                     req_id, latest_seal, expected, actual
@@ -299,7 +299,7 @@ impl Validator {
                         .flat_map(|(_, v)| v)
                         .cloned()
                         .collect();
-                    if !updates_eq(&mut actual, &mut expected) {
+                    if !updates_eq(&mut actual, &mut expected, res.since) {
                         self.errors.push(format!(
                             "incorrect snapshot {:?} expected {:?} got: {:?}",
                             req_id, expected, actual
@@ -337,6 +337,7 @@ impl Validator {
 fn updates_eq(
     actual: &mut Vec<((String, ()), u64, isize)>,
     expected: &mut Vec<((String, ()), u64, isize)>,
+    since: Antichain<u64>,
 ) -> bool {
     // TODO: This is also used by the implementation. Write a slower but more
     // obvious impl of consolidation here and use it for validation.
@@ -344,6 +345,22 @@ fn updates_eq(
     // TODO: The actual snapshot will eventually be compacted up to some since
     // frontier and the expected snapshot will need to account for that when
     // checking equality.
+
+    for (_, t, _) in actual.iter_mut() {
+        for ts in since.elements().iter() {
+            if *t < *ts {
+                *t = *ts;
+            }
+        }
+    }
+
+    for (_, t, _) in expected.iter_mut() {
+        for ts in since.elements().iter() {
+            if *t < *ts {
+                *t = *ts;
+            }
+        }
+    }
     differential_dataflow::consolidation::consolidate_updates(actual);
     differential_dataflow::consolidation::consolidate_updates(expected);
     actual == expected

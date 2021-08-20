@@ -508,6 +508,14 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     pub fn seqno(&self) -> SeqNo {
         self.snap.seqno()
     }
+
+    /// Returns the since frontier of this snapshot.
+    ///
+    /// All updates at times less than this frontier must be forwarded
+    /// to some time in this frontier.
+    pub fn since(&self) -> Antichain<u64> {
+        self.snap.since()
+    }
 }
 
 /// Extension methods on `DecodedSnapshot<K, V>` for use in tests and benchmarks.

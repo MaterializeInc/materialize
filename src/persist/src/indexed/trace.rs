@@ -226,11 +226,16 @@ impl Trace {
     /// Returns a consistent read of all the updates contained in this trace.
     pub fn snapshot<B: Blob>(&self, blob: &BlobCache<B>) -> Result<TraceSnapshot, Error> {
         let ts_upper = self.ts_upper();
+        let since = self.since();
         let mut updates = Vec::with_capacity(self.batches.len());
         for meta in self.batches.iter() {
             updates.push(blob.get_trace_batch(&meta.key)?);
         }
-        Ok(TraceSnapshot { ts_upper, updates })
+        Ok(TraceSnapshot {
+            ts_upper,
+            since,
+            updates,
+        })
     }
 
     /// Merge two batches into one, forwarding all updates not beyond the current
@@ -327,6 +332,11 @@ impl Trace {
 pub struct TraceSnapshot {
     /// An open upper bound on the times of contained updates.
     pub ts_upper: Antichain<u64>,
+    /// Since frontier of the given updates.
+    ///
+    /// All updates not at times greater than this frontier must be advanced
+    /// to a time that is equivalent to this frontier.
+    pub since: Antichain<u64>,
     updates: Vec<Arc<BlobTraceBatch>>,
 }
 
@@ -457,6 +467,8 @@ mod tests {
         );
 
         let snapshot = t.snapshot(&blob)?;
+        assert_eq!(snapshot.since, Antichain::from_elem(3));
+        assert_eq!(snapshot.ts_upper, Antichain::from_elem(9));
 
         let updates = snapshot.read_to_end();
 
