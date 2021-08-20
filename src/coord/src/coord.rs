@@ -2287,31 +2287,34 @@ impl Coordinator {
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
-        action: EndTransactionAction,
+        mut action: EndTransactionAction,
     ) {
         let was_implicit = matches!(
             session.transaction(),
             TransactionStatus::InTransactionImplicit(_)
         );
+        // If the transaction has failed, we can only rollback.
+        if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
+            (&action, session.transaction())
+        {
+            action = EndTransactionAction::Rollback;
+        }
+        let response = ExecuteResponse::TransactionExited {
+            tag: action.tag(),
+            was_implicit,
+        };
         let rx = self.sequence_end_transaction_inner(&mut session, &action);
         match rx {
             Ok(Some(rx)) => {
                 tokio::spawn(async move {
-                    let tag = match rx.await {
-                        Ok(_) => action.tag(),
-                        // TODO: Try to return this error somehow.
-                        Err(_err) => EndTransactionAction::Rollback.tag(),
-                    };
-                    let result = Ok(ExecuteResponse::TransactionExited { tag, was_implicit });
+                    // The rx returns a Result<(), CoordError>, so we can map the Ok(()) output to
+                    // `response`, which will also pass through whatever error we see to tx.
+                    let result = rx.await.map(|_| response);
                     tx.send(result, session);
                 });
             }
             Ok(None) => {
-                let result = Ok(ExecuteResponse::TransactionExited {
-                    tag: action.tag(),
-                    was_implicit,
-                });
-                tx.send(result, session);
+                tx.send(Ok(response), session);
             }
             Err(err) => {
                 tx.send(Err(err), session);
