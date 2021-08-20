@@ -349,6 +349,14 @@ impl Blob for FileBlob {
         Ok(())
     }
 
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        let file_path = self.blob_path(key)?;
+        // TODO: strict correctness requires that we fsync the parent directory
+        // as well after file removal.
+        fs::remove_file(&file_path)?;
+
+        Ok(())
+    }
     fn close(&mut self) -> Result<bool, Error> {
         if let Some(base_dir) = self.base_dir.as_ref() {
             let lockfile_path = Self::lockfile_path(&base_dir);

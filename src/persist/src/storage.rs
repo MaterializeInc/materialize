@@ -77,6 +77,11 @@ pub trait Blob {
     /// or leave the previous value intact.
     fn set(&mut self, key: &str, value: Vec<u8>, allow_overwrite: bool) -> Result<(), Error>;
 
+    /// Remove a key from the map.
+    ///
+    /// Errors if the key does not exist.
+    fn delete(&mut self, key: &str) -> Result<(), Error>;
+
     /// Synchronously closes the blob, releasing exclusive-writer locks and
     /// causing all future commands to error.
     ///
@@ -366,6 +371,18 @@ pub mod tests {
         assert!(blob0.set("k0", values[1].clone(), false).is_err());
         assert_eq!(blob0.get("k0")?, Some(values[0].clone()));
         blob0.set("k0", values[1].clone(), true)?;
+        assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
+
+        // Can delete a key.
+        blob0.delete("k0")?;
+        // Can no longer get a deleted key.
+        assert_eq!(blob0.get("k0")?, None);
+        // Cannot double delete a key.
+        assert!(blob0.delete("k0").is_err());
+        // Cannot delete a key that does not exist.
+        assert!(blob0.delete("nope").is_err());
+        // Can reset a deleted key to some other value.
+        blob0.set("k0", values[1].clone(), false)?;
         assert_eq!(blob0.get("k0")?, Some(values[1].clone()));
 
         // Cannot reuse a blob once it is closed.
