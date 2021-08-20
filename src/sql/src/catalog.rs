@@ -185,6 +185,8 @@ pub struct CatalogConfig {
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
+    /// Whether to prevent user indexes from being considered for use.
+    pub disable_user_indexes: bool,
 }
 
 /// A database in a [`Catalog`].
@@ -372,6 +374,7 @@ lazy_static! {
         num_workers: 0,
         timestamp_frequency: Duration::from_secs(1),
         now: now_zero,
+        disable_user_indexes: false,
     };
 }
 

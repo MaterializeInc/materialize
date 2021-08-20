@@ -47,7 +47,7 @@ impl<'a> DataflowBuilder<'a> {
 
         // A valid index is any index on `id` that is known to the dataflow
         // layer, as indicated by its presence in `self.indexes`.
-        let valid_index = self.catalog.indexes()[id]
+        let valid_index = self.catalog.enabled_indexes()[id]
             .iter()
             .find(|(id, _keys)| self.indexes.contains_key(*id));
         if let Some((index_id, keys)) = valid_index {
@@ -137,7 +137,7 @@ impl<'a> DataflowBuilder<'a> {
 
             // TODO: indexes should be imported after the optimization process, and only those
             // actually used by the optimized plan
-            if let Some(indexes) = self.catalog.indexes().get(&get_id) {
+            if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
                 for (id, keys) in indexes.iter() {
                     let on_entry = self.catalog.get_by_id(&get_id);
                     let on_type = on_entry.desc().unwrap().typ().clone();
@@ -153,12 +153,20 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Builds a dataflow description for the index with the specified ID.
-    pub fn build_index_dataflow(&mut self, id: GlobalId) -> DataflowDesc {
+    ///
+    /// Returns `None` if we infer that the specified index is disabled.
+    pub fn build_index_dataflow(&mut self, id: GlobalId) -> Option<DataflowDesc> {
         let index_entry = self.catalog.get_by_id(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
             _ => unreachable!("cannot create index dataflow on non-index"),
         };
+
+        // Disabled indexes should not have dataflows created for them.
+        if !index.enabled {
+            return None;
+        }
+
         let on_entry = self.catalog.get_by_id(&index.on);
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(index_entry.name().to_string());
@@ -166,7 +174,7 @@ impl<'a> DataflowBuilder<'a> {
         let keys = index.keys.clone();
         self.import_into_dataflow(&on_id, &mut dataflow);
         dataflow.export_index(id, on_id, on_type, keys);
-        dataflow
+        Some(dataflow)
     }
 
     /// Builds a dataflow description for the sink with the specified name,

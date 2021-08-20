@@ -186,6 +186,7 @@ pub struct Config<'a> {
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
+    pub disable_user_indexes: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
@@ -388,8 +389,9 @@ impl Coordinator {
                         let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
-                        let df = self.dataflow_builder().build_index_dataflow(entry.id());
-                        self.ship_dataflow(df);
+                        self.dataflow_builder()
+                            .build_index_dataflow(entry.id())
+                            .map(|df| self.ship_dataflow(df));
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -1750,6 +1752,7 @@ impl Coordinator {
             &table.desc,
             conn_id,
             index_depends_on,
+            self.catalog.enable_index(&index_id),
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
@@ -1768,8 +1771,9 @@ impl Coordinator {
             },
         ]) {
             Ok(_) => {
-                let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df);
+                self.dataflow_builder()
+                    .build_index_dataflow(index_id)
+                    .map(|df| self.ship_dataflow(df));
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -1828,8 +1832,9 @@ impl Coordinator {
                 self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
             self.sources.insert(source_id, frontiers);
             if let Some(index_id) = idx_id {
-                let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df);
+                self.dataflow_builder()
+                    .build_index_dataflow(index_id)
+                    .map(|df| self.ship_dataflow(df));
             }
         }
     }
@@ -1850,7 +1855,7 @@ impl Coordinator {
             } = plan;
             let optimized_expr = self
                 .view_optimizer
-                .optimize(source.expr, self.catalog.indexes())?;
+                .optimize(source.expr, self.catalog.enabled_indexes())?;
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
             let source = catalog::Source {
                 create_sql: source.create_sql,
@@ -1874,6 +1879,7 @@ impl Coordinator {
                     .catalog
                     .for_session(session)
                     .find_available_name(index_name);
+                let index_id = self.catalog.allocate_id()?;
                 let index = auto_generate_primary_idx(
                     index_name.item.clone(),
                     name,
@@ -1881,8 +1887,8 @@ impl Coordinator {
                     &source.desc,
                     None,
                     vec![source_id],
+                    self.catalog.enable_index(&index_id),
                 );
-                let index_id = self.catalog.allocate_id()?;
                 let index_oid = self.catalog.allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
                     id: index_id,
@@ -2030,6 +2036,7 @@ impl Coordinator {
                 .catalog
                 .for_session(session)
                 .find_available_name(index_name);
+            let index_id = self.catalog.allocate_id()?;
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 name,
@@ -2037,8 +2044,8 @@ impl Coordinator {
                 &view.desc,
                 view.conn_id,
                 vec![view_id],
+                self.catalog.enable_index(&index_id),
             );
-            let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
@@ -2065,8 +2072,9 @@ impl Coordinator {
         match self.catalog_transact(ops) {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    let df = self.dataflow_builder().build_index_dataflow(index_id);
-                    self.ship_dataflow(df);
+                    self.dataflow_builder()
+                        .build_index_dataflow(index_id)
+                        .map(|df| self.ship_dataflow(df));
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2098,8 +2106,9 @@ impl Coordinator {
             Ok(()) => {
                 let mut dfs = vec![];
                 for index_id in index_ids {
-                    let df = self.dataflow_builder().build_index_dataflow(index_id);
-                    dfs.push(df);
+                    self.dataflow_builder()
+                        .build_index_dataflow(index_id)
+                        .map(|df| dfs.push(df));
                 }
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
@@ -2125,14 +2134,15 @@ impl Coordinator {
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
         }
+        let id = self.catalog.allocate_id()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
             keys: index.keys,
             on: index.on,
             conn_id: None,
             depends_on,
+            enabled: self.catalog.enable_index(&id),
         };
-        let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
@@ -2142,9 +2152,11 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]) {
             Ok(()) => {
-                let df = self.dataflow_builder().build_index_dataflow(id);
-                self.ship_dataflow(df);
-                self.set_index_options(id, options);
+                self.dataflow_builder().build_index_dataflow(id).map(|df| {
+                    self.ship_dataflow(df);
+                    self.set_index_options(id, options);
+                });
+
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2572,7 +2584,7 @@ impl Coordinator {
                 // values by predicate constraints in `map_filter_project`. If we find such
                 // an index, we can use it with the literal to perform look-ups at workers,
                 // and in principle avoid even contacting all but one worker (future work).
-                if let Some(indexes) = self.catalog.indexes().get(id) {
+                if let Some(indexes) = self.catalog.enabled_indexes().get(id) {
                     // Determine for each index identifier, an optional row literal as key.
                     // We want to extract the "best" option, where we prefer indexes with
                     // literals and long keys, then indexes at all, then exit correctly.
@@ -2974,7 +2986,7 @@ impl Coordinator {
                     &optimized_plan,
                     &mut dataflow,
                 );
-                transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
+                transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
                 let catalog = self.catalog.for_session(session);
                 let mut explanation =
                     dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
@@ -3002,7 +3014,19 @@ impl Coordinator {
         }]))?;
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
-            MutationKind::Insert => ExecuteResponse::Inserted(plan.affected_rows),
+            MutationKind::Insert => {
+                if self.catalog.config().disable_user_indexes {
+                    if self.catalog.enabled_indexes()[&plan.id].is_empty() {
+                        // Have to hard error here because we won't encounter the failure to
+                        // select an index until a panic occurs in the dataflow layer.
+                        return Err(CoordError::TableWithoutIndexes(
+                            self.catalog.get_by_id(&plan.id).name().to_string(),
+                        ));
+                    }
+                }
+
+                ExecuteResponse::Inserted(plan.affected_rows)
+            }
             MutationKind::Update => ExecuteResponse::Updated(plan.affected_rows),
         })
     }
@@ -3287,7 +3311,9 @@ impl Coordinator {
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
         if let ExprPrepStyle::Static = style {
-            let mut opt_expr = self.view_optimizer.optimize(expr, self.catalog.indexes())?;
+            let mut opt_expr = self
+                .view_optimizer
+                .optimize(expr, self.catalog.enabled_indexes())?;
             opt_expr.0.try_visit_mut(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
@@ -3308,7 +3334,9 @@ impl Coordinator {
             // constant expression that originally contains a global get? Is
             // there anything not containing a global get that cannot be
             // optimized to a constant expression?
-            Ok(self.view_optimizer.optimize(expr, self.catalog.indexes())?)
+            Ok(self
+                .view_optimizer
+                .optimize(expr, self.catalog.enabled_indexes())?)
         }
     }
 
@@ -3423,7 +3451,7 @@ impl Coordinator {
             }
 
             // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
+            transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
             let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
                 .expect("Dataflow planning failed; unrecoverable error");
             dataflow_plans.push(dataflow_plan);
@@ -3558,6 +3586,7 @@ pub async fn serve(
         timestamp_frequency,
         logical_compaction_window,
         experimental_mode,
+        disable_user_indexes,
         safe_mode,
         build_info,
         metrics_registry,
@@ -3587,6 +3616,7 @@ pub async fn serve(
         persist,
         skip_migrations: false,
         metrics_registry: &metrics_registry,
+        disable_user_indexes,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
@@ -3737,6 +3767,7 @@ pub fn serve_debug(
         persist: PersistConfig::disabled(),
         skip_migrations: false,
         metrics_registry: &MetricsRegistry::new(),
+        disable_user_indexes: false,
     })
     .unwrap();
 
@@ -3873,6 +3904,7 @@ fn auto_generate_primary_idx(
     on_desc: &RelationDesc,
     conn_id: Option<u32>,
     depends_on: Vec<GlobalId>,
+    enabled: bool,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
@@ -3884,6 +3916,7 @@ fn auto_generate_primary_idx(
             .collect(),
         conn_id,
         depends_on,
+        enabled,
     }
 }
 

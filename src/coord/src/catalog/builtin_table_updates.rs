@@ -285,6 +285,7 @@ impl Catalog {
             Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts.unwrap(),
             _ => unreachable!(),
         };
+
         updates.push(BuiltinTableUpdate {
             id: MZ_INDEXES.id,
             row: Row::pack_slice(&[
@@ -293,6 +294,7 @@ impl Catalog {
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
+                Datum::from(index.enabled),
             ]),
             diff,
         });

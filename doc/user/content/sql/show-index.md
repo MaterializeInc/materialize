@@ -26,9 +26,9 @@ _on&lowbar;name_ | The name of the object whose indexes you want to show. This c
 `SHOW INDEX`'s output is a table, with this structure:
 
 ```nofmt
- on_name | key_name | seq_in_index | column_name | expression | nullable |
----------+----------+--------------+-------------+------------+----------+
- ...     | ...      | ...          | ...         | ...        | ...
+ on_name | key_name | seq_in_index | column_name | expression | nullable | enabled
+---------+----------+--------------+-------------+------------+----------+--------
+ ...     | ...      | ...          | ...         | ...        | ...      | ...
 ```
 
 Field | Meaning
@@ -39,6 +39,7 @@ Field | Meaning
 **column_name** | The indexed column.
 **expression** | An expression used to generate the column in the index.
 **null** | Is the column nullable?
+**enabled** | Does the index represent an [arrangement](/overview/arrangements/)? `false` only in the case of [Disabling user indexes](/cli/#disable-user-indexes).
 
 {{< version-changed v0.5.0 >}}
 The output columns are renamed from `On_name`, `Key_name`, `Column_name`,
@@ -65,9 +66,9 @@ SHOW FULL VIEWS;
 SHOW INDEXES FROM my_materialized_view;
 ```
 ```nofmt
- on_name | key_name | seq_in_index | column_name | expression | null
----------+----------+--------------+-------------+------------+-----
- ...     | ...      | ...          | ...         | ...        | ...
+ on_name | key_name | seq_in_index | column_name | expression | nullable | enabled
+---------+----------+--------------+-------------+------------+----------+--------
+ ...     | ...      | ...          | ...         | ...        | ...      | ...
 ```
 
 ## Related pages
