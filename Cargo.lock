@@ -1133,9 +1133,9 @@ dependencies = [
 
 [[package]]
 name = "enum-kinds"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c30ea541ff8aec761976f2eadf20371fa06fbc0f2cb2f8fb505a7f1340d459a0"
+checksum = "4e40a16955681d469ab3da85aaa6b42ff656b3c67b52e1d8d3dd36afe97fd462"
 dependencies = [
  "proc-macro2",
  "quote",
