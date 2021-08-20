@@ -489,7 +489,42 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         ret
     }
 
-    /// Compact all traces, if they have batches that can be compacted.
+    fn compact_inner(&mut self) -> Result<(), Error> {
+        let mut deleted_unsealed_batches = vec![];
+        let mut deleted_trace_batches = vec![];
+        for (id, trace) in self.traces.iter_mut() {
+            let unsealed = self
+                .unsealeds
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
+            deleted_trace_batches.extend(trace.step(&mut self.blob)?);
+        }
+
+        self.try_set_meta()?;
+
+        // After we've committed our logical deletions to durable storage, we can
+        // physically delete the data.
+        //
+        // TODO: if there's an error in the middle of the deletions then any
+        // undeleted blobs will forever be orphaned. We could instead retain a
+        // pending_deletes list but we would lose that across restarts unless we
+        // wrote it to persistent storage. Alternatively, we should expose a list
+        // method on blob and have a periodic cleanup task that attempts to find
+        // and delete unused blobs. We could also use the list method to verify
+        // that all referenced blobs exist.
+        for batch in deleted_unsealed_batches {
+            self.blob.delete_unsealed_batch(&batch)?;
+        }
+
+        for batch in deleted_trace_batches {
+            self.blob.delete_trace_batch(&batch)?;
+        }
+
+        Ok(())
+    }
+
+    /// Compact all traces and truncate all unsealeds, if possible.
     ///
     /// TODO: currently we do not attempt to compact unsealed batches and instead
     /// logically delete them from unsealed after all updates contained within a
@@ -499,19 +534,20 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// that assumption stops being true.
     fn compact(&mut self) -> Result<(), Error> {
         let compaction_start = Instant::now();
-        for (_, trace) in self.traces.iter_mut() {
-            if let Err(e) = trace.step(&mut self.blob) {
+
+        let ret = match self.compact_inner() {
+            Ok(_) => Ok(()),
+            Err(e) => {
                 self.restore();
-                return Err(e);
+                Err(e)
             }
-        }
-        self.try_set_meta()?;
+        };
 
         self.metrics
             .compaction_ms
             .inc_by(metric_duration_ms(compaction_start.elapsed()));
 
-        Ok(())
+        ret
     }
 
     /// Drains writes from the log into the unsealed and does any necessary
@@ -739,7 +775,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// work to remove uneccessary batches.
     fn drain_unsealed(&mut self) -> Result<(), Error> {
         let mut updates_by_id = vec![];
-        let mut unsealed_ts_lower_updates = vec![];
         for (id, trace) in self.traces.iter_mut() {
             // If this unsealed is already properly sealed then we don't need
             // to do anything.
@@ -778,37 +813,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
-            let new_unsealed_ts_lower = batch.desc.upper().clone();
             if let Err(e) = trace.append(batch, &mut self.blob) {
                 self.restore();
                 return Err(format!("failed to append to trace: {}", e).into());
             }
-
-            // We can only truncate unsealed after we have successfully committed
-            // everything to trace.
-            unsealed_ts_lower_updates.push((*id, new_unsealed_ts_lower));
         }
 
         // We need to update metadata before we do any notification or unsealed
         // truncation because that's the final step of ensuring that things
         // get appended to trace.
         self.try_set_meta()?;
-        // TODO: This is a good point to compact unsealed. The data that's been
-        // moved is still there but now irrelevant. It may also be a good time
-        // to compact trace.
-
-        // Now that all of the trace data and metadata writes have completed, we
-        // can attempt to truncate unsealed. The goal here is strictly to reduce
-        // consumption of durable storage, and so we don't need to roll back if
-        // one of the truncates fails.
-        for (id, new_unsealed_ts_lower) in unsealed_ts_lower_updates {
-            let unsealed = self
-                .unsealeds
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-            unsealed.truncate(new_unsealed_ts_lower)?;
-        }
-
         Ok(())
     }
 

@@ -54,6 +54,10 @@ pub struct Metrics {
     pub(crate) blob_write_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) blob_write_bytes: ThirdPartyMetric<UIntCounter>,
     pub(crate) blob_write_ms: ThirdPartyMetric<UIntCounter>,
+    pub(crate) blob_delete_count: ThirdPartyMetric<UIntCounter>,
+    // TODO: pub(crate) blob_delete_bytes: ThirdPartyMetric<UIntCounter>,
+    pub(crate) blob_delete_ms: ThirdPartyMetric<UIntCounter>,
+
     // TODO: pub(crate) blob_read_cache_bytes: ThirdPartyMetric<UIntGauge>,
     // TODO: pub(crate) blob_read_cache_entry_count: ThirdPartyMetric<UIntGauge>,
     pub(crate) blob_read_cache_hit_count: ThirdPartyMetric<UIntCounter>,
@@ -129,6 +133,14 @@ impl Metrics {
             blob_write_ms: registry.register_third_party_visible(metric!(
                 name: "mz_persist_blob_write_ms",
                 help: "time spent writing to blob storage",
+            )),
+            blob_delete_count: registry.register_third_party_visible(metric!(
+                name: "mz_persist_blob_delete_count",
+                help: "count of blob storage deletes",
+            )),
+            blob_delete_ms: registry.register_third_party_visible(metric!(
+                name: "mz_persist_blob_delete_ms",
+                help: "time spent deleting from blob storage",
             )),
             blob_read_cache_hit_count: registry.register_third_party_visible(metric!(
                 name: "mz_persist_blob_read_cache_hit_count",
