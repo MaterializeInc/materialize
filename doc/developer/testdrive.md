@@ -387,6 +387,19 @@ For example, this test will pass:
 "${testdrive.seed}"
 ```
 
+#### `$ set name`
+
+Sets the variable to the possibly multi-line value that follows.
+
+```
+$ set schema
+syntax = "proto3";
+
+message SimpleId {
+  string id = 1;
+}
+```
+
 ## Variable reference
 
 The following variables are defined for every test. Many correspond to the command-line options passed to `testdrive`:

@@ -493,7 +493,13 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
                     }
                     "set" => {
-                        vars.extend(builtin.args);
+                        for (key, val) in builtin.args {
+                            if val.is_empty() {
+                                vars.insert(key, builtin.input.join("\n"));
+                            } else {
+                                vars.insert(key, val);
+                            }
+                        }
                         continue;
                     }
                     _ => {

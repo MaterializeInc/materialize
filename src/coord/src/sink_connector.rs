@@ -308,17 +308,22 @@ async fn register_kafka_topic(
 async fn publish_kafka_schemas(
     ccsr: &ccsr::Client,
     topic: &str,
-    value_schema: &str,
     key_schema: Option<&str>,
+    key_schema_type: Option<ccsr::SchemaType>,
+    value_schema: &str,
+    value_schema_type: ccsr::SchemaType,
 ) -> Result<(Option<i32>, i32), CoordError> {
     let value_schema_id = ccsr
-        .publish_schema(&format!("{}-value", topic), value_schema)
+        .publish_schema(&format!("{}-value", topic), value_schema, value_schema_type)
         .await
         .context("unable to publish value schema to registry in kafka sink")?;
 
     let key_schema_id = if let Some(key_schema) = key_schema {
+        let key_schema_type = key_schema_type.ok_or_else(|| {
+            CoordError::Unstructured(anyhow!("expected schema type for key schema"))
+        })?;
         Some(
-            ccsr.publish_schema(&format!("{}-key", topic), key_schema)
+            ccsr.publish_schema(&format!("{}-key", topic), key_schema, key_schema_type)
                 .await
                 .context("unable to publish key schema to registry in kafka sink")?,
         )
@@ -377,10 +382,16 @@ async fn build_kafka(
             ..
         } => {
             let ccsr = ccsr_config.build()?;
-            let (key_schema_id, value_schema_id) =
-                publish_kafka_schemas(&ccsr, &topic, &value_schema, key_schema.as_deref())
-                    .await
-                    .context("error publishing kafka schemas for sink")?;
+            let (key_schema_id, value_schema_id) = publish_kafka_schemas(
+                &ccsr,
+                &topic,
+                key_schema.as_deref(),
+                Some(ccsr::SchemaType::Avro),
+                &value_schema,
+                ccsr::SchemaType::Avro,
+            )
+            .await
+            .context("error publishing kafka schemas for sink")?;
             Some(PublishedSchemaInfo {
                 key_schema_id,
                 value_schema_id,
@@ -413,10 +424,16 @@ async fn build_kafka(
             .context("error registering kafka consistency topic for sink")?;
 
             let ccsr = ccsr_config.build()?;
-            let (_, consistency_schema_id) =
-                publish_kafka_schemas(&ccsr, &consistency_topic, &value_schema, None)
-                    .await
-                    .context("error publishing kafka consistency schemas for sink")?;
+            let (_, consistency_schema_id) = publish_kafka_schemas(
+                &ccsr,
+                &consistency_topic,
+                None,
+                None,
+                &value_schema,
+                ccsr::SchemaType::Avro,
+            )
+            .await
+            .context("error publishing kafka consistency schemas for sink")?;
 
             // get latest committed timestamp from consistency topic
             let gate_ts = if builder.reuse_topic {
