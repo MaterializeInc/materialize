@@ -1192,17 +1192,6 @@ impl Coordinator {
     fn persisted_table_allow_compaction(&self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
         let mut table_since_updates = vec![];
         for (id, frontier) in since_updates.iter() {
-            // HACK: Avoid the "failed to compact persisted tables" error log at
-            // startup, by not trying to allow compaction on the minimum
-            // timestamp. Real fix in #7977.
-            if !frontier
-                .elements()
-                .iter()
-                .any(|x| *x > Timestamp::minimum())
-            {
-                continue;
-            }
-
             // Not all ids will be present in the catalog however, those that are
             // in the catalog must also have their dependencies in the catalog as
             // well.
