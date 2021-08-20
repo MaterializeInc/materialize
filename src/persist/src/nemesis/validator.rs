@@ -12,11 +12,10 @@ use std::fmt;
 
 use timely::progress::{Antichain, Timestamp};
 
-use crate::error::Error;
-use crate::indexed::ListenEvent;
 use crate::nemesis::{
-    AllowCompactionReq, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, ReqId, Res,
-    SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
+    AllowCompactionReq, ReadOutputEvent, ReadOutputReq, ReadOutputRes, ReadSnapshotReq,
+    ReadSnapshotRes, ReqId, Res, ResError, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq,
+    WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::storage::SeqNo;
 
@@ -24,7 +23,7 @@ pub struct Validator {
     seal_frontier: HashMap<String, u64>,
     since_frontier: HashMap<String, u64>,
     writes_by_seqno: BTreeMap<(String, SeqNo), Vec<((String, ()), u64, isize)>>,
-    output_by_stream: HashMap<String, Vec<ListenEvent<String, ()>>>,
+    output_by_stream: HashMap<String, Vec<ReadOutputEvent>>,
     available_snapshots: HashMap<SnapshotId, String>,
     errors: Vec<String>,
     storage_available: bool,
@@ -78,10 +77,14 @@ impl Validator {
             Res::ReadSnapshot(req, res) => self.step_read_snapshot(s.req_id, req, res),
             Res::Start(res) => self.step_start(s.req_id, res),
             Res::Stop(res) => self.step_stop(s.req_id, res),
-            Res::StorageUnavailable => {
+            Res::StorageUnavailable(res) => {
+                let should_succeed = true;
+                self.check_success(s.req_id, &res, should_succeed);
                 self.storage_available = false;
             }
-            Res::StorageAvailable => {
+            Res::StorageAvailable(res) => {
+                let should_succeed = true;
+                self.check_success(s.req_id, &res, should_succeed);
                 self.storage_available = true;
             }
         }
@@ -90,7 +93,7 @@ impl Validator {
     fn check_success<T: fmt::Debug>(
         &mut self,
         req_id: ReqId,
-        res: &Result<T, Error>,
+        res: &Result<T, ResError>,
         should_succeed: bool,
     ) {
         match (should_succeed, res) {
@@ -110,7 +113,7 @@ impl Validator {
         &mut self,
         req_id: ReqId,
         req: WriteReqSingle,
-        res: Result<WriteRes, Error>,
+        res: Result<WriteRes, ResError>,
     ) {
         let should_succeed = self.runtime_available
             && self.storage_available
@@ -133,7 +136,7 @@ impl Validator {
         &mut self,
         req_id: ReqId,
         req: WriteReqMulti,
-        res: Result<WriteRes, Error>,
+        res: Result<WriteRes, ResError>,
     ) {
         let should_succeed = self.runtime_available
             && self.storage_available
@@ -161,7 +164,7 @@ impl Validator {
         &mut self,
         req_id: ReqId,
         req: ReadOutputReq,
-        res: Result<ReadOutputRes, Error>,
+        res: Result<ReadOutputRes, ResError>,
     ) {
         let should_succeed = true;
         self.check_success(req_id, &res, should_succeed);
@@ -178,12 +181,12 @@ impl Validator {
             let mut all_received_writes = Vec::new();
             for e in all_stream_output.iter() {
                 match e {
-                    ListenEvent::Sealed(ts) => {
+                    ReadOutputEvent::Sealed(ts) => {
                         if *ts > latest_seal {
                             latest_seal = *ts;
                         }
                     }
-                    ListenEvent::Records(records) => {
+                    ReadOutputEvent::Records(records) => {
                         for ((k, v), ts, diff) in records.iter() {
                             all_received_writes.push(((k.clone(), *v), *ts, *diff));
                         }
@@ -230,7 +233,7 @@ impl Validator {
         }
     }
 
-    fn step_seal(&mut self, req_id: ReqId, req: SealReq, res: Result<(), Error>) {
+    fn step_seal(&mut self, req_id: ReqId, req: SealReq, res: Result<(), ResError>) {
         let should_succeed = self.runtime_available
             && self.storage_available
             && req.ts
@@ -249,7 +252,7 @@ impl Validator {
         &mut self,
         req_id: ReqId,
         req: AllowCompactionReq,
-        res: Result<(), Error>,
+        res: Result<(), ResError>,
     ) {
         let should_succeed = self.runtime_available
             && self.storage_available
@@ -271,7 +274,12 @@ impl Validator {
         }
     }
 
-    fn step_take_snapshot(&mut self, req_id: ReqId, req: TakeSnapshotReq, res: Result<(), Error>) {
+    fn step_take_snapshot(
+        &mut self,
+        req_id: ReqId,
+        req: TakeSnapshotReq,
+        res: Result<(), ResError>,
+    ) {
         let should_succeed = self.runtime_available && self.storage_available;
         self.check_success(req_id, &res, should_succeed);
         if let Ok(_) = res {
@@ -283,7 +291,7 @@ impl Validator {
         &mut self,
         req_id: ReqId,
         req: ReadSnapshotReq,
-        res: Result<ReadSnapshotRes, Error>,
+        res: Result<ReadSnapshotRes, ResError>,
     ) {
         match self.available_snapshots.remove(&req.snap) {
             None => {
@@ -310,7 +318,7 @@ impl Validator {
         }
     }
 
-    fn step_start(&mut self, req_id: ReqId, res: Result<(), Error>) {
+    fn step_start(&mut self, req_id: ReqId, res: Result<(), ResError>) {
         // The semantics of Req::Start are pretty blunt. It unconditionally
         // attempts to start a new persister. If the storage is down, the new
         // one won't be able to read metadata and will fail to start. This will
@@ -323,7 +331,7 @@ impl Validator {
         self.runtime_available = res.is_ok();
     }
 
-    fn step_stop(&mut self, req_id: ReqId, res: Result<(), Error>) {
+    fn step_stop(&mut self, req_id: ReqId, res: Result<(), ResError>) {
         // Stop is a no-op if the runtime is already down (and so will succeed).
         // Otherwise, it will succeed if it can cleanly release locks, which
         // requires the storage to be available.

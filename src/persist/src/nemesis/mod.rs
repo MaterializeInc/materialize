@@ -69,26 +69,30 @@
 // - Vary key size
 // - Deleting streams
 
-use std::env;
+use std::{env, fmt, io};
 
 use ore::test::init_logging;
 use rand::rngs::OsRng;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
 use crate::error::Error;
-use crate::indexed::ListenEvent;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
 
+mod crashable;
 mod direct;
 mod generator;
 mod validator;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
+pub mod crashable_helper;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReqId(u64);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SnapshotId(u64);
 
 /// A single logical operator to run against the persist API.
@@ -103,7 +107,7 @@ pub struct SnapshotId(u64);
 /// snapshot registry. The second removes this snapshot from the registry, reads
 /// the contents, and returns them. This allows us to insert whatever other
 /// `Input`s we like in between them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Input {
     req_id: ReqId,
     req: Req,
@@ -115,7 +119,7 @@ pub struct Step {
     res: Res,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Req {
     Write(WriteReq),
     ReadOutput(ReadOutputReq),
@@ -129,76 +133,140 @@ pub enum Req {
     StorageAvailable,
 }
 
-#[derive(Debug)]
-pub enum Res {
-    Write(WriteReq, Result<WriteRes, Error>),
-    Seal(SealReq, Result<(), Error>),
-    ReadOutput(ReadOutputReq, Result<ReadOutputRes, Error>),
-    AllowCompaction(AllowCompactionReq, Result<(), Error>),
-    TakeSnapshot(TakeSnapshotReq, Result<(), Error>),
-    ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, Error>),
-    Start(Result<(), Error>),
-    Stop(Result<(), Error>),
-    StorageUnavailable,
-    StorageAvailable,
+impl Req {
+    fn into_error_res(self, err: ResError) -> Res {
+        match self {
+            Req::Write(req) => Res::Write(req, Err(err)),
+            Req::ReadOutput(req) => Res::ReadOutput(req, Err(err)),
+            Req::Seal(req) => Res::Seal(req, Err(err)),
+            Req::AllowCompaction(req) => Res::AllowCompaction(req, Err(err)),
+            Req::TakeSnapshot(req) => Res::TakeSnapshot(req, Err(err)),
+            Req::ReadSnapshot(req) => Res::ReadSnapshot(req, Err(err)),
+            Req::Start => Res::Start(Err(err)),
+            Req::Stop => Res::Stop(Err(err)),
+            Req::StorageUnavailable => Res::StorageUnavailable(Err(err)),
+            Req::StorageAvailable => Res::StorageAvailable(Err(err)),
+        }
+    }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResError(String);
+
+impl From<Error> for ResError {
+    fn from(x: Error) -> Self {
+        ResError(x.to_string())
+    }
+}
+
+impl From<String> for ResError {
+    fn from(x: String) -> Self {
+        ResError(x)
+    }
+}
+
+impl From<io::Error> for ResError {
+    fn from(x: io::Error) -> Self {
+        ResError(x.to_string())
+    }
+}
+
+impl From<serde_json::Error> for ResError {
+    fn from(x: serde_json::Error) -> Self {
+        ResError(x.to_string())
+    }
+}
+
+impl<'a> From<&'a str> for ResError {
+    fn from(x: &'a str) -> Self {
+        ResError(x.to_owned())
+    }
+}
+
+impl fmt::Display for ResError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Res {
+    Write(WriteReq, Result<WriteRes, ResError>),
+    Seal(SealReq, Result<(), ResError>),
+    ReadOutput(ReadOutputReq, Result<ReadOutputRes, ResError>),
+    AllowCompaction(AllowCompactionReq, Result<(), ResError>),
+    TakeSnapshot(TakeSnapshotReq, Result<(), ResError>),
+    ReadSnapshot(ReadSnapshotReq, Result<ReadSnapshotRes, ResError>),
+    Start(Result<(), ResError>),
+    Stop(Result<(), ResError>),
+    StorageUnavailable(Result<(), ResError>),
+    StorageAvailable(Result<(), ResError>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WriteReqSingle {
     stream: String,
     update: ((String, ()), u64, isize),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WriteReqMulti {
     writes: Vec<WriteReqSingle>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WriteReq {
     Single(WriteReqSingle),
     Multi(WriteReqMulti),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WriteRes {
     seqno: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReadOutputReq {
     stream: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct ReadOutputRes {
-    contents: Vec<ListenEvent<String, ()>>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ReadOutputEvent {
+    /// Records in the data stream.
+    Records(Vec<((String, ()), u64, isize)>),
+    /// Progress of the data stream.
+    Sealed(u64),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReadOutputRes {
+    contents: Vec<ReadOutputEvent>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SealReq {
     stream: String,
     ts: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AllowCompactionReq {
     stream: String,
     ts: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TakeSnapshotReq {
     stream: String,
     snap: SnapshotId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReadSnapshotReq {
     snap: SnapshotId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReadSnapshotRes {
     seqno: u64,
     since: Antichain<u64>,

@@ -275,6 +275,7 @@ impl ReqGenerator {
             }
             ReqGenerator::Stop => {
                 state.running = false;
+                state.outstanding_snaps.clear();
                 Req::Stop
             }
             ReqGenerator::StorageUnavailable => {

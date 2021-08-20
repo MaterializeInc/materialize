@@ -23,11 +23,10 @@ use crate::error::Error;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
-use crate::indexed::ListenEvent;
 use crate::nemesis::{
-    AllowCompactionReq, Input, ReadOutputReq, ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, Req,
-    Res, Runtime, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq, WriteReqMulti,
-    WriteReqSingle, WriteRes,
+    AllowCompactionReq, Input, ReadOutputEvent, ReadOutputReq, ReadOutputRes, ReadSnapshotReq,
+    ReadSnapshotRes, Req, Res, ResError, Runtime, SealReq, SnapshotId, Step, TakeSnapshotReq,
+    WriteReq, WriteReqMulti, WriteReqSingle, WriteRes,
 };
 use crate::operators::source::PersistedSource;
 use crate::unreliable::UnreliableHandle;
@@ -74,11 +73,11 @@ impl Runtime for Direct {
             Req::Stop => Res::Stop(self.stop()),
             Req::StorageUnavailable => {
                 self.unreliable.make_unavailable();
-                Res::StorageUnavailable
+                Res::StorageUnavailable(Ok(()))
             }
             Req::StorageAvailable => {
                 self.unreliable.make_available();
-                Res::StorageAvailable
+                Res::StorageAvailable(Ok(()))
             }
         };
 
@@ -122,7 +121,7 @@ impl Direct {
             StreamReadHandle<String, ()>,
             TimelyProbe<u64>,
         ),
-        Error,
+        ResError,
     > {
         let (streams, persister, worker) =
             (&mut self.streams, &mut self.persister, &mut self.worker);
@@ -151,13 +150,13 @@ impl Direct {
         }
     }
 
-    fn write_single(&mut self, req: WriteReqSingle) -> Result<WriteRes, Error> {
+    fn write_single(&mut self, req: WriteReqSingle) -> Result<WriteRes, ResError> {
         let (write, _, _) = self.stream(&req.stream)?;
         let seqno = write.write(&[req.update]).recv()?.0;
         Ok(WriteRes { seqno })
     }
 
-    fn write_multi(&mut self, req: WriteReqMulti) -> Result<WriteRes, Error> {
+    fn write_multi(&mut self, req: WriteReqMulti) -> Result<WriteRes, ResError> {
         let mut write_handles = Vec::new();
         let mut updates = Vec::new();
         for req in req.writes {
@@ -172,7 +171,7 @@ impl Direct {
         Ok(WriteRes { seqno })
     }
 
-    fn read_output(&mut self, req: ReadOutputReq) -> Result<ReadOutputRes, Error> {
+    fn read_output(&mut self, req: ReadOutputReq) -> Result<ReadOutputRes, ResError> {
         let mut contents = Vec::new();
         if let Some(output) = self.output_by_stream_name.get_mut(&req.stream) {
             for e in output.try_iter() {
@@ -182,12 +181,12 @@ impl Direct {
                         // happens to work.
                         for (ts, ts_diff) in x {
                             if ts_diff > 0 {
-                                contents.push(ListenEvent::Sealed(ts));
+                                contents.push(ReadOutputEvent::Sealed(ts));
                             }
                         }
                     }
                     TimelyCaptureEvent::Messages(_, x) => {
-                        contents.push(ListenEvent::Records(x));
+                        contents.push(ReadOutputEvent::Records(x));
                     }
                 }
             }
@@ -195,7 +194,7 @@ impl Direct {
         Ok(ReadOutputRes { contents })
     }
 
-    fn seal(&mut self, req: SealReq) -> Result<(), Error> {
+    fn seal(&mut self, req: SealReq) -> Result<(), ResError> {
         let (write, _, probe) = self.stream(&req.stream)?;
         write.seal(req.ts).recv()?;
 
@@ -207,12 +206,15 @@ impl Direct {
         Ok(())
     }
 
-    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<(), Error> {
+    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<(), ResError> {
         let (write, _, _) = self.stream(&req.stream)?;
-        write.allow_compaction(Antichain::from_elem(req.ts)).recv()
+        write
+            .allow_compaction(Antichain::from_elem(req.ts))
+            .recv()?;
+        Ok(())
     }
 
-    fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), Error> {
+    fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), ResError> {
         let (_, read, _) = self.stream(&req.stream)?;
         let snap = read.snapshot()?;
         match self.snapshots.entry(req.snap) {
@@ -230,7 +232,7 @@ impl Direct {
         Ok(())
     }
 
-    fn read_snapshot(&mut self, req: ReadSnapshotReq) -> Result<ReadSnapshotRes, Error> {
+    fn read_snapshot(&mut self, req: ReadSnapshotReq) -> Result<ReadSnapshotRes, ResError> {
         let mut snap = match self.snapshots.remove(&req.snap) {
             Some(snap) => snap,
             None => return Err(format!("unknown snap: {:?}", req.snap).into()),
@@ -243,7 +245,7 @@ impl Direct {
         })
     }
 
-    fn start(&mut self) -> Result<(), Error> {
+    fn start(&mut self) -> Result<(), ResError> {
         // The handles from the previous persister cannot be used after stop.
         self.streams.clear();
 
@@ -257,13 +259,14 @@ impl Direct {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), Error> {
+    fn stop(&mut self) -> Result<(), ResError> {
         let res = self.persister.stop();
 
         // Stopping the persister should allow the dataflows to finish.
         while self.worker.step() {}
 
-        res
+        res?;
+        Ok(())
     }
 }
 
