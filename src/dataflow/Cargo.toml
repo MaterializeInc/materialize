@@ -32,7 +32,7 @@ kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
-num_enum = "0.5.3"
+num_enum = "0.5.4"
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
 persist = { path = "../persist" }

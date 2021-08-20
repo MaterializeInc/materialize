@@ -18,7 +18,7 @@ hmac = "0.11.0"
 itertools = "0.10.1"
 lowertest = { path = "../lowertest"}
 md-5 = "0.9.0"
-num_enum = "0.5.2"
+num_enum = "0.5.4"
 ordered-float = { version = "2.7.0", features = ["serde"] }
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
