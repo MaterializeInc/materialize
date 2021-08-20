@@ -7,7 +7,7 @@ menu:
     parent: guides
 ---
 
-Change Data Capture (CDC) allows you to track and propagate changes in a database to downstream consumers based on its changelog. In this guide, we'll cover how to use Materialize to create and efficiently maintain real-time materialized views on top of Postgres CDC data.
+Change Data Capture (CDC) allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL). In this guide, we'll cover how to use Materialize to create and efficiently maintain real-time materialized views on top of CDC data.
 
 There are two ways to connect Materialize to a Postgres database for CDC:
 
@@ -21,7 +21,7 @@ If Kafka is not part of your stack, you can use the [Postgres source](/sql/creat
 
 ### Setup
 
-**Minimum requirements:** Materialize v0.8.0+, Postgres 10+
+**Minimum requirements:** Materialize v0.8.2+, Postgres 10+
 
 Before creating a source in Materialize, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html). As a _superuser_:
 
@@ -69,13 +69,13 @@ Before creating a source in Materialize, you need to ensure that the upstream da
 
 ### Create a source
 
-Postgres sources are materialized by default and ingest the raw replication stream data for all tables included in the publication, to avoid creating multiple replication slots and minimize the required bandwidth. To create a source:
+Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth, and must therefore be explicitly materialized. To create a source:
 
 ```sql
 CREATE MATERIALIZED SOURCE mz_source
 FROM POSTGRES
-  CONNECTION 'host=postgres port=5432 user=host dbname=postgres sslmode=require'
-PUBLICATION 'mz_source';
+  CONNECTION 'host=example.com port=5432 user=host dbname=postgres sslmode=require'
+  PUBLICATION 'mz_source';
 ```
 
 {{< note >}}
@@ -117,7 +117,7 @@ _Create views for all tables:_
 CREATE VIEWS FROM SOURCE mz_source;
 ```
 
-Under the hood, Materilize parses this statement into view definitions for each table (so you don't have to!).
+Under the hood, Materialize parses this statement into view definitions for each table (so you don't have to!).
 
 ### Create a materialized view
 
