@@ -22,7 +22,11 @@ def main() -> int:
     args = parse_args()
     ui.Verbosity.init_from_env(explicit=None)
     root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(root)
+    repo = mzbuild.Repository(
+        root,
+        release_mode=(args.build_mode == "release"),
+        coverage=args.coverage,
+    )
 
     if args.command == "list":
         for image in repo:
@@ -83,6 +87,17 @@ def parse_args() -> argparse.Namespace:
         subparser = add_subcommand(name, **kwargs)
         subparser.add_argument(
             "image", help="the name of an mzbuild image in this repository"
+        )
+        subparser.add_argument(
+            "--build-mode",
+            default="release",
+            choices=["dev", "release"],
+            help="whether to build in dev or release mode",
+        )
+        subparser.add_argument(
+            "--coverage",
+            help="whether to enable code coverage compilation flags",
+            action="store_true",
         )
         return subparser
 

@@ -280,7 +280,9 @@ class CargoBuild(CargoPreImage):
             )
         if self.extract:
             output = spawn.capture(
-                cargo_build + ["--message-format=json"], unicode=True
+                cargo_build + ["--message-format=json"],
+                unicode=True,
+                env=dict(os.environ, XCOMPILE_RUSTFLAGS=self.rustflags),
             )
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
