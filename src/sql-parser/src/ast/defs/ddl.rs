@@ -92,6 +92,7 @@ impl_display_t!(AvroSchema);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProtobufSchema<T: AstInfo> {
     Csr {
+        message_name: String,
         csr_connector: CsrConnector<T>,
     },
     InlineSchema {
@@ -103,7 +104,13 @@ pub enum ProtobufSchema<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Csr { csr_connector } => {
+            Self::Csr {
+                message_name,
+                csr_connector,
+            } => {
+                f.write_str("MESSAGE '");
+                f.write_node(&display::escape_single_quote_string(message_name));
+                f.write_str("' ");
                 f.write_node(csr_connector);
             }
             Self::InlineSchema {

@@ -1524,23 +1524,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_protobuf_schema(&mut self) -> Result<ProtobufSchema<Raw>, ParserError> {
-        if self.parse_keywords(&[USING, CONFLUENT, SCHEMA, REGISTRY]) {
+        self.expect_keyword(MESSAGE)?;
+        let message_name = self.parse_literal_string()?;
+
+        self.expect_keyword(USING)?;
+        if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
             let csr_connector = self.parse_csr_connector()?;
-            Ok(ProtobufSchema::Csr { csr_connector })
-        } else if self.parse_keyword(MESSAGE) {
-            let message_name = self.parse_literal_string()?;
-            self.expect_keyword(USING)?;
+            Ok(ProtobufSchema::Csr {
+                message_name,
+                csr_connector,
+            })
+        } else {
             let schema = self.parse_schema()?;
             Ok(ProtobufSchema::InlineSchema {
                 message_name,
                 schema,
             })
-        } else {
-            return self.expected(
-                self.peek_pos(),
-                "CONFLUENT SCHEMA REGISTRY or MESSSAGE",
-                self.peek_token(),
-            );
         }
     }
 

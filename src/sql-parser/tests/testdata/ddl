@@ -632,9 +632,16 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]),
 parse-statement
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 ----
+error: Expected MESSAGE, found USING
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
+                                                               ^
+
+parse-statement
+CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE 'somemessage' USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
+----
+CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE 'somemessage' USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnector { url: "http://localhost:8081", seed: None, with_options: [] } })), key_envelope: None, envelope: None, if_not_exists: false, materialized: true, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Bare(Protobuf(Csr { message_name: "somemessage", csr_connector: CsrConnector { url: "http://localhost:8081", seed: None, with_options: [] } })), key_envelope: None, envelope: None, if_not_exists: false, materialized: true, key_constraint: None })
 
 parse-statement
 CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''

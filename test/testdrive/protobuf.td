@@ -111,4 +111,9 @@ $ kafka-ingest topic=tester format=protobuf message=simpleid schema=${schema} pu
 ! CREATE MATERIALIZED SOURCE tester
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tester-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Expected MESSAGE, found USING
+
+! CREATE MATERIALIZED SOURCE tester
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tester-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.SimpleId' USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 confluent schema registry protobuf schemas not yet supported

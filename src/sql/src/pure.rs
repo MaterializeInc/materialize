@@ -481,7 +481,7 @@ async fn purify_source_format_single(
             _ => {}
         },
         Format::Protobuf(schema) => match schema {
-            ProtobufSchema::Csr { csr_connector } => {
+            ProtobufSchema::Csr { csr_connector, .. } => {
                 purify_csr_connector(connector, connector_options, envelope, csr_connector).await?
             }
             ProtobufSchema::InlineSchema { schema, .. } => {
