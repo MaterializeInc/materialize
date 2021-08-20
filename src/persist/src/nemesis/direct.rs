@@ -15,6 +15,7 @@ use std::sync::mpsc::Receiver;
 use timely::communication::allocator::Thread;
 use timely::dataflow::operators::capture::{Capture, Event as TimelyCaptureEvent};
 use timely::dataflow::operators::probe::{Handle as TimelyProbe, Probe};
+use timely::progress::Antichain;
 use timely::worker::Worker;
 use timely::WorkerConfig;
 
@@ -207,13 +208,13 @@ impl Direct {
     }
 
     fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<(), Error> {
-        let (_, meta, _) = self.stream(&req.stream)?;
-        meta.allow_compaction(req.ts).recv()
+        let (write, _, _) = self.stream(&req.stream)?;
+        write.allow_compaction(Antichain::from_elem(req.ts)).recv()
     }
 
     fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), Error> {
-        let (_, meta, _) = self.stream(&req.stream)?;
-        let snap = meta.snapshot()?;
+        let (_, read, _) = self.stream(&req.stream)?;
+        let snap = read.snapshot()?;
         match self.snapshots.entry(req.snap) {
             Entry::Occupied(x) => {
                 return Err(format!(
