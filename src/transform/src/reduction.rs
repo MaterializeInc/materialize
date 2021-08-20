@@ -492,7 +492,7 @@ impl FoldConstants {
                         .map(|expr| expr.eval(&datums, &temp_storage))
                         .collect::<Result<Vec<_>, _>>()?,
                     &temp_storage,
-                )
+                )?
                 .fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
                 row_packer.extend(input_row.clone().into_iter().chain(output_row.into_iter()));

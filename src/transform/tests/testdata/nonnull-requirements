@@ -17,7 +17,7 @@ build apply=NonNullRequirements
 (filter
   (flat_map
     (map (get x) [(null int32)])
-    generate_series_int32
+    generate_series_step_int32
     [#1]
   )
   [(call_binary eq #0 #3)]

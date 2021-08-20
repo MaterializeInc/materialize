@@ -62,6 +62,8 @@ Wrap your release notes at the 80 character mark.
 
 - Add the [`string_agg`](/sql/functions/string_agg) function.
 
+- Add the [`generate_series(start, stop, step)`](/sql/functions/#table-func) table function. {{% gh 7953 %}}
+
 {{% version-header v0.9.0 %}}
 
 - **Breaking change.** Reject [Protobuf sources] whose schemas contain

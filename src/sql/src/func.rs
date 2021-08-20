@@ -23,7 +23,7 @@ use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
 use pgrepr::oid;
-use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 
 use crate::names::PartialName;
@@ -1813,19 +1813,37 @@ lazy_static! {
             // Table functions.
             "generate_series" => Table {
                 params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
+                    let row = Row::pack(&[Datum::Int32(1)]);
+                    let column_type = ColumnType { scalar_type: ScalarType::Int32, nullable: false };
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt32,
-                        exprs: vec![start, stop],
+                        func: TableFunc::GenerateSeriesStepInt32,
+                        exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1067;
                 params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
+                    let row = Row::pack(&[Datum::Int64(1)]);
+                    let column_type = ColumnType { scalar_type: ScalarType::Int64, nullable: false };
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt64,
-                        exprs: vec![start, stop],
+                        func: TableFunc::GenerateSeriesStepInt64,
+                        exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1069;
+                params!(Int32, Int32, Int32) => Operation::variadic(|_ecx, exprs| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesStepInt32,
+                        exprs,
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }), 1066;
+                params!(Int64, Int64, Int64) => Operation::variadic(|_ecx, exprs| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesStepInt64,
+                        exprs,
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }), 1066;
             },
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
