@@ -337,6 +337,23 @@ SELECT '1'::pg_catalog.oid
 ----
 1
 
+# 🔬🔬 regproc
+
+query T
+SELECT '1'::regproc
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regproc
+----
+1
+
+query T
+SELECT 'array_in'::pg_catalog.regproc
+----
+1
+
 # 🔬🔬🔬 oid alias
 
 query T

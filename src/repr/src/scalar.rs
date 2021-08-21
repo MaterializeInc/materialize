@@ -782,6 +782,8 @@ pub enum ScalarType {
         value_type: Box<ScalarType>,
         custom_oid: Option<u32>,
     },
+    /// A PostgreSQL function name.
+    RegProc,
 }
 
 impl<'a> ScalarType {

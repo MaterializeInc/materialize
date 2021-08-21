@@ -25,6 +25,19 @@ use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarTy
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
+use crate::func;
+
+/// Like func::sql_impl_func, but for casts.
+fn sql_impl_cast(expr: &'static str) -> CastTemplate {
+    let invoke = func::sql_impl(expr);
+    CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
+        let mut out = invoke(&ecx.qcx, vec![from_type.clone()]).ok()?;
+        Some(move |e| {
+            out.splice_parameters(&[e], 0);
+            out
+        })
+    })
+}
 
 /// A cast is a function that takes a `ScalarExpr` to another `ScalarExpr`.
 type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
@@ -210,6 +223,8 @@ lazy_static! {
             (String, Int32) => Explicit: CastStringToInt32,
             (String, Int64) => Explicit: CastStringToInt64,
             (String, Oid) => Explicit: CastStringToInt32,
+            (String, RegProc) => Explicit: sql_impl_cast("(SELECT oid FROM pg_catalog.pg_proc WHERE proname = $1)"),
+
             (String, Float32) => Explicit: CastStringToFloat32,
             (String, Float64) => Explicit: CastStringToFloat64,
             (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
