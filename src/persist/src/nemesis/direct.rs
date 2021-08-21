@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
+use std::time::Instant;
 
 use timely::communication::allocator::Thread;
 use timely::dataflow::operators::capture::{Capture, Event as TimelyCaptureEvent};
@@ -21,16 +22,18 @@ use timely::worker::Worker;
 use timely::WorkerConfig;
 
 use crate::error::Error;
+use crate::future::Future;
 use crate::indexed::runtime::{
     self, DecodedSnapshot, MultiWriteHandle, RuntimeClient, StreamReadHandle, StreamWriteHandle,
 };
 use crate::indexed::SnapshotExt;
 use crate::nemesis::{
-    AllowCompactionReq, Input, ReadOutputEvent, ReadOutputReq, ReadOutputRes, ReadSnapshotReq,
-    ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId, Step, TakeSnapshotReq, WriteReq,
-    WriteReqMulti, WriteReqSingle, WriteRes,
+    AllowCompactionReq, FutureRes, FutureStep, Input, ReadOutputEvent, ReadOutputReq,
+    ReadOutputRes, ReadSnapshotReq, ReadSnapshotRes, Req, Res, Runtime, SealReq, SnapshotId,
+    TakeSnapshotReq, WriteReq, WriteReqMulti, WriteReqSingle,
 };
 use crate::operators::source::PersistedSource;
+use crate::storage::SeqNo;
 use crate::unreliable::UnreliableHandle;
 
 // TODO: With the recent addition of dataflows, this is much less "direct" than
@@ -59,30 +62,47 @@ pub struct Direct {
 }
 
 impl Runtime for Direct {
-    fn run(&mut self, i: Input) -> Step {
+    fn run(&mut self, i: Input) -> FutureStep {
+        log::debug!("{:?} req: {:?}", i.req_id, &i.req);
+        let before = Instant::now();
         let res = match i.req {
             Req::Write(WriteReq::Single(req)) => {
-                Res::Write(WriteReq::Single(req.clone()), self.write_single(req))
+                FutureRes::Write(WriteReq::Single(req.clone()), self.write_single(req))
             }
             Req::Write(WriteReq::Multi(req)) => {
-                Res::Write(WriteReq::Multi(req.clone()), self.write_multi(req))
+                FutureRes::Write(WriteReq::Multi(req.clone()), self.write_multi(req))
             }
-            Req::ReadOutput(req) => Res::ReadOutput(req.clone(), self.read_output(req)),
-            Req::Seal(req) => Res::Seal(req.clone(), self.seal(req)),
+            Req::ReadOutput(req) => {
+                let res = Res::ReadOutput(req.clone(), self.read_output(req));
+                FutureRes::Ready(res)
+            }
+            Req::Seal(req) => FutureRes::Seal(req.clone(), self.seal(req)),
             Req::AllowCompaction(req) => {
-                Res::AllowCompaction(req.clone(), self.allow_compaction(req))
+                FutureRes::AllowCompaction(req.clone(), self.allow_compaction(req))
             }
-            Req::TakeSnapshot(req) => Res::TakeSnapshot(req.clone(), self.take_snapshot(req)),
-            Req::ReadSnapshot(req) => Res::ReadSnapshot(req.clone(), self.read_snapshot(req)),
-            Req::Start => Res::Start(self.start()),
-            Req::Stop => Res::Stop(self.stop()),
+            Req::TakeSnapshot(req) => {
+                let res = Res::TakeSnapshot(req.clone(), self.take_snapshot(req));
+                FutureRes::Ready(res)
+            }
+            Req::ReadSnapshot(req) => {
+                let res = Res::ReadSnapshot(req.clone(), self.read_snapshot(req));
+                FutureRes::Ready(res)
+            }
+            Req::Start => {
+                let res = Res::Start(self.start());
+                FutureRes::Ready(res)
+            }
+            Req::Stop => {
+                let res = Res::Stop(self.stop());
+                FutureRes::Ready(res)
+            }
             Req::StorageUnavailable => {
                 self.unreliable.make_unavailable();
-                Res::StorageUnavailable
+                FutureRes::Ready(Res::StorageUnavailable)
             }
             Req::StorageAvailable => {
                 self.unreliable.make_available();
-                Res::StorageAvailable
+                FutureRes::Ready(Res::StorageAvailable)
             }
         };
 
@@ -90,9 +110,17 @@ impl Runtime for Direct {
         // stop) but it can't hurt and maybe we'll uncover something.
         self.worker.0.step();
 
-        Step {
+        FutureStep {
             req_id: i.req_id,
+            before,
             res,
+        }
+    }
+
+    fn block_until(&mut self, stream: &str, ts: u64) {
+        if let Ok((_, _, probe)) = self.stream(stream) {
+            let probe = probe.clone();
+            self.worker.0.step_while(|| probe.less_than(&ts));
         }
     }
 
@@ -154,13 +182,12 @@ impl Direct {
         }
     }
 
-    fn write_single(&mut self, req: WriteReqSingle) -> Result<WriteRes, Error> {
+    fn write_single(&mut self, req: WriteReqSingle) -> Result<Future<SeqNo>, Error> {
         let (write, _, _) = self.stream(&req.stream)?;
-        let seqno = write.write(&[req.update]).recv()?.0;
-        Ok(WriteRes { seqno })
+        Ok(write.write(&[req.update]))
     }
 
-    fn write_multi(&mut self, req: WriteReqMulti) -> Result<WriteRes, Error> {
+    fn write_multi(&mut self, req: WriteReqMulti) -> Result<Future<SeqNo>, Error> {
         let mut write_handles = Vec::new();
         let mut updates = Vec::new();
         for req in req.writes {
@@ -171,8 +198,7 @@ impl Direct {
         let write_handles = write_handles.iter().collect::<Vec<_>>();
         let multi = MultiWriteHandle::new(&write_handles)?;
 
-        let seqno = multi.write_atomic(updates).recv()?.0;
-        Ok(WriteRes { seqno })
+        Ok(multi.write_atomic(updates))
     }
 
     fn read_output(&mut self, req: ReadOutputReq) -> Result<ReadOutputRes, Error> {
@@ -198,21 +224,18 @@ impl Direct {
         Ok(ReadOutputRes { contents })
     }
 
-    fn seal(&mut self, req: SealReq) -> Result<(), Error> {
-        let (write, _, probe) = self.stream(&req.stream)?;
-        write.seal(req.ts).recv()?;
-
-        // Force the dataflows to make progress, so we don't end up validating
-        // the very uninteresting case of no output.
-        let probe = probe.clone();
-        self.worker.0.step_while(|| probe.less_than(&req.ts));
-
-        Ok(())
+    fn seal(&mut self, req: SealReq) -> Result<Future<()>, Error> {
+        // NB: Once the caller resolves the returned future, it'd probably be
+        // good to wait until the output corresponding to this stream catches up
+        // to the sealed timestamp. Otherwise, we might end up testing the
+        // uninteresting but correct case of no output.
+        let (write, _, _) = self.stream(&req.stream)?;
+        Ok(write.seal(req.ts))
     }
 
-    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<(), Error> {
+    fn allow_compaction(&mut self, req: AllowCompactionReq) -> Result<Future<()>, Error> {
         let (write, _, _) = self.stream(&req.stream)?;
-        write.allow_compaction(Antichain::from_elem(req.ts)).recv()
+        Ok(write.allow_compaction(Antichain::from_elem(req.ts)))
     }
 
     fn take_snapshot(&mut self, req: TakeSnapshotReq) -> Result<(), Error> {

@@ -163,7 +163,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
         )
     })?;
     for req in reqs.iter() {
-        let _ = persist.run(req.clone());
+        let _ = persist.run(req.clone()).recv();
     }
     let persist_state = PersistState::slurp_from(&persist.persister)?;
     persist.finish();
