@@ -1271,9 +1271,9 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_proc AS SELECT
-    NULL::pg_catalog.oid AS oid,
-    NULL::pg_catalog.text AS proname
-    WHERE false",
+    oid,
+    name AS proname
+FROM mz_catalog.mz_functions",
     id: GlobalId::System(5021),
     needs_logs: false,
 };
