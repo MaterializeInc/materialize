@@ -106,7 +106,7 @@ if sys.platform != "darwin":
     # support lld.
     #
     # TODO(benesch): use a newer cross toolchain.
-    xrustflags += "-C link-arg=-fuse-ld=lld"
+    xrustflags += " -C link-arg=-fuse-ld=lld"
 
 
 def docker_images() -> Set[str]:
