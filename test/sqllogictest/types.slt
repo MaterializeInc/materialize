@@ -337,6 +337,61 @@ SELECT '1'::pg_catalog.oid
 ----
 1
 
+# 🔬🔬 regproc
+
+query T
+SELECT 1::regproc
+----
+1
+
+query T
+SELECT 1::int4::regproc
+----
+1
+
+query T
+SELECT 1::oid::regproc
+----
+1
+
+query T
+SELECT 1::oid::regproc::oid
+----
+1
+
+query T
+SELECT '1'::regproc
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regproc
+----
+1
+
+query error CAST does not support casting from regproc to text
+SELECT '1'::regproc::text
+
+query error CAST does not support casting from regproc to text
+SELECT 'now'::regproc::text
+
+query T
+SELECT 'now'::regproc
+----
+1299
+
+query T
+SELECT 'now'::regproc::oid
+----
+1299
+
+# TODO: improve this error message to match postgres.
+query error more than one record produced in subquery
+SELECT 'max'::regproc
+
+query error function "nonexistent" does not exist
+SELECT 'nonexistent'::regproc
+
 # 🔬🔬🔬 oid alias
 
 query T

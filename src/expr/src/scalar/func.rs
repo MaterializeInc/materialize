@@ -3556,10 +3556,13 @@ pub enum UnaryFunc {
     CastInt32ToFloat32,
     CastInt32ToFloat64,
     CastInt32ToOid,
+    CastInt32ToRegProc,
     CastInt32ToInt16,
     CastInt32ToInt64,
     CastInt32ToString,
     CastOidToInt32,
+    CastOidToRegProc,
+    CastRegProcToOid,
     CastInt64ToInt16,
     CastInt64ToInt32,
     CastInt16ToNumeric(Option<u8>),
@@ -3788,9 +3791,12 @@ impl UnaryFunc {
             UnaryFunc::CastInt32ToInt16 => cast_int32_to_int16(a),
             UnaryFunc::CastInt32ToInt64 => Ok(cast_int32_to_int64(a)),
             UnaryFunc::CastInt32ToOid => Ok(a),
+            UnaryFunc::CastInt32ToRegProc => Ok(a),
             UnaryFunc::CastInt32ToNumeric(scale) => cast_int32_to_numeric(a, *scale),
             UnaryFunc::CastInt32ToString => Ok(cast_int32_to_string(a, temp_storage)),
             UnaryFunc::CastOidToInt32 => Ok(a),
+            UnaryFunc::CastRegProcToOid => Ok(a),
+            UnaryFunc::CastOidToRegProc => Ok(a),
             UnaryFunc::CastInt64ToInt16 => cast_int64_to_int16(a),
             UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32(a),
             UnaryFunc::CastInt64ToBool => Ok(cast_int64_to_bool(a)),
@@ -4037,7 +4043,10 @@ impl UnaryFunc {
             | CastJsonbToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(nullable),
 
             CastInt32ToOid => ScalarType::Oid.nullable(nullable),
+            CastInt32ToRegProc => ScalarType::RegProc.nullable(nullable),
             CastOidToInt32 => ScalarType::Oid.nullable(nullable),
+            CastRegProcToOid => ScalarType::Oid.nullable(nullable),
+            CastOidToRegProc => ScalarType::RegProc.nullable(nullable),
 
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => {
                 ScalarType::Date.nullable(nullable)
@@ -4217,7 +4226,8 @@ impl UnaryFunc {
             | CastFloat32ToNumeric(_)
             | CastFloat64ToNumeric(_)
             | CastJsonbToNumeric(_) => false,
-            CastInt32ToOid | CastOidToInt32 => false,
+            CastInt32ToOid | CastOidToInt32 | CastInt32ToRegProc | CastRegProcToOid
+            | CastOidToRegProc => false,
             CastStringToDate | CastTimestampToDate | CastTimestampTzToDate => false,
             CastStringToTime | CastIntervalToTime | TimezoneTime { .. } => false,
             CastStringToTimestamp
@@ -4322,9 +4332,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastInt32ToInt16 => f.write_str("i32toi16"),
             UnaryFunc::CastInt32ToInt64 => f.write_str("i32toi64"),
             UnaryFunc::CastInt32ToOid => f.write_str("i32tooid"),
+            UnaryFunc::CastInt32ToRegProc => f.write_str("i32toregproc"),
             UnaryFunc::CastInt32ToString => f.write_str("i32tostr"),
             UnaryFunc::CastInt32ToNumeric(..) => f.write_str("i32tonumeric"),
             UnaryFunc::CastOidToInt32 => f.write_str("oidtoi32"),
+            UnaryFunc::CastRegProcToOid => f.write_str("regproctooid"),
+            UnaryFunc::CastOidToRegProc => f.write_str("oidtoregproc"),
             UnaryFunc::CastInt64ToInt16 => f.write_str("i64toi16"),
             UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
             UnaryFunc::CastInt64ToBool => f.write_str("i64tobool"),
@@ -4955,7 +4968,7 @@ where
     match &ty {
         Bool => strconv::format_bool(buf, d.unwrap_bool()),
         Int16 => strconv::format_int16(buf, d.unwrap_int16()),
-        Int32 | Oid => strconv::format_int32(buf, d.unwrap_int32()),
+        Int32 | Oid | RegProc => strconv::format_int32(buf, d.unwrap_int32()),
         Int64 => strconv::format_int64(buf, d.unwrap_int64()),
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),

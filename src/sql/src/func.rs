@@ -100,6 +100,7 @@ impl TypeCategory {
             | ScalarType::Int32
             | ScalarType::Int64
             | ScalarType::Oid
+            | ScalarType::RegProc
             | ScalarType::Numeric { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
@@ -786,6 +787,7 @@ impl From<ScalarBaseType> for ParamType {
             Jsonb => ScalarType::Jsonb,
             Uuid => ScalarType::Uuid,
             Oid => ScalarType::Oid,
+            RegProc => ScalarType::RegProc,
             Array | List | Record | Map => {
                 panic!("cannot convert ScalarBaseType::{:?} to ParamType", s)
             }
