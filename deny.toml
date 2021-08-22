@@ -63,7 +63,6 @@ allow-git = [
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
-    "https://github.com/MaterializeInc/serde-protobuf.git",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",

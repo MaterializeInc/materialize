@@ -22,6 +22,7 @@ use serde_protobuf::descriptor::{
 use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
+use ore::str::StrExt;
 use repr::adt::numeric::Numeric;
 use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
 
@@ -133,14 +134,15 @@ pub fn decode_descriptors(descriptors: &[u8]) -> Result<Descriptors> {
 pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
     let proto_name = proto_message_name(message_name);
     let message = descriptors.message_by_name(&proto_name).ok_or_else(|| {
+        // TODO(benesch): the error message here used to include the names of
+        // all messages in the descriptor set, but that one feature required
+        // maintaining a fork of serde_protobuf. I sent the patch upstream [0],
+        // and we can add the error message improvement back if that patch is
+        // accepted.
+        // [0]: https://github.com/dflemstr/serde-protobuf/pull/9
         anyhow!(
-            "Message {:?} not found in file descriptor set: {}",
-            proto_name,
-            descriptors
-                .iter_messages()
-                .map(|m| m.name())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "Message {} not found in file descriptor set",
+            proto_name.quoted()
         )
     })?;
     let mut seen_messages = HashSet::new();
