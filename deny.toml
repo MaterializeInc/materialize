@@ -25,11 +25,13 @@ name = "strum-macros"
 [[bans.deny]]
 name = "thiserror"
 wrappers = [
+    # Only list third-party crates here.
     "pprof",
     "proc-macro-crate",
     "prometheus",
     "pubnub-core",
     "pubnub-hyper",
+    "serde-protobuf",
     "sysctl",
 ]
 
