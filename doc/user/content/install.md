@@ -128,7 +128,8 @@ Detail | Info
 
 ### CLI Connections
 
-To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. To install the `psql` client:
+To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/),
+like `psql` or `mzcli`. To install the `psql` client:
 
 {{< tabs >}}
 {{< tab "macOS">}}
