@@ -115,7 +115,7 @@ impl Action for SqlAction {
             // DDL statements should always provide the expected result on the first try
             CreateDatabase(_) | CreateSchema(_) | CreateSource(_) | CreateSink(_)
             | CreateView(_) | CreateViews(_) | CreateTable(_) | CreateIndex(_) | CreateType(_)
-            | CreateRole(_) | AlterObjectRename(_) | AlterIndexOptions(_) | Discard(_)
+            | CreateRole(_) | AlterObjectRename(_) | AlterIndex(_) | Discard(_)
             | DropDatabase(_) | DropObjects(_) | SetVariable(_) | ShowDatabases(_)
             | ShowObjects(_) | ShowIndexes(_) | ShowColumns(_) | ShowCreateView(_)
             | ShowCreateSource(_) | ShowCreateTable(_) | ShowCreateSink(_) | ShowCreateIndex(_)

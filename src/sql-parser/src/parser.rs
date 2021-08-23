@@ -2500,28 +2500,32 @@ impl<'a> Parser<'a> {
 
         // We support `ALTER INDEX ... {RESET, SET} and `ALTER <object type> RENAME
         if object_type == ObjectType::Index {
-            let options = match self.parse_one_of_keywords(&[RESET, SET]) {
+            let action = match self.parse_one_of_keywords(&[RESET, SET]) {
                 Some(RESET) => {
                     self.expect_token(&Token::LParen)?;
                     let reset_options = self.parse_comma_separated(Parser::parse_identifier)?;
                     self.expect_token(&Token::RParen)?;
 
-                    Some(AlterIndexOptionsList::Reset(reset_options))
+                    Some(AlterIndexAction::ResetOptions(reset_options))
                 }
                 Some(SET) => {
-                    let set_options = self.parse_with_options(true)?;
+                    if self.parse_keyword(ENABLED) {
+                        Some(AlterIndexAction::Enable)
+                    } else {
+                        let set_options = self.parse_with_options(true)?;
 
-                    Some(AlterIndexOptionsList::Set(set_options))
+                        Some(AlterIndexAction::SetOptions(set_options))
+                    }
                 }
                 Some(_) => unreachable!(),
                 None => None,
             };
 
-            if let Some(options) = options {
-                return Ok(Statement::AlterIndexOptions(AlterIndexOptionsStatement {
+            if let Some(action) = action {
+                return Ok(Statement::AlterIndex(AlterIndexStatement {
                     index_name: name,
                     if_exists,
-                    options,
+                    action,
                 }));
             }
         }

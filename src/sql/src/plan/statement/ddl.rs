@@ -44,8 +44,8 @@ use sql_parser::ast::{CreateSourceFormat, KeyConstraint};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
-    AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AvroSchema, ColumnOption,
+    Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
     CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
     CreateSourceConnector, CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
@@ -2252,7 +2252,7 @@ with_options! {
 
 pub fn describe_alter_index_options(
     _: &StatementContext,
-    _: AlterIndexOptionsStatement,
+    _: AlterIndexStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2275,11 +2275,11 @@ fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, an
 
 pub fn plan_alter_index_options(
     scx: &StatementContext,
-    AlterIndexOptionsStatement {
+    AlterIndexStatement {
         index_name,
         if_exists,
-        options,
-    }: AlterIndexOptionsStatement,
+        action: actions,
+    }: AlterIndexStatement,
 ) -> Result<Plan, anyhow::Error> {
     let entry = match scx.resolve_item(index_name) {
         Ok(index) => index,
@@ -2297,8 +2297,8 @@ pub fn plan_alter_index_options(
     }
     let id = entry.id();
 
-    match options {
-        AlterIndexOptionsList::Reset(options) => {
+    match actions {
+        AlterIndexAction::ResetOptions(options) => {
             let options = options
                 .into_iter()
                 .filter_map(|o| match normalize::ident(o).as_str() {
@@ -2313,13 +2313,14 @@ pub fn plan_alter_index_options(
                 options,
             }))
         }
-        AlterIndexOptionsList::Set(options) => {
+        AlterIndexAction::SetOptions(options) => {
             let options = plan_index_options(options)?;
             Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
                 id,
                 options,
             }))
         }
+        AlterIndexAction::Enable => todo!("support ALTER INDEX foo SET ENABLED"),
     }
 }
 

@@ -1014,21 +1014,21 @@ ALTER INDEX name SET (property = true)
 ----
 ALTER INDEX name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Set([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name RESET (property)
 ----
 ALTER INDEX name RESET (property)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Reset([Ident("property")]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Ident("property")]) })
 
 parse-statement
 ALTER INDEX IF EXISTS name SET (property = true)
 ----
 ALTER INDEX IF EXISTS name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, options: Set([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name SET ()
@@ -1049,7 +1049,7 @@ ALTER INDEX name SET (property)
 ----
 ALTER INDEX name SET (property)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Set([WithOption { key: Ident("property"), value: None }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: None }]) })
 
 parse-statement
 ALTER INDEX name RESET (property = true)
@@ -1085,3 +1085,24 @@ ALTER INDEX name RENAME TO name2
 ALTER INDEX name RENAME TO name2
 =>
 AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
+
+parse-statement
+ALTER INDEX name SET ENABLED
+----
+ALTER INDEX name SET ENABLED
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: Enable })
+
+parse-statement
+ALTER INDEX name SET (property = true) ENABLED
+----
+error: Expected end of statement, found ENABLED
+ALTER INDEX name SET (property = true) ENABLED
+                                       ^
+
+parse-statement
+ALTER INDEX name SET ENABLED (property = true)
+----
+error: Expected end of statement, found left parenthesis
+ALTER INDEX name SET ENABLED (property = true)
+                             ^

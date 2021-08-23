@@ -931,7 +931,7 @@ impl Coordinator {
                                 }
 
                                 // Statements below must by run singly (in Started).
-                                Statement::AlterIndexOptions(_)
+                                Statement::AlterIndex(_)
                                 | Statement::AlterObjectRename(_)
                                 | Statement::CreateDatabase(_)
                                 | Statement::CreateIndex(_)
@@ -1609,6 +1609,7 @@ impl Coordinator {
             Plan::AlterIndexResetOptions(plan) => {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
+            Plan::AlterIndexEnable(..) => todo!("ALTER INDEX ... SET ENABLED"),
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id());
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
