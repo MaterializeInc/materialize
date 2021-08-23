@@ -66,6 +66,40 @@ pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, Stri
     )
 }
 
+/// Turns the json version of a MirRelationExpr into the [lowertest::to_json]
+/// syntax.
+///
+/// The return value is a tuple of:
+/// 1. The translated MirRelationExpr.
+/// 2. The commands to register sources referenced by the MirRelationExpr with
+///    the test catalog.
+pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<String>) {
+    let mut ctx = MirRelationExprDeserializeContext::new(&catalog);
+    let spec = from_json(
+        &serde_json::from_str(rel_json).unwrap(),
+        "MirRelationExpr",
+        &RTI,
+        &mut ctx,
+    );
+    let mut source_defs = ctx
+        .list_scope_references()
+        .map(|(name, typ)| {
+            format!(
+                "(defsource {} {})",
+                name,
+                from_json(
+                    &serde_json::to_value(typ).unwrap(),
+                    "RelationType",
+                    &RTI,
+                    &mut GenericTestDeserializeContext::default()
+                )
+            )
+        })
+        .collect::<Vec<_>>();
+    source_defs.sort();
+    (spec, source_defs)
+}
+
 /// A catalog that holds types of objects previously created for the unit test.
 ///
 /// This is for the purpose of allowing `MirRelationExpr`s can refer to them

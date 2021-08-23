@@ -4712,7 +4712,9 @@ dependencies = [
  "expr_test_util",
  "itertools",
  "lazy_static",
+ "ore",
  "repr",
+ "serde_json",
 ]
 
 [[package]]

@@ -16,3 +16,5 @@ anyhow = "1.0.43"
 datadriven = "0.6.0"
 lazy_static = "1.4.0"
 expr_test_util = {path = "../expr-test-util"}
+ore = { path = "../ore"}
+serde_json = "1.0.66"
