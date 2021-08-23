@@ -20,7 +20,7 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use interchange::json::JsonEncoder;
 use itertools::Itertools;
 use log::{debug, error, info};
-use ore::metrics::{IntCounter, UIntGauge};
+use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
@@ -51,6 +51,7 @@ use super::{KafkaBaseMetrics, SinkBaseMetrics};
 use crate::render::sinks::SinkRender;
 use crate::render::RenderState;
 use crate::source::timestamp::TimestampBindingRc;
+use prometheus::core::{AtomicI64, AtomicU64};
 
 impl<G> SinkRender<G> for KafkaSinkConnector
 where
@@ -162,14 +163,12 @@ where
 }
 
 /// Per-Kafka sink metrics.
-#[derive(Clone)]
 pub struct SinkMetrics {
-    // TODO: make these delete-on-drop?
-    messages_sent_counter: IntCounter,
-    message_send_errors_counter: IntCounter,
-    message_delivery_errors_counter: IntCounter,
-    rows_queued: UIntGauge,
-    messages_in_flight: UIntGauge,
+    messages_sent_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
+    message_send_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
+    message_delivery_errors_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
+    rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    messages_in_flight: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SinkMetrics {
@@ -179,27 +178,34 @@ impl SinkMetrics {
         sink_id: &str,
         worker_id: &str,
     ) -> SinkMetrics {
-        let labels = &[topic_name, sink_id, worker_id];
+        let labels = vec![
+            topic_name.to_string(),
+            sink_id.to_string(),
+            worker_id.to_string(),
+        ];
         SinkMetrics {
-            messages_sent_counter: base.messages_sent_counter.with_label_values(labels),
-            message_send_errors_counter: base.message_send_errors_counter.with_label_values(labels),
+            messages_sent_counter: base
+                .messages_sent_counter
+                .get_delete_on_drop_counter(labels.clone()),
+            message_send_errors_counter: base
+                .message_send_errors_counter
+                .get_delete_on_drop_counter(labels.clone()),
             message_delivery_errors_counter: base
                 .message_delivery_errors_counter
-                .with_label_values(labels),
-            rows_queued: base.rows_queued.with_label_values(labels),
-            messages_in_flight: base.messages_in_flight.with_label_values(labels),
+                .get_delete_on_drop_counter(labels.clone()),
+            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels.clone()),
+            messages_in_flight: base.messages_in_flight.get_delete_on_drop_gauge(labels),
         }
     }
 }
 
-#[derive(Clone)]
 pub struct SinkProducerContext {
-    metrics: SinkMetrics,
+    metrics: Arc<SinkMetrics>,
     shutdown_flag: Arc<AtomicBool>,
 }
 
 impl SinkProducerContext {
-    pub fn new(metrics: SinkMetrics, shutdown_flag: Arc<AtomicBool>) -> Self {
+    pub fn new(metrics: Arc<SinkMetrics>, shutdown_flag: Arc<AtomicBool>) -> Self {
         SinkProducerContext {
             metrics,
             shutdown_flag,
@@ -242,7 +248,7 @@ struct KafkaSinkState {
     topic: String,
     topic_prefix: String,
     shutdown_flag: Arc<AtomicBool>,
-    metrics: SinkMetrics,
+    metrics: Arc<SinkMetrics>,
     producer: ThreadedProducer<SinkProducerContext>,
     activator: timely::scheduling::Activator,
     txn_timeout: Duration,
@@ -281,11 +287,16 @@ impl KafkaSinkState {
     ) -> Self {
         let config = Self::create_producer_config(&connector);
 
-        let metrics = SinkMetrics::new(metrics, &connector.topic, &sink_id.to_string(), &worker_id);
+        let metrics = Arc::new(SinkMetrics::new(
+            metrics,
+            &connector.topic,
+            &sink_id.to_string(),
+            &worker_id,
+        ));
 
         let producer = config
             .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
-                metrics.clone(),
+                Arc::clone(&metrics),
                 Arc::clone(&shutdown_flag),
             ))
             .expect("creating kafka producer for Kafka sink failed");

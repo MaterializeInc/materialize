@@ -9,7 +9,7 @@
 
 use ore::{
     metric,
-    metrics::{HistogramVec, MetricsRegistry, UIntCounter},
+    metrics::{raw::HistogramVec, MetricsRegistry, UIntCounter},
 };
 
 #[derive(Clone, Debug)]

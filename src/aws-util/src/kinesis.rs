@@ -9,8 +9,6 @@
 
 //! Utility mod for Kinesis.
 
-use std::collections::HashSet;
-
 use anyhow::Context;
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
@@ -66,9 +64,9 @@ pub async fn list_shards(
 pub async fn get_shard_ids(
     client: &KinesisClient,
     stream_name: &str,
-) -> Result<HashSet<String>, anyhow::Error> {
+) -> Result<impl Iterator<Item = String>, anyhow::Error> {
     let shards = list_shards(client, stream_name).await?;
-    Ok(shards.into_iter().map(|s| s.shard_id).collect())
+    Ok(shards.into_iter().map(|s| s.shard_id))
 }
 
 /// Wrapper around AWS Kinesis GetShardIterator API (and Rusoto).

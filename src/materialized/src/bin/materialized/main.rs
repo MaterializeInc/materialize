@@ -45,7 +45,7 @@ use log::info;
 use ore::cgroup::{detect_memory_limit, MemoryLimit};
 use ore::metric;
 use ore::metrics::ThirdPartyMetric;
-use ore::metrics::{IntCounterVec, MetricsRegistry};
+use ore::metrics::{raw::IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 

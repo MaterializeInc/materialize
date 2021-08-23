@@ -33,6 +33,7 @@ use prometheus::core::{
     Atomic, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec, MetricVec,
     MetricVecBuilder,
 };
+use prometheus::{Histogram, HistogramVec};
 
 /// An extension trait for types that are valid (or convertible into) prometheus labels:
 /// slices/vectors of strings, and [`HashMap`]s.
@@ -147,6 +148,57 @@ impl<'a> PromLabelsExt<'a> for HashMap<&'a str, &'a str> {
 /// It adds a method to create a concrete metric from the vector that gets removed from the vector
 /// when the concrete metric is dropped.
 #[derive(Debug)]
+pub struct DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    inner: Histogram,
+    labels: L,
+    vec: HistogramVec,
+    _phantom: &'a PhantomData<()>,
+}
+
+impl<'a, L> DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    fn from_metric_vector(vec: &HistogramVec, labels: L) -> Self {
+        let inner = labels.get_from_metric_vec(vec);
+        Self {
+            inner,
+            labels,
+            vec: vec.clone(),
+            _phantom: &PhantomData,
+        }
+    }
+}
+
+impl<'a, L> Deref for DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    type Target = Histogram;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'a, L> Drop for DeleteOnDropHistogram<'a, L>
+where
+    L: PromLabelsExt<'a>,
+{
+    fn drop(&mut self) {
+        if self.labels.remove_from_metric_vec(&self.vec).is_err() {
+            // ignore.
+        }
+    }
+}
+
+/// A [`GenericCounter`] wrapper that deletes its labels from the vec when it is dropped
+///
+/// It adds a method to create a concrete metric from the vector that gets removed from the vector
+/// when the concrete metric is dropped.
+#[derive(Debug)]
 pub struct DeleteOnDropCounter<'a, P, L>
 where
     P: Atomic,
@@ -221,6 +273,28 @@ impl<P: Atomic> CounterVecExt for GenericCounterVec<P> {
         labels: L,
     ) -> DeleteOnDropCounter<'a, Self::CounterType, L> {
         DeleteOnDropCounter::from_metric_vector(self, labels)
+    }
+}
+
+/// Extension trait for all gauge metrics vectors.
+///
+/// It adds a method to create a concrete metric from the vector that gets removed from the vector
+/// when the concrete metric is dropped.
+pub trait HistogramVecExt {
+    /// Returns a counter that deletes its labels from this metrics vector when dropped.
+    /// See [`DeleteOnDropCounter`] for a detailed description.
+    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropHistogram<'a, L>;
+}
+
+impl HistogramVecExt for HistogramVec {
+    fn get_delete_on_drop_histogram<'a, L: PromLabelsExt<'a>>(
+        &self,
+        labels: L,
+    ) -> DeleteOnDropHistogram<'a, L> {
+        DeleteOnDropHistogram::from_metric_vector(self, labels)
     }
 }
 

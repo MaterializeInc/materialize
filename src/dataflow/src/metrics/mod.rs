@@ -11,7 +11,7 @@ use expr::GlobalId;
 use ore::metrics::MetricsRegistry;
 use ore::{
     metric,
-    metrics::{UIntCounterVec, UIntGauge, UIntGaugeVec},
+    metrics::{raw::UIntCounterVec, raw::UIntGaugeVec, UIntGauge},
 };
 
 use crate::decode::{DataDecoderInner, PreDelimitedFormat};
