@@ -25,6 +25,13 @@ mod tests {
     use ore::str::separated;
     use transform::{Optimizer, Transform, TransformArgs};
 
+    // Global options
+    const IN: &str = "in";
+    const FORMAT: &str = "format";
+    // Values that can be supplied for global options
+    const JSON: &str = "json";
+    const TEST: &str = "test";
+
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     enum FormatType<'a> {
         Explain(Option<&'a Vec<String>>),
@@ -46,8 +53,8 @@ mod tests {
         cat: &TestCatalog,
         args: &HashMap<String, Vec<String>>,
     ) -> Result<MirRelationExpr, Error> {
-        if let Some(input_format) = args.get("in") {
-            if input_format.contains(&"json".to_string()) {
+        if let Some(input_format) = args.get(IN) {
+            if input_format.iter().any(|s| s == JSON) {
                 return serde_json::from_str::<MirRelationExpr>(s).map_err(|e| anyhow!(e));
             }
         }
@@ -87,16 +94,16 @@ mod tests {
             )?;
         }
 
-        let format_type = if let Some(format) = args.get("format") {
-            if format.contains(&"test".to_string()) {
+        let format_type = if let Some(format) = args.get(FORMAT) {
+            if format.iter().any(|s| s == TEST) {
                 FormatType::Test
-            } else if format.contains(&"json".to_string()) {
+            } else if format.iter().any(|s| s == JSON) {
                 FormatType::Json
             } else {
-                FormatType::Explain(args.get("format"))
+                FormatType::Explain(args.get(FORMAT))
             }
         } else {
-            FormatType::Explain(args.get("format"))
+            FormatType::Explain(args.get(FORMAT))
         };
 
         let out = match test_type {

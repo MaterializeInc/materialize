@@ -45,6 +45,7 @@ have to reproduce the behavior, etc. etc.
    command of your choice (most likely `build` or `steps`). Be sure to include
    the argument `in=json`. If you want to use the output of your test in further
    tests, add the argument `format=test` or `format=json`.
-4. Run `cargo test` from this directory.
+4. Run `REWRITE=1 cargo test` from this directory. The test output will be
+   written to the file right below your test.
 
 Refer to [tests/testdata/steps] as an example.
