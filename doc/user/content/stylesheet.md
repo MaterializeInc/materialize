@@ -91,12 +91,20 @@ This is a "full_width" CTA button
 
 ### `callout` shortcode
 
-Used for prominent messages. Optionally can include a CTA button using `button_url` and `button_text` in shortcode params.
+Used for prominent messages. Optionally can include a primary and secondary CTA button using `primary_url`, `primary_text`, `secondary_url`, `secondary_text` in shortcode params.
 
-{{< callout button_url="/get-started/" button_text="Get Started" >}}
+**Primary Only:**
+{{< callout primary_url="/get-started/" primary_text="Get Started" >}}
   # Header
 
   Some text and the closing button is specified in the shortcode top.
+{{</ callout >}}
+
+**Primary and Secondary:**
+{{< callout primary_url="/" primary_text="Primary" secondary_url="/" secondary_text="Secondary">}}
+  # Header
+
+  This example has two buttons!
 {{</ callout >}}
 
 ### `linkbox` shortcode
