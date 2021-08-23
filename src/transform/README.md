@@ -20,7 +20,7 @@ MirRelationExpr. By default the input syntax is the one described in the
 option `in=json` to change the input syntax to the `serde_json` version of the
 MirRelationExpr.
 
-By default, the output is expressed the same form as `EXPLAIN <query>`.
+By default, the output is expressed in the same form as `EXPLAIN <query>`.
 Alternate output formats:
 * `format=types` will express the output in the same form as `EXPLAIN TYPED PLAN FOR <query>`.
 * `format=json` will serialize the output MirRelationExpr using `serde_json`.
