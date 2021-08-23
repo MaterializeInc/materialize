@@ -229,7 +229,7 @@ pub fn show_objects<'a>(
         ObjectType::Sink => show_sinks(scx, full, from, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
-        ObjectType::Role => unsupported!("SHOW ROLES"),
+        ObjectType::Role => bail_unsupported!("SHOW ROLES"),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -512,7 +512,7 @@ pub fn show_indexes<'a>(
     }: ShowIndexesStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
-        unsupported!("SHOW EXTENDED INDEXES")
+        bail_unsupported!("SHOW EXTENDED INDEXES")
     }
     let from = scx.resolve_item(table_name)?;
     if from.item_type() != CatalogItemType::View
@@ -558,10 +558,10 @@ pub fn show_columns<'a>(
     }: ShowColumnsStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
-        unsupported!("SHOW EXTENDED COLUMNS");
+        bail_unsupported!("SHOW EXTENDED COLUMNS");
     }
     if full {
-        unsupported!("SHOW FULL COLUMNS");
+        bail_unsupported!("SHOW FULL COLUMNS");
     }
 
     let entry = scx.resolve_item(table_name)?;

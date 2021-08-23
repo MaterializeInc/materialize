@@ -36,14 +36,14 @@ pub fn describe_set_transaction(
     _: &StatementContext,
     _: SetTransactionStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
-    unsupported!("SET TRANSACTION")
+    bail_unsupported!("SET TRANSACTION")
 }
 
 pub fn plan_set_transaction(
     _: &StatementContext,
     _: SetTransactionStatement,
 ) -> Result<Plan, anyhow::Error> {
-    unsupported!("SET TRANSACTION")
+    bail_unsupported!("SET TRANSACTION")
 }
 
 pub fn describe_rollback(
