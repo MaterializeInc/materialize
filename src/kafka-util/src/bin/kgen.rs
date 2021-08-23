@@ -360,8 +360,8 @@ impl<'a> RandomAvroGenerator<'a> {
                 let dist = string_dist(len_dist_json, rng);
                 self.strings.insert(p, Box::new(dist));
             }
-            SchemaPiece::Json => unimplemented!(),
-            SchemaPiece::Uuid => unimplemented!(),
+            SchemaPiece::Json => panic!("not generatable"),
+            SchemaPiece::Uuid => panic!("not generatable"),
             SchemaPiece::Array(inner) => {
                 let fn_ = field_name.unwrap();
                 let len_dist_json = annotations.get(&format!("{}.len", fn_)).unwrap();
@@ -370,7 +370,7 @@ impl<'a> RandomAvroGenerator<'a> {
                 let item_fn = format!("{}[]", fn_);
                 self.new_inner(node.step(&**inner), annotations, Some(&item_fn))
             }
-            SchemaPiece::Map(_) => unimplemented!(),
+            SchemaPiece::Map(_) => panic!("not generatable"),
             SchemaPiece::Union(us) => {
                 let variant_jsons = dist_json.expect(&err).as_array().unwrap();
                 assert!(variant_jsons.len() == us.variants().len());
@@ -400,8 +400,8 @@ impl<'a> RandomAvroGenerator<'a> {
                 doc: _,
                 symbols: _,
                 default_idx: _,
-            } => unimplemented!(),
-            SchemaPiece::Fixed { size: _ } => unimplemented!(),
+            } => panic!("not generatable"),
+            SchemaPiece::Fixed { size: _ } => panic!("not generatable"),
             SchemaPiece::ResolveIntTsMilli
             | SchemaPiece::ResolveIntTsMicro
             | SchemaPiece::ResolveDateTimestamp

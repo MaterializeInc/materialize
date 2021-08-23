@@ -72,12 +72,14 @@ extra_lints=(
     # `println!("{:?}", obj)` instead.
     clippy::dbg_macro
 
-    # Prevent code containing the `todo!` macro from being merged to the main
-    # branch.
+    # Prevent code containing the `todo!` or `unimplemented!` macros from being
+    # merged to the main branch. Both of these crash the program.
     #
-    # To mark something as intentionally unimplemented, use the `unimplemented!`
-    # macro instead.
+    # To mark a SQL feature as intentionally unimplemented, use the
+    # `unsupported!` macro which returns an error. Or if you must, just
+    # explicitly crash: `panic!("unimplemented and unreachable")`.
     clippy::todo
+    clippy::unimplemented
 
     # Wildcard dependencies are, by definition, incorrect. It is impossible
     # to be compatible with all future breaking changes in a crate.

@@ -11,9 +11,9 @@
 
 //! Catalog abstraction layer.
 
+use std::error::Error;
 use std::fmt;
 use std::time::{Duration, Instant};
-use std::{error::Error, unimplemented};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
 use dataflow_types::SourceConnector;
@@ -392,7 +392,7 @@ impl Catalog for DummyCatalog {
     }
 
     fn resolve_database(&self, _: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn resolve_schema(
@@ -400,38 +400,38 @@ impl Catalog for DummyCatalog {
         _: Option<String>,
         _: &str,
     ) -> Result<&dyn CatalogSchema, CatalogError> {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn resolve_role(&self, _: &str) -> Result<&dyn CatalogRole, CatalogError> {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn resolve_item(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn list_items<'a>(
         &'a self,
         _: &SchemaName,
     ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a> {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn try_get_item_by_id(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn get_item_by_oid(&self, _: &u32) -> &dyn CatalogItem {
-        unimplemented!();
+        panic!("unimplemented for tests");
     }
 
     fn item_exists(&self, _: &FullName) -> bool {
