@@ -18,7 +18,7 @@ ore = { path = "../ore" }
 regex = "1.5.4"
 repr = { path = "../repr" }
 rusoto_core = "0.47.0"
-serde = { version = "1.0.127", features = ["derive"] }
+serde = { version = "1.0.128", features = ["derive"] }
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.10.0"
