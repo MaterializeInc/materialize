@@ -95,6 +95,12 @@ pub struct MetricsRegistry {
 }
 
 /// A wrapper for metrics to require delete on drop semantics
+///
+/// The wrapper behaves like regular metrics but only provides functions to create delete-on-drop
+/// variants. This way, no metrics if this type can be leaked.
+///
+/// In situations where the delete-on-drop behavior is not desired or in legacy code, use the raw
+/// variants of the metrics, as defined in [self::raw].
 #[derive(Clone)]
 pub struct DeleteOnDropWrapper<M> {
     inner: M,

@@ -22,7 +22,10 @@ use hyper::{Body, Response, Server};
 use log::{debug, error, info, warn};
 use ore::{
     metric,
-    metrics::{CounterVecExt, HistogramVecExt, IntCounterVec, MetricsRegistry},
+    metrics::{
+        raw::IntCounterVec as RawIntCounterVec, CounterVecExt, HistogramVecExt, IntCounterVec,
+        MetricsRegistry,
+    },
 };
 use postgres::Client;
 use prometheus::Encoder;
@@ -176,7 +179,7 @@ fn spawn_query_thread(
                         Err(err) => {
                             timer.stop_and_discard();
                             err_count += 1;
-                            metrics.error(q_name.clone());
+                            metrics.error(&q_name);
                             last_was_failure = true;
                             print_error_and_backoff(&mut backoff, &q_name, err.to_string());
                             try_initialize(&mut postgres_client, &group);
@@ -361,7 +364,8 @@ fn try_initialize(client: &mut Client, query_group: &QueryGroup) -> bool {
 #[derive(Clone)]
 struct Metrics {
     histogram_unlabeled: HistogramVec,
-    errors_unlabeled: IntCounterVec,
+    // TODO: The error metric is not deleted after removing self
+    errors_unlabeled: RawIntCounterVec,
     rows_unlabeled: IntCounterVec,
 }
 
@@ -386,9 +390,9 @@ impl Metrics {
         }
     }
 
-    fn error(&self, query_name: String) {
+    fn error(&self, query_name: &str) {
         self.errors_unlabeled
-            .get_delete_on_drop_counter(vec![query_name])
+            .with_label_values(&[&query_name])
             .inc();
     }
 }
