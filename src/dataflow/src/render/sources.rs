@@ -189,6 +189,12 @@ where
                     (usize::cast_from(src_id.hashed()) % scope.peers()) == scope.index()
                 };
 
+                let name = format!("{}-{}", connector.name(), uid);
+                let persistence_token = if let Some(persist) = &render_state.persist {
+                    Some(persist.create_or_load(&name).expect("WIP"))
+                } else {
+                    None
+                };
                 let timestamp_histories = render_state
                     .ts_histories
                     .get(&orig_id)
@@ -210,6 +216,7 @@ where
                     encoding: encoding.clone(),
                     now,
                     base_metrics,
+                    persistence_token,
                 };
 
                 let (collection, capability) =

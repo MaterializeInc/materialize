@@ -37,9 +37,12 @@ use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeV
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
 
+use persist::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
+use persist::operators::stream::Persist;
 use repr::{Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::scheduling::activate::{Activator, SyncActivator};
@@ -113,6 +116,8 @@ pub struct SourceConfig<'a, G> {
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
     pub base_metrics: &'a SourceBaseMetrics,
+    /// Persistence token
+    pub persistence_token: Option<(StreamWriteHandle<Row, ()>, StreamReadHandle<Row, ()>)>,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -1153,10 +1158,18 @@ where
         }
     });
 
-    (
-        stream.map_fallible("SimpleSourceErrorDemux", |r| r),
-        Some(capability),
-    )
+    let (ok_stream, err_stream) = stream.map_fallible("SimpleSourceErrorDemux", |r| r);
+    let ok_stream = if let Some(token) = config.persistence_token {
+        // TODO: thread persistence errors into dataflow
+        let (ok, _err) = ok_stream
+            .map(|(data, time, diff)| ((data, ()), time, diff))
+            .persist(token);
+        ok.map(|((data, ()), time, diff)| (data, time, diff))
+    } else {
+        ok_stream
+    };
+
+    ((ok_stream, err_stream), Some(capability))
 }
 
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
