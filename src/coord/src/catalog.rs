@@ -2029,6 +2029,18 @@ impl Catalog {
         &self.enabled_indexes
     }
 
+    /// Returns whether or not an index is enabled.
+    ///
+    /// # Panics
+    /// Panics if `id` does not belong to a [`CatalogItem::Index`].
+    pub fn is_index_enabled(&self, id: &GlobalId) -> bool {
+        let index_entry = self.get_by_id(&id);
+        match index_entry.item() {
+            CatalogItem::Index(index) => index.enabled,
+            _ => unreachable!("cannot call is_index_enabled on non-idex"),
+        }
+    }
+
     /// Returns the default index for the specified `id`.
     ///
     /// Panics if `id` does not exist, or if `id` is not an object on which

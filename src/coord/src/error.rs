@@ -20,6 +20,8 @@ use crate::session::Var;
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum CoordError {
+    /// Specified index is disabled, but received update request
+    AlterOnDisabledIndex(String),
     /// Query needs AS OF <time> or indexes to succeed.
     AutomaticTimestampFailure(Vec<String>),
     /// An error occurred in a catalog operation.
@@ -80,6 +82,11 @@ impl CoordError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            CoordError::AlterOnDisabledIndex { .. } => Some(
+                "The Materialize server you are connected to is running with \
+                some indexes disabled."
+                    .into(),
+            ),
             CoordError::AutomaticTimestampFailure(deps) => Some(format!(
                 "The query transitively depends on the following unmaterialized sources:\n\t{}",
                 itertools::join(deps, "\n\t")
@@ -124,6 +131,9 @@ impl CoordError {
 impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            CoordError::AlterOnDisabledIndex(name) => {
+                write!(f, "cannot ALTER disabled index {}", name.quoted())
+            }
             CoordError::AutomaticTimestampFailure(..) => {
                 f.write_str("unable to automatically determine a query timestamp")
             }

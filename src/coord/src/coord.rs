@@ -2165,7 +2165,7 @@ impl Coordinator {
             Ok(()) => {
                 self.dataflow_builder().build_index_dataflow(id).map(|df| {
                     self.ship_dataflow(df);
-                    self.set_index_options(id, options);
+                    self.set_index_options(id, options).expect("index enabled");
                 });
 
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -3141,7 +3141,7 @@ impl Coordinator {
         &mut self,
         plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(plan.id, plan.options);
+        self.set_index_options(plan.id, plan.options)?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -3158,7 +3158,7 @@ impl Coordinator {
                 ),
             })
             .collect();
-        self.set_index_options(plan.id, options);
+        self.set_index_options(plan.id, options)?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -3321,8 +3321,24 @@ impl Coordinator {
         }
     }
 
-    fn set_index_options(&mut self, id: GlobalId, options: Vec<IndexOption>) {
-        let index = self.indexes.get_mut(&id).expect("index known to exist");
+    fn set_index_options(
+        &mut self,
+        id: GlobalId,
+        options: Vec<IndexOption>,
+    ) -> Result<(), CoordError> {
+        let index = match self.indexes.get_mut(&id) {
+            Some(index) => index,
+            None => {
+                if !self.catalog.is_index_enabled(&id) {
+                    return Err(CoordError::AlterOnDisabledIndex(
+                        self.catalog.get_by_id(&id).name().to_string(),
+                    ));
+                } else {
+                    panic!("coord indexes out of sync")
+                }
+            }
+        };
+
         for o in options {
             match o {
                 IndexOption::LogicalCompactionWindow(window) => {
@@ -3331,6 +3347,7 @@ impl Coordinator {
                 }
             }
         }
+        Ok(())
     }
 
     /// Prepares a relation expression for execution by preparing all contained

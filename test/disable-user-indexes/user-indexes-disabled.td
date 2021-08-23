@@ -58,6 +58,10 @@ on_name   key_name              seq_in_index  column_name  expression  nullable 
 ---------------------------------------------------------------------------------------
 mat_view  mat_view_primary_idx  1             sum          <null>      true     false
 
+# Cannot alter disabled index
+! ALTER INDEX mat_view_primary_idx RESET (logical_compaction_window)
+cannot ALTER disabled index "materialize.public.mat_view_primary_idx"
+
 # Materialized sources
 
 # mat_data is not considered materialized
