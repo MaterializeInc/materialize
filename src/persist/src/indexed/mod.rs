@@ -950,10 +950,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .traces
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let seal_frontier = trace.get_seal();
         let trace = trace.snapshot(&self.blob)?;
         let unsealed = unsealed.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
-        Ok(IndexedSnapshot(unsealed, trace, self.unsealeds_seqno_upper))
+        Ok(IndexedSnapshot(
+            unsealed,
+            trace,
+            self.unsealeds_seqno_upper,
+            seal_frontier,
+        ))
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
@@ -1025,7 +1031,7 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 /// A consistent snapshot of all data currently stored for an id.
 #[derive(Debug)]
-pub struct IndexedSnapshot(UnsealedSnapshot, TraceSnapshot, SeqNo);
+pub struct IndexedSnapshot(UnsealedSnapshot, TraceSnapshot, SeqNo, Antichain<u64>);
 
 impl IndexedSnapshot {
     /// Returns the SeqNo at which this snapshot was run.
@@ -1041,6 +1047,12 @@ impl IndexedSnapshot {
     /// to some time in this frontier.
     pub fn since(&self) -> Antichain<u64> {
         self.1.since.clone()
+    }
+
+    /// A logical upper bound on the times that had been added to the collection
+    /// when this snapshot was taken
+    fn get_seal(&self) -> Antichain<u64> {
+        self.3.clone()
     }
 }
 
@@ -1092,10 +1104,12 @@ mod tests {
         let id = block_on(|res| i.register("0", "()", "()", res))?;
 
         // Empty things are empty.
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 0);
+        assert_eq!(seal_frontier.elements(), &[0]);
 
         // Register a listener for writes.
         let (listen_tx, listen_rx) = mpsc::channel();
@@ -1116,19 +1130,23 @@ mod tests {
             i.write(vec![(id, updates.clone())], handle)
         })?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), updates);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[0]);
 
         // After a step, it's all still in the unsealed as nothing has been sealed
         // yet.
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), updates);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[0]);
 
         // After a seal and a step, the relevant data has moved into the trace
         // part of the index. Since we haven't sealed all the data, some of it
@@ -1136,19 +1154,23 @@ mod tests {
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), updates[1..]);
         assert_eq!(trace.read_to_end(), updates[..1]);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[2]);
 
         // All the data has been sealed, so it's now all in the trace.
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[3]);
 
         // Verify that the listener got a copy of the writes.
         let listen_received = {
@@ -1197,7 +1219,7 @@ mod tests {
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(unsealed, trace, _) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
         Ok(())
@@ -1239,7 +1261,7 @@ mod tests {
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(unsealed, trace, _) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![(("1".into(), "".into()), 1, 4)]);
 

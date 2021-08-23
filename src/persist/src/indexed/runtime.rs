@@ -551,6 +551,14 @@ impl<K: Codec, V: Codec> Snapshot<Result<K, String>, Result<V, String>> for Deco
     }
 }
 
+impl<K, V> DecodedSnapshot<K, V> {
+    /// A logical upper bound on the times that had been added to the collection
+    /// when this snapshot was taken
+    pub fn get_seal(&self) -> Antichain<u64> {
+        self.snap.get_seal()
+    }
+}
+
 /// A handle for a persisted stream of ((Key, Value), Time, Diff) updates backed
 /// by an [crate::indexed::Indexed] via a [RuntimeClient].
 #[derive(Debug, PartialEq, Eq)]
