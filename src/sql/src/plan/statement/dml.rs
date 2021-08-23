@@ -73,7 +73,7 @@ pub fn describe_update(
     _: &StatementContext,
     _: UpdateStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    unsupported!("UPDATE statements")
+    bail_unsupported!("UPDATE statements")
 }
 
 pub fn plan_update(
@@ -81,14 +81,14 @@ pub fn plan_update(
     _: UpdateStatement<Raw>,
     _: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    unsupported!("UPDATE statements")
+    bail_unsupported!("UPDATE statements")
 }
 
 pub fn describe_delete(
     _: &StatementContext,
     _: DeleteStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    unsupported!("DELETE statements")
+    bail_unsupported!("DELETE statements")
 }
 
 pub fn plan_delete(
@@ -96,7 +96,7 @@ pub fn plan_delete(
     _: DeleteStatement<Raw>,
     _: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    unsupported!("DELETE statements")
+    bail_unsupported!("DELETE statements")
 }
 
 pub fn describe_select(

@@ -1681,7 +1681,7 @@ lazy_static! {
             "array_agg" => Aggregate {
                 params!(NonVecAny) => Operation::unary(|ecx, e| {
                     if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
-                        unsupported!("array_agg on char");
+                        bail_unsupported!("array_agg on char");
                     };
                     // ArrayConcat excepts all inputs to be arrays, so wrap all input datums into
                     // arrays.
@@ -1691,13 +1691,13 @@ lazy_static! {
                     };
                     Ok((e_arr, AggregateFunc::ArrayConcat))
                 }), 2335;
-                params!(ArrayAny) => Operation::unary(|_ecx, _e| unsupported!("array_agg on arrays")), 4053;
+                params!(ArrayAny) => Operation::unary(|_ecx, _e| bail_unsupported!("array_agg on arrays")), 4053;
             },
             "bool_and" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_and")), 2517;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_and")), 2517;
             },
             "bool_or" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_or")), 2518;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_or")), 2518;
             },
             "count" => Aggregate {
                 params!() => Operation::nullary(|_ecx| {
@@ -1737,7 +1737,7 @@ lazy_static! {
                 params!(Numeric) => AggregateFunc::MinNumeric, oid::FUNC_MIN_NUMERIC_OID;
             },
             "json_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("json_agg")), 3175;
             },
             "jsonb_agg" => Aggregate {
                 params!(Any) => Operation::unary(|ecx, e| {
@@ -1792,7 +1792,7 @@ lazy_static! {
                     };
                     Ok((e, AggregateFunc::StringAgg))
                 }), 3538;
-                params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| unsupported!("string_agg")), 3545;
+                params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg")), 3545;
             },
             "sum" => Aggregate {
                 params!(Int16) => AggregateFunc::SumInt32, 2109;
@@ -1806,7 +1806,7 @@ lazy_static! {
                     // prevents `sum(NULL)` from choosing the `Float64`
                     // implementation, so that we match PostgreSQL's behavior.
                     // Plus we will one day want to support this overload.
-                    unsupported!("sum(interval)");
+                    bail_unsupported!("sum(interval)");
                 }), 2113;
             },
 
@@ -1920,7 +1920,7 @@ lazy_static! {
                 }), oid::FUNC_CSV_EXTRACT_OID;
             },
             "concat_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("concat_agg")), oid::FUNC_CONCAT_AGG_OID;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")), oid::FUNC_CONCAT_AGG_OID;
             },
             "current_timestamp" => Scalar {
                 params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID;
@@ -1928,7 +1928,7 @@ lazy_static! {
             "list_agg" => Aggregate {
                 params!(Any) => Operation::unary(|ecx, e| {
                     if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
-                        unsupported!("list_agg on char");
+                        bail_unsupported!("list_agg on char");
                     };
                     // ListConcat excepts all inputs to be lists, so wrap all input datums into
                     // lists.
@@ -2607,6 +2607,6 @@ pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow
         // JsonDeletePath
         // JsonContainsPath
         // JsonApplyPathPredicate
-        None => unsupported!(op),
+        None => bail_unsupported!(op),
     }
 }

@@ -146,10 +146,10 @@ pub fn plan_create_table(
     } = &stmt;
 
     if !with_options.is_empty() {
-        unsupported!("WITH options");
+        bail_unsupported!("WITH options");
     }
     if !constraints.is_empty() {
-        unsupported!("CREATE TABLE with constraints")
+        bail_unsupported!("CREATE TABLE with constraints")
     }
 
     let names: Vec<_> = columns
@@ -185,7 +185,9 @@ pub fn plan_create_table(
                     depends_on.extend(expr_depends_on);
                     default = expr.clone();
                 }
-                other => unsupported!(format!("CREATE TABLE with column constraint: {}", other)),
+                other => {
+                    bail_unsupported!(format!("CREATE TABLE with column constraint: {}", other))
+                }
             }
         }
         column_types.push(ty.nullable(nullable));
@@ -410,7 +412,7 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_frequency,
     };
     if !matches!(connector, CreateSourceConnector::Kafka { .. }) && key_envelope.is_present() {
-        unsupported!("INCLUDE KEY with non-Kafka sources");
+        bail_unsupported!("INCLUDE KEY with non-Kafka sources");
     }
 
     let (external_connector, encoding, key_envelope) = match connector {
@@ -739,19 +741,19 @@ pub fn plan_create_source(
                 CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr { .. })) => {
                     SourceEnvelope::Upsert
                 }
-                _ => unsupported!(format!("upsert requires a key/value format: {:?}", format)),
+                _ => bail_unsupported!(format!("upsert requires a key/value format: {:?}", format)),
             },
-            _ => unsupported!("upsert envelope for non-Kafka sources"),
+            _ => bail_unsupported!("upsert envelope for non-Kafka sources"),
         },
         sql_parser::ast::Envelope::CdcV2 => {
             if let CreateSourceConnector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
-                unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
+                bail_unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
             }
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
-                _ => unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
+                _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
             SourceEnvelope::CdcV2
         }
@@ -760,7 +762,7 @@ pub fn plan_create_source(
     if matches!(envelope, SourceEnvelope::Upsert) {
         match &encoding {
             SourceDataEncoding::Single(_) => {
-                unsupported!("upsert envelopes must have a key")
+                bail_unsupported!("upsert envelopes must have a key")
             }
             SourceDataEncoding::KeyValue { .. } => (),
         }
@@ -1044,7 +1046,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { .. } => {
-                unsupported!("confluent schema registry protobuf schemas");
+                bail_unsupported!("confluent schema registry protobuf schemas");
             }
             ProtobufSchema::InlineSchema {
                 message_name,
@@ -1092,7 +1094,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 },
             })
         }
-        Format::Json => unsupported!("JSON sources"),
+        Format::Json => bail_unsupported!("JSON sources"),
         Format::Text => DataEncoding::Text,
     }))
 }
@@ -1165,7 +1167,7 @@ pub fn plan_create_view(
             },
     } = &mut stmt;
     if !with_options.is_empty() {
-        unsupported!("WITH options");
+        bail_unsupported!("WITH options");
     }
     let name = if *temporary {
         scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
@@ -1323,8 +1325,8 @@ fn kafka_sink_builder(
             }
         }
         Some(Format::Json) => KafkaSinkFormat::Json,
-        Some(format) => unsupported!(format!("sink format {:?}", format)),
-        None => unsupported!("sink without format"),
+        Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
+        None => bail_unsupported!("sink without format"),
     };
 
     let (consistency_topic, consistency_format) = match consistency {
@@ -1365,10 +1367,10 @@ fn kafka_sink_builder(
                 // If a CONSISTENCY FORMAT is not provided, default to the FORMAT of the sink.
                 match &format {
                     format @ KafkaSinkFormat::Avro { .. } => (Some(topic), Some(format.clone())),
-                    KafkaSinkFormat::Json => unsupported!("CONSISTENCY FORMAT JSON"),
+                    KafkaSinkFormat::Json => bail_unsupported!("CONSISTENCY FORMAT JSON"),
                 }
             }
-            Some(other) => unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
+            Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
         },
         None => {
             // Support use of `consistency_topic` with option if the sink is Avro-formatted
@@ -1403,7 +1405,7 @@ fn kafka_sink_builder(
                             }),
                         )
                     }
-                    KafkaSinkFormat::Json => unsupported!("JSON consistency topic"),
+                    KafkaSinkFormat::Json => bail_unsupported!("JSON consistency topic"),
                 }
             } else {
                 (None, None)
@@ -1530,11 +1532,11 @@ pub fn plan_create_sink(
     let envelope = match envelope {
         None | Some(Envelope::Debezium(sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
-        Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
+        Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::Debezium(sql_parser::ast::DbzMode::Upsert)) => {
-            unsupported!("UPSERT doesn't make sense for sinks")
+            bail_unsupported!("UPSERT doesn't make sense for sinks")
         }
-        Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
+        Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;
@@ -1996,10 +1998,10 @@ pub fn plan_create_role(
         login = Some(true);
     }
     if login != Some(true) {
-        unsupported!("non-login users");
+        bail_unsupported!("non-login users");
     }
     if super_user != Some(true) {
-        unsupported!("non-superusers");
+        bail_unsupported!("non-superusers");
     }
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
@@ -2075,7 +2077,7 @@ pub fn plan_drop_schema(
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     if names.len() != 1 {
-        unsupported!("DROP SCHEMA with multiple schemas");
+        bail_unsupported!("DROP SCHEMA with multiple schemas");
     }
     match scx.resolve_schema(names.into_element()) {
         Ok(schema) => {

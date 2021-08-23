@@ -45,7 +45,7 @@ pub fn plan_set_variable(
     }: SetVariableStatement,
 ) -> Result<Plan, anyhow::Error> {
     if local {
-        unsupported!("SET LOCAL");
+        bail_unsupported!("SET LOCAL");
     }
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
@@ -100,8 +100,8 @@ pub fn plan_discard(
     match target {
         DiscardTarget::All => Ok(Plan::DiscardAll),
         DiscardTarget::Temp => Ok(Plan::DiscardTemp),
-        DiscardTarget::Sequences => unsupported!("DISCARD SEQUENCES"),
-        DiscardTarget::Plans => unsupported!("DISCARD PLANS"),
+        DiscardTarget::Sequences => bail_unsupported!("DISCARD SEQUENCES"),
+        DiscardTarget::Plans => bail_unsupported!("DISCARD PLANS"),
     }
 }
 
