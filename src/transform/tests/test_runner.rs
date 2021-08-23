@@ -40,7 +40,7 @@ mod tests {
     }
 
     // Converts string to MirRelationExpr. `args[in]` specifies which input
-    // is being used.
+    // format is being used.
     fn parse_relation(
         s: &str,
         cat: &TestCatalog,
