@@ -798,6 +798,30 @@ class Postgres(PythonService):
         )
 
 
+class SqlServer(PythonService):
+    def __init__(
+        self,
+        sa_password: str,  # At least 8 characters including uppercase, lowercase letters, base-10 digits and/or non-alphanumeric symbols.
+        name: str = "sql-server",
+        image: str = "mcr.microsoft.com/mssql/server",
+        environment: List[str] = [
+            "ACCEPT_EULA=Y",
+            "MSSQL_PID=Developer",
+            "MSSQL_AGENT_ENABLED=True",
+        ],
+    ) -> None:
+        environment.append(f"SA_PASSWORD={sa_password}")
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [1433, 1434, 1431],
+                "environment": environment,
+            },
+        )
+        self.sa_password = sa_password
+
+
 class Debezium(PythonService):
     def __init__(
         self,
@@ -845,11 +869,13 @@ class Testdrive(PythonService):
             "${TD_TEST:-$$*}",
         ],
         environment: List[str] = [
+            "TD_TEST",
             "TMPDIR=/share/tmp",
             "MZ_LOG_FILTER",
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_SESSION_TOKEN",
+            "SA_PASSWORD",
         ],
         volumes: List[str] = [".:/workdir", "mzdata:/share/mzdata", "tmp:/share/tmp"],
     ) -> None:
@@ -1803,6 +1829,35 @@ class RunStep(WorkflowStep):
                     *self._command,
                 ]
             )
+        except subprocess.CalledProcessError:
+            raise errors.Failed("giving up: {}".format(ui.shell_quote(self._command)))
+
+
+@Steps.register("exec")
+class ExecStep(WorkflowStep):
+    """
+    Run 'docker-compose exec' using `mzcompose run`
+
+    Args:
+
+      - service: (required) the name of the service
+      - command: (required) the command to run
+    """
+
+    def __init__(self, *, service: str, command: Union[str, list]) -> None:
+        self._service = service
+        cmd_list = ["exec", self._service]
+        if isinstance(command, str):
+            cmd_list.extend(shlex.split(command))
+        elif isinstance(command, list):
+            cmd_list.extend(command)
+
+        self._service = service
+        self._command = cmd_list
+
+    def run(self, workflow: Workflow) -> None:
+        try:
+            workflow.run_compose(self._command)
         except subprocess.CalledProcessError:
             raise errors.Failed("giving up: {}".format(ui.shell_quote(self._command)))
 
