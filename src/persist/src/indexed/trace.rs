@@ -52,8 +52,9 @@ use crate::storage::Blob;
 ///    to the trace it is assigned a compaction level of 0.
 ///  - We periodically merge consecutive batches at the same level L representing
 ///    time intervals [lo, mid) and [mid, hi) into a single batch representing
-///    all of the updates in [lo, hi) with level L + 1. Once two batches are merged
-///    they are removed from the trace and replaced with the merged batch.
+///    all of the updates in [lo, hi) with level L + 1 iff the new batch contains
+///    more data than both of its parents, and L otherwise.. Once two batches are
+///    merged they are removed from the trace and replaced with the merged batch.
 ///  - Perform merges for the oldest batches possible first.
 ///
 /// NB: this approach assumes that all batches are roughly uniformly sized when they
@@ -257,7 +258,6 @@ impl Trace {
         // Sanity check that both batches being merged are at identical compaction
         // levels.
         debug_assert_eq!(first.level, second.level);
-        let merged_level = first.level + 1;
 
         let desc = Description::new(
             first.desc.lower().clone(),
@@ -288,6 +288,16 @@ impl Trace {
         let key = self.new_blob_key();
         // TODO: actually clear the unwanted batches from the blob storage
         let size_bytes = blob.set_trace_batch(key.clone(), new_batch)?;
+
+        // Only upgrade the compaction level if we know this new batch represents
+        // an increase in data over both of its parents so that we know we need
+        // even more additional batches to amortize the cost of compacting it in
+        // the future.
+        let merged_level = if size_bytes > first.size_bytes && size_bytes > second.size_bytes {
+            first.level + 1
+        } else {
+            first.level
+        };
 
         Ok(TraceBatchMeta {
             key,
@@ -367,17 +377,21 @@ mod tests {
 
     use super::*;
 
+    fn desc_from(lower: u64, upper: u64, since: u64) -> Description<u64> {
+        Description::new(
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(since),
+        )
+    }
+
     #[test]
     fn test_allow_compaction() -> Result<(), Error> {
         let mut t: Trace = Trace::new(TraceMeta {
             id: Id(0),
             batches: vec![TraceBatchMeta {
                 key: "key1".to_string(),
-                desc: Description::new(
-                    Antichain::from_elem(0),
-                    Antichain::from_elem(10),
-                    Antichain::from_elem(5),
-                ),
+                desc: desc_from(0, 10, 5),
                 level: 1,
                 size_bytes: 0,
             }],
@@ -419,31 +433,25 @@ mod tests {
         t.update_seal(10);
 
         let batch = BlobTraceBatch {
-            desc: Description::new(
-                Antichain::from_elem(0),
-                Antichain::from_elem(1),
-                Antichain::from_elem(0),
-            ),
-            updates: vec![(("k".into(), "v".into()), 0, 1)],
+            desc: desc_from(0, 1, 0),
+            updates: vec![
+                (("k".into(), "v".into()), 0, 1),
+                (("k2".into(), "v2".into()), 0, 1),
+            ],
         };
 
         assert_eq!(t.append(batch, &mut blob), Ok(()));
         let batch = BlobTraceBatch {
-            desc: Description::new(
-                Antichain::from_elem(1),
-                Antichain::from_elem(3),
-                Antichain::from_elem(0),
-            ),
-            updates: vec![(("k".into(), "v".into()), 2, 1)],
+            desc: desc_from(1, 3, 0),
+            updates: vec![
+                (("k".into(), "v".into()), 2, 1),
+                (("k3".into(), "v3".into()), 2, 1),
+            ],
         };
         assert_eq!(t.append(batch, &mut blob), Ok(()));
 
         let batch = BlobTraceBatch {
-            desc: Description::new(
-                Antichain::from_elem(3),
-                Antichain::from_elem(9),
-                Antichain::from_elem(0),
-            ),
+            desc: desc_from(3, 9, 0),
             updates: vec![(("k".into(), "v".into()), 5, 1)],
         };
         assert_eq!(t.append(batch, &mut blob), Ok(()));
@@ -452,7 +460,7 @@ mod tests {
         t.allow_compaction(Antichain::from_elem(3));
         let (written_bytes, deleted_batches) = t.step(&mut blob)?;
         // Change this to a >0 check if it starts to be a maintenance burden.
-        assert_eq!(written_bytes, 186);
+        assert_eq!(written_bytes, 322);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -466,27 +474,21 @@ mod tests {
         assert_eq!(written_bytes, 0);
         assert_eq!(deleted_batches, vec![]);
 
-        let batch_meta: Vec<_> = t
-            .batches
-            .iter()
-            .map(|meta| {
-                (
-                    meta.key.clone(),
-                    (
-                        meta.desc.lower()[0],
-                        meta.desc.upper()[0],
-                        meta.desc.since()[0],
-                    ),
-                    meta.level,
-                )
-            })
-            .collect();
-
         assert_eq!(
-            batch_meta,
+            t.batches,
             vec![
-                ("Id(0)-trace-3".to_string(), (0, 3, 3), 1),
-                ("Id(0)-trace-2".to_string(), (3, 9, 0), 0)
+                TraceBatchMeta {
+                    key: "Id(0)-trace-3".to_string(),
+                    desc: desc_from(0, 3, 3),
+                    level: 1,
+                    size_bytes: 322,
+                },
+                TraceBatchMeta {
+                    key: "Id(0)-trace-2".to_string(),
+                    desc: desc_from(3, 9, 0),
+                    level: 0,
+                    size_bytes: 186,
+                },
             ]
         );
 
@@ -500,7 +502,64 @@ mod tests {
             updates,
             vec![
                 (("k".into(), "v".into()), 3, 2),
-                (("k".into(), "v".into()), 5, 1)
+                (("k".into(), "v".into()), 5, 1),
+                (("k2".into(), "v2".into()), 3, 1),
+                (("k3".into(), "v3".into()), 3, 1),
+            ]
+        );
+
+        t.update_seal(11);
+
+        let batch = BlobTraceBatch {
+            desc: desc_from(9, 10, 0),
+            updates: vec![(("k".into(), "v".into()), 9, 1)],
+        };
+        assert_eq!(t.append(batch, &mut blob), Ok(()));
+        t.validate_allow_compaction(&Antichain::from_elem(10))?;
+        t.allow_compaction(Antichain::from_elem(10));
+        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        assert_eq!(written_bytes, 186);
+        assert_eq!(
+            deleted_batches
+                .into_iter()
+                .map(|b| b.key)
+                .collect::<Vec<_>>(),
+            vec!["Id(0)-trace-4".to_string(), "Id(0)-trace-2".to_string()]
+        );
+
+        // Check that compactions which do not result in a batch larger than both
+        // parents do not increment the result batch's compaction level.
+        assert_eq!(
+            t.batches,
+            vec![
+                TraceBatchMeta {
+                    key: "Id(0)-trace-3".to_string(),
+                    desc: desc_from(0, 3, 3),
+                    level: 1,
+                    size_bytes: 322,
+                },
+                TraceBatchMeta {
+                    key: "Id(0)-trace-5".to_string(),
+                    desc: desc_from(3, 10, 10),
+                    level: 0,
+                    size_bytes: 186,
+                },
+            ]
+        );
+
+        let snapshot = t.snapshot(&blob)?;
+        assert_eq!(snapshot.since, Antichain::from_elem(10));
+        assert_eq!(snapshot.ts_upper, Antichain::from_elem(10));
+
+        let updates = snapshot.read_to_end();
+
+        assert_eq!(
+            updates,
+            vec![
+                (("k".into(), "v".into()), 3, 2),
+                (("k".into(), "v".into()), 10, 2),
+                (("k2".into(), "v2".into()), 3, 1),
+                (("k3".into(), "v3".into()), 3, 1),
             ]
         );
 
