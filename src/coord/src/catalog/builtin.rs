@@ -441,6 +441,18 @@ pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::BPCHAR_ARRAY,
 };
 
+pub const TYPE_REGPROC: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1046),
+    pgtype: &postgres_types::Type::REGPROC,
+};
+
+pub const TYPE_REGPROC_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1047),
+    pgtype: &postgres_types::Type::REGPROC_ARRAY,
+};
+
 lazy_static! {
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -1271,9 +1283,9 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_proc AS SELECT
-    NULL::pg_catalog.oid AS oid,
-    NULL::pg_catalog.text AS proname
-    WHERE false",
+    oid,
+    name AS proname
+FROM mz_catalog.mz_functions",
     id: GlobalId::System(5021),
     needs_logs: false,
 };
@@ -1344,6 +1356,8 @@ lazy_static! {
             Builtin::Type(&TYPE_OID_ARRAY),
             Builtin::Type(&TYPE_RECORD),
             Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_REGPROC),
+            Builtin::Type(&TYPE_REGPROC_ARRAY),
             Builtin::Type(&TYPE_INT2),
             Builtin::Type(&TYPE_INT2_ARRAY),
             Builtin::Type(&TYPE_TEXT),

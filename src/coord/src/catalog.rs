@@ -877,6 +877,9 @@ impl Catalog {
             for (_item_name, item_id) in &schema.items {
                 builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
             }
+            for (_item_name, function_id) in &schema.functions {
+                builtin_table_updates.extend(catalog.pack_item_update(*function_id, 1));
+            }
         }
         for (db_name, db) in &catalog.by_name {
             builtin_table_updates.push(catalog.pack_database_update(db_name, 1));
@@ -885,6 +888,9 @@ impl Catalog {
                 builtin_table_updates.push(catalog.pack_schema_update(&db_spec, schema_name, 1));
                 for (_item_name, item_id) in &schema.items {
                     builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
+                }
+                for (_item_name, function_id) in &schema.functions {
+                    builtin_table_updates.extend(catalog.pack_item_update(*function_id, 1));
                 }
             }
         }

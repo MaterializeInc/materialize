@@ -313,6 +313,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
+            PgType::REGPROC => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
             PgType::TEXT | PgType::BPCHAR | PgType::VARCHAR => {
                 Self(Value::Text(types::text_from_sql(raw)?.to_string()))
             }
@@ -385,6 +386,7 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::JSONB
                 | PgType::NUMERIC
                 | PgType::OID
+                | PgType::REGPROC
                 | PgType::RECORD
                 | PgType::TEXT
                 | PgType::BPCHAR
