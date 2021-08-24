@@ -17,7 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log;
 use ore::metrics::MetricsRegistry;
@@ -45,6 +45,8 @@ enum Cmd {
     Stop(FutureHandle<()>),
 }
 
+const STEP_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Starts the runtime in a [std::thread].
 ///
 /// This returns a clone-able client handle. The runtime is stopped when any
@@ -69,6 +71,7 @@ where
             indexed,
             rx,
             metrics: runtime_impl_metrics,
+            last_step: Instant::now(),
         };
         while l.work() {}
     };
@@ -626,6 +629,7 @@ struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
     rx: crossbeam_channel::Receiver<Cmd>,
     metrics: Metrics,
+    last_step: Instant,
 }
 
 impl<L: Log, B: Blob> RuntimeImpl<L, B> {
@@ -705,7 +709,14 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             .cmd_run_ms
             .inc_by(metric_duration_ms(step_start.duration_since(run_start)));
 
-        if let Err(e) = self.indexed.step() {
+        if let Err(e) = self.indexed.drain_pending().and_then(|_| {
+            if self.last_step.elapsed() > STEP_INTERVAL {
+                self.last_step = Instant::now();
+                self.indexed.step()
+            } else {
+                Ok(())
+            }
+        }) {
             self.metrics.cmd_step_error_count.inc();
             // TODO: revisit whether we need to move this to a different log level
             // depending on how spammy it ends up being. Alternatively, we
