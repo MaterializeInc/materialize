@@ -17,6 +17,8 @@ use std::{error, fmt, io, sync};
 pub enum Error {
     /// A persistence related error resulting from an io failure.
     IO(Arc<io::Error>),
+    /// An operation failed because storage was out of space or quota.
+    OutOfQuota(String),
     /// An unstructured persistence related error.
     String(String),
     /// An error returned when a command is sent to a persistence runtime that
@@ -30,6 +32,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::IO(e) => fmt::Display::fmt(e, f),
+            Error::OutOfQuota(e) => f.write_str(e),
             Error::String(e) => f.write_str(e),
             Error::RuntimeShutdown => f.write_str("runtime shutdown"),
         }
@@ -50,6 +53,10 @@ impl PartialEq for Error {
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
+        // This only works on unix/macos, but I don't see a great alternative.
+        if let Some(28) = e.raw_os_error() {
+            return Error::OutOfQuota(e.to_string());
+        }
         Error::IO(Arc::new(e))
     }
 }

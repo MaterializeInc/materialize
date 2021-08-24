@@ -217,7 +217,10 @@ impl Unsealed {
     ///
     /// Returns a list of batches that can safely be deleted after the eviction is
     /// committed to durable storage.
-    pub fn truncate(&mut self, new_ts_lower: Antichain<u64>) -> Result<Vec<String>, Error> {
+    pub fn truncate(
+        &mut self,
+        new_ts_lower: Antichain<u64>,
+    ) -> Result<Vec<UnsealedBatchMeta>, Error> {
         if PartialOrder::less_than(&new_ts_lower, &self.ts_lower) {
             return Err(format!(
                 "cannot regress ts_lower from {:?} to {:?}",
@@ -234,14 +237,14 @@ impl Unsealed {
     ///
     /// Returns a list of batches that can safely be deleted after the eviction is
     /// committed to durable storage.
-    fn evict(&mut self) -> Vec<String> {
+    fn evict(&mut self) -> Vec<UnsealedBatchMeta> {
         // TODO: actually physically free the old batches.
         let ts_lower = self.ts_lower.clone();
         let evicted = self
             .batches
             .iter()
             .filter(|b| !ts_lower.less_equal(&b.ts_upper))
-            .map(|b| b.key.clone())
+            .cloned()
             .collect();
         self.batches.retain(|b| ts_lower.less_equal(&b.ts_upper));
 
@@ -493,8 +496,11 @@ mod tests {
         // Check that truncate correctly returns the list of batches that can be
         // physically deleted.
         assert_eq!(
-            f.truncate(Antichain::from_elem(1)),
-            Ok(vec!["Id(0)-unsealed-0".to_string()])
+            f.truncate(Antichain::from_elem(1))?
+                .into_iter()
+                .map(|b| b.key)
+                .collect::<Vec<_>>(),
+            vec!["Id(0)-unsealed-0".to_string()]
         );
 
         // Check that repeatedly truncating the same time bound does not modify the unsealed.
@@ -520,11 +526,14 @@ mod tests {
 
         // Check that truncate correctly handles removing all data in the unsealed.
         assert_eq!(
-            f.truncate(Antichain::from_elem(2)),
-            Ok(vec![
+            f.truncate(Antichain::from_elem(2))?
+                .into_iter()
+                .map(|b| b.key)
+                .collect::<Vec<_>>(),
+            vec![
                 "Id(0)-unsealed-1".to_string(),
                 "Id(0)-unsealed-2".to_string()
-            ])
+            ]
         );
 
         // Check that truncate correctly handles the case where there are no more batches.

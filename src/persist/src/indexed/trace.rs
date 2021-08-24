@@ -12,6 +12,7 @@
 //!
 //! This is directly a persistent analog of [differential_dataflow::trace::Trace].
 
+use std::mem;
 use std::sync::Arc;
 
 use differential_dataflow::trace::Description;
@@ -300,7 +301,11 @@ impl Trace {
     ///
     /// Returns a list of trace batches that can now be physically deleted after
     /// the compaction step is committed to durable storage.
-    pub fn step<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<Vec<String>, Error> {
+    pub fn step<B: Blob>(
+        &mut self,
+        blob: &mut BlobCache<B>,
+    ) -> Result<(u64, Vec<TraceBatchMeta>), Error> {
+        let mut written_bytes = 0;
         let mut deleted = vec![];
         // TODO: should we remember our position in this list?
         for i in 1..self.batches.len() {
@@ -310,13 +315,13 @@ impl Trace {
                 let first = self.batches[i - 1].clone();
                 let second = self.batches[i].clone();
 
-                let new_batch = self.merge(&first, &second, blob)?;
+                let mut new_batch = self.merge(&first, &second, blob)?;
+                written_bytes += new_batch.size_bytes;
 
-                deleted.push(self.batches[i].key.clone());
-                deleted.push(self.batches[i - 1].key.clone());
                 // TODO: more performant way to do this?
-                self.batches.remove(i);
-                self.batches[i - 1] = new_batch;
+                deleted.push(self.batches.remove(i));
+                mem::swap(&mut self.batches[i - 1], &mut new_batch);
+                deleted.push(new_batch);
 
                 // Sanity check that the modified list of batches satisfies
                 // all invariants.
@@ -327,7 +332,7 @@ impl Trace {
                 break;
             }
         }
-        Ok(deleted)
+        Ok((written_bytes, deleted))
     }
 }
 
@@ -445,16 +450,21 @@ mod tests {
 
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
         t.allow_compaction(Antichain::from_elem(3));
+        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        // Change this to a >0 check if it starts to be a maintenance burden.
+        assert_eq!(written_bytes, 186);
         assert_eq!(
-            t.step(&mut blob),
-            Ok(vec![
-                "Id(0)-trace-1".to_string(),
-                "Id(0)-trace-0".to_string()
-            ])
+            deleted_batches
+                .into_iter()
+                .map(|b| b.key)
+                .collect::<Vec<_>>(),
+            vec!["Id(0)-trace-1".to_string(), "Id(0)-trace-0".to_string()]
         );
 
         // Check that step doesn't do anything when there's nothing to compact.
-        assert_eq!(t.step(&mut blob), Ok(vec![]));
+        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        assert_eq!(written_bytes, 0);
+        assert_eq!(deleted_batches, vec![]);
 
         let batch_meta: Vec<_> = t
             .batches
