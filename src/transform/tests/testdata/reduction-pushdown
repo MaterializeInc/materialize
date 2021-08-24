@@ -1,0 +1,66 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+cat
+(defsource x [int32 string])
+----
+ok
+
+build apply=ReductionPushdown
+(reduce
+    (project
+        (map
+            (project
+                (map
+                    (get x)
+                    [(call_unary byte_length_string #1)]
+                )
+                [#0 #2 #0 #1]
+            )
+            [(call_unary ln (call_unary cast_int_32_to_float_64 #1))]
+        )
+        [#4 #2 #0 #1]
+    )
+    [#2]
+    [(sum_int32 #3 true)
+    (sum_float64 (call_binary add_int32 (call_unary
+        cast_float_64_to_int32 (call_unary round_float64 #0)) #1) false)]
+)
+----
+%0 =
+| Get x (u0)
+| Reduce group=(#0)
+| | agg sum(distinct octet_length(#1))
+| | agg sum((f64toi32(roundf64(lnf64(i32tof64(octet_length(#1))))) + #0))
+
+build apply=ReductionPushdown
+(reduce
+    (map
+        (project
+            (map
+                (project
+                    (get x)
+                    [#1 #0 #1]
+                )
+                [(call_unary ln (call_unary cast_int_32_to_float_64 #1))]
+            )
+            [#2 #0 #3 #1]
+        )
+        [(call_unary byte_length_string #0)]
+    )
+    [(call_binary mul_int32 #3 5)]
+    [(sum_int32 #4 true)
+    (sum_float64 #2 false)]
+)
+----
+%0 =
+| Get x (u0)
+| Reduce group=((#0 * 5))
+| | agg sum(distinct octet_length(#1))
+| | agg sum(lnf64(i32tof64(#0)))
