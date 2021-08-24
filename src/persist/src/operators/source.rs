@@ -56,6 +56,17 @@ where
             // We should probably allow the listen to deregister itself.
             let _ = listen_tx.send(e);
         });
+
+        // We intentionally register the listener before we take the snapshot so
+        // that we know there will be no missing data between the data returned
+        // by the listener and the data contained in the snapshot. However, this
+        // means that either the records received by the listener or the seal
+        // notifications received by the listener could be duplicates of the data
+        // contained in the snapshot and so we have to check every notification to
+        // ensure it is in advance of the snapshot's frontier.
+        //
+        // TODO: if we had some way to communicate the ts/seqno a listener started
+        // listening at, we could pass it along as the upper bound to snapshot.
         let err_new_register = match read.listen(listen_fn) {
             Ok(_) => operator::empty(self),
             Err(err) => vec![(err.to_string(), 0, 1)].to_stream(self),
@@ -147,8 +158,16 @@ where
                             activator.activate();
                         }
                         ListenEvent::Sealed(ts) => {
-                            cap.downgrade(&ts);
-                            activator.activate();
+                            // We only need to check that the incoming notifications
+                            // are in advance of the snapshot's lower bound because the
+                            // snapshot might have some overlap with the notifications.
+                            // The seals are required to be in order and so we don't
+                            // need to check that each seal is in advance of its
+                            // predecessor.
+                            if lower_filter.less_equal(&ts) {
+                                cap.downgrade(&ts);
+                                activator.activate();
+                            }
                         }
                     },
                     Err(TryRecvError::Empty) => {
