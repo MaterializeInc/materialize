@@ -24,11 +24,14 @@ pub mod file;
 pub mod future;
 pub mod indexed;
 pub mod mem;
-#[cfg(test)]
-pub mod nemesis;
 pub mod operators;
 pub mod storage;
 pub mod unreliable;
+
+#[cfg(test)]
+pub mod golden_test;
+#[cfg(test)]
+pub mod nemesis;
 
 // TODO
 // - This method of getting the metadata handle ends up being pretty clunky in
