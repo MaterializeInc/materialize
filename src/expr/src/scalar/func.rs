@@ -4478,6 +4478,21 @@ fn coalesce<'a>(
     Ok(Datum::Null)
 }
 
+fn error_if_null<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    exprs: &'a [MirScalarExpr],
+) -> Result<Datum<'a>, EvalError> {
+    let datums = exprs
+        .iter()
+        .map(|e| e.eval(datums, temp_storage))
+        .collect::<Result<Vec<_>, _>>()?;
+    match datums[0] {
+        Datum::Null => Err(EvalError::Internal(datums[1].unwrap_str().to_string())),
+        _ => Ok(datums[0]),
+    }
+}
+
 fn text_concat_binary<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     buf.push_str(a.unwrap_str());
@@ -5461,6 +5476,7 @@ pub enum VariadicFunc {
     RegexpMatch,
     HmacString,
     HmacBytes,
+    ErrorIfNull,
 }
 
 impl VariadicFunc {
@@ -5506,6 +5522,7 @@ impl VariadicFunc {
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
             VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
             VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
+            VariadicFunc::ErrorIfNull => error_if_null(datums, temp_storage, exprs),
         }
     }
 
@@ -5565,6 +5582,7 @@ impl VariadicFunc {
             SplitPart => ScalarType::String.nullable(true),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
+            ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
         }
     }
 
@@ -5603,6 +5621,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::SplitPart => f.write_str("split_string"),
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
             VariadicFunc::HmacString | VariadicFunc::HmacBytes => f.write_str("hmac"),
+            VariadicFunc::ErrorIfNull => f.write_str("error_if_null"),
         }
     }
 }

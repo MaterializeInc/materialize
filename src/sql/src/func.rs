@@ -2081,6 +2081,11 @@ lazy_static! {
                     END"
                 ), oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID;
             },
+            "mz_error_if_null" => Scalar {
+                // If the first argument is NULL, returns an EvalError::Internal whose error
+                // message is the second argument.
+                params!(Any, String) => VariadicFunc::ErrorIfNull, oid::FUNC_MZ_ERROR_IF_NULL_OID;
+            },
             "mz_is_materialized" => Scalar {
                 params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1 AND enabled)"),
                     oid::FUNC_MZ_IS_MATERIALIZED_OID;

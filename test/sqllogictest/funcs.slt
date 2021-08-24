@@ -1110,3 +1110,11 @@ SELECT a, b, mz_row_size(col_size.*) FROM col_size ORDER BY a
 ----
 1  2  77
 NULL  NULL  32
+
+query error mz_errored
+SELECT mz_internal.mz_error_if_null(NULL, 'mz_errored')
+
+query I
+SELECT mz_internal.mz_error_if_null(1, '')
+----
+1
