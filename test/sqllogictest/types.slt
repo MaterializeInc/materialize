@@ -417,6 +417,18 @@ SELECT 750 = 'array_in'::regproc
 ----
 true
 
+statement ok
+CREATE TABLE text_to_regproc (a text);
+
+statement ok
+INSERT INTO text_to_regproc VALUES (NULL), ('array_in');
+
+query I
+SELECT a::regproc FROM text_to_regproc ORDER BY a
+----
+750
+NULL
+
 # 🔬🔬🔬 oid alias
 
 query T

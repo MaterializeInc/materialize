@@ -1263,7 +1263,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
         0
     )
         AS typarray,
-    (CASE mztype WHEN 'a' THEN 'array_in'::pg_catalog.regproc ELSE NULL END) AS typinput,
+    (CASE mztype WHEN 'a' THEN 'array_in' ELSE NULL END)::pg_catalog.regproc AS typinput,
     NULL::pg_catalog.oid AS typreceive,
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype

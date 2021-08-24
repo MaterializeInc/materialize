@@ -241,6 +241,7 @@ lazy_static! {
             (String, RegProc) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE
+                    WHEN $1 IS NULL THEN NULL
                     WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regproc
                     ELSE (
                         mz_internal.mz_error_if_null(
