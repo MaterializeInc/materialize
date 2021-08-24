@@ -59,6 +59,7 @@ atttypmod    false     integer
 attnotnull   false     boolean
 attisdropped false     boolean
 atttypid     false     oid
+attlen       true      smallint
 
 ! SELECT current_schemas()
 Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;

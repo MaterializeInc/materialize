@@ -1220,24 +1220,6 @@ FROM pg_catalog.pg_class",
     needs_logs: false,
 };
 
-pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
-    name: "pg_attribute",
-    schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_attribute AS SELECT
-    mz_objects.oid as attrelid,
-    mz_columns.name as attname,
-    mz_types.oid AS atttypid,
-    position as attnum,
-    -1::pg_catalog.int4 as atttypmod,
-    NOT nullable as attnotnull,
-    FALSE as attisdropped
-FROM mz_catalog.mz_objects
-JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
-JOIN mz_catalog.mz_types ON mz_columns.type = mz_types.name",
-    id: GlobalId::System(5019),
-    needs_logs: false,
-};
-
 pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
     schema: PG_CATALOG_SCHEMA,
@@ -1245,6 +1227,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
+    NULL::pg_catalog.int2 AS typlen,
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
     CASE mztype WHEN 'a' THEN 'b' ELSE mztype END AS typtype,
@@ -1266,7 +1249,8 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     (CASE mztype WHEN 'a' THEN 'array_in' ELSE NULL END)::pg_catalog.regproc AS typinput,
     NULL::pg_catalog.oid AS typreceive,
     false::pg_catalog.bool AS typnotnull,
-    0::pg_catalog.oid AS typbasetype
+    0::pg_catalog.oid AS typbasetype,
+    -1::pg_catalog.int4 AS typtypmod
 FROM
     mz_catalog.mz_types
     JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id
@@ -1280,6 +1264,29 @@ FROM
             UNION ALL SELECT type_id, 'p' FROM mz_catalog.mz_pseudo_types
         )
             AS t ON mz_types.id = t.type_id",
+    id: GlobalId::System(5019),
+    needs_logs: false,
+};
+
+pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
+    name: "pg_attribute",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_attribute AS SELECT
+    mz_objects.oid as attrelid,
+    mz_columns.name as attname,
+    mz_types.oid AS atttypid,
+    pg_type.typlen AS attlen,
+    position as attnum,
+    -1::pg_catalog.int4 as atttypmod,
+    NOT nullable as attnotnull,
+    FALSE as attisdropped
+FROM mz_catalog.mz_objects
+JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
+JOIN mz_catalog.mz_types ON mz_columns.type = mz_types.name
+JOIN pg_catalog.pg_type ON pg_type.oid = mz_types.oid
+",
+    // Since this depends on pg_type, its id must be higher due to initialization
+    // ordering.
     id: GlobalId::System(5020),
     needs_logs: false,
 };
@@ -1316,6 +1323,30 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     NULL::pg_catalog.text AS enumlabel
     WHERE false",
     id: GlobalId::System(5023),
+    needs_logs: false,
+};
+
+pub const PG_ATTRDEF: BuiltinView = BuiltinView {
+    name: "pg_attrdef",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_attrdef AS SELECT
+    NULL::pg_catalog.oid AS adrelid,
+    NULL::pg_catalog.int2 AS adnum,
+    NULL::pg_catalog.text AS adbin,
+    NULL::pg_catalog.text AS adsrc
+    WHERE false",
+    id: GlobalId::System(5025),
+    needs_logs: false,
+};
+
+pub const PG_SETTINGS: BuiltinView = BuiltinView {
+    name: "pg_settings",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_settings AS SELECT
+    NULL::pg_catalog.text AS name,
+    NULL::pg_catalog.text AS setting
+    WHERE false",
+    id: GlobalId::System(5026),
     needs_logs: false,
 };
 
@@ -1438,11 +1469,13 @@ lazy_static! {
             Builtin::View(&PG_DATABASE),
             Builtin::View(&PG_INDEX),
             Builtin::View(&PG_DESCRIPTION),
-            Builtin::View(&PG_ATTRIBUTE),
             Builtin::View(&PG_TYPE),
+            Builtin::View(&PG_ATTRIBUTE),
             Builtin::View(&PG_PROC),
             Builtin::View(&PG_RANGE),
             Builtin::View(&PG_ENUM),
+            Builtin::View(&PG_ATTRDEF),
+            Builtin::View(&PG_SETTINGS),
         ];
 
         // TODO(sploiselle): assign static global IDs to functions
