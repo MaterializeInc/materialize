@@ -22,6 +22,7 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::storage::Blob;
+use crate::Codec;
 
 /// A disk-backed cache for objects in [Blob] storage.
 ///
@@ -253,9 +254,9 @@ impl<B: Blob> BlobCache<B> {
             Some(bytes) => bytes,
             None => return Ok(None),
         };
-        let meta: Abomonated<BlobMeta, Vec<u8>> = unsafe { Abomonated::new(bytes) }
-            .ok_or_else(|| Error::from(format!("invalid meta at key: {}", Self::META_KEY)))?;
-        let meta = (*meta).clone();
+        let meta = BlobMeta::decode(&bytes).map_err(|err| {
+            Error::from(format!("invalid meta at key {}: {}", Self::META_KEY, err))
+        })?;
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
         Ok(Some(meta))
     }
@@ -265,7 +266,7 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
 
         let mut val = Vec::new();
-        unsafe { abomonation::encode(meta, &mut val) }.expect("write to Vec is infallible");
+        meta.encode(&mut val);
         let val_len = u64::cast_from(val.len());
         self.metrics.meta_size_bytes.set(val_len);
 
