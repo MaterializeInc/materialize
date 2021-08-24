@@ -172,7 +172,7 @@ lazy_static! {
             (Oid, RegProc) => Assignment: CastOidToRegProc,
 
             // REGPROC
-            (RegProc,Oid) => Assignment: CastRegProcToOid,
+            (RegProc,Oid) => Implicit: CastRegProcToOid,
 
             // FLOAT32
             (Float32, Int16) => Assignment: CastFloat32ToInt16,
