@@ -15,7 +15,7 @@ assets = [
     ["target/release/materialized", "usr/bin/", "755"],
 ]
 conflicts = "materialized"
-depends = "$auto"
+depends = "libc6 (>= 2.12.1)"
 maintainer-scripts = "misc/dist/deb-scripts"
 
 [package.metadata.deb.variants.materialized]
