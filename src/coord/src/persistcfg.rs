@@ -12,22 +12,20 @@
 use std::path::PathBuf;
 
 use ore::metrics::MetricsRegistry;
-use persist::error::Error;
+use persist::error::{Error, ErrorLog};
 use persist::indexed::encoding::Id;
 use persist::storage::LockInfo;
 use repr::Row;
 use serde::Serialize;
 
 use expr::GlobalId;
-use persist::file::{FileBlob, FileLog};
+use persist::file::FileBlob;
 use persist::indexed::runtime::{self, MultiWriteHandle, RuntimeClient, StreamWriteHandle};
 use uuid::Uuid;
 
 /// Configuration of the persistence runtime and features.
 #[derive(Clone, Debug)]
 pub struct PersistConfig {
-    /// A directory under which un-indexed WAL-like writes are quickly stored.
-    pub log_path: PathBuf,
     /// A directory under which larger batches of indexed data are stored. This
     /// will eventually be S3 for Cloud.
     pub blob_path: PathBuf,
@@ -50,7 +48,6 @@ pub struct PersistConfig {
 impl PersistConfig {
     pub fn disabled() -> Self {
         PersistConfig {
-            log_path: Default::default(),
             blob_path: Default::default(),
             user_table_enabled: false,
             system_table_enabled: false,
@@ -69,7 +66,7 @@ impl PersistConfig {
         let persister = if self.user_table_enabled || self.system_table_enabled {
             let lock_reentrance_id = catalog_id.to_string();
             let lock_info = LockInfo::new(lock_reentrance_id, self.lock_info.clone())?;
-            let log = FileLog::new(&self.log_path, lock_info.clone())?;
+            let log = ErrorLog;
             let blob = FileBlob::new(&self.blob_path, lock_info)?;
             let persister = runtime::start(log, blob, reg)?;
             Some(persister)
