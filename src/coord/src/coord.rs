@@ -3473,8 +3473,14 @@ impl Coordinator {
     }
 
     fn broadcast(&self, cmd: dataflow::Command) {
-        for tx in &self.worker_txs {
-            tx.send(cmd.clone())
+        for index in 1..self.worker_txs.len() {
+            self.worker_txs[index - 1]
+                .send(cmd.clone())
+                .expect("worker command receiver should not drop first")
+        }
+        if self.worker_txs.len() > 0 {
+            self.worker_txs[self.worker_txs.len() - 1]
+                .send(cmd)
                 .expect("worker command receiver should not drop first")
         }
         for handle in self.worker_guards.guards() {
