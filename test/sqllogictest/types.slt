@@ -337,6 +337,21 @@ SELECT '1'::pg_catalog.oid
 ----
 1
 
+query I
+SELECT 1::oid
+----
+1
+
+query I
+SELECT 1::int4::oid
+----
+1
+
+query I
+SELECT 1::int4::oid::int4
+----
+1
+
 # 🔬🔬 regproc
 
 query T

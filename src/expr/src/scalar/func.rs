@@ -4044,7 +4044,7 @@ impl UnaryFunc {
 
             CastInt32ToOid => ScalarType::Oid.nullable(nullable),
             CastInt32ToRegProc => ScalarType::RegProc.nullable(nullable),
-            CastOidToInt32 => ScalarType::Oid.nullable(nullable),
+            CastOidToInt32 => ScalarType::Int32.nullable(nullable),
             CastRegProcToOid => ScalarType::Oid.nullable(nullable),
             CastOidToRegProc => ScalarType::RegProc.nullable(nullable),
 
