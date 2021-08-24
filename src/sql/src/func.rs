@@ -1229,6 +1229,9 @@ lazy_static! {
                 params!(Float32) => UnaryFunc::AbsFloat32, 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64, 1395;
             },
+            "array_in" => Scalar {
+                params!(String, Oid, Int32) => Operation::unary(|_ecx, _e| bail_unsupported!("array_in")), 750;
+            },
             "array_length" => Scalar {
                 params![ArrayAny, Int64] => BinaryFunc::ArrayLength, 2176;
             },

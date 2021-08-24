@@ -407,6 +407,16 @@ SELECT 'max'::regproc
 query error function "nonexistent" does not exist
 SELECT 'nonexistent'::regproc
 
+query T
+SELECT 'array_in'::regproc
+----
+750
+
+query B
+SELECT 750 = 'array_in'::regproc
+----
+true
+
 # 🔬🔬🔬 oid alias
 
 query T

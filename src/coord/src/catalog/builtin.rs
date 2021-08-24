@@ -1245,7 +1245,9 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
-    typtype,
+    -- 'a' is used internally to denote an array type, but in postgres they show up
+    -- as 'b'.
+    CASE mztype WHEN 'a' THEN 'b' ELSE mztype END AS typtype,
     0::pg_catalog.oid AS typrelid,
     NULL::pg_catalog.oid AS typelem,
     coalesce(
@@ -1261,6 +1263,9 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
         0
     )
         AS typarray,
+    -- Unfortunately we cannot use 'array_in'::pg_catalog.regproc, so hard code the
+    -- array_in oid.
+    (CASE mztype WHEN 'a' THEN 750 ELSE NULL END)::pg_catalog.regproc AS typinput,
     NULL::pg_catalog.oid AS typreceive,
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype
@@ -1268,7 +1273,9 @@ FROM
     mz_catalog.mz_types
     JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id
     JOIN (
-            SELECT type_id, 'a' AS typtype FROM mz_catalog.mz_array_types
+            -- 'a' is not a supported typtype, but we use it to denote an array. It is
+            -- converted to the correct value above.
+            SELECT type_id, 'a' AS mztype FROM mz_catalog.mz_array_types
             UNION ALL SELECT type_id, 'b' FROM mz_catalog.mz_base_types
             UNION ALL SELECT type_id, 'l' FROM mz_catalog.mz_list_types
             UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
