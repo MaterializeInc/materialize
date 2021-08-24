@@ -87,9 +87,19 @@ mod encoding;
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `Row` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `Row::new()`.
-#[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
     data: SmallVec<[u8; Self::SIZE]>,
+}
+
+// Implement Clone manually to use SmallVec's more efficent from_slice.
+// TODO: Revisit once Rust supports specialization: https://github.com/rust-lang/rust/issues/31844
+impl Clone for Row {
+    fn clone(&self) -> Self {
+        Self {
+            data: SmallVec::from_slice(self.data.as_slice()),
+        }
+    }
 }
 
 impl Row {
