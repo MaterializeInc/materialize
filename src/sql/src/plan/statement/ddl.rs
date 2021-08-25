@@ -1501,7 +1501,7 @@ fn get_kafka_sink_consistency_config(
                             },
                         ))
                     }
-                    KafkaSinkFormat::Json => bail_unsupported!("JSON consistency topic"),
+                    KafkaSinkFormat::Json => bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY TOPIC consistency_topic CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url'. The default of using a JSON consistency topic is not supported."),
                 }
             } else {
                 None
