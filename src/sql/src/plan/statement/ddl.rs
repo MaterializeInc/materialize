@@ -1329,89 +1329,14 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let (consistency_topic, consistency_format) = match consistency {
-        Some(KafkaConsistency {
-            topic,
-            topic_format,
-        }) => match topic_format {
-            Some(Format::Avro(AvroSchema::Csr {
-                csr_connector:
-                    CsrConnector {
-                        url,
-                        seed,
-                        with_options,
-                    },
-            })) => {
-                if seed.is_some() {
-                    bail!("SEED option does not make sense with sinks");
-                }
-                let schema_registry_url = url.parse::<Url>()?;
-                let ccsr_with_options = normalize::options(&with_options);
-                let ccsr_config = kafka_util::generate_ccsr_client_config(
-                    schema_registry_url.clone(),
-                    &config_options,
-                    ccsr_with_options,
-                )?;
-
-                (
-                    Some(topic),
-                    Some(KafkaSinkFormat::Avro {
-                        schema_registry_url,
-                        key_schema: None,
-                        value_schema: avro::get_debezium_transaction_schema().canonical_form(),
-                        ccsr_config,
-                    }),
-                )
-            }
-            None => {
-                // If a CONSISTENCY FORMAT is not provided, default to the FORMAT of the sink.
-                match &format {
-                    format @ KafkaSinkFormat::Avro { .. } => (Some(topic), Some(format.clone())),
-                    KafkaSinkFormat::Json => bail_unsupported!("CONSISTENCY FORMAT JSON"),
-                }
-            }
-            Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
-        },
-        None => {
-            // Support use of `consistency_topic` with option if the sink is Avro-formatted
-            // for backwards compatibility.
-            if reuse_topic | consistency_topic.is_some() {
-                match &format {
-                    KafkaSinkFormat::Avro {
-                        schema_registry_url,
-                        ccsr_config,
-                        ..
-                    } => {
-                        let consistency_topic = match consistency_topic {
-                            Some(topic) => topic,
-                            None => {
-                                let default_consistency_topic =
-                                    format!("{}-consistency", topic_prefix);
-                                debug!(
-                                    "Using default consistency topic '{}' for topic '{}'",
-                                    default_consistency_topic, topic_prefix
-                                );
-                                default_consistency_topic
-                            }
-                        };
-                        (
-                            Some(consistency_topic),
-                            Some(KafkaSinkFormat::Avro {
-                                schema_registry_url: schema_registry_url.clone(),
-                                key_schema: None,
-                                value_schema: avro::get_debezium_transaction_schema()
-                                    .canonical_form(),
-                                ccsr_config: ccsr_config.clone(),
-                            }),
-                        )
-                    }
-                    KafkaSinkFormat::Json => bail_unsupported!("JSON consistency topic"),
-                }
-            } else {
-                (None, None)
-            }
-        }
-    };
+    let consistency_config = get_kafka_sink_consistency_config(
+        &topic_prefix,
+        &format,
+        &config_options,
+        reuse_topic,
+        consistency,
+        consistency_topic,
+    )?;
 
     let broker_addrs = broker.parse()?;
 
@@ -1463,6 +1388,9 @@ fn kafka_sink_builder(
         );
     }
 
+    let consistency_topic = consistency_config.clone().map(|config| config.0);
+    let consistency_format = consistency_config.map(|config| config.1);
+
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
         format,
@@ -1480,6 +1408,108 @@ fn kafka_sink_builder(
         reuse_topic,
         transitive_source_dependencies,
     }))
+}
+
+/// Determines the consistency configuration (topic and format) that should be used for a Kafka
+/// sink based on the given configuration items.
+///
+/// This is slightly complicated because of a desire to maintain backwards compatibility with
+/// previous ways of specifying consistency configuration. [`KafkaConsistency`] is the new way of
+/// doing things, we support specifying just a topic name (via `consistency_topic`) for backwards
+/// compatibility.
+fn get_kafka_sink_consistency_config(
+    topic_prefix: &str,
+    sink_format: &KafkaSinkFormat,
+    config_options: &BTreeMap<String, String>,
+    reuse_topic: bool,
+    consistency: Option<KafkaConsistency<Raw>>,
+    consistency_topic: Option<String>,
+) -> Result<Option<(String, KafkaSinkFormat)>, anyhow::Error> {
+    let result = match consistency {
+        Some(KafkaConsistency {
+            topic,
+            topic_format,
+        }) => match topic_format {
+            Some(Format::Avro(AvroSchema::Csr {
+                csr_connector:
+                    CsrConnector {
+                        url,
+                        seed,
+                        with_options,
+                    },
+            })) => {
+                if seed.is_some() {
+                    bail!("SEED option does not make sense with sinks");
+                }
+                let schema_registry_url = url.parse::<Url>()?;
+                let ccsr_with_options = normalize::options(&with_options);
+                let ccsr_config = kafka_util::generate_ccsr_client_config(
+                    schema_registry_url.clone(),
+                    config_options,
+                    ccsr_with_options,
+                )?;
+
+                Some((
+                    topic,
+                    KafkaSinkFormat::Avro {
+                        schema_registry_url,
+                        key_schema: None,
+                        value_schema: avro::get_debezium_transaction_schema().canonical_form(),
+                        ccsr_config,
+                    },
+                ))
+            }
+            None => {
+                // If a CONSISTENCY FORMAT is not provided, default to the FORMAT of the sink.
+                match sink_format {
+                    format @ KafkaSinkFormat::Avro { .. } => Some((topic, format.clone())),
+                    KafkaSinkFormat::Json => bail_unsupported!("CONSISTENCY FORMAT JSON"),
+                }
+            }
+            Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
+        },
+        None => {
+            // Support use of `consistency_topic` with option if the sink is Avro-formatted
+            // for backwards compatibility.
+            if reuse_topic | consistency_topic.is_some() {
+                match sink_format {
+                    KafkaSinkFormat::Avro {
+                        schema_registry_url,
+                        ccsr_config,
+                        ..
+                    } => {
+                        let consistency_topic = match consistency_topic {
+                            Some(topic) => topic,
+                            None => {
+                                let default_consistency_topic =
+                                    format!("{}-consistency", topic_prefix);
+                                debug!(
+                                    "Using default consistency topic '{}' for topic '{}'",
+                                    default_consistency_topic, topic_prefix
+                                );
+                                default_consistency_topic
+                            }
+                        };
+                        Some((
+                            consistency_topic,
+                            KafkaSinkFormat::Avro {
+                                schema_registry_url: schema_registry_url.clone(),
+                                key_schema: None,
+                                value_schema: avro::get_debezium_transaction_schema()
+                                    .canonical_form(),
+                                ccsr_config: ccsr_config.clone(),
+                            },
+                        ))
+                    }
+                    KafkaSinkFormat::Json => bail_unsupported!("JSON consistency topic"),
+                }
+            } else {
+                None
+            }
+        }
+    };
+
+    Ok(result)
 }
 
 fn avro_ocf_sink_builder(
