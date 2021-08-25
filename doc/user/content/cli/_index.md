@@ -17,7 +17,7 @@ Flag | Default | Modifies
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
-[`--metrics_scraping-frequency`](#prometheus-metrics) | 1s | The frequency at which to update [prometheus metrics](#prometheus-metrics).
+[`--metrics-scraping-interval`](#prometheus-metrics) | 30s | The update interval for the `mz_metrics` table, see [prometheus metrics](#prometheus-metrics).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
 [`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where to emit log messages
@@ -203,20 +203,21 @@ In prior versions of Materialize, the metrics scraping interval was linked to
 the introspection interval.
 {{< /version-changed >}}
 
-The `--metrics-scraping-frequency` option determines the frequency at which the
-prometheus metrics are collected. The default frequency is `1s`. To disable
-prometheus metrics collection entirely, use the special value `off`.
+The `--metrics-scraping-interval` option determines the interval at which the
+prometheus metrics are collected to update the `mz_metrics` table. The default
+interval is `30s`. To disable prometheus metrics collection entirely, use the
+special value `off`.
 
-Higher frequencies provide more up-to-date metrics but increase load on
-the system. Lower frequencies increase staleness in exchange for decreased load.
-The default frequency is a good choice for most deployments.
+Lower intervals provide more up-to-date metrics but increase load on
+the system. Higher intervals increase staleness in exchange for decreased load.
+The default interval is a good choice for most deployments.
 
 {{< version-changed v0.7.3 >}}
 Materialize imports its own [Prometheus metrics](/ops/monitoring#prometheus)
 into the systems tables `mz_metrics` (counters and gauge readings),
 `mz_metric_histograms` (histogram distributions) and `mz_metrics_meta` (type
 information and help for each metric). These readings are imported once per
-`--metrics-scraping-frequency` period, and are retained for the duration given with
+`--metrics-scraping-interval` period, and are retained for the duration given with
 `--retain-prometheus-metrics` (defaulting to 5 minutes). Higher retention
 periods lead to greater memory usage.
 {{< /version-changed >}}

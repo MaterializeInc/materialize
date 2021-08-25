@@ -148,6 +148,7 @@ services:
       --timestamp-frequency 100ms
       --disable-telemetry
       --retain-prometheus-metrics 1s
+      --metrics-scraping-interval 1s
     ports:
       - 6875
     environment:
