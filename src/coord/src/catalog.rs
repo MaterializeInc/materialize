@@ -797,9 +797,9 @@ impl Catalog {
                 }
 
                 Builtin::View(view) if config.enable_logging || !view.needs_logs => {
-                    let allow_persist = false;
+                    let persist_name = None;
                     let item = catalog
-                        .parse_item(view.id, &name, view.sql.into(), None, allow_persist)
+                        .parse_item(view.id, view.sql.into(), None, persist_name)
                         .unwrap_or_else(|e| {
                             panic!(
                                 "internal error: failed to load bootstrap view:\n\
@@ -922,7 +922,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match c.deserialize_item(id, &name, def) {
+            let item = match c.deserialize_item(id, def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -1888,62 +1888,53 @@ impl Catalog {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
                 eval_env: None,
+                persist_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
             },
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
                 eval_env: None,
+                persist_name: None,
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
+                persist_name: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
                 eval_env: None,
+                persist_name: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
                 eval_env: None,
+                persist_name: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
                 eval_env: None,
+                persist_name: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
 
-    fn deserialize_item(
-        &self,
-        id: GlobalId,
-        name: &FullName,
-        bytes: Vec<u8>,
-    ) -> Result<CatalogItem, anyhow::Error> {
+    fn deserialize_item(&self, id: GlobalId, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env: _,
+            persist_name,
         } = serde_json::from_slice(&bytes)?;
-        // TODO: Serialize the persisted stream name and pass it in here instead
-        // of re-deriving it from scratch. This will allow us to later change
-        // our persisted stream naming scheme, if necessary.
-        let allow_persist = true;
-        self.parse_item(
-            id,
-            &name,
-            create_sql,
-            Some(&PlanContext::zero()),
-            allow_persist,
-        )
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()), persist_name)
     }
 
     fn parse_item(
         &self,
         id: GlobalId,
-        name: &FullName,
         create_sql: String,
         pcx: Option<&PlanContext>,
-        allow_persist: bool,
+        persist_name: Option<String>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
@@ -1951,11 +1942,7 @@ impl Catalog {
             Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
             }) => {
-                let persist = if allow_persist {
-                    self.persist_details(id, name)?
-                } else {
-                    None
-                };
+                let persist = self.persist.details_from_name(persist_name)?;
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
                     desc: table.desc,
@@ -2279,6 +2266,7 @@ enum SerializedCatalogItem {
         create_sql: String,
         // The name "eval_env" is historical.
         eval_env: Option<SerializedPlanContext>,
+        persist_name: Option<String>,
     },
 }
 
