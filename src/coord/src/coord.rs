@@ -3345,6 +3345,7 @@ impl Coordinator {
                 }
                 explanation.to_string()
             }
+            ExplainStage::PhysicalPlan | // TODO
             ExplainStage::OptimizedPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan);
                 self.validate_timeline(decorrelated_plan.global_uses())?;

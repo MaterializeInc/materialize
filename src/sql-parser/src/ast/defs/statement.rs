@@ -1568,6 +1568,8 @@ pub enum ExplainStage {
     DecorrelatedPlan,
     /// The expr::MirRelationExpr after optimization
     OptimizedPlan,
+    /// The render::plan::Plan
+    PhysicalPlan,
 }
 
 impl AstDisplay for ExplainStage {
@@ -1576,6 +1578,7 @@ impl AstDisplay for ExplainStage {
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
         }
     }
 }
