@@ -20,6 +20,8 @@ use crate::session::Var;
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum CoordError {
+    /// Query needs AS OF <time> or indexes to succeed.
+    AutomaticTimestampFailure(Vec<String>),
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The specified session parameter is constrained to its current value.
@@ -76,6 +78,10 @@ impl CoordError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            CoordError::AutomaticTimestampFailure(deps) => Some(format!(
+                "The query transitively depends on the following unmaterialized sources:\n\t{}",
+                itertools::join(deps, "\n\t")
+            )),
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
             CoordError::SafeModeViolation(_) => Some(
@@ -90,6 +96,12 @@ impl CoordError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
+            CoordError::AutomaticTimestampFailure(..) => Some(
+                "Create indexes on the listed sources or on the views derived from \
+                those sources, or use `SELECT ... AS OF` to manually choose a \
+                timestamp for your query."
+                    .into(),
+            ),
             CoordError::Catalog(c) => c.hint(),
             CoordError::Eval(e) => e.hint(),
             CoordError::UnknownLoginRole(_) => {
@@ -110,6 +122,9 @@ impl CoordError {
 impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            CoordError::AutomaticTimestampFailure(..) => {
+                f.write_str("unable to automatically determine a query timestamp")
+            }
             CoordError::Catalog(e) => e.fmt(f),
             CoordError::ConstrainedParameter(p) => write!(
                 f,

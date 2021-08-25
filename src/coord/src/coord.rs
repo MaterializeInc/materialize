@@ -2820,11 +2820,13 @@ impl Coordinator {
             // original sources on which they depend.
             PeekWhen::Immediately => {
                 if !unmaterialized_source_ids.is_empty() {
-                    coord_bail!(
-                        "Unable to automatically determine a timestamp for your query; \
-                        this can happen if your query depends on non-materialized sources.\n\
-                        For more details, see https://materialize.com/s/non-materialized-error"
-                    );
+                    let unmaterialized_dep_names = unmaterialized_source_ids
+                        .iter()
+                        .map(|id| self.catalog.get_by_id(id).name().to_string())
+                        .collect();
+                    return Err(CoordError::AutomaticTimestampFailure(
+                        unmaterialized_dep_names,
+                    ));
                 }
 
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {

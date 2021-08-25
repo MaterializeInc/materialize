@@ -35,14 +35,13 @@ _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want
 ### Querying non-materialized views
 
 You can only directly `SELECT` from a non-materialized view if all of the
-sources it depends on (i.e. views and sources in its `FROM` clause) have access
-to materialized data (i.e. indexes). That is to say that all of a
+objects it depends on (i.e. views and sources in its `FROM` clause) have access
+to materialized data (i.e. indexes or constants). That is to say that all of a
 non-materialized view's data must exist somewhere in memory for it to process
 `SELECT` statements. For those inclined toward mathematics, it's possible to
 think of this as "transitive materialization."
 
-If non-materialized views can process `SELECT` statements, we call them
-"queryable."
+If views can process `SELECT` statements, we call them "queryable."
 
 However, this limitation does not apply to creating materialized views.
 Materialized view definitions can `SELECT` from non-materialized view,
@@ -62,7 +61,7 @@ The diagram below demonstrates this restriction using a number of views
 A few things to note from this example:
 
 - **c** can be materialized despite the dependency on a non-materialized view.
-- If **g** were materialized, all views could process `SELECT`.
+- If **g** were materialized, all views would be queryable.
 
 ### Memory
 
@@ -112,3 +111,4 @@ However, it's important to note that you could only `SELECT` from this view:
 ## Related pages
 
 - [`CREATE MATERIALIZED VIEW`](../create-materialized-view)
+- [`CREATE INDEX`](../create-index)

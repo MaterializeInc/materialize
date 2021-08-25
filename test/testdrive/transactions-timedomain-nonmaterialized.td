@@ -31,10 +31,10 @@ $ file-append path=static.csv
 4
 
 ! SELECT * FROM unindexed
-Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources.
+unable to automatically determine a query timestamp
 
 ! SELECT * FROM v_unindexed
-Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources.
+unable to automatically determine a query timestamp
 
 > BEGIN
 

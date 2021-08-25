@@ -43,7 +43,7 @@ on_name   key_name      seq_in_index  column_name  expression  nullable enabled
 > SHOW MATERIALIZED VIEWS
 
 ! SELECT * FROM mat_view
-Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
+unable to automatically determine a query timestamp
 
 > SHOW INDEXES FROM mat_view;
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
@@ -64,7 +64,7 @@ mat_view  mat_view_primary_idx  1             sum          <null>      true     
 > SHOW MATERIALIZED SOURCES
 
 ! SELECT * FROM mat_data
-Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
+unable to automatically determine a query timestamp
 
 > SHOW INDEXES FROM mat_data;
 on_name   key_name              seq_in_index  column_name  expression  nullable enabled
