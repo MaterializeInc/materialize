@@ -6,13 +6,13 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.43"
 fstrings = "0.2.3"
-itertools = "0.9.0"
+itertools = "0.10.1"
 ore = { path = "../ore" }
 quote = "1.0.9"
-syn = { version = "1.0.72", features = ["extra-traits", "full", "parsing"] }
+syn = { version = "1.0.75", features = ["extra-traits", "full", "parsing"] }
 
 [dev-dependencies]
-datadriven = "0.5.0"
+datadriven = "0.6.0"
 tempfile = "3.2.0"

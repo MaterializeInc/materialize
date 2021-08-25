@@ -7,12 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import itertools
 import os
 from pathlib import Path
 
-from materialize import mzbuild
-from materialize import spawn
+from materialize import mzbuild, spawn
 
 IMAGES = [
     "antithesis-cp-combined",

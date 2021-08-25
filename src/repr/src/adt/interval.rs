@@ -10,6 +10,7 @@
 //! A time interval abstract data type.
 
 use std::fmt::{self, Write};
+use std::time::Duration;
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
@@ -275,6 +276,19 @@ impl Interval {
         // https://github.com/chronotope/chrono/pull/426
         Duration::seconds(self.dur_as_secs() as i64)
             + Duration::nanoseconds(self.nanoseconds() as i64)
+    }
+
+    pub fn duration(&self) -> Result<Duration, anyhow::Error> {
+        if self.duration < 0 {
+            bail!("cannot convert negative interval to duration");
+        }
+        if self.months != 0 {
+            bail!("cannot convert interval with months to duration");
+        }
+        Ok(Duration::new(
+            self.dur_as_secs() as u64,
+            self.nanoseconds() as u32,
+        ))
     }
 
     /// Truncate the "tail" of the interval, removing all time units less than `f`.

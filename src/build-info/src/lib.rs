@@ -13,7 +13,7 @@
 //! from any layer of the stack.
 
 /// Build information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildInfo {
     /// The version number of the build.
     pub version: &'static str,
@@ -30,8 +30,8 @@ pub struct BuildInfo {
 /// Intended for use in contexts where getting the correct build information is
 /// impossible or unnecessary, like in tests.
 pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
-    version: "",
-    sha: "",
+    version: "0.0.0+dummy",
+    sha: "0000000000000000000000000000000000000000",
     time: "",
     target_triple: "",
 };
@@ -40,5 +40,21 @@ impl BuildInfo {
     /// Constructs a human-readable version string.
     pub fn human_version(&self) -> String {
         format!("v{} ({})", self.version, &self.sha[..9])
+    }
+
+    /// Returns the version as a rich [semantic version][semver].
+    ///
+    /// This method is only available when the `semver` feature is active.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `version` field is not a valid semantic version.
+    ///
+    /// [semver]: https://semver.org
+    #[cfg(feature = "semver")]
+    pub fn semver_version(&self) -> semver::Version {
+        self.version
+            .parse()
+            .expect("build version is not valid semver")
     }
 }

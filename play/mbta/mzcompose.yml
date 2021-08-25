@@ -25,18 +25,18 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+    - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
     ports:
       - *kafka
     depends_on: [zookeeper]
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:${KAFKA_PORT:-9092}
-      KAFKA_BROKER_ID: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_JMX_PORT: 9991
+    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:${KAFKA_PORT:-9092}
+    - KAFKA_BROKER_ID=1
+    - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    - KAFKA_JMX_PORT=9991
   mbta-demo:
     mzbuild: mbta-demo
     volumes:

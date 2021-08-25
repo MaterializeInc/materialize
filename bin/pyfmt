@@ -11,4 +11,12 @@
 #
 # pyfmt — formats Python code with Black.
 
-exec "$(dirname "$0")"/pyactivate --dev -m black --target-version py36 . "$@"
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+. misc/shlib/shlib.bash
+
+try bin/pyactivate --dev -m black . "$@"
+try bin/pyactivate --dev -m isort . "$@"
+try_finish

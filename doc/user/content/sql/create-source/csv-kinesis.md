@@ -9,11 +9,11 @@ aliases:
     - /sql/create-source/csv-source
 ---
 
+{{< beta />}}
+
 {{% create-source/intro %}}
 This document details how to connect Materialize to CSV-formatted Kinesis
 streams.
-
-{{< kinesis-alpha >}}
 
 {{< volatility-warning >}}Kinesis{{< /volatility-warning >}}
 
@@ -23,7 +23,15 @@ streams.
 
 {{< diagram "create-source-csv-kinesis.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="csv" envelopes="append-only" %}}
+#### `key_constraint`
+
+{{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kinesis" formats="csv" envelopes="append-only" keyConstraint=true %}}
 
 ## Example
 

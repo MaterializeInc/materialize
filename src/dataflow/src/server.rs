@@ -12,12 +12,17 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::Mutex;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+use timely::progress::reachability::logging::TrackerEvent;
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
+use enum_iterator::IntoEnumIterator;
+use enum_kinds::EnumKind;
+use num_enum::IntoPrimitive;
+use ore::metrics::MetricsRegistry;
 use serde::{Deserialize, Serialize};
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -29,24 +34,28 @@ use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
-    SourceConnector, TimestampSourceUpdate, Update,
+    Consistency, DataflowDescription, DataflowError, ExternalSourceConnector, MzOffset,
+    PeekResponse, SourceConnector, TailResponse, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
+use ore::{now::NowFn, result::ResultExt};
+use persist::indexed::runtime::RuntimeClient;
 use repr::{Diff, Row, RowArena, Timestamp};
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{TraceBundle, TraceManager, TraceMetrics};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
+use crate::metrics::Metrics;
 use crate::operator::CollectionExt;
-use crate::render::{self, RenderState};
-use crate::server::metrics::Metrics;
-use crate::source::cache::WorkerCacheData;
+use crate::render::{self, plan::Plan as RenderPlan, RenderState};
+use crate::sink::SinkBaseMetrics;
+use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
+
+use self::metrics::{ServerMetrics, WorkerMetrics};
 
 mod metrics;
 
@@ -55,10 +64,24 @@ mod metrics;
 static TS_BINDING_FEEDBACK_INTERVAL_MS: u128 = 1_000;
 
 /// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug)]
-pub enum SequencedCommand {
+#[derive(Clone, Debug, Serialize, Deserialize, EnumKind)]
+#[enum_kind(
+    CommandKind,
+    derive(Serialize, IntoPrimitive, IntoEnumIterator),
+    repr(usize),
+    serde(rename_all = "snake_case"),
+    doc = "The kind of command that was received"
+)]
+pub enum Command {
     /// Create a sequence of dataflows.
-    CreateDataflows(Vec<DataflowDesc>),
+    ///
+    /// Each of the dataflows must contain `as_of` members that are valid
+    /// for each of the referenced arrangements, meaning `AllowCompaction`
+    /// should be held back to those values until the command.
+    /// Subsequent commands may arbitrarily compact the arrangements;
+    /// the dataflow runners are responsible for ensuring that they can
+    /// correctly maintain the dataflows.
+    CreateDataflows(Vec<DataflowDescription<RenderPlan>>),
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
     /// Drop the sinks bound to these names.
@@ -70,6 +93,13 @@ pub enum SequencedCommand {
     /// This request elicits data from the worker, by naming an
     /// arrangement and some actions to apply to the results before
     /// returning them.
+    ///
+    /// The `timestamp` member must be valid for the arrangement that
+    /// is referenced by `id`. This means that `AllowCompaction` for
+    /// this arrangement should not pass `timestamp` before this command.
+    /// Subsequent commands may arbitrarily compact the arrangements;
+    /// the dataflow runners are responsible for ensuring that they can
+    /// correctly answer the `Peek`.
     Peek {
         /// The identifier of the arrangement.
         id: GlobalId,
@@ -79,8 +109,6 @@ pub enum SequencedCommand {
         ///
         /// Used in responses and cancelation requests.
         conn_id: u32,
-        /// A communication link for sending a response.
-        tx: mpsc::UnboundedSender<PeekResponse>,
         /// The logical timestamp at which the arrangement is queried.
         timestamp: Timestamp,
         /// Actions to apply to the result set before returning them.
@@ -138,10 +166,6 @@ pub enum SequencedCommand {
         /// The timestamp to advance to.
         advance_to: Timestamp,
     },
-    /// Request that feedback is streamed to the provided channel.
-    EnableFeedback(mpsc::UnboundedSender<WorkerFeedbackWithMeta>),
-    /// Request that cache data is streamed to the provided channel.
-    EnableCaching(mpsc::UnboundedSender<CacheMessage>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -149,25 +173,36 @@ pub enum SequencedCommand {
     Shutdown,
 }
 
+impl CommandKind {
+    /// Returns the name of the command kind.
+    fn name(self) -> &'static str {
+        match self {
+            CommandKind::AddSourceTimestamping => "add_source_timestamping",
+            CommandKind::AdvanceAllLocalInputs => "advance_all_local_inputs",
+            CommandKind::AdvanceSourceTimestamp => "advance_source_timestamp",
+            CommandKind::AllowCompaction => "allow_compaction",
+            CommandKind::CancelPeek => "cancel_peek",
+            CommandKind::CreateDataflows => "create_dataflows",
+            CommandKind::DropIndexes => "drop_indexes",
+            CommandKind::DropSinks => "drop_sinks",
+            CommandKind::DropSourceTimestamping => "drop_source_timestamping",
+            CommandKind::DropSources => "drop_sources",
+            CommandKind::DurabilityFrontierUpdates => "durability_frontier_updates",
+            CommandKind::EnableLogging => "enable_logging",
+            CommandKind::Insert => "insert",
+            CommandKind::Peek => "peek",
+            CommandKind::Shutdown => "shutdown",
+        }
+    }
+}
+
 /// Information from timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerFeedbackWithMeta {
+pub struct Response {
     /// Identifies the worker by its identifier.
     pub worker_id: usize,
     /// The feedback itself.
     pub message: WorkerFeedback,
-}
-
-/// All data and metadata messages that can be sent by dataflow workers or coordinator
-/// to the cacher thread.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum CacheMessage {
-    /// Data to be cached (sent from dataflow workers)
-    Data(WorkerCacheData),
-    /// Add source to cache.
-    AddSource(Uuid, GlobalId),
-    /// Drop source from cache.
-    DropSource(GlobalId),
 }
 
 /// Data about timestamp bindings that dataflow workers send to the coordinator
@@ -187,6 +222,10 @@ pub enum WorkerFeedback {
     /// Timestamp bindings and prior and new frontiers for those bindings for all
     /// sources
     TimestampBindings(TimestampBindingFeedback),
+    /// The worker's response to a specified (by connection id) peek.
+    PeekResponse(u32, PeekResponse),
+    /// The worker's next response to a specified tail.
+    TailResponse(GlobalId, TailResponse),
 }
 
 /// Configures a dataflow server.
@@ -195,16 +234,26 @@ pub struct Config {
     ///
     /// The length of this vector determines the number of worker threads that
     /// will be spawned.
-    pub command_receivers: Vec<crossbeam_channel::Receiver<SequencedCommand>>,
+    pub command_receivers: Vec<crossbeam_channel::Receiver<Command>>,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
     /// Whether the server is running in experimental mode.
     pub experimental_mode: bool,
+    /// Function to get wall time now.
+    pub now: NowFn,
+    /// Metrics registry through which dataflow metrics will be reported.
+    pub metrics_registry: MetricsRegistry,
+    /// Handle to the persistence runtime. None if disabled.
+    pub persist: Option<RuntimeClient>,
+    /// Responses to commands should be sent into this channel.
+    pub feedback_tx: mpsc::UnboundedSender<Response>,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
-    let experimental_mode = config.experimental_mode;
+    let server_metrics = ServerMetrics::register_with(&config.metrics_registry);
+    let dataflow_source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
+    let dataflow_sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
     let workers = config.command_receivers.len();
     assert!(workers > 0);
 
@@ -218,6 +267,11 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
         Mutex::new(config.command_receivers.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
+    let now = config.now;
+    let metrics = Metrics::register_with(&config.metrics_registry);
+    let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
+    let persist = config.persist;
+    let feedback_tx = config.feedback_tx.clone();
     timely::execute::execute(
         timely::Config {
             communication: timely::CommunicationConfig::Process(workers),
@@ -229,26 +283,34 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 .take()
                 .unwrap();
             let worker_idx = timely_worker.index();
+            let metrics = metrics.clone();
+            let trace_metrics = trace_metrics.clone();
+            let dataflow_source_metrics = dataflow_source_metrics.clone();
+            let dataflow_sink_metrics = dataflow_sink_metrics.clone();
             Worker {
                 timely_worker,
                 render_state: RenderState {
-                    traces: TraceManager::new(worker_idx),
+                    traces: TraceManager::new(trace_metrics, worker_idx),
                     local_inputs: HashMap::new(),
                     ts_source_mapping: HashMap::new(),
                     ts_histories: HashMap::default(),
                     dataflow_tokens: HashMap::new(),
-                    caching_tx: None,
                     sink_write_frontiers: HashMap::new(),
+                    metrics,
+                    persist: persist.clone(),
+                    tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 },
                 materialized_logger: None,
                 command_rx,
                 pending_peeks: Vec::new(),
-                feedback_tx: None,
+                feedback_tx: feedback_tx.clone(),
                 reported_frontiers: HashMap::new(),
                 reported_bindings_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
-                metrics: Metrics::for_worker_id(worker_idx),
-                experimental_mode,
+                metrics: server_metrics.for_worker_id(worker_idx),
+                now,
+                dataflow_source_metrics,
+                dataflow_sink_metrics,
             }
             .run()
         },
@@ -270,11 +332,11 @@ where
     /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<SequencedCommand>,
+    command_rx: crossbeam_channel::Receiver<Command>,
     /// Peek commands that are awaiting fulfillment.
     pending_peeks: Vec<PendingPeek>,
     /// The channel over which frontier information is reported.
-    feedback_tx: Option<mpsc::UnboundedSender<WorkerFeedbackWithMeta>>,
+    feedback_tx: mpsc::UnboundedSender<Response>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Tracks the timestamp binding durability information that has been sent over `feedback_tx`.
@@ -282,9 +344,11 @@ where
     /// Tracks the last time we sent binding durability info over `feedback_tx`.
     last_bindings_feedback: Instant,
     /// Metrics bundle.
-    metrics: Metrics,
-    /// Whether the server is running in experimental mode
-    experimental_mode: bool,
+    metrics: WorkerMetrics,
+    now: NowFn,
+    /// Metrics for the source-specific side of dataflows.
+    dataflow_source_metrics: SourceBaseMetrics,
+    dataflow_sink_metrics: SinkBaseMetrics,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -306,17 +370,20 @@ where
         // started, so that the logging sources can be joined with tables and
         // other real time sources for semi-sensible results.
         let now = Instant::now();
-        let unix = UNIX_EPOCH.elapsed().expect("time went backwards");
+        let unix = Duration::from_millis((self.now)());
 
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
         let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
+        let r_linked = std::rc::Rc::new(EventLink::new());
+        let mut r_logger = BatchLogger::new(r_linked.clone(), granularity_ms);
         let d_linked = std::rc::Rc::new(EventLink::new());
         let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
         let m_linked = std::rc::Rc::new(EventLink::new());
         let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
         let mut t_traces = HashMap::new();
+        let mut r_traces = HashMap::new();
         let mut d_traces = HashMap::new();
         let mut m_traces = HashMap::new();
 
@@ -326,6 +393,11 @@ where
                 &mut self.timely_worker,
                 logging,
                 t_linked.clone(),
+            ));
+            r_traces.extend(logging::reachability::construct(
+                &mut self.timely_worker,
+                logging,
+                r_linked.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
@@ -345,6 +417,49 @@ where
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
                 t_logger.publish_batch(time, data)
             }),
+        );
+
+        self.timely_worker.log_register().insert_logger(
+            "timely/reachability",
+            Logger::new(
+                now,
+                unix,
+                self.timely_worker.index(),
+                move |time, data: &mut Vec<(Duration, usize, TrackerEvent)>| {
+                    let mut massaged_source_updates = Vec::new();
+                    for event in data.iter() {
+                        match &event.2 {
+                            TrackerEvent::SourceUpdate(update) => {
+                                for u in update.updates.iter() {
+                                    let massaged = (
+                                        update.tracker_id.clone(),
+                                        u.0.clone(),
+                                        u.1.clone(),
+                                        "source".to_owned(),
+                                        format!("{:?}", u.2),
+                                        u.3.clone() as isize,
+                                    );
+                                    massaged_source_updates.push((event.0, event.1, massaged));
+                                }
+                            }
+                            TrackerEvent::TargetUpdate(update) => {
+                                for u in update.updates.iter() {
+                                    let massaged = (
+                                        update.tracker_id.clone(),
+                                        u.0.clone(),
+                                        u.1.clone(),
+                                        "target".to_owned(),
+                                        format!("{:?}", u.2),
+                                        u.3.clone() as isize,
+                                    );
+                                    massaged_source_updates.push((event.0, event.1, massaged));
+                                }
+                            }
+                        }
+                    }
+                    r_logger.publish_batch(time, &mut massaged_source_updates)
+                },
+            ),
         );
 
         self.timely_worker.log_register().insert_logger(
@@ -383,6 +498,11 @@ where
                 logging,
                 t_linked,
             ));
+            r_traces.extend(logging::reachability::construct(
+                &mut self.timely_worker,
+                logging,
+                r_linked,
+            ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
@@ -397,6 +517,14 @@ where
 
         // Install traces as maintained indexes
         for (log, (_, trace)) in t_traces {
+            let id = logging.active_logs[&log];
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone()));
+            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+        }
+        for (log, (_, trace)) in r_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
@@ -432,6 +560,9 @@ where
         self.timely_worker.log_register().remove("timely");
         self.timely_worker
             .log_register()
+            .remove("timely/reachability");
+        self.timely_worker
+            .log_register()
             .remove("differential/arrange");
         self.timely_worker.log_register().remove("materialized");
     }
@@ -458,7 +589,7 @@ where
             let cmds: Vec<_> = self.command_rx.try_iter().collect();
             self.metrics.observe_command_queue(&cmds);
             for cmd in cmds {
-                if let SequencedCommand::Shutdown = cmd {
+                if let Command::Shutdown = cmd {
                     shutdown = true;
                 }
                 self.metrics.observe_command(&cmd);
@@ -468,6 +599,7 @@ where
             self.metrics.observe_pending_peeks(&self.pending_peeks);
             self.metrics.observe_command_finish();
             self.process_peeks();
+            self.process_tails();
         }
     }
 
@@ -492,87 +624,79 @@ where
             }
         }
 
-        if let Some(feedback_tx) = &mut self.feedback_tx {
-            let mut new_frontier = Antichain::new();
-            let mut progress = Vec::new();
-            for (id, traces) in self.render_state.traces.traces.iter_mut() {
-                // Read the upper frontier and compare to what we've reported.
-                traces.oks_mut().read_upper(&mut new_frontier);
-                let prev_frontier = self
-                    .reported_frontiers
-                    .get_mut(&id)
-                    .expect("Index frontier missing!");
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
+        let mut new_frontier = Antichain::new();
+        let mut progress = Vec::new();
+        for (id, traces) in self.render_state.traces.traces.iter_mut() {
+            // Read the upper frontier and compare to what we've reported.
+            traces.oks_mut().read_upper(&mut new_frontier);
+            let prev_frontier = self
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Index frontier missing!");
+            if prev_frontier != &new_frontier {
+                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                prev_frontier.clone_from(&new_frontier);
             }
+        }
 
-            // Log index frontier changes
-            if let Some(logger) = self.materialized_logger.as_mut() {
-                for (id, changes) in &mut progress {
-                    for (time, diff) in changes.iter() {
-                        logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
-                    }
+        // Log index frontier changes
+        if let Some(logger) = self.materialized_logger.as_mut() {
+            for (id, changes) in &mut progress {
+                for (time, diff) in changes.iter() {
+                    logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
                 }
             }
+        }
 
-            for (id, history) in self.render_state.ts_histories.iter() {
-                // Read the upper frontier and compare to what we've reported.
-                history.read_upper(&mut new_frontier);
-                let prev_frontier = self
-                    .reported_frontiers
-                    .get_mut(&id)
-                    .expect("Source frontier missing!");
-                assert!(<_ as PartialOrder>::less_equal(
-                    prev_frontier,
-                    &new_frontier
-                ));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
+        for (id, history) in self.render_state.ts_histories.iter() {
+            // Read the upper frontier and compare to what we've reported.
+            history.read_upper(&mut new_frontier);
+            let prev_frontier = self
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Source frontier missing!");
+            assert!(<_ as PartialOrder>::less_equal(
+                prev_frontier,
+                &new_frontier
+            ));
+            if prev_frontier != &new_frontier {
+                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                prev_frontier.clone_from(&new_frontier);
             }
+        }
 
-            if self.experimental_mode {
-                for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
-                    new_frontier.clone_from(&frontier.borrow());
-                    let prev_frontier = self
-                        .reported_frontiers
-                        .get_mut(&id)
-                        .expect("Sink frontier missing!");
-                    assert!(<_ as PartialOrder>::less_equal(
-                        prev_frontier,
-                        &new_frontier
-                    ));
-                    if prev_frontier != &new_frontier {
-                        add_progress(*id, &prev_frontier, &new_frontier, &mut progress);
-                        prev_frontier.clone_from(&new_frontier);
-                    }
-                }
+        for (id, frontier) in self.render_state.sink_write_frontiers.iter() {
+            new_frontier.clone_from(&frontier.borrow());
+            let prev_frontier = self
+                .reported_frontiers
+                .get_mut(&id)
+                .expect("Sink frontier missing!");
+            assert!(<_ as PartialOrder>::less_equal(
+                prev_frontier,
+                &new_frontier
+            ));
+            if prev_frontier != &new_frontier {
+                add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                prev_frontier.clone_from(&new_frontier);
             }
-            if !progress.is_empty() {
-                feedback_tx
-                    .send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::FrontierUppers(progress),
-                    })
-                    .expect("feedback receriver should not drop first");
-            }
+        }
+
+        if !progress.is_empty() {
+            self.feedback_tx
+                .send(Response {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::FrontierUppers(progress),
+                })
+                .expect("feedback receiver should not drop first");
         }
     }
 
     /// Send information about new timestamp bindings created by dataflow workers back to
     /// the coordinator.
-    ///
-    /// Only enabled when running in experimental mode for now.
     fn report_timestamp_bindings(&mut self) {
         // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
         // the last time we reported timestamp bindings.
-        if !self.experimental_mode
-            || self.feedback_tx.is_none()
-            || self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS
-        {
+        if self.last_bindings_feedback.elapsed().as_millis() < TS_BINDING_FEEDBACK_INTERVAL_MS {
             return;
         }
 
@@ -584,6 +708,10 @@ where
         // If that frontier is different than the durability frontier we've previously reported then we also need to
         // get the new bindings we've produced and send them to the coordinator.
         for (id, history) in self.render_state.ts_histories.iter() {
+            if !history.requires_persistence() {
+                continue;
+            }
+
             // Read the upper frontier and compare to what we've reported.
             history.read_upper(&mut new_frontier);
             let prev_frontier = self
@@ -619,9 +747,7 @@ where
 
         if !changes.is_empty() || !bindings.is_empty() {
             self.feedback_tx
-                .as_mut()
-                .expect("known to exist")
-                .send(WorkerFeedbackWithMeta {
+                .send(Response {
                     worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::TimestampBindings(TimestampBindingFeedback {
                         changes,
@@ -643,9 +769,9 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: SequencedCommand) {
+    fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            SequencedCommand::CreateDataflows(dataflows) => {
+            Command::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
                         self.reported_frontiers
@@ -666,23 +792,30 @@ where
                         }
                     }
 
-                    render::build_dataflow(self.timely_worker, &mut self.render_state, dataflow);
+                    render::build_dataflow(
+                        self.timely_worker,
+                        &mut self.render_state,
+                        dataflow,
+                        self.now,
+                        &self.dataflow_source_metrics,
+                        &self.dataflow_sink_metrics,
+                    );
                 }
             }
 
-            SequencedCommand::DropSources(names) => {
+            Command::DropSources(names) => {
                 for name in names {
                     self.render_state.local_inputs.remove(&name);
                 }
             }
-            SequencedCommand::DropSinks(ids) => {
+            Command::DropSinks(ids) => {
                 for id in ids {
                     self.reported_frontiers.remove(&id);
                     self.render_state.sink_write_frontiers.remove(&id);
                     self.render_state.dataflow_tokens.remove(&id);
                 }
             }
-            SequencedCommand::DropIndexes(ids) => {
+            Command::DropIndexes(ids) => {
                 for id in ids {
                     self.render_state.traces.del_trace(&id);
                     let frontier = self
@@ -698,12 +831,11 @@ where
                 }
             }
 
-            SequencedCommand::Peek {
+            Command::Peek {
                 id,
                 key,
                 timestamp,
                 conn_id,
-                tx,
                 finishing,
                 map_filter_project,
             } => {
@@ -728,7 +860,6 @@ where
                     id,
                     key,
                     conn_id,
-                    tx,
                     timestamp,
                     finishing,
                     trace_bundle,
@@ -739,30 +870,32 @@ where
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), true));
                 }
                 // Attempt to fulfill the peek.
-                let fulfilled = peek.seek_fulfillment(&mut Antichain::new());
-                if !fulfilled {
-                    self.pending_peeks.push(peek);
-                } else {
+                if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
+                    // Respond with the response.
+                    self.feedback_tx
+                        .send(Response {
+                            worker_id: self.timely_worker.index(),
+                            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+                        })
+                        .expect("feedback receiver should not drop first");
+
                     // Log the fulfillment of the peek.
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                     }
+                } else {
+                    self.pending_peeks.push(peek);
                 }
                 self.metrics.observe_pending_peeks(&self.pending_peeks);
             }
 
-            SequencedCommand::CancelPeek { conn_id } => {
+            Command::CancelPeek { conn_id } => {
                 let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
-                        peek.tx
-                            .send(PeekResponse::Canceled)
-                            .expect("peek receiver should not drop first");
-
                         if let Some(logger) = logger {
                             logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                         }
-
                         false // don't retain
                     } else {
                         true // retain
@@ -770,13 +903,13 @@ where
                 })
             }
 
-            SequencedCommand::AdvanceAllLocalInputs { advance_to } => {
+            Command::AdvanceAllLocalInputs { advance_to } => {
                 for (_, local_input) in self.render_state.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
                 }
             }
 
-            SequencedCommand::Insert { id, updates } => {
+            Command::Insert { id, updates } => {
                 if self.timely_worker.index() == 0 {
                     let input = match self.render_state.local_inputs.get_mut(&id) {
                         Some(input) => input,
@@ -790,7 +923,7 @@ where
                 }
             }
 
-            SequencedCommand::AllowCompaction(list) => {
+            Command::AllowCompaction(list) => {
                 for (id, frontier) in list {
                     self.render_state
                         .traces
@@ -800,29 +933,22 @@ where
                     }
                 }
             }
-            SequencedCommand::DurabilityFrontierUpdates(list) => {
+            Command::DurabilityFrontierUpdates(list) => {
                 for (id, frontier) in list {
                     if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
                         ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
             }
-
-            SequencedCommand::EnableFeedback(tx) => {
-                self.feedback_tx = Some(tx);
-            }
-            SequencedCommand::EnableLogging(config) => {
+            Command::EnableLogging(config) => {
                 self.initialize_logging(&config);
             }
-            SequencedCommand::EnableCaching(tx) => {
-                self.render_state.caching_tx = Some(tx);
-            }
-            SequencedCommand::Shutdown => {
+            Command::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
             }
-            SequencedCommand::AddSourceTimestamping {
+            Command::AddSourceTimestamping {
                 id,
                 connector,
                 bindings,
@@ -834,20 +960,18 @@ where
                     ..
                 } = connector
                 {
-                    let byo_default = TimestampBindingRc::new(None);
-                    let rt_default =
-                        TimestampBindingRc::new(Some(ts_frequency.as_millis().try_into().unwrap()));
+                    let byo_default = TimestampBindingRc::new(None, self.now, true);
+                    let rt_default = TimestampBindingRc::new(
+                        Some(ts_frequency.as_millis().try_into().unwrap()),
+                        self.now,
+                        false,
+                    );
                     match (connector, consistency) {
                         (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
                             byo_default.add_partition(PartitionId::Kafka(0));
-                            // NB: mark BYO sources as fully durable when not running in experimental
-                            // because, because we don't actually write durability updates in that context
-                            // but we still rely on BYO sources being default durable for EOS.
-                            // Need to remove this when we move RT EOS sinks to non-experimental
-                            // status.
-                            if !self.experimental_mode {
-                                byo_default.set_durability_frontier(Antichain::new().borrow());
-                            }
+                            // TODO(aljoscha): Hey Ruchir 😃, should we always pull this to +Inf,
+                            // and never persist bindings for BYO sources, like this?
+                            byo_default.set_durability_frontier(Antichain::new().borrow());
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
@@ -923,7 +1047,7 @@ where
                     assert!(bindings.is_empty());
                 }
             }
-            SequencedCommand::AdvanceSourceTimestamp { id, update } => {
+            Command::AdvanceSourceTimestamp { id, update } => {
                 if let Some(history) = self.render_state.ts_histories.get_mut(&id) {
                     match update {
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
@@ -958,7 +1082,7 @@ where
                     }
                 }
             }
-            SequencedCommand::DropSourceTimestamping { id } => {
+            Command::DropSourceTimestamping { id } => {
                 let prev = self.render_state.ts_histories.remove(&id);
 
                 if prev.is_none() {
@@ -985,15 +1109,35 @@ where
             Vec::with_capacity(pending_peeks_len),
         );
         for mut peek in pending_peeks.drain(..) {
-            let success = peek.seek_fulfillment(&mut upper);
-            if !success {
-                self.pending_peeks.push(peek);
-            } else {
+            if let Some(response) = peek.seek_fulfillment(&mut upper) {
+                // Respond with the response.
+                self.feedback_tx
+                    .send(Response {
+                        worker_id: self.timely_worker.index(),
+                        message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+                    })
+                    .expect("feedback receiver should not drop first");
+
                 // Log the fulfillment of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                 }
+            } else {
+                self.pending_peeks.push(peek);
             }
+        }
+    }
+
+    /// Scan the shared tail response buffer, and forward results along.
+    fn process_tails(&mut self) {
+        let mut tail_responses = self.render_state.tail_response_buffer.borrow_mut();
+        for (sink_id, response) in tail_responses.drain(..) {
+            self.feedback_tx
+                .send(Response {
+                    worker_id: self.timely_worker.index(),
+                    message: WorkerFeedback::TailResponse(sink_id, response),
+                })
+                .expect("feedback receiver should not drop first");
         }
     }
 }
@@ -1012,8 +1156,6 @@ struct PendingPeek {
     key: Option<Row>,
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
-    /// A transmitter connected to the intended recipient of the peek.
-    tx: mpsc::UnboundedSender<PeekResponse>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -1043,23 +1185,20 @@ impl PendingPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
-    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> bool {
+    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.timestamp) {
-            return false;
+            return None;
         }
         self.trace_bundle.errs_mut().read_upper(upper);
         if upper.less_equal(&self.timestamp) {
-            return false;
+            return None;
         }
         let response = match self.collect_finished_data() {
             Ok(rows) => PeekResponse::Rows(rows),
             Err(text) => PeekResponse::Error(text),
         };
-        self.tx
-            .send(response)
-            .expect("peek receiver should not drop first");
-        true
+        Some(response)
     }
 
     /// Collects data for a known-complete peek.
@@ -1119,7 +1258,7 @@ impl PendingPeek {
                 if let Some(result) = self
                     .map_filter_project
                     .evaluate(&mut datums, &arena)
-                    .map_err(|e| e.to_string())?
+                    .map_err_to_string()?
                 {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {

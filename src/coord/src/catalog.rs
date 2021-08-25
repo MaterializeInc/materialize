@@ -22,14 +22,19 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
+use ore::metrics::MetricsRegistry;
+use ore::now::{to_datetime, EpochMillis, NowFn};
+use persist::indexed::runtime::MultiWriteHandle;
 use regex::Regex;
 use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
-use expr::{ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use repr::{ColumnType, RelationDesc, ScalarType};
+use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use persist::error::Error as PersistError;
+use persist::indexed::runtime::RuntimeClient as PersistClient;
+use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
 use sql::catalog::{
@@ -49,13 +54,12 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
     PG_CATALOG_SCHEMA,
 };
-use crate::catalog::migrate::CONTENT_MIGRATIONS;
+use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
 use crate::session::Session;
 
 mod builtin_table_updates;
 mod config;
 mod error;
-mod metrics;
 mod migrate;
 
 pub mod builtin;
@@ -98,15 +102,110 @@ pub const FIRST_USER_OID: u32 = 20_000;
 #[derive(Debug, Clone)]
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
-    by_id: BTreeMap<GlobalId, CatalogEntry>,
+    by_id: CatalogEntryMap,
     by_oid: HashMap<u32, GlobalId>,
-    indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    /// Contains only enabled indexes from objects in the catalog; does not
+    /// contain indexes disabled by e.g. the disable_user_indexes flag.
+    enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     config: sql::catalog::CatalogConfig,
+    /// Handle to persistence runtime and feature configuration.
+    persist: PersisterWithConfig,
+}
+
+// A newtype wrapper for the by_id map that makes it easier to reason about
+// maintenance of the persist_multi_details invariant (which is a cached value
+// derived from by_id, updated when by_id is updated).
+//
+// This intentionally impls Deref to make it transparently behave like the
+// BTreeMap for reads, but not DerefMut, so we have control of the mutation
+// paths.
+#[derive(Debug, Clone)]
+struct CatalogEntryMap {
+    by_id: BTreeMap<GlobalId, CatalogEntry>,
+    /// Handle allowing operations on multiple persisted streams, either for
+    /// atomicity (writing a user transaction over multiple tables) or
+    /// efficiency (advancing the timestamp of all user tables in bulk).
+    ///
+    /// Invariant: This contains the same ids and handles as the set of tables
+    /// currently being persisted (i.e it matches the output of
+    /// self.generate_persist_multi_details() and is updated whenever the set of
+    /// persisted tables changes).
+    persist_multi_details: Option<PersistMultiDetails>,
+}
+
+impl std::ops::Deref for CatalogEntryMap {
+    type Target = BTreeMap<GlobalId, CatalogEntry>;
+    fn deref(&self) -> &Self::Target {
+        &self.by_id
+    }
+}
+
+impl CatalogEntryMap {
+    pub fn new(by_id: BTreeMap<GlobalId, CatalogEntry>) -> Self {
+        let mut ret = CatalogEntryMap {
+            by_id,
+            persist_multi_details: None,
+        };
+        ret.persist_multi_details = ret.generate_persist_multi_details();
+        ret
+    }
+
+    pub fn get_mut(&mut self, key: &GlobalId) -> Option<&mut CatalogEntry> {
+        // NB: Unfortunately, there's no way for this to regenerate
+        // self.persist_multi_details after the mutation is finished. However,
+        // as of when this was written, none of the callsites used this to
+        // change whether the entry is persisted, so we should be fine.
+        self.by_id.get_mut(key)
+    }
+
+    pub fn insert(&mut self, key: GlobalId, value: CatalogEntry) -> Option<CatalogEntry> {
+        let ret = self.by_id.insert(key, value);
+        self.persist_multi_details = self.generate_persist_multi_details();
+        ret
+    }
+
+    pub fn remove(&mut self, key: &GlobalId) -> Option<CatalogEntry> {
+        let ret = self.by_id.remove(key);
+        self.persist_multi_details = self.generate_persist_multi_details();
+        ret
+    }
+
+    fn generate_persist_multi_details(&self) -> Option<PersistMultiDetails> {
+        let mut all_table_ids = Vec::new();
+        let mut handles = Vec::new();
+        for (_, entry) in self.by_id.iter() {
+            match entry.item() {
+                CatalogItem::Table(Table {
+                    persist: Some(persist),
+                    ..
+                }) => {
+                    all_table_ids.push(persist.write_handle.stream_id());
+                    handles.push(&persist.write_handle);
+                }
+                _ => {}
+            }
+        }
+        MultiWriteHandle::new(&handles)
+            .ok()
+            .map(|write_handle| PersistMultiDetails {
+                all_table_ids,
+                write_handle,
+            })
+    }
+
+    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+        // Verify the persist_multi_details invariant.
+        debug_assert_eq!(
+            &self.persist_multi_details,
+            &self.generate_persist_multi_details()
+        );
+        self.persist_multi_details.as_ref()
+    }
 }
 
 #[derive(Debug)]
@@ -124,7 +223,7 @@ impl ConnCatalog<'_> {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Database {
     pub name: String,
     pub id: i64,
@@ -133,7 +232,7 @@ pub struct Database {
     pub schemas: BTreeMap<String, Schema>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Schema {
     pub name: SchemaName,
     pub id: i64,
@@ -174,12 +273,12 @@ pub enum CatalogItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    pub persist: Option<PersistDetails>,
 }
 
 impl Table {
@@ -193,7 +292,6 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub connector: SourceConnector,
     pub bare_desc: RelationDesc,
@@ -203,7 +301,6 @@ pub struct Source {
 #[derive(Debug, Clone, Serialize)]
 pub struct Sink {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
     pub envelope: SinkEnvelope,
@@ -220,7 +317,6 @@ pub enum SinkConnectorState {
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub conn_id: Option<u32>,
@@ -230,17 +326,16 @@ pub struct View {
 #[derive(Debug, Clone, Serialize)]
 pub struct Index {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
     pub create_sql: String,
-    pub plan_cx: PlanContext,
     pub inner: TypeInner,
     pub depends_on: Vec<GlobalId>,
 }
@@ -272,7 +367,6 @@ impl From<sql::plan::TypeInner> for TypeInner {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
-    pub plan_cx: PlanContext,
     #[serde(skip)]
     pub inner: &'static sql::func::Func,
 }
@@ -495,32 +589,43 @@ impl Catalog {
     ///
     /// Returns the catalog and a list of updates to builtin tables that
     /// describe the initial state of the catalog.
-    pub fn open(config: &Config) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
+    pub fn open(
+        config: &Config,
+    ) -> Result<(Catalog, Vec<BuiltinTableUpdate>, Option<PersistClient>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
+
+        // This is somewhat incorrect in a services/multi-node world. The
+        // reentrance id should be per-node not per-cluster. This is also an odd
+        // place to be booting the persistence system. But both of these are
+        // fine for now.
+        let persist = config.persist.init(cluster_id, &config.metrics_registry)?;
+        let persister = persist.persister.clone();
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
-            by_id: BTreeMap::new(),
+            by_id: CatalogEntryMap::new(BTreeMap::new()),
             by_oid: HashMap::new(),
-            indexes: HashMap::new(),
+            enabled_indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             roles: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
-                start_time: Utc::now(),
+                start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
                 nonce: rand::random(),
                 experimental_mode,
                 safe_mode: config.safe_mode,
                 cluster_id,
                 session_id: Uuid::new_v4(),
-                cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
                 num_workers: config.num_workers,
                 timestamp_frequency: config.timestamp_frequency,
+                now: config.now,
+                disable_user_indexes: config.disable_user_indexes,
             },
+            persist,
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
@@ -601,11 +706,11 @@ impl Catalog {
                         name.clone(),
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
-                            plan_cx: PlanContext::default(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local(
-                                Timeline::EpochMilliseconds,
-                            ),
+                            connector: dataflow_types::SourceConnector::Local {
+                                timeline: Timeline::EpochMilliseconds,
+                                persisted_name: None,
+                            },
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
@@ -633,9 +738,9 @@ impl Catalog {
                                 &log.variant.desc(),
                                 &log.variant.index_by(),
                             ),
-                            plan_cx: PlanContext::default(),
                             conn_id: None,
                             depends_on: vec![log.id],
+                            enabled: catalog.enable_index(&log.index_id),
                         }),
                     );
                 }
@@ -650,17 +755,22 @@ impl Catalog {
                         &index_columns,
                     );
                     let oid = catalog.allocate_oid()?;
+                    let persist = if table.persistent {
+                        catalog.persist_details(table.id, &name)?
+                    } else {
+                        None
+                    };
                     catalog.insert_item(
                         table.id,
                         oid,
                         name.clone(),
                         CatalogItem::Table(Table {
                             create_sql: "TODO".to_string(),
-                            plan_cx: PlanContext::default(),
                             desc: table.desc.clone(),
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
+                            persist,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -679,16 +789,17 @@ impl Catalog {
                                 .map(|i| MirScalarExpr::Column(*i))
                                 .collect(),
                             create_sql: index_sql,
-                            plan_cx: PlanContext::default(),
                             conn_id: None,
                             depends_on: vec![table.id],
+                            enabled: catalog.enable_index(&table.index_id),
                         }),
                     );
                 }
 
                 Builtin::View(view) if config.enable_logging || !view.needs_logs => {
+                    let allow_persist = false;
                     let item = catalog
-                        .parse_item(view.sql.into(), PlanContext::default())
+                        .parse_item(view.id, &name, view.sql.into(), None, allow_persist)
                         .unwrap_or_else(|e| {
                             panic!(
                                 "internal error: failed to load bootstrap view:\n\
@@ -713,7 +824,6 @@ impl Catalog {
                         },
                         CatalogItem::Type(Type {
                             create_sql: format!("CREATE TYPE {}", typ.name()),
-                            plan_cx: PlanContext::default(),
                             inner: match typ.kind() {
                                 postgres_types::Kind::Array(element_type) => {
                                     let element_id = catalog.ambient_schemas[PG_CATALOG_SCHEMA]
@@ -735,33 +845,30 @@ impl Catalog {
                         func.id,
                         oid,
                         name.clone(),
-                        CatalogItem::Func(Func {
-                            plan_cx: PlanContext::default(),
-                            inner: func.inner,
-                        }),
+                        CatalogItem::Func(Func { inner: func.inner }),
                     );
                 }
 
                 _ => (),
             }
         }
-
-        let mut catalog_content_version = catalog.storage().get_catalog_content_version()?;
-
-        while CONTENT_MIGRATIONS.len() > catalog_content_version {
-            if let Err(e) = CONTENT_MIGRATIONS[catalog_content_version](&mut catalog) {
-                return Err(Error::new(ErrorKind::FailedMigration {
-                    last_version: catalog_content_version,
+        if !config.skip_migrations {
+            let last_seen_version = catalog.storage().get_catalog_content_version()?;
+            crate::catalog::migrate::migrate(&mut catalog).map_err(|e| {
+                Error::new(ErrorKind::FailedMigration {
+                    last_seen_version,
+                    this_version: catalog.config.build_info.version,
                     cause: e.to_string(),
-                }));
-            }
-            catalog_content_version += 1;
+                })
+            })?;
             catalog
                 .storage()
-                .set_catalog_content_version(catalog_content_version)?;
+                .set_catalog_content_version(catalog.config.build_info.version)?;
         }
 
-        let catalog = Self::load_catalog_items(catalog)?;
+        let mut storage = catalog.storage();
+        let tx = storage.transaction()?;
+        let catalog = Self::load_catalog_items(&tx, &catalog)?;
 
         let mut builtin_table_updates = vec![];
         for (schema_name, schema) in &catalog.ambient_schemas {
@@ -769,6 +876,9 @@ impl Catalog {
             builtin_table_updates.push(catalog.pack_schema_update(&db_spec, schema_name, 1));
             for (_item_name, item_id) in &schema.items {
                 builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
+            }
+            for (_item_name, function_id) in &schema.functions {
+                builtin_table_updates.extend(catalog.pack_item_update(*function_id, 1));
             }
         }
         for (db_name, db) in &catalog.by_name {
@@ -779,21 +889,30 @@ impl Catalog {
                 for (_item_name, item_id) in &schema.items {
                     builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
                 }
+                for (_item_name, function_id) in &schema.functions {
+                    builtin_table_updates.extend(catalog.pack_item_update(*function_id, 1));
+                }
             }
         }
         for (role_name, _role) in &catalog.roles {
             builtin_table_updates.push(catalog.pack_role_update(role_name, 1));
         }
 
-        Ok((catalog, builtin_table_updates))
+        Ok((catalog, builtin_table_updates, persister))
     }
 
-    // Takes a catalog which only has items in its on-disk storage ("unloaded")
-    // and cannot yet resolve names, and returns a catalog loaded with those
-    // items.
-    // TODO(justin): it might be nice if these were two different types.
-    pub fn load_catalog_items(mut c: Catalog) -> Result<Catalog, Error> {
-        let items = c.storage().load_items()?;
+    /// Takes a catalog which only has items in its on-disk storage ("unloaded")
+    /// and cannot yet resolve names, and returns a catalog loaded with those
+    /// items.
+    ///
+    /// This function requires transactions to support loading a catalog with
+    /// the transaction's currently in-flight updates to existing catalog
+    /// objects, which is necessary for at least one catalog migration.
+    ///
+    /// TODO(justin): it might be nice if these were two different types.
+    pub fn load_catalog_items(tx: &storage::Transaction, c: &Catalog) -> Result<Catalog, Error> {
+        let mut c = c.clone();
+        let items = tx.load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
@@ -803,7 +922,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match c.deserialize_item(def) {
+            let item = match c.deserialize_item(id, &name, def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -825,19 +944,27 @@ impl Catalog {
     /// Opens the catalog at `path` with parameters set appropriately for debug
     /// contexts, like in tests.
     ///
+    /// WARNING! This function can arbitrarily fail because it does not make any
+    /// effort to adjust the catalog's contents' structure or semantics to the
+    /// currently running version, i.e. it does not apply any migrations.
+    ///
     /// This function should not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub fn open_debug(path: &Path) -> Result<Catalog, anyhow::Error> {
-        let (catalog, _) = Self::open(&Config {
+    pub fn open_debug(path: &Path, now: NowFn) -> Result<Catalog, anyhow::Error> {
+        let (catalog, _, _) = Self::open(&Config {
             path,
             enable_logging: true,
             experimental_mode: None,
             safe_mode: false,
-            cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
             num_workers: 0,
             timestamp_frequency: Duration::from_secs(1),
+            now,
+            persist: PersistConfig::disabled(),
+            skip_migrations: true,
+            metrics_registry: &MetricsRegistry::new(),
+            disable_user_indexes: false,
         })?;
         Ok(catalog)
     }
@@ -1135,13 +1262,15 @@ impl Catalog {
 
         match entry.item() {
             CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.indexes.insert(id, vec![]);
+                self.enabled_indexes.insert(id, vec![]);
             }
             CatalogItem::Index(index) => {
-                self.indexes
-                    .get_mut(&index.on)
-                    .unwrap()
-                    .push((id, index.keys.clone()));
+                if index.enabled {
+                    self.enabled_indexes
+                        .get_mut(&index.on)
+                        .unwrap()
+                        .push((id, index.keys.clone()));
+                }
             }
             CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
         }
@@ -1669,7 +1798,6 @@ impl Catalog {
                     name,
                     item,
                 } => {
-                    metrics::item_created(id, &item);
                     self.insert_item(id, oid, name, item);
                     builtin_table_updates.extend(self.pack_item_update(id, 1));
                 }
@@ -1697,7 +1825,6 @@ impl Catalog {
                     if !metadata.item.is_placeholder() {
                         info!("drop {} {} ({})", metadata.item_type(), metadata.name, id);
                     }
-                    metrics::item_dropped(id, &metadata.item);
                     for u in metadata.uses() {
                         if let Some(dep_metadata) = self.by_id.get_mut(&u) {
                             dep_metadata.used_by.retain(|u| *u != metadata.id)
@@ -1714,16 +1841,19 @@ impl Catalog {
                         .expect("catalog out of sync");
                     if let CatalogItem::Index(index) = &metadata.item {
                         let indexes = self
-                            .indexes
+                            .enabled_indexes
                             .get_mut(&index.on)
                             .expect("catalog out of sync");
-                        let i = indexes
-                            .iter()
-                            .position(|(idx_id, _keys)| *idx_id == id)
-                            .expect("catalog out of sync");
-                        indexes.remove(i);
+                        let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
+                        match i {
+                            Some(i) => {
+                                indexes.remove(i);
+                            }
+                            None if !index.enabled => {}
+                            None => panic!("catalog out of sync"),
+                        };
                     }
-                    self.indexes.remove(&id);
+                    self.enabled_indexes.remove(&id);
                 }
 
                 Action::UpdateItem { id, to_name, item } => {
@@ -1757,73 +1887,88 @@ impl Catalog {
         let item = match item {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
-                eval_env: Some(table.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
-                eval_env: Some(source.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
-                eval_env: Some(view.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
-                eval_env: Some(index.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
-                eval_env: Some(sink.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
-                eval_env: Some(typ.plan_cx.clone().into()),
+                eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
 
-    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
+    fn deserialize_item(
+        &self,
+        id: GlobalId,
+        name: &FullName,
+        bytes: Vec<u8>,
+    ) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
-            eval_env,
+            eval_env: _,
         } = serde_json::from_slice(&bytes)?;
-        let pcx = match eval_env {
-            // Old sources and sinks don't have plan contexts, but it's safe to
-            // just give them a default, as they clearly don't depend on the
-            // plan context.
-            None => PlanContext::default(),
-            Some(eval_env) => eval_env.into(),
-        };
-        self.parse_item(create_sql, pcx)
+        // TODO: Serialize the persisted stream name and pass it in here instead
+        // of re-deriving it from scratch. This will allow us to later change
+        // our persisted stream naming scheme, if necessary.
+        let allow_persist = true;
+        self.parse_item(
+            id,
+            &name,
+            create_sql,
+            Some(&PlanContext::zero()),
+            allow_persist,
+        )
     }
 
     fn parse_item(
         &self,
+        id: GlobalId,
+        name: &FullName,
         create_sql: String,
-        pcx: PlanContext,
+        pcx: Option<&PlanContext>,
+        allow_persist: bool,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
-        let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let persist = if allow_persist {
+            self.persist_details(id, name)?
+        } else {
+            None
+        };
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
             }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
-                plan_cx: pcx,
                 desc: table.desc,
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
+                persist,
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
-                let mut optimizer = Optimizer::default();
-                let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
+                let mut optimizer = Optimizer::for_view();
+                let optimized_expr = optimizer.optimize(source.expr, self.enabled_indexes())?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
-                    plan_cx: pcx,
                     optimized_expr,
                     connector: source.connector,
                     bare_desc: source.bare_desc,
@@ -1833,12 +1978,11 @@ impl Catalog {
             Plan::CreateView(CreateViewPlan {
                 view, depends_on, ..
             }) => {
-                let mut optimizer = Optimizer::default();
-                let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
+                let mut optimizer = Optimizer::for_view();
+                let optimized_expr = optimizer.optimize(view.expr, self.enabled_indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    plan_cx: pcx,
                     optimized_expr,
                     desc,
                     conn_id: None,
@@ -1849,11 +1993,11 @@ impl Catalog {
                 index, depends_on, ..
             }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
-                plan_cx: pcx,
                 on: index.on,
                 keys: index.keys,
                 conn_id: None,
                 depends_on,
+                enabled: self.enable_index(&id),
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -1862,7 +2006,6 @@ impl Catalog {
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
-                plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
                 envelope: sink.envelope,
@@ -1873,7 +2016,6 @@ impl Catalog {
                 typ, depends_on, ..
             }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
-                plan_cx: pcx,
                 inner: typ.inner.into(),
                 depends_on,
             }),
@@ -1881,10 +2023,21 @@ impl Catalog {
         })
     }
 
-    /// Returns a mapping that indicates all indices that are available for
-    /// each item in the catalog.
-    pub fn indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
-        &self.indexes
+    /// Determines the appropriate value for a [`Index`]'s `enabled` field.
+    ///
+    /// Note that it is the caller's responsibility to ensure that the `id` is
+    /// used for an `Index`.
+    pub fn enable_index(&self, id: &GlobalId) -> bool {
+        !self.config.disable_user_indexes || !id.is_user()
+    }
+
+    /// Returns a mapping that indicates all indices that are available for each
+    /// item in the catalog.
+    ///
+    /// Note that when `self.config.disable_user_indexes` is `true`, this does
+    /// not include any user indexes.
+    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+        &self.enabled_indexes
     }
 
     /// Returns the default index for the specified `id`.
@@ -1894,7 +2047,7 @@ impl Catalog {
     pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
         // The default index is just whatever index happens to appear first in
         // self.indexes.
-        self.indexes[&id].first().map(|(id, _keys)| *id)
+        self.enabled_indexes[&id].first().map(|(id, _keys)| *id)
     }
 
     /// Finds the nearest indexes that can satisfy the views or sources whose
@@ -1921,7 +2074,7 @@ impl Catalog {
                 return;
             }
 
-            if let Some((index_id, _)) = catalog.indexes[&id].first() {
+            if let Some((index_id, _)) = catalog.enabled_indexes[&id].first() {
                 indexes.push(*index_id);
                 return;
             }
@@ -1982,7 +2135,7 @@ impl Catalog {
                     ExternalSourceConnector::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local(_) => Volatile,
+                SourceConnector::Local { .. } => Volatile,
             },
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one
@@ -1999,6 +2152,7 @@ impl Catalog {
                     }
                 })
             }
+            // TODO: Persisted tables should be Nonvolatile.
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
@@ -2022,32 +2176,53 @@ impl Catalog {
         self.by_id.values()
     }
 
-    /// Returns the items in a "time domain" for an expression.
-    ///
-    /// A "time domain" is a set of relations (tables, views, sources) that need to
-    /// share time guarantees. Currently we assume time domains to mean "everything
-    /// in a schema". For example, a read transaction on table A in some schema may
-    /// also need to query table B in the same schema, so A and B (and all other
-    /// tables and views in the schema) are in the same time domain.
-    pub fn timedomain_for(&self, source: &MirRelationExpr, conn_id: u32) -> Vec<GlobalId> {
+    /// Returns all tables, views, and sources in the same schemas as a set of
+    /// input ids. The indexes of all relations are included.
+    pub fn schema_adjacent_indexed_relations(
+        &self,
+        ids: &[GlobalId],
+        conn_id: u32,
+    ) -> Vec<GlobalId> {
         // Find all relations referenced by the expression. Find their parent schemas
         // and add all tables, views, and sources in those schemas to a set.
-        let mut ids = HashSet::new();
-        for id in source.global_uses() {
+        let mut relations: HashSet<GlobalId> = HashSet::new();
+        for id in ids {
+            // Always add in the user-specified ids.
+            relations.insert(*id);
             let entry = self.get_by_id(&id);
             let name = entry.name();
             if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
                 for id in schema.items.values() {
-                    if let SqlCatalogItemType::Table
-                    | SqlCatalogItemType::View
-                    | SqlCatalogItemType::Source = self.get_by_id(id).item_type()
-                    {
-                        ids.insert(*id);
+                    match self.get_by_id(id).item_type() {
+                        SqlCatalogItemType::Table => {
+                            relations.insert(*id);
+                        }
+                        SqlCatalogItemType::View | SqlCatalogItemType::Source => {
+                            let (indexes, unmaterialized) = self.nearest_indexes(&[*id]);
+                            relations.extend(indexes);
+                            // Add in the view/source if fully materialized.
+                            if unmaterialized.is_empty() {
+                                relations.insert(*id);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
         }
-        ids.into_iter().collect()
+        relations.into_iter().collect()
+    }
+
+    pub fn persist_details(
+        &self,
+        id: GlobalId,
+        name: &FullName,
+    ) -> Result<Option<PersistDetails>, PersistError> {
+        self.persist.details(id, &name.to_string())
+    }
+
+    pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
+        self.by_id.persist_multi_details()
     }
 }
 
@@ -2209,21 +2384,9 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     // qualified object name to refer to type.
                     self.get_item_by_oid(&pgrepr_type.oid()).name().to_string()
                 };
-                if let ScalarType::Decimal(p, s) = typ {
-                    format!("{}({},{})", res, p, s)
-                } else {
-                    res
-                }
+                res
             }
         }
-    }
-
-    fn humanize_column_type(&self, typ: &ColumnType) -> String {
-        format!(
-            "{}{}",
-            self.humanize_scalar_type(&typ.scalar_type),
-            if typ.nullable { "?" } else { "" }
-        )
     }
 }
 
@@ -2381,6 +2544,10 @@ impl SqlCatalog for ConnCatalog<'_> {
     fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.catalog.config
     }
+
+    fn now(&self) -> EpochMillis {
+        (self.catalog.config.now)()
+    }
 }
 
 impl sql::catalog::CatalogDatabase for Database {
@@ -2447,18 +2614,6 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "TODO",
-        }
-    }
-
-    fn plan_cx(&self) -> &PlanContext {
-        match self.item() {
-            CatalogItem::Table(Table { plan_cx, .. }) => plan_cx,
-            CatalogItem::Source(Source { plan_cx, .. }) => plan_cx,
-            CatalogItem::Sink(Sink { plan_cx, .. }) => plan_cx,
-            CatalogItem::View(View { plan_cx, .. }) => plan_cx,
-            CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
-            CatalogItem::Type(Type { plan_cx, .. }) => plan_cx,
-            CatalogItem::Func(Func { plan_cx, .. }) => plan_cx,
         }
     }
 
@@ -2552,7 +2707,7 @@ mod tests {
         ];
 
         let catalog_file = NamedTempFile::new()?;
-        let catalog = Catalog::open_debug(catalog_file.path())?;
+        let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero)?;
         for tc in test_cases {
             assert_eq!(
                 catalog

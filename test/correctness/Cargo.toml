@@ -11,21 +11,20 @@ path = "checker.rs"
 
 [dependencies]
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-env_logger = "0.8.3"
-futures = "0.3.14"
-hyper = "0.14.7"
+env_logger = "0.9.0"
+futures = "0.3.16"
+hyper = "0.14.11"
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-process-collector = { path = "../../src/mz-process-collector" }
 ore = { path = "../../src/ore" }
-parse_duration = "2.1.1"
 pgrepr = { path = "../../src/pgrepr" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.5.4"
-serde = { version = "1.0.126", features = ["derive"] }
-structopt = "0.3.21"
-tokio = "1.6.0"
+repr = { path = "../../src/repr" }
+serde = { version = "1.0.128", features = ["derive"] }
+structopt = "0.3.22"
+tokio = "1.10.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 toml = "0.5.8"

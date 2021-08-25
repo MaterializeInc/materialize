@@ -9,29 +9,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# devsite.sh — deploys docs and apps to mtrlz.dev in CI.
+# devsite.sh — deploys docs to dev.materialize.com in CI.
 
 set -euo pipefail
 
-rsync misc/www/index.html buildkite@mtrlz.dev:/var/www/html/index.html
+aws s3 cp misc/www/index.html s3://materialize-dev-website/index.html
 
 bin/doc
-rsync --archive target/doc/ buildkite@mtrlz.dev:/var/www/html/api/rust
+aws s3 sync --size-only target/doc/ s3://materialize-dev-website/api/rust
 
 bin/doc --document-private-items
-rsync --archive target/doc/ buildkite@mtrlz.dev:/var/www/html/api/rust-private
+aws s3 sync --size-only target/doc/ s3://materialize-dev-website/api/rust-private
 
 bin/pydoc
-rsync --archive target/pydoc/ buildkite@mtrlz.dev:/var/www/html/api/python
-
-ssh -A buildkite@mtrlz.dev <<'EOF'
-set -euxo pipefail
-cd /var/www/materialize/misc/civiz
-setfacl -m www-data:x $(dirname "$SSH_AUTH_SOCK")
-setfacl -m www-data:rwx "$SSH_AUTH_SOCK"
-sudo -u www-data --preserve-env=SSH_AUTH_SOCK git fetch origin
-sudo -u www-data --preserve-env=SSH_AUTH_SOCK git checkout main
-sudo -u www-data --preserve-env=SSH_AUTH_SOCK git merge --ff-only origin/main
-sudo -u www-data bash -c ". venv/bin/activate && python setup.py develop && alembic upgrade head"
-sudo service civiz restart
-EOF
+aws s3 sync --size-only target/pydoc/ s3://materialize-dev-website/api/python

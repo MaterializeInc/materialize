@@ -9,6 +9,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::ops::Deref;
 use std::panic;
@@ -24,8 +25,10 @@ use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
 use mz_avro::schema::Schema;
 use mz_avro::types::Value;
-use prometheus::{register_int_gauge_vec, IntGaugeVec};
+use ore::metric;
+use ore::metrics::{GaugeVecExt, IntGaugeVec, MetricsRegistry};
 use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
@@ -85,12 +88,6 @@ lazy_static! {
           "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
         }"#.parse().unwrap()
     };
-
-    static ref MAX_AVAILABLE_OFFSET: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kafka_partition_offset_max",
-        "The high watermark for a partition, the maximum offset that we could hope to ingest",
-        &["topic", "source_id", "partition_id"]
-    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -167,11 +164,23 @@ struct TimestampingState {
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
     consumer: BaseConsumer,
+
+    /// Offset of the last consistency record we received and processed. We use
+    /// this to filter out messages that we have seen already.
+    ///
+    /// Session timeouts, together with consumer-group re-arrangement, combined
+    /// with the fact that we don't commit read offsets for the BYO consumer
+    /// can lead to cases where an existing consumer starts reading the
+    /// consistency topic from the beginning, after a connection outage.
+    last_offset: Option<i64>,
 }
 
 impl ByoKafkaConnector {
     fn new(consumer: BaseConsumer) -> ByoKafkaConnector {
-        ByoKafkaConnector { consumer }
+        ByoKafkaConnector {
+            consumer,
+            last_offset: None,
+        }
     }
 }
 
@@ -190,8 +199,30 @@ fn byo_query_source(
     let mut messages = vec![];
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_connector) => {
-            while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer)? {
-                messages.push(ValueEncoding::Bytes(payload));
+            while let Some(message) = kafka_get_next_message(&mut kafka_connector.consumer)? {
+                if let Some(last_offset) = kafka_connector.last_offset {
+                    if message.offset() <= last_offset {
+                        // it would probably be nicer to print the decoded
+                        // message here. But we don't know the message format
+                        // and I don't necessarily want to pipe Kafka specifics
+                        // (offsets) to the decoding part.
+                        debug!(
+                            "Received BYO consistency record that we have received before: {:?}",
+                            message
+                        );
+                        continue;
+                    }
+                }
+                kafka_connector.last_offset = Some(message.offset());
+
+                match message.payload() {
+                    Some(payload) => {
+                        messages.push(ValueEncoding::Bytes(payload.to_vec()));
+                    }
+                    None => {
+                        bail!("unexpected null payload");
+                    }
+                }
             }
         }
     }
@@ -199,15 +230,13 @@ fn byo_query_source(
 }
 
 /// Polls a message from a Kafka Source
-fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Result<Option<Vec<u8>>, anyhow::Error> {
+fn kafka_get_next_message(
+    consumer: &mut BaseConsumer,
+) -> Result<Option<BorrowedMessage>, anyhow::Error> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
-            Ok(message) => match message.payload() {
-                Some(p) => Ok(Some(p.to_vec())),
-                None => {
-                    bail!("unexpected null payload");
-                }
-            },
+            Ok(message) => Ok(Some(message)),
+
             Err(err) => {
                 bail!("Failed to process message {}", err);
             }
@@ -255,6 +284,26 @@ pub struct Timestamper {
 
     /// Frequency at which thread should run
     timestamp_frequency: Duration,
+
+    /// Metrics that the timestamper reports.
+    metrics: Metrics,
+}
+
+#[derive(Clone)]
+struct Metrics {
+    max_available_offset: IntGaugeVec,
+}
+
+impl Metrics {
+    fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            max_available_offset: registry.register(metric!(
+                name: "mz_kafka_partition_offset_max",
+                help: "The high watermark for a partition, the maximum offset that we could hope to ingest",
+                var_labels: ["topic", "source_id", "partition_id"],
+            ))
+        }
+    }
 }
 
 /// Implements the byo timestamping logic
@@ -466,6 +515,7 @@ impl Timestamper {
         frequency: Duration,
         tx: mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
+        registry: &MetricsRegistry,
     ) -> Self {
         info!(
             "Starting Timestamping Thread. Frequency: {} ms.",
@@ -478,6 +528,7 @@ impl Timestamper {
             tx,
             rx,
             timestamp_frequency: frequency,
+            metrics: Metrics::register_with(registry),
         }
     }
 
@@ -512,6 +563,7 @@ impl Timestamper {
                         encoding,
                         envelope,
                         consistency,
+                        key_envelope: _,
                         ts_frequency: _,
                         timeline: _,
                     } = sc
@@ -705,7 +757,7 @@ impl Timestamper {
         // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
         let metadata_refresh_frequency = Duration::from_millis(
             kc.config_options
-                .get("topic_metadata_refresh_interval_ms")
+                .get("topic.metadata.refresh.interval.ms")
                 // Safe conversion: statement::extract_config enforces that option is a value
                 // between 0 and 3600000
                 .unwrap_or(&"30000".to_owned())
@@ -717,8 +769,14 @@ impl Timestamper {
             .name("rt_kafka_meta".to_string())
             .spawn({
                 let connector = connector.clone();
+                let metrics = self.metrics.clone();
                 move || {
-                    rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
+                    rt_kafka_metadata_fetch_loop(
+                        connector,
+                        consumer,
+                        metadata_refresh_frequency,
+                        &metrics,
+                    )
                 }
             })
             .unwrap();
@@ -860,13 +918,19 @@ impl Timestamper {
     }
 }
 
-fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wait: Duration) {
+fn rt_kafka_metadata_fetch_loop(
+    c: RtKafkaConnector,
+    consumer: BaseConsumer,
+    wait: Duration,
+    metrics: &Metrics,
+) {
     debug!(
         "Starting realtime Kafka thread for {} (source {})",
         &c.topic, &c.id
     );
 
     let mut current_partition_count = 0;
+    let mut max_available_offsets_metrics = vec![];
 
     while !c.coordination_state.stop.load(Ordering::SeqCst) {
         match get_kafka_partitions(&consumer, &c.topic, Duration::from_secs(30)) {
@@ -923,12 +987,16 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
         for pid in 0..current_partition_count {
             match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(30)) {
                 Ok((_low, high)) => {
-                    let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
-                        &c.topic,
-                        &c.id.to_string(),
-                        &pid.to_string(),
-                    ]);
-                    max_offset.set(high);
+                    while max_available_offsets_metrics.len() <= usize::try_from(pid).unwrap() {
+                        max_available_offsets_metrics.push(
+                            metrics.max_available_offset.get_delete_on_drop_gauge(vec![
+                                c.topic.clone(),
+                                c.id.to_string(),
+                                pid.to_string(),
+                            ]),
+                        );
+                    }
+                    max_available_offsets_metrics[usize::try_from(pid).unwrap()].set(high);
                 }
                 Err(e) => {
                     error!(

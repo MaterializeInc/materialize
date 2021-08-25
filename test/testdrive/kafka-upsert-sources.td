@@ -99,7 +99,7 @@ mämmalmore    moose    42
 
 $ kafka-create-topic topic=textbytes
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 fish:fish
 bìrd1:goose
 bírdmore:geese
@@ -133,7 +133,7 @@ fish          fish  1
 bírdmore      geese 3
 mammal1       moose 4
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 bírdmore:géese
 mammalmore:moose
 mammal1:
@@ -147,7 +147,7 @@ bírdmore      g\xc3\xa9ese     6
 mammal1       mouse            9
 mammalmore    moose            7
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 mammalmore:herd
 
 > select * from bytesbytes
@@ -158,7 +158,7 @@ b\xc3\xadrdmore  g\xc3\xa9ese     6
 mammal1          mouse            9
 mammalmore       herd             10
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 bìrd1:
 fish:
 
@@ -183,7 +183,7 @@ $ kafka-create-topic topic=textproto
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
   ENVELOPE UPSERT FORMAT BYTES
 
-$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=:
 fish:{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
 bìrd1:{"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
 birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
@@ -198,7 +198,7 @@ fish 1 1 ONE my-string 1
 bìrd1 2 2 ONE something-valid 2
 birdmore 2 2 ONE something-valid 3
 
-$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=:
 mammal1: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
 bìrd1:
 birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "stuff"}
@@ -224,7 +224,7 @@ mammalmore 2 2 ONE something-valid 10
 $ kafka-create-topic topic=nullkey
 
 # A null key should result in an error decoding that row but not a panic
-$ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
 bird1:goose
 :geese
 mammal1:moose
@@ -487,3 +487,127 @@ melon  2
 k1        k2
 -----------
 librairie 10
+
+# Declare a key constraint (PRIMARY KEY NOT ENFORCED)
+
+$ set schema={
+    "type": "record",
+    "name": "row",
+    "fields": [
+      {"name": "a", "type": "long"},
+      {"name": "b", "type": "long"}
+    ]
+  }
+
+$ kafka-create-topic topic=input-pkne-flat
+
+$ kafka-ingest format=avro topic=input-pkne-flat schema=${schema}
+{"a": 1, "b": 11}
+{"a": 2, "b": 22}
+{"a": 3, "b": 33}
+
+> CREATE MATERIALIZED SOURCE input_pkne_flat_a (PRIMARY KEY (a) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-pkne-flat-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE NONE
+
+> CREATE MATERIALIZED SOURCE input_pkne_flat_b (PRIMARY KEY (b) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-pkne-flat-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE NONE
+
+> CREATE MATERIALIZED SOURCE input_pkne_flat_ab (PRIMARY KEY (a, b) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-pkne-flat-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE NONE
+
+> CREATE SINK input_pkne_flat_a_sink FROM input_pkne_flat_a
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-pkne-flat-a-sink'
+  KEY (a)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+
+> CREATE SINK input_pkne_flat_b_sink FROM input_pkne_flat_b
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-pkne-flat-b-sink'
+  KEY (b)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+
+> CREATE SINK input_pkne_flat_ab_sink FROM input_pkne_flat_ab
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-pkne-flat-ab-sink'
+  KEY (a, b)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+
+$ kafka-verify format=avro sink=materialize.public.input_pkne_flat_a_sink sort-messages=true
+{"a": 1} {"a": 1, "b": 11}
+{"a": 2} {"a": 2, "b": 22}
+{"a": 3} {"a": 3, "b": 33}
+
+$ kafka-verify format=avro sink=materialize.public.input_pkne_flat_b_sink sort-messages=true
+{"b": 11} {"a": 1, "b": 11}
+{"b": 22} {"a": 2, "b": 22}
+{"b": 33} {"a": 3, "b": 33}
+
+$ kafka-verify format=avro sink=materialize.public.input_pkne_flat_ab_sink sort-messages=true
+{"a": 1, "b": 11} {"a": 1, "b": 11}
+{"a": 2, "b": 22} {"a": 2, "b": 22}
+{"a": 3, "b": 33} {"a": 3, "b": 33}
+
+$ set keyschema={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+        {"name": "key1", "type": "string"},
+        {"name": "key2", "type": "long"}
+    ]
+  }
+
+$ kafka-create-topic topic=input-pkne-key
+
+$ kafka-ingest topic=input-pkne-key key-format=avro key-schema=${keyschema} format=avro schema=${schema}
+{"key1": "a", "key2": 1} {"a": 1, "b": 11}
+{"key1": "b", "key2": 2} {"a": 2, "b": 22}
+{"key1": "c", "key2": 3} {"a": 3, "b": 33}
+
+> CREATE MATERIALIZED SOURCE input_pkne_key (PRIMARY KEY (key1) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-pkne-key-${testdrive.seed}'
+  WITH (ignore_source_keys=true)
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE UPSERT FORMAT AVRO USING SCHEMA '${keyschema}'
+
+> CREATE SINK input_pkne_key_sink FROM input_pkne_key
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-pkne-key-sink'
+  KEY (key1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+
+$ kafka-verify format=avro sink=materialize.public.input_pkne_key_sink sort-messages=true
+{"key1": "a"} {"key1": "a", "key2": 1, "a": 1, "b": 11}
+{"key1": "b"} {"key1": "b", "key2": 2, "a": 2, "b": 22}
+{"key1": "c"} {"key1": "c", "key2": 3, "a": 3, "b": 33}
+
+! CREATE MATERIALIZED SOURCE avroavro (PRIMARY KEY (f1) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT
+Key constraint (f1) conflicts with existing key (key)
+
+! CREATE MATERIALIZED SOURCE avroavro (PRIMARY KEY (unknown) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT
+No such column in source key constraint: unknown
+
+! CREATE MATERIALIZED SOURCE avroavro (PRIMARY KEY (f1, f1) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE NONE
+Repeated column name in source key constraint: f1
+
+$ set ambiguous-schema={
+        "type" : "record",
+        "name" : "test",
+        "fields" : [
+            {"name":"f1", "type":"string"},
+            {"name":"f2", "type":"long"},
+            {"name":"f1", "type":"long"}
+        ]
+    }
+
+! CREATE MATERIALIZED SOURCE input_pkne (f1, f2, f1, PRIMARY KEY (f1) NOT ENFORCED)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${ambiguous-schema}' ENVELOPE NONE
+Ambiguous column in source key constraint: f1

@@ -46,19 +46,19 @@ topic missing_topic does not exist
 
 $ kafka-create-topic topic=t1 partitions=3
 
-$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: publish=true timestamp=1 partition=0
+$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=1 partition=0
 apple:apple
 banana:banana
 
-$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: publish=true timestamp=2 partition=1
+$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=2 partition=1
 cherry:cherry
 date:date
 eggfruit:eggfruit
 
-$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: publish=true timestamp=3 partition=1
+$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=3 partition=1
 fig:fig
 
-$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: publish=true timestamp=4 partition=2
+$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=4 partition=2
 grape:grape
 
 > CREATE MATERIALIZED SOURCE append_time_offset_0
@@ -68,27 +68,27 @@ grape:grape
 
 > CREATE MATERIALIZED SOURCE append_time_offset_1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=1)
+  WITH (kafka_time_offset=1, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=2)
+  WITH (kafka_time_offset=2, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=3)
+  WITH (kafka_time_offset=3, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=4)
+  WITH (kafka_time_offset=4, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > CREATE MATERIALIZED SOURCE append_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t1-${testdrive.seed}'
-  WITH (kafka_time_offset=5)
+  WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
 
 > SELECT * FROM append_time_offset_0
@@ -139,7 +139,7 @@ text      mz_offset
 
 $ kafka-add-partitions topic=t1 total-partitions=4
 
-$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: publish=true timestamp=5 partition=3
+$ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=5 partition=3
 hazelnut:hazelnut
 
 $ set-sql-timeout duration=60s
@@ -155,23 +155,23 @@ hazelnut  1
 
 $ kafka-create-topic topic=t2 partitions=3
 
-$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: publish=true timestamp=1 partition=0
+$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=1 partition=0
 apple:apple
 banana:banana
 
-$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: publish=true timestamp=1 partition=0
+$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=1 partition=0
 apple:
 
-$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: publish=true timestamp=2 partition=1
+$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=2 partition=1
 cherry:cherry
 date:date
 eggfruit:eggfruit
 
-$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: publish=true timestamp=3 partition=1
+$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=3 partition=1
 cherry:
 fig:fig
 
-$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: publish=true timestamp=4 partition=2
+$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=4 partition=2
 grape:grape
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_0
@@ -206,7 +206,7 @@ grape:grape
 
 > CREATE MATERIALIZED SOURCE upsert_time_offset_5
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-t2-${testdrive.seed}'
-  WITH (kafka_time_offset=5)
+  WITH (kafka_time_offset=5, topic_metadata_refresh_interval_ms=10)
   FORMAT TEXT
   ENVELOPE UPSERT
 
@@ -253,7 +253,7 @@ key0      text      mz_offset
 
 $ kafka-add-partitions topic=t2 total-partitions=4
 
-$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: publish=true timestamp=5 partition=3
+$ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=5 partition=3
 hazelnut:hazelnut
 
 # It takes a while for new partitions to be consumed...
@@ -273,15 +273,15 @@ hazelnut  hazelnut  1
 
 $ kafka-create-topic topic=t3 partitions=1
 
-$ kafka-ingest format=bytes topic=t3 publish=true timestamp=1
+$ kafka-ingest format=bytes topic=t3 timestamp=1
 apple
 
 # Timestamp for June 2021
-$ kafka-ingest format=bytes topic=t3 publish=true timestamp=1622666300000
+$ kafka-ingest format=bytes topic=t3 timestamp=1622666300000
 banana
 
 # Timestamp for June 2099
-$ kafka-ingest format=bytes topic=t3 publish=true timestamp=4084108700000
+$ kafka-ingest format=bytes topic=t3 timestamp=4084108700000
 cherry
 
 > CREATE MATERIALIZED SOURCE relative_time_offset_30_years_ago

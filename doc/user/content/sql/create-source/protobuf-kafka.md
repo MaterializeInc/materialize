@@ -19,7 +19,19 @@ topics.
 
 {{< diagram "create-source-protobuf-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only" %}}
+#### `key_constraint`
+
+{{< diagram "key-constraint.svg" >}}
+
+#### `format_spec`
+
+{{< diagram "format-spec.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only upsert" keyConstraint=true %}}
 
 ## Examples
 
@@ -30,28 +42,10 @@ named `SCHEMA`:
 
 ```sql
 CREATE SOURCE batches
-KAFKA BROKER 'localhost:9092' TOPIC 'billing'
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
-```
-
-This creates a source that...
-
-- Is append-only.
-- Decodes data received from the `billing` topic published by Kafka running on
-  `localhost:9092`.
-- Decodes data as the `Batch` message from the `billing` package, as described
-  in the [generated `FileDescriptorSet`](#filedescriptorset).
-
-### Caching records to local disk
-
-Assuming you've already generated a [`FileDescriptorSet`](#filedescriptorset)
-named `SCHEMA`:
-
-```sql
-CREATE SOURCE batches
-KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
 WITH (cache = true)
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
 ```
 
 This creates a source that...
@@ -61,20 +55,20 @@ This creates a source that...
   `localhost:9092`.
 - Decodes data as the `Batch` message from the `billing` package, as described
   in the [generated `FileDescriptorSet`](#filedescriptorset).
-- Caches messages from the `billing` topic to local disk.
 
 ### Connecting to a Kafka broker using SSL authentication
 
 ```sql
 CREATE SOURCE batches
-KAFKA BROKER 'localhost:9092' TOPIC 'billing' WITH (
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing' WITH (
     security_protocol = 'SSL',
     ssl_key_location = '/secrets/materialized.key',
     ssl_certificate_location = '/secrets/materialized.crt',
     ssl_ca_location = '/secrets/ca.crt',
     ssl_key_password = 'mzmzmz'
 )
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
 ```
 
 This creates a source that...
@@ -89,9 +83,10 @@ This creates a source that...
 
 ```sql
 CREATE SOURCE batches
-  KAFKA BROKER 'localhost:9092' TOPIC 'billing'
-  WITH (start_offset=[0,10,100])
-  FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+WITH (start_offset=[0,10,100])
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
 ```
 
 This creates a source that...

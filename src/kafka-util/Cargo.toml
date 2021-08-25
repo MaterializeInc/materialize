@@ -6,17 +6,17 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
+anyhow = "1.0.43"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = "2.33.0"
-futures = "0.3.14"
+futures = "0.3.16"
 mz-avro = { path = "../avro" }
-ore = { path = "../ore" }
-rand = "0.8.3"
+ore = { path = "../ore", features = ["network"] }
+rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-serde = { version = "1.0.126", features = ["derive"] }
-serde_json = "1.0.64"
-structopt = "0.3.21"
-tokio = { version = "1.6.0", features = ["macros"] }
+serde = { version = "1.0.128", features = ["derive"] }
+serde_json = "1.0.66"
+structopt = "0.3.22"
+tokio = { version = "1.10.0", features = ["macros"] }
 url = "2.2.2"

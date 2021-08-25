@@ -110,23 +110,17 @@ SELECT l1.la, l2.lb, l3.lb
 FROM l as l1, l as l2, l as l3
 WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
 
-%1 =
-| Get materialize.public.l (u1)
-| Filter !(isnull(#0))
+%1 = Let l1 =
+| Get %0 (l0)
 | ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.l (u1)
-| Filter !(isnull(#0))
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %1 %2 (= #2 (#0 + 1)) (= #4 (#0 + #2))
-| | implementation = Differential %0 %1.(#0) %2.(#0)
+| Join %0 %1 %1 (= #2 (#0 + 1)) (= #4 (#0 + #2))
+| | implementation = Differential %0 %1.(#0) %1.(#0)
 | | demand = (#0, #3, #5)
 | Project (#0, #3, #5)
 
@@ -169,7 +163,7 @@ WHERE l1.la IN (
 
 %4 =
 | Get %2 (l0)
-| Filter !(isnull(#0)), (#0 = (#1 + 1))
+| Filter (#0 = (#1 + 1))
 
 %5 =
 | Get %2 (l0)
@@ -429,56 +423,49 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 %3 = Let l1 =
 | Get %2 (l0)
 | Distinct group=(#0)
+| ArrangeBy (#0)
 
 %4 =
 | Get materialize.public.r (u3)
 
 %5 =
-| Get %3 (l1)
-| ArrangeBy (#0)
-
-%6 =
-| Join %4 %5 (= #0 #2)
-| | implementation = Differential %4 %5.(#0)
+| Join %4 %3 (= #0 #2)
+| | implementation = Differential %4 %3.(#0)
 | | demand = (#0, #1)
 | Negate
 | Project (#0, #1)
 
-%7 =
+%6 =
 | Get materialize.public.r (u3)
 
-%8 =
-| Union %6 %7
+%7 =
+| Union %5 %6
 | Map null, null
 | Project (#2, #3, #0, #1)
 
-%9 =
+%8 =
 | Get materialize.public.l (u1)
 
-%10 =
-| Get %3 (l1)
-| ArrangeBy (#0)
-
-%11 =
-| Join %9 %10 (= #0 #2)
-| | implementation = Differential %9 %10.(#0)
+%9 =
+| Join %8 %3 (= #0 #2)
+| | implementation = Differential %8 %3.(#0)
 | | demand = (#0, #1)
 | Negate
 | Project (#0, #1)
 
-%12 =
+%10 =
 | Get materialize.public.l (u1)
 
-%13 =
-| Union %11 %12
+%11 =
+| Union %9 %10
 | Map null, null
 
-%14 =
+%12 =
 | Get %2 (l0)
 | Project (#0, #1, #0, #3)
 
-%15 =
-| Union %8 %13 %14
+%13 =
+| Union %7 %11 %12
 
 EOF
 
@@ -566,7 +553,7 @@ EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id
 | Get %0 (l0)
 | Reduce group=()
 | | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Filter (#0 > 1)
 | Map (err: more than one record produced in subquery)
 | Project (#1)
 

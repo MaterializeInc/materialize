@@ -122,8 +122,8 @@ pub fn lex(query: &str) -> Result<Vec<(Token, usize)>, ParserError> {
             'e' | 'E' if buf.consume('\'') => lex_extended_string(buf)?,
             'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX => lex_ident(buf),
             '"' => lex_quoted_ident(buf)?,
-            '0'..='9' => lex_number(buf),
-            '.' if matches!(buf.peek(), Some('0'..='9')) => lex_number(buf),
+            '0'..='9' => lex_number(buf)?,
+            '.' if matches!(buf.peek(), Some('0'..='9')) => lex_number(buf)?,
             '$' if matches!(buf.peek(), Some('0'..='9')) => lex_parameter(buf)?,
             '$' => lex_dollar_string(buf)?,
             '(' => Token::LParen,
@@ -284,6 +284,7 @@ fn lex_to_adjacent_string(buf: &mut LexBuf) -> bool {
 fn lex_dollar_string(buf: &mut LexBuf) -> Result<Token, ParserError> {
     let pos = buf.pos() - 1;
     let tag = format!("${}$", buf.take_while(|ch| ch != '$'));
+    let _ = buf.next();
     if let Some(s) = buf.take_to_delimiter(&tag) {
         Ok(Token::String(s.into()))
     } else {
@@ -300,7 +301,7 @@ fn lex_parameter(buf: &mut LexBuf) -> Result<Token, ParserError> {
     Ok(Token::Parameter(n))
 }
 
-fn lex_number(buf: &mut LexBuf) -> Token {
+fn lex_number(buf: &mut LexBuf) -> Result<Token, ParserError> {
     buf.prev();
     let mut s = buf.take_while(|ch| matches!(ch, '0'..='9')).to_owned();
 
@@ -313,15 +314,25 @@ fn lex_number(buf: &mut LexBuf) -> Token {
     // Optional exponent.
     if buf.consume('e') || buf.consume('E') {
         s.push('E');
-        if buf.consume('-') {
+        let require_exp = if buf.consume('-') {
             s.push('-');
+            true
         } else {
-            buf.consume('+');
+            buf.consume('+')
+        };
+        let exp = buf.take_while(|ch| matches!(ch, '0'..='9'));
+        if require_exp && exp.is_empty() {
+            return Err(ParserError::new(buf.pos() - 1, "missing required exponent"));
+        } else if exp.is_empty() {
+            // Put back consumed E.
+            buf.prev();
+            s.pop();
+        } else {
+            s.push_str(exp);
         }
-        s.push_str(buf.take_while(|ch| matches!(ch, '0'..='9')));
     }
 
-    Token::Number(s)
+    Ok(Token::Number(s))
 }
 
 fn lex_op(buf: &mut LexBuf) -> Result<Token, ParserError> {

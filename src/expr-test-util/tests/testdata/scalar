@@ -1,0 +1,53 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+build-scalar
+#0
+----
+#0
+
+build-scalar
+#10
+----
+#10
+
+build-scalar
+(call_unary not #200)
+----
+!(#200)
+
+build-scalar
+(call_binary add_int32 (call_unary neg_int32 #21) (1 int32))
+----
+(-(#21) + 1)
+
+build-scalar
+(
+    if
+    (call_binary gt #0 (-2 numeric))
+    (call_variadic substr [#1 (1 int64) (4 int64)])
+    "hello"
+)
+----
+if (#0 > -2) then {substr(#1, 1, 4)} else {"hello"}
+
+build-scalar
+(call_binary (jsonb_get_string true) #2 ("field1" string))
+----
+(#2 ->> "field1")
+
+build-scalar
+(call_unary is_null null)
+----
+isnull(null)
+
+build-scalar
+("1999-12-31 23:42:23.342" timestamp)
+----
+1999-12-31 23:42:23.342

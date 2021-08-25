@@ -30,6 +30,8 @@ pub enum CoordError {
     Eval(EvalError),
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
+    /// At least one input has no complete timestamps yet
+    IncompleteTimestamp(Vec<expr::GlobalId>),
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The named operation cannot be run in a transaction.
@@ -48,6 +50,8 @@ pub enum CoordError {
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
+    /// The named table has no active indexes to support the operation.
+    TableWithoutIndexes(String),
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
@@ -118,6 +122,11 @@ impl fmt::Display for CoordError {
             }
             CoordError::Eval(e) => e.fmt(f),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
+            CoordError::IncompleteTimestamp(unstarted) => write!(
+                f,
+                "At least one input has no complete timestamps yet: {:?}",
+                unstarted
+            ),
             CoordError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",
@@ -154,6 +163,13 @@ impl fmt::Display for CoordError {
             }
             CoordError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
+            }
+            CoordError::TableWithoutIndexes(table) => {
+                write!(
+                    f,
+                    "cannot access {} because it has no indexes enabled",
+                    table
+                )
             }
             CoordError::SqlCatalog(e) => e.fmt(f),
             CoordError::TailOnlyTransaction => {

@@ -11,16 +11,17 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
+[`--metrics_scraping-frequency`](#prometheus-metrics) | 1s | The frequency at which to update [prometheus metrics](#prometheus-metrics).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
-[`--log-filter`](#logging) | `info` | Which log messages to emit.
+[`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where to emit log messages
+[`--log-filter`](#log-filter) | `info` | Which log messages to emit
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -29,6 +30,7 @@ Flag | Default | Modifies
 [`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
 `-v` / `--version` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
+[`--disable-user-indexes`](#disable-user-indexes) | Disabled | Starts the node without creating any dataflows for user indexes.
 
 If a command line flag takes an argument, you can alternatively set that flag
 via an environment variable named after the flag. If both the environment
@@ -111,13 +113,14 @@ the port that Materialize listens on from the default `6875`.
 
 The `--logical-compaction-window` option specifies the duration of time for
 which Materialize is required to maintain full historical detail in its
-[arrangements](/overview/api-components#indexes). Note that compaction happens
+[arrangements][api-indexes]. Note that compaction happens
 lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
 
-The value of the option is a duration string like `10ms` (10 milliseconds) or
-`1min 30s` (1 minute, 30 seconds).  The special value `off` disables logical
-compaction and corresponds to an unboundedly large duration.
+The value of the option is any valid SQL [interval](/sql/types/interval)
+string, like `10ms` (10 milliseconds) or `1min 30s` (1 minute, 30
+seconds). The special value `off` disables logical compaction and
+corresponds to an unboundedly large duration.
 
 The logical compaction window ends at the current time and extends backwards in
 time for the configured duration. The default window is 1 millisecond.
@@ -127,11 +130,26 @@ the compaction window.
 
 ### Logging
 
-{{< version-added 0.7.2 />}}
+#### Log file
 
-The `--log-filter` option specifies which log messages Materialize will emit.
-Its value is a comma-separated list of filter directives. Each filter directive
-has the following format:
+The `--log-file` option specifies the path to a file in which Materialize will
+write its [log messages](/ops/monitoring#logging). The value `stderr` is treated
+specially and specifies the standard error stream.
+
+If the option is unspecified, Materialize writes log messages to the
+`materialized.log` file in the [data directory](#data-directory) and
+additionally forwards any log messages at the `WARN` or `ERROR` levels to the
+standard error stream. Forwarding does not occur if you explicitly specify a log
+file.
+
+#### Log filter
+
+{{< version-added v0.7.2 />}}
+
+The `--log-filter` option specifies which [log
+messages](/ops/monitoring#logging) Materialize will emit. Its value is a
+comma-separated list of filter directives. Each filter directive has the
+following format:
 
 ```
 [module::path=]level
@@ -143,15 +161,21 @@ module, then it implicitly applies to all modules. When directives conflict, the
 last directive wins. Materialize will only emit log messages that match at least
 one filter directive.
 
-The module path of a log message reflects its location in Materialize's source
-code. Specifying module paths in filter directives requires familiarity with
-Materialize's codebase and is intended for advanced users. Note that module
-paths change frequency from release to release and are not considered part of
-Materialize's stable interface.
+Specifying module paths in filter directives requires familiarity with
+Materialize's codebase and is intended for advanced users.
 
-The valid levels for a log message are, in increasing order of severity:
-`trace`, `debug`, `info`, `warn`, and `error`. The special level `off` may be
-used in a directive to suppress all log messages, even errors.
+The valid levels for a log message are documented in the [logging
+section](/ops/monitoring/#levels) of the monitoring documentation and are not
+case sensitive. The special level `off` may be used in a directive to suppress
+all log messages, even those at the `error` level.
+
+As an example, the following filter specifies the `TRACE` level for the `pgwire`
+module, which handles SQL network connections, and the `INFO` level for all
+other modules.
+
+```
+pgwire=trace,info
+```
 
 ### Introspection sources
 
@@ -172,12 +196,27 @@ Higher frequencies provide more up-to-date introspection but increase load on
 the system. Lower frequencies increase staleness in exchange for decreased load.
 The default frequency is a good choice for most deployments.
 
+### Prometheus metrics
+
+{{< version-changed v0.9.1 >}}
+In prior versions of Materialize, the metrics scraping interval was linked to
+the introspection interval.
+{{< /version-changed >}}
+
+The `--metrics-scraping-frequency` option determines the frequency at which the
+prometheus metrics are collected. The default frequency is `1s`. To disable
+prometheus metrics collection entirely, use the special value `off`.
+
+Higher frequencies provide more up-to-date metrics but increase load on
+the system. Lower frequencies increase staleness in exchange for decreased load.
+The default frequency is a good choice for most deployments.
+
 {{< version-changed v0.7.3 >}}
 Materialize imports its own [Prometheus metrics](/ops/monitoring#prometheus)
 into the systems tables `mz_metrics` (counters and gauge readings),
 `mz_metric_histograms` (histogram distributions) and `mz_metrics_meta` (type
 information and help for each metric). These readings are imported once per
-`--introspection-frequency` period, and are retained for the duration given with
+`--metrics-scraping-frequency` period, and are retained for the duration given with
 `--retain-prometheus-metrics` (defaulting to 5 minutes). Higher retention
 periods lead to greater memory usage.
 {{< /version-changed >}}
@@ -290,15 +329,6 @@ You cannot disable experimental mode for a node. You can, however, extract your
 view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
 etc.), and then create a new node with those items.
 
-### Source cache
-
-The `--cache-max-pending-records` specifies the number of input messages
-Materialize buffers in memory before flushing them all to disk when using
-[cached sources][cache]. The default value is 1000000 messages. Note
-that Materialize will also flush buffered records every 10 minutes as well. See
-the [Deployment section][cache] for more guidance on how to tune this
-parameter.
-
 ### Telemetry
 
 Materialize periodically communicates with `telemetry.materialize.com` to report
@@ -337,8 +367,58 @@ Using these parameters correctly requires substantial knowledge about how
 the underlying Timely and Differential Dataflow engines work. Typically you
 should only set these parameters in consultation with Materialize engineers.
 
+### Disable user indexes
+
+{{< version-added v0.9.2 />}}
+
+{{< warning >}}
+This feature is primarily meant for advanced administrators of Materialize.
+{{< /warning >}}
+
+If you cannot boot a Materialize node because it runs out of memory, you can use
+the `--disable-user-indexes` to prevent Materialize from creating any
+[indexes][api-indexes] on user-created objects. For
+example, if you add a view that contains a cross join that causes your node to
+immediately run out of memory on boot, you can use `--disable-user-indexes` to
+boot the node and then drop the offending view.
+
+In this mode users...
+
+- Can access objects within the [system catalog][sys-cat] to help determine
+  which indexes are causing the crash.
+- Can only `SELECT` from user-created objects that do not rely on user-created
+  indexes. In essence, this means users can still `SELECT` from user-created...
+  - Tables, but they will never return any data.
+  - Views that contain only references to constant values or depend entirely on
+    system tables' indexes.
+- Cannot `INSERT` data into tables.
+- Can create new objects, but any created indexes will remain disabled.
+
+For assistance with this mode, see:
+
+- [Architecture over: Indexes][api-indexes]
+- [System catalog][sys-cat]
+- [`SHOW INDEX`](/sql/show-index)
+- [`DROP VIEW`](/sql/drop-view)
+- [`DROP INDEX`](/sql/drop-index)
+
+## Special environment variables
+
+Materialize respects several environment variables that have conventional
+meanings in Unix systems.
+
+### HTTP proxies
+
+The `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` environment
+variables specify a proxy to use for outgoing HTTP and HTTPS traffic. There is
+no precise specification of how these variables behave, but Materialize's
+behavior generally matches the behavior of other HTTP clients.
+
+For precise details of Materialize's behavior, consult the documentation of
+the [`mz_http_proxy`](https://docs.rs/mz_http_proxy) crate.
+
+[api-indexes]: /overview/api-components#indexes
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
-[parse-duration-syntax]: https://docs.rs/parse_duration/2.1.0/parse_duration/#syntax
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
-[cache]: /ops/deployment/#source-caching
+[sys-cat]: /sql/system-catalog

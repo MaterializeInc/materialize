@@ -55,7 +55,7 @@
   {%- set old_relation = adapter.get_relation(database=database, schema=schema, identifier=identifier) -%}
 
   {%- set agate_table = load_agate_table() -%}
-  {%- do store_result('agate_table', status='OK', agate_table=agate_table) -%}
+  {%- do store_result('agate_table', response='OK', agate_table=agate_table) -%}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
 

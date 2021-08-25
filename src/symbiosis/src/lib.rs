@@ -25,9 +25,7 @@
 //! extremely slow and inefficient on large data sets.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::TryInto;
 use std::env;
 use std::rc::Rc;
 
@@ -37,7 +35,7 @@ use tokio_postgres::types::FromSql;
 use uuid::Uuid;
 
 use pgrepr::Jsonb;
-use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
+use repr::adt::numeric;
 use repr::{Datum, RelationDesc, RelationType, Row};
 use sql::ast::{
     ColumnOption, CreateSchemaStatement, CreateTableStatement, DataType, DeleteStatement,
@@ -143,12 +141,7 @@ END $$;
         catalog: &dyn Catalog,
         stmt: &Statement<Raw>,
     ) -> Result<Plan, anyhow::Error> {
-        let scx = StatementContext {
-            pcx,
-            catalog,
-            ids: HashSet::new(),
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
-        };
+        let scx = StatementContext::new(Some(pcx), catalog, Rc::new(RefCell::new(BTreeMap::new())));
         Ok(match stmt {
             Statement::CreateTable(CreateTableStatement {
                 name,
@@ -399,109 +392,112 @@ fn push_column(
     sql_type: &DataType<Aug>,
     nullable: bool,
 ) -> Result<Row, anyhow::Error> {
-    // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
-    // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
+    // NOTE this needs to stay in sync with
+    // materialize::sql::scalar_type_from_sql in some cases, we use slightly
+    // different representations than postgres does for the same sql types, so
+    // we have to be careful about conversions
     match sql_type {
-        DataType::Other { name, typ_mod } => {
-            match name.raw_name().to_string().as_str() {
-                "pg_catalog.bool" => {
-                    let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
-                    row.push(Datum::from(bool));
-                }
-                "pg_catalog.bytea" => {
-                    let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
-                    row.push(Datum::from(bytes.as_deref()));
-                }
-                "pg_catalog.bpchar" | "pg_catalog.char" | "pg_catalog.text"
-                | "pg_catalog.varchar" => {
-                    let string = get_column_inner::<String>(postgres_row, i, nullable)?;
-                    row.push(Datum::from(string.as_deref()));
-                }
-                "pg_catalog.date" => {
-                    let d: chrono::NaiveDate =
-                        get_column_inner::<chrono::NaiveDate>(postgres_row, i, nullable)?.unwrap();
-                    row.push(Datum::Date(d));
-                }
-                "pg_catalog.float4" => {
-                    let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f32::from);
-                    row.push(Datum::from(f));
-                }
-                "pg_catalog.float8" => {
-                    let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
-                    row.push(Datum::from(f));
-                }
-                "pg_catalog.int4" => {
-                    let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
-                    row.push(Datum::from(i));
-                }
-                "pg_catalog.int8" => {
-                    let i = get_column_inner::<i64>(postgres_row, i, nullable)?;
-                    row.push(Datum::from(i));
-                }
-                "pg_catalog.interval" => {
-                    let iv =
-                        get_column_inner::<pgrepr::Interval>(postgres_row, i, nullable)?.unwrap();
-                    row.push(Datum::Interval(iv.0));
-                }
-                "pg_catalog.jsonb" => {
-                    let jsonb = get_column_inner::<Jsonb>(postgres_row, i, nullable)?;
-                    if let Some(jsonb) = jsonb {
-                        row.extend_by_row(&jsonb.0.into_row())
-                    } else {
-                        row.push(Datum::Null)
-                    }
-                }
-                "pg_catalog.numeric" => {
-                    let (_, desired_scale) = sql::plan::unwrap_numeric_typ_mod(
-                        typ_mod,
-                        MAX_DECIMAL_PRECISION,
-                        "numeric",
-                    )?;
-                    match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
-                        None => row.push(Datum::Null),
-                        Some(d) => {
-                            let mut significand = d.0.significand();
-                            // TODO(jamii) lots of potential for unchecked edge cases here eg 10^scale_correction could overflow
-                            // current representation is `significand * 10^current_scale`
-                            // want to get to `significand2 * 10^desired_scale`
-                            // so `significand2 = significand * 10^(current_scale - desired_scale)`
-                            let scale_correction =
-                                (d.0.scale() as isize) - (desired_scale.unwrap_or(0) as isize);
-                            if scale_correction > 0 {
-                                significand /= 10i128.pow(scale_correction.try_into()?);
-                            } else {
-                                significand *= 10i128.pow((-scale_correction).try_into()?);
-                            };
-                            row.push(Datum::from(Significand::new(significand)));
-                        }
-                    }
-                }
-                "pg_catalog.int2" | "pg_catalog.smallint" => {
-                    let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
-                    row.push(Datum::from(i));
-                }
-                "pg_catalog.timestamp" => {
-                    let d: chrono::NaiveDateTime =
-                        get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?
-                            .unwrap();
-                    row.push(Datum::Timestamp(d));
-                }
-                "pg_catalog.timestamptz" => {
-                    let d: chrono::DateTime<Utc> =
-                        get_column_inner::<chrono::DateTime<Utc>>(postgres_row, i, nullable)?
-                            .unwrap();
-                    row.push(Datum::TimestampTz(d));
-                }
-                "pg_catalog.uuid" => {
-                    let u = get_column_inner::<Uuid>(postgres_row, i, nullable)?.unwrap();
-                    row.push(Datum::Uuid(u));
-                }
-                _ => bail!(
-                    "Postgres to materialize conversion not yet supported for {:?}",
-                    sql_type
-                ),
+        DataType::Other { name, typ_mod } => match name.raw_name().to_string().as_str() {
+            "pg_catalog.bool" => {
+                let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
+                row.push(Datum::from(bool));
             }
-        }
+            "pg_catalog.bytea" => {
+                let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
+                row.push(Datum::from(bytes.as_deref()));
+            }
+            "pg_catalog.text" => {
+                let string = get_column_inner::<String>(postgres_row, i, nullable)?;
+                row.push(Datum::from(string.as_deref()));
+            }
+            "pg_catalog.bpchar" | "pg_catalog.char" => {
+                let length = repr::adt::char::extract_typ_mod(&typ_mod)?;
+                match get_column_inner::<String>(postgres_row, i, nullable)? {
+                    None => row.push(Datum::Null),
+                    Some(s) => {
+                        let s = repr::adt::char::format_str_trim(&s, length, true)?;
+                        row.push(Datum::String(&s));
+                    }
+                }
+            }
+            "pg_catalog.varchar" => {
+                let length = repr::adt::varchar::extract_typ_mod(&typ_mod)?;
+                match get_column_inner::<String>(postgres_row, i, nullable)? {
+                    None => row.push(Datum::Null),
+                    Some(s) => {
+                        let s = repr::adt::varchar::format_str(&s, length, true)?;
+                        row.push(Datum::String(&s));
+                    }
+                }
+            }
+            "pg_catalog.date" => {
+                let d: chrono::NaiveDate =
+                    get_column_inner::<chrono::NaiveDate>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Date(d));
+            }
+            "pg_catalog.float4" => {
+                let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f32::from);
+                row.push(Datum::from(f));
+            }
+            "pg_catalog.float8" => {
+                let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
+                row.push(Datum::from(f));
+            }
+            "pg_catalog.int2" => {
+                let i = get_column_inner::<i16>(postgres_row, i, nullable)?;
+                row.push(Datum::from(i));
+            }
+            "pg_catalog.int4" => {
+                let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
+                row.push(Datum::from(i));
+            }
+            "pg_catalog.int8" => {
+                let i = get_column_inner::<i64>(postgres_row, i, nullable)?;
+                row.push(Datum::from(i));
+            }
+            "pg_catalog.interval" => {
+                let iv = get_column_inner::<pgrepr::Interval>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Interval(iv.0));
+            }
+            "pg_catalog.jsonb" => {
+                let jsonb = get_column_inner::<Jsonb>(postgres_row, i, nullable)?;
+                if let Some(jsonb) = jsonb {
+                    row.extend_by_row(&jsonb.0.into_row())
+                } else {
+                    row.push(Datum::Null)
+                }
+            }
+            "pg_catalog.numeric" => {
+                let desired_scale = repr::adt::numeric::extract_typ_mod(typ_mod)?;
+                match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
+                    None => row.push(Datum::Null),
+                    Some(mut d) => {
+                        if let Some(scale) = desired_scale {
+                            numeric::rescale(&mut d.0 .0, scale)?;
+                        }
+                        row.push(Datum::Numeric(d.0));
+                    }
+                }
+            }
+            "pg_catalog.timestamp" => {
+                let d: chrono::NaiveDateTime =
+                    get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Timestamp(d));
+            }
+            "pg_catalog.timestamptz" => {
+                let d: chrono::DateTime<Utc> =
+                    get_column_inner::<chrono::DateTime<Utc>>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::TimestampTz(d));
+            }
+            "pg_catalog.uuid" => {
+                let u = get_column_inner::<Uuid>(postgres_row, i, nullable)?.unwrap();
+                row.push(Datum::Uuid(u));
+            }
+            _ => bail!(
+                "Postgres to materialize conversion not yet supported for {:?}",
+                sql_type
+            ),
+        },
         _ => bail!(
             "Postgres to materialize conversion not yet supported for {:?}",
             sql_type

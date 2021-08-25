@@ -14,6 +14,8 @@ use std::vec;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
+use lowertest::MzStructReflect;
+
 use crate::ScalarType;
 
 /// The type of a [`Datum`](crate::Datum).
@@ -23,18 +25,31 @@ use crate::ScalarType;
 ///
 /// To construct a column type, either initialize the struct directly, or
 /// use the [`ScalarType::nullable`] method.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzStructReflect,
+)]
 pub struct ColumnType {
-    /// Whether this datum can be null.
-    pub nullable: bool,
     /// The underlying scalar type (e.g., Int32 or String) of this column.
     pub scalar_type: ScalarType,
+    /// Whether this datum can be null.
+    #[serde(default = "return_true")]
+    pub nullable: bool,
+}
+
+/// This method exists solely for the purpose of making ColumnType nullable by
+/// default in unit tests. The default value of a bool is false, and the only
+/// way to make an object take on any other value by default is to pass it a
+/// function that returns the desired default value. See
+/// <https://github.com/serde-rs/serde/issues/1030>
+#[inline(always)]
+fn return_true() -> bool {
+    true
 }
 
 impl ColumnType {
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (self.scalar_type.clone(), other.scalar_type.clone()) {
-            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
+            (scalar_type, other_scalar_type) if scalar_type.base_eq(&other_scalar_type) => {
                 Ok(ColumnType {
                     scalar_type: scalar_type,
                     nullable: self.nullable || other.nullable,
@@ -100,7 +115,7 @@ impl ColumnType {
 }
 
 /// The type of a relation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
 pub struct RelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,
@@ -113,6 +128,7 @@ pub struct RelationType {
     ///
     /// A collection can contain multiple sets of keys, although it is common to
     /// have either zero or one sets of key indices.
+    #[serde(default)]
     pub keys: Vec<Vec<usize>>,
 }
 

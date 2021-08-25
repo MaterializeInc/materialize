@@ -6,22 +6,15 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.40"
-backtrace = "0.3.60"
-jemalloc-ctl = { version = "0.3.0", features = ["use_std"], optional = true }
+anyhow = "1.0.43"
+backtrace = "0.3.61"
+tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
-pprof = "0.4.3"
-serde = { version = "1.0.126", features = ["derive"] }
+pprof = "0.5.0"
+serde = { version = "1.0.128", features = ["derive"] }
 tempfile = "3.2.0"
-tokio = { version = "1.6.0", features = ["time"] }
+tokio = { version = "1.10.0", features = ["time"] }
 
 [features]
-# Whether to automatically enable the jemalloc feature if compiling for a target
-# besides macOS.
-#
-# TODO(benesch): remove this crate's build script and this feature once Cargo
-# supports target-specific features.
-# See: https://github.com/rust-lang/cargo/issues/1197
-auto-jemalloc = ["jemalloc-ctl"]
 # Whether to enable profiling features that depend on jemalloc.
-jemalloc = ["jemalloc-ctl"]
+jemalloc = ["tikv-jemalloc-ctl"]

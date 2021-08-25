@@ -22,3 +22,6 @@ http://materialize.com/* https://materialize.com/:splat 301!
 
 # The Slack invitation URL expires every 30 days, so we give it a stable alias.
 /s/chat https://join.slack.com/t/materializecommunity/shared_invite/zt-ljdufufo-PTwVPmgzlZtI7RIQLDrAiA
+
+# Forward all paths unknown to Netlify to the marketing site.
+/* https://materializeinc.wpengine.com/:splat 200

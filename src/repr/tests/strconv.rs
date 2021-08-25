@@ -97,6 +97,10 @@ fn test_parse_time() {
     run_test_parse_time("01:02:03", NaiveTime::from_hms(1, 2, 3));
     run_test_parse_time("02:03.456", NaiveTime::from_hms_nano(0, 2, 3, 456_000_000));
     run_test_parse_time("01:02", NaiveTime::from_hms(1, 2, 0));
+
+    // Regression for #6272.
+    run_test_parse_time("9::60", NaiveTime::from_hms_nano(9, 0, 59, 1_000_000_000));
+
     fn run_test_parse_time(s: &str, t: NaiveTime) {
         assert_eq!(strconv::parse_time(s).unwrap(), t);
     }

@@ -53,10 +53,10 @@ name
 ----
 
 > SHOW INDEXES FROM t;
-on_name  key_name       seq_in_index  column_name  expression  nullable
------------------------------------------------------------------------
-t        t_primary_idx  1             a            <null>      true
-t        t_primary_idx  2             b            <null>      false
+on_name  key_name       seq_in_index  column_name  expression  nullable enabled
+-------------------------------------------------------------------------------
+t        t_primary_idx  1             a            <null>      true     true
+t        t_primary_idx  2             b            <null>      false    true
 
 ! DROP INDEX t_primary_idx
 cannot drop 'materialize.public.t_primary_idx' as it is the default index for a table
@@ -161,7 +161,7 @@ invalid input syntax for type integer: invalid digit found in string: "d"
 > INSERT INTO t VALUES ('4', 'e')
 
 # ...but not in complicated VALUES clauses, per PostgreSQL.
-! INSERT INTO t VALUES ('4', 'e') LIMIT 0
+! INSERT INTO t VALUES ('5', 'f') LIMIT 0
 column "a" is of type integer but expression is of type text
 
 # Test that assignment casts occur when possible...

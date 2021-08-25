@@ -18,8 +18,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
+use uncased::UncasedStr;
 
-use ore::ascii::UncasedStr;
 use ore::codegen::CodegenBuf;
 
 const AST_DEFS_MOD: &str = "src/ast/defs.rs";

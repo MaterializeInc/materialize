@@ -33,11 +33,9 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 static MAX_BACKOFF: Duration = Duration::from_secs(2);
 
 fn main() -> Result<(), Error> {
-    LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
+    LogBuilder::from_env(Env::new().filter_or("MZ_LOG_FILTER", "info"))
         .target(Target::Stdout)
         .init();
-
-    mz_process_collector::register_default_process_collector()?;
 
     let args: Args = ore::cli::parse_args();
     let config = args::load_config(args.config_file.as_deref(), args.checks.as_deref())?;
@@ -140,7 +138,7 @@ fn decode(row: &Row) -> Result<HashMap<String, String>, String> {
         let ty = col.type_();
         let conversion = match *ty {
             Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
-            Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+            Type::BPCHAR | Type::TEXT => row.get::<_, Option<String>>(i),
             Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
                 let s = x.into_iter().map(ascii::escape_default).flatten().collect();
                 String::from_utf8(s).unwrap()

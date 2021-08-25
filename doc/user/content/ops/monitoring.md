@@ -114,8 +114,17 @@ The health check is not part of Materialize's stable interface.
 Backwards-incompatible changes to the health check may be made at any time.
 {{< /warning >}}
 
-Materialize supports a minimal HTTP health check endpoint at `http://<materialized
-host>:6875/status`.
+Materialize supports a basic HTTP health check at `http://<materialized_hostname>:6875/status`.
+
+The health check returns HTTP status code 200 as long as Materialize has enough resources to respond
+to HTTP requests. It does not otherwise assess the state of the system.
+
+Use this endpoint to integrate Materialize with monitoring and orchestration tools that support HTTP health
+checks, like [Kubernetes liveness probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
+or [AWS load balancer health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html).
+
+To perform health checks that assess other metrics, consider using the [Prometheus metrics endpoint](#prometheus).
+
 
 ## Memory usage visualization
 
@@ -175,3 +184,110 @@ Configuration parameter | Value
 `prometheus_url`        | `http://<materialized host>/metrics`
 `namespace`             | Your choice
 `metrics`               | `[mz*]` to select all metrics, or a list of specific metrics
+
+## Logging
+
+Materialize periodically emits messages to its [log file](/cli/#log-filter).
+These log messages serve several purposes:
+
+  * To alert operators to critical issues
+  * To record system status changes
+  * To provide developers with visibility into the system's execution when
+    troubleshooting issues
+
+We recommend that you monitor for messages at the [`WARN` or `ERROR`
+levels](#levels). Every message at either of these levels indicates an issue
+that must be investigated and resolved.
+
+### Message format
+
+Each log message is a single line with the following format:
+
+```
+<timestamp> <level> <module>: [<tag>]... <body>
+```
+
+For example, Materialize emits the following log message when a table named `t`
+is created:
+
+```
+2021-04-08T04:12:25.927738Z  INFO coord::catalog: create table materialize.public.t (u1)
+```
+
+The timestamp is always in UTC and formatted according to ISO 8601.
+
+The log level is one of the five levels described in the next section,
+formatted with all uppercase letters.
+
+The module path reflects the log message's location in Materialize's source
+code. Module paths change frequently from release to release and are not part of
+Materialize's stable interface.
+
+The tags, if included, further categorize the message. Tags are surrounded by
+square brackets. The currently used tags are:
+
+* `[customer-data]`: the message includes clear-text contents of data in the system
+* `[deprecation]`: a feature in use will be removed or changed in a future release
+
+The body is unstructured text intended for human consumption. It may include
+embedded newlines.
+
+### Levels
+
+Every log message is associated with a level that indicates the severity of the
+message. The levels are, in decreasing order of severity, `ERROR`, `WARN`,
+`INFO`, `DEBUG`, and `TRACE`.
+
+Log levels are used in the [`--log-filter` command-line option](/cli/#log-filter)
+to determine which log messages to emit.
+
+Messages at each level must meet the indicated standard:
+
+* **`ERROR`**: Reports an error that has caused data corruption, data loss, or
+  unavailability. You should page on-call staff immediately about these errors.
+
+  Examples:
+
+  * Authentication with an external system (e.g., Amazon S3) has failed.
+  * A source ingested the deletion of a record that does not exist, causing a
+    "negative multiplicity."
+
+* **`WARN`**: Reports an issue that may lead to data corruption, data loss, or
+  unavailability. It is reasonable to check for `WARN`-level messages once per
+  day during normal business hours.
+
+  Examples:
+
+  * A network request (e.g., downloading an object from Amazon S3) has failed
+    several times, but a retry is in progress.
+
+* **`INFO`**: Reports normal system status changes. Messages at this level may
+  be of interest to operators, but do not typically require attention.
+
+  Examples:
+
+  * A view was created.
+  * A view was dropped.
+
+* **`DEBUG`**: Provides information that may help when troubleshooting issues.
+  Messages at this level are primarily of interest to Materialize engineers.
+
+  Examples:
+
+  * An HTTP request was routed through a proxy specified by the `http_proxy`
+    environment variable.
+  * An S3 object downloaded by an S3 source had an invalid `Content-Encoding`
+    header that was ignored, but the object was nonetheless decoded
+    successfully.
+
+* **`TRACE`**: Like `DEBUG`, but the information meets a lower standard of
+  relevance or importance.
+
+  Enabling `TRACE` logs can generate multiple gigabytes of log messages per
+  hour. We recommend that you only enable this level in development or at the
+  direction of a Materialize engineer.
+
+  Examples:
+
+  * A Kafka source consumed a message.
+  * A SQL client issued a command.

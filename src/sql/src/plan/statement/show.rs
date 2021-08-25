@@ -229,7 +229,7 @@ pub fn show_objects<'a>(
         ObjectType::Sink => show_sinks(scx, full, from, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
-        ObjectType::Role => unsupported!("SHOW ROLES"),
+        ObjectType::Role => bail_unsupported!("SHOW ROLES"),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }
@@ -319,36 +319,51 @@ fn show_sources<'a>(
         scx.resolve_default_schema()?
     };
 
-    let query = if !full & !materialized {
-        format!(
-            "SELECT name FROM mz_catalog.mz_sources WHERE schema_id = {}",
-            schema.id(),
-        )
-    } else if full & !materialized {
-        format!(
+    let query = match (full, materialized) {
+        (false, false) => format!(
             "SELECT
-                name,
-                mz_internal.mz_classify_object_id(id) AS type,
-                mz_internal.mz_is_materialized(id) AS materialized,
-                volatility
-            FROM mz_catalog.mz_sources
-            WHERE schema_id = {}",
-            schema.id(),
-        )
-    } else if !full & materialized {
-        format!(
-            "SELECT name
-            FROM mz_catalog.mz_sources
-            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema.id(),
-        )
-    } else {
-        format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatility
-            FROM mz_catalog.mz_sources
-            WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
-            schema.id(),
-        )
+                 name
+             FROM
+                 mz_catalog.mz_sources
+             WHERE
+                 schema_id = {}",
+            schema.id()
+        ),
+        (false, true) => format!(
+            "SELECT
+                 name
+             FROM mz_catalog.mz_sources
+             WHERE
+                 mz_internal.mz_is_materialized(id) AND
+                 schema_id = {}",
+            schema.id()
+        ),
+        (true, false) => format!(
+            "SELECT
+                 name,
+                 mz_internal.mz_classify_object_id(id) AS type,
+                 mz_internal.mz_is_materialized(id) AS materialized,
+                 volatility,
+                 connector_type
+             FROM
+                 mz_catalog.mz_sources
+             WHERE
+                 schema_id = {}",
+            schema.id()
+        ),
+        (true, true) => format!(
+            "SELECT
+                 name,
+                 mz_internal.mz_classify_object_id(id) AS type,
+                 volatility,
+                 connector_type
+             FROM
+                 mz_catalog.mz_sources
+             WHERE
+                  mz_internal.mz_is_materialized(id) AND
+                  schema_id = {}",
+            schema.id()
+        ),
     };
     Ok(ShowSelect::new(scx, query, filter, None, None))
 }
@@ -497,7 +512,7 @@ pub fn show_indexes<'a>(
     }: ShowIndexesStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
-        unsupported!("SHOW EXTENDED INDEXES")
+        bail_unsupported!("SHOW EXTENDED INDEXES")
     }
     let from = scx.resolve_item(table_name)?;
     if from.item_type() != CatalogItemType::View
@@ -518,7 +533,8 @@ pub fn show_indexes<'a>(
             idx_cols.index_position AS seq_in_index,
             obj_cols.name AS column_name,
             idx_cols.on_expression AS expression,
-            idx_cols.nullable AS nullable
+            idx_cols.nullable AS nullable,
+            idxs.enabled AS enabled
         FROM
             mz_catalog.mz_indexes AS idxs
             JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
@@ -542,10 +558,10 @@ pub fn show_columns<'a>(
     }: ShowColumnsStatement<Raw>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
-        unsupported!("SHOW EXTENDED COLUMNS");
+        bail_unsupported!("SHOW EXTENDED COLUMNS");
     }
     if full {
-        unsupported!("SHOW FULL COLUMNS");
+        bail_unsupported!("SHOW FULL COLUMNS");
     }
 
     let entry = scx.resolve_item(table_name)?;

@@ -36,27 +36,27 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+    - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
     depends_on: [zookeeper]
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_BROKER_ID: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_JMX_PORT: 9991
+    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+    - KAFKA_BROKER_ID=1
+    - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    - KAFKA_JMX_PORT=9991
   connect:
     image: debezium/connect:1.4
     environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: 1
-      CONFIG_STORAGE_TOPIC: connect_configs
-      OFFSET_STORAGE_TOPIC: connect_offsets
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    - BOOTSTRAP_SERVERS=kafka:9092
+    - GROUP_ID=1
+    - CONFIG_STORAGE_TOPIC=connect_configs
+    - OFFSET_STORAGE_TOPIC=connect_offsets
+    - KEY_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+    - CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
     depends_on: [kafka]
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
@@ -76,5 +76,5 @@ services:
     depends_on:
       - materialized
   inspect:
-    image: ubuntu:bionic-20200403
+    mzbuild: ubuntu-base
     command: "true"

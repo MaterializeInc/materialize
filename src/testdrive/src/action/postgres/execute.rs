@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
-use tokio_postgres::NoTls;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+use crate::util::postgres::postgres_client;
 
 pub struct ExecuteAction {
     connection: String,
@@ -33,15 +33,18 @@ impl Action for ExecuteAction {
         Ok(())
     }
 
-    async fn redo(&self, _: &mut State) -> Result<(), String> {
-        let (client, conn) = tokio_postgres::connect(&self.connection, NoTls)
-            .await
-            .map_err(|e| format!("connecting to postgres: {}", e))?;
-        println!(
-            "Executing queries against PostgreSQL server at {}...",
-            self.connection
-        );
-        let conn_handle = tokio::spawn(conn);
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let client;
+        let client = if self.connection.starts_with("postgres://") {
+            client = postgres_client(&self.connection).await?;
+            &client
+        } else {
+            state
+                .postgres_clients
+                .get(&self.connection)
+                .ok_or(format!("connection '{}' not found", &self.connection))?
+        };
+
         for query in &self.queries {
             println!(">> {}", query);
             client
@@ -49,10 +52,7 @@ impl Action for ExecuteAction {
                 .await
                 .map_err(|e| format!("executing postgres query: {}", e))?;
         }
-        drop(client);
-        conn_handle
-            .await
-            .unwrap()
-            .map_err(|e| format!("postgres connection error: {}", e))
+
+        Ok(())
     }
 }

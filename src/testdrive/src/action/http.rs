@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
+use ore::result::ResultExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -52,14 +53,10 @@ impl Action for RequestAction {
             request = request.header(CONTENT_TYPE, value);
         }
 
-        let response = request.send().await.map_err(|e| e.to_string())?;
+        let response = request.send().await.map_err_to_string()?;
         let status = response.status();
 
-        println!(
-            "{}\n{}",
-            status,
-            response.text().await.map_err(|e| e.to_string())?
-        );
+        println!("{}\n{}", status, response.text().await.map_err_to_string()?);
 
         if status.is_success() {
             Ok(())

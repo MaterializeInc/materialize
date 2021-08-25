@@ -34,7 +34,7 @@ use crate::schema::{
     RecordField, ResolvedDefaultValueField, ResolvedRecordField, SchemaNode, SchemaPiece,
     SchemaPieceOrNamed,
 };
-use crate::types::{Scalar, Value};
+use crate::types::{AvroMap, Scalar, Value};
 use crate::{
     util::{safe_len, zag_i32, zag_i64, TsUnit},
     TrivialDecoder, ValueDecoder,
@@ -704,7 +704,7 @@ pub mod public_decoders {
 
     use super::{AvroDecodable, AvroMapAccess, StatefulAvroDecodable};
     use crate::error::{DecodeError, Error as AvroError};
-    use crate::types::{DecimalValue, Scalar, Value};
+    use crate::types::{AvroMap, DecimalValue, Scalar, Value};
     use crate::{
         AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
     };
@@ -1177,7 +1177,7 @@ pub mod public_decoders {
                 let val = a.decode_field(d)?;
                 entries.insert(name, val);
             }
-            Ok(Value::Map(entries))
+            Ok(Value::Map(AvroMap(entries)))
         }
     }
 }
@@ -1206,7 +1206,6 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, AvroError> {
         // The &[u8] parameter here (and elsewhere in this function) is arbitrary, but we have to put in something in order for the function
         // to type-check
         Value::Decimal(val) => d.decimal::<&[u8]>(val.precision, val.scale, V(&val.unscaled)),
-        Value::APD(..) => unreachable!(),
         Value::Bytes(val) => d.bytes::<&[u8]>(V(val)),
         Value::String(val) => d.string::<&[u8]>(V(val)),
         Value::Fixed(_len, val) => d.fixed::<&[u8]>(V(val)),
@@ -1230,7 +1229,7 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, AvroError> {
             let mut a = ValueArrayAccess::new(val);
             d.array(&mut a)
         }
-        Value::Map(val) => {
+        Value::Map(AvroMap(val)) => {
             let vals: Vec<_> = val.clone().into_iter().collect();
             let mut m = ValueMapAccess::new(vals.as_slice());
             d.map(&mut m)

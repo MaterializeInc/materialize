@@ -15,25 +15,27 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use timely::dataflow::operators::unordered_input::UnorderedInput;
-use timely::dataflow::operators::Map;
-use timely::dataflow::operators::OkErr;
+use persist::operators::source::PersistedSource;
+use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{Concat, OkErr, ToStream};
+use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, ScopeParent};
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MirRelationExpr, SourceInstanceId};
+use expr::{GlobalId, Id, SourceInstanceId};
 use ore::cast::CastFrom;
+use ore::now::NowFn;
 use repr::RelationDesc;
 use repr::ScalarType;
 use repr::{Datum, Row, Timestamp};
+use timely::progress::timestamp::Refines;
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
 use crate::decode::render_decode_delimited;
 use crate::decode::rewrite_for_upsert;
 use crate::logging::materialized::Logger;
-use crate::metrics;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
@@ -41,11 +43,11 @@ use crate::server::LocalInput;
 use crate::source::DecodeResult;
 use crate::source::SourceConfig;
 use crate::source::{
-    self, FileSourceReader, KafkaSourceReader, KinesisSourceReader, PostgresSourceReader,
-    PubNubSourceReader, S3SourceReader,
+    self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
+    PostgresSourceReader, PubNubSourceReader, S3SourceReader,
 };
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -62,6 +64,8 @@ where
         // have its own transient ID) and a relational transformation (which has the original source
         // ID).
         orig_id: GlobalId,
+        now: NowFn,
+        base_metrics: &SourceBaseMetrics,
     ) {
         // Extract the linear operators, as we will need to manipulate them.
         // extracting them reduces the change we might accidentally communicate
@@ -84,22 +88,66 @@ where
         // This has a lot of potential for improvement in the near future.
         match src.connector.clone() {
             // Create a new local input (exposed as TABLEs to users). Data is inserted
-            // via SequencedCommand::Insert commands.
-            SourceConnector::Local(_) => {
-                let ((handle, capability), stream) = scope.new_unordered_input();
-                render_state
-                    .local_inputs
-                    .insert(src_id, LocalInput { handle, capability });
+            // via Command::Insert commands.
+            SourceConnector::Local { persisted_name, .. } => {
+                let ((handle, capability), ok_stream, err_collection) = {
+                    let ((handle, capability), ok_stream) = scope.new_unordered_input();
+                    let err_collection = Collection::empty(scope);
+                    ((handle, capability), ok_stream, err_collection)
+                };
+
+                let (ok_stream, err_collection) = match (&mut render_state.persist, persisted_name)
+                {
+                    (Some(persist), Some(stream_name)) => {
+                        let persisted_stream = persist.create_or_load(&stream_name);
+                        let (persist_ok_stream, persist_err_stream) = match persisted_stream {
+                            Ok((_, read)) => scope.persisted_source(&read),
+                            Err(err) => {
+                                let ok_stream = empty(scope);
+                                let (ts, diff) = (0, 1);
+                                let err_stream = vec![(err.to_string(), ts, diff)].to_stream(scope);
+                                (ok_stream, err_stream)
+                            }
+                        };
+                        let (persist_ok_stream, decode_err_stream) =
+                            persist_ok_stream.ok_err(|((row, ()), ts, diff)| Ok((row, ts, diff)));
+                        let persist_err_collection = persist_err_stream
+                            .concat(&decode_err_stream)
+                            .map(move |(err, ts, diff)| {
+                                let err = SourceError::new(
+                                    stream_name.clone(),
+                                    SourceErrorDetails::Persistence(err),
+                                );
+                                (err.into(), ts, diff)
+                            })
+                            .as_collection();
+                        (
+                            ok_stream.concat(&persist_ok_stream),
+                            err_collection.concat(&persist_err_collection),
+                        )
+                    }
+                    _ => (ok_stream, err_collection),
+                };
+
+                render_state.local_inputs.insert(
+                    src_id,
+                    LocalInput {
+                        handle: handle,
+                        capability,
+                    },
+                );
                 let as_of_frontier = self.as_of_frontier.clone();
-                let ok_collection = stream
+                let ok_collection = ok_stream
                     .map_in_place(move |(_, mut time, _)| {
                         time.advance_by(as_of_frontier.borrow());
                     })
                     .as_collection();
-                let err_collection = Collection::empty(scope);
-                self.collections.insert(
-                    MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone()),
-                    (ok_collection, err_collection),
+                self.insert_id(
+                    Id::Global(src_id),
+                    crate::render::CollectionBundle::from_collections(
+                        ok_collection,
+                        err_collection,
+                    ),
                 );
             }
 
@@ -107,6 +155,7 @@ where
                 connector,
                 encoding,
                 envelope,
+                key_envelope,
                 consistency,
                 ts_frequency,
                 timeline: _,
@@ -140,14 +189,6 @@ where
                     (usize::cast_from(src_id.hashed()) % scope.peers()) == scope.index()
                 };
 
-                let caching_tx = if let (true, Some(caching_tx)) =
-                    (connector.caching_enabled(), render_state.caching_tx.clone())
-                {
-                    Some(caching_tx)
-                } else {
-                    None
-                };
-
                 let timestamp_histories = render_state
                     .ts_histories
                     .get(&orig_id)
@@ -167,7 +208,8 @@ where
                     worker_count: scope.peers(),
                     logger: materialized_logging,
                     encoding: encoding.clone(),
-                    caching_tx,
+                    now,
+                    base_metrics,
                 };
 
                 let (collection, capability) =
@@ -277,6 +319,7 @@ where
                                         &envelope,
                                         &mut linear_operators,
                                         fast_forwarded,
+                                        render_state.metrics.clone(),
                                     )
                                 } else {
                                     render_decode(
@@ -287,6 +330,7 @@ where
                                         &envelope,
                                         &mut linear_operators,
                                         fast_forwarded,
+                                        render_state.metrics.clone(),
                                     )
                                 };
                                 if let Some(tok) = extra_token {
@@ -302,10 +346,10 @@ where
                                     SourceEnvelope::Debezium(_, DebeziumMode::Upsert) => {
                                         let mut trackstate = (
                                             HashMap::new(),
-                                            metrics::DEBEZIUM_UPSERT_COUNT.with_label_values(&[
-                                                &src_id.to_string(),
-                                                &self.dataflow_id.to_string(),
-                                            ]),
+                                            render_state.metrics.debezium_upsert_count_for(
+                                                src_id,
+                                                self.dataflow_id,
+                                            ),
                                         );
                                         let results = results.flat_map(
                                             move |DecodeResult { key, value, .. }| {
@@ -343,9 +387,8 @@ where
                                         src.bare_desc.typ().arity(),
                                     ),
                                     _ => {
-                                        let (stream, errors) = results
-                                            .flat_map(|DecodeResult { key: _, value, .. }| value)
-                                            .ok_err(std::convert::identity);
+                                        let (stream, errors) =
+                                            flatten_results(key_envelope, results);
                                         let stream =
                                             stream.pass_through("decode-ok").as_collection();
                                         let errors =
@@ -409,6 +452,10 @@ where
                     _ => collection,
                 };
 
+                // Force a shuffling of data in case sources are not uniformly distributed.
+                use timely::dataflow::operators::Exchange;
+                collection = collection.inner.exchange(|x| x.hashed()).as_collection();
+
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
                 // to demonstrate the intended use.
@@ -426,35 +473,39 @@ where
                         .collect::<Vec<_>>();
 
                     // Apply predicates and insert dummy values into undemanded columns.
-                    let (collection2, errors) = collection.inner.flat_map_fallible({
-                        let mut datums = crate::render::datum_vec::DatumVec::new();
-                        let predicates = std::mem::take(&mut operators.predicates);
-                        // The predicates may be temporal, which requires the nuance
-                        // of an explicit plan capable of evaluating the predicates.
-                        let filter_plan = expr::MapFilterProject::new(source_type.arity())
-                            .filter(predicates)
-                            .into_plan()
-                            .unwrap_or_else(|e| panic!("{}", e));
-                        move |(input_row, time, diff)| {
-                            let arena = repr::RowArena::new();
-                            let mut datums_local = datums.borrow_with(&input_row);
-                            let times_diffs =
-                                filter_plan.evaluate(&mut datums_local, &arena, time, diff);
-                            // Name the iterator, to capture total size and datums.
-                            let iterator = position_or.iter().map(|pos_or| match pos_or {
-                                Some(index) => datums_local[*index],
-                                None => Datum::Dummy,
+                    let (collection2, errors) =
+                        collection
+                            .inner
+                            .flat_map_fallible("SourceLinearOperators", {
+                                let mut datums = crate::render::datum_vec::DatumVec::new();
+                                let predicates = std::mem::take(&mut operators.predicates);
+                                // The predicates may be temporal, which requires the nuance
+                                // of an explicit plan capable of evaluating the predicates.
+                                let filter_plan = expr::MapFilterProject::new(source_type.arity())
+                                    .filter(predicates)
+                                    .into_plan()
+                                    .unwrap_or_else(|e| panic!("{}", e));
+                                move |(input_row, time, diff)| {
+                                    let arena = repr::RowArena::new();
+                                    let mut datums_local = datums.borrow_with(&input_row);
+                                    let times_diffs =
+                                        filter_plan.evaluate(&mut datums_local, &arena, time, diff);
+                                    // Name the iterator, to capture total size and datums.
+                                    let iterator = position_or.iter().map(|pos_or| match pos_or {
+                                        Some(index) => datums_local[*index],
+                                        None => Datum::Dummy,
+                                    });
+                                    let total_size = repr::datums_size(iterator.clone());
+                                    let mut output_row = Row::with_capacity(total_size);
+                                    output_row.extend(iterator);
+                                    // Each produced (time, diff) results in a copy of `output_row` in the output.
+                                    // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
+                                    times_diffs.map(move |time_diff| {
+                                        time_diff
+                                            .map_err(|(e, t, d)| (DataflowError::from(e), t, d))
+                                    })
+                                }
                             });
-                            let total_size = repr::datums_size(iterator.clone());
-                            let mut output_row = Row::with_capacity(total_size);
-                            output_row.extend(iterator);
-                            // Each produced (time, diff) results in a copy of `output_row` in the output.
-                            // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
-                            times_diffs.map(move |time_diff| {
-                                time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
-                            })
-                        }
-                    });
 
                     collection = collection2.as_collection();
                     error_collections.push(errors.as_collection());
@@ -489,13 +540,15 @@ where
                     }
                 }
 
-                let get = MirRelationExpr::Get {
-                    id: Id::Global(src_id),
-                    typ: src.bare_desc.typ().clone(),
-                };
+                // Consolidate the results, as there may now be cancellations.
+                use differential_dataflow::operators::consolidate::ConsolidateStream;
+                collection = collection.consolidate_stream();
 
                 // Introduce the stream by name, as an unarranged collection.
-                self.collections.insert(get, (collection, err_collection));
+                self.insert_id(
+                    Id::Global(src_id),
+                    crate::render::CollectionBundle::from_collections(collection, err_collection),
+                );
 
                 let token = Rc::new(capability);
                 tokens.source_tokens.insert(src_id, token.clone());
@@ -509,5 +562,72 @@ where
                     .push(Rc::downgrade(&token));
             }
         }
+    }
+}
+
+/// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
+fn flatten_results<G, T>(
+    key_envelope: KeyEnvelope,
+    results: timely::dataflow::Stream<Child<G, T>, DecodeResult>,
+) -> (
+    timely::dataflow::Stream<Child<G, T>, Row>,
+    timely::dataflow::Stream<Child<G, T>, DataflowError>,
+)
+where
+    G: ScopeParent,
+    T: Refines<<G as ScopeParent>::Timestamp>,
+{
+    match key_envelope {
+        KeyEnvelope::None => results
+            .flat_map(|DecodeResult { key: _, value, .. }| value)
+            .ok_err(std::convert::identity),
+        KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
+            .flat_map(flatten_key_value)
+            .map(|maybe_kv| {
+                maybe_kv.map(|(mut key, value)| {
+                    key.extend_by_row(&value);
+                    key
+                })
+            })
+            .ok_err(std::convert::identity),
+        KeyEnvelope::Named(_) => results
+            .flat_map(flatten_key_value)
+            .map(|maybe_kv| match maybe_kv {
+                Ok((mut key, value)) => {
+                    // Named semantics rename a key that is a single column, and encode a
+                    // multi-column field as a struct with that name
+                    match key.iter().count() {
+                        1 => {
+                            key.extend_by_row(&value);
+                            Ok(key)
+                        }
+                        _ => {
+                            let mut new_row = Row::default();
+                            new_row.push_list(key.iter());
+                            new_row.extend_by_row(&value);
+                            Ok(new_row)
+                        }
+                    }
+                }
+                Err(e) => Err(e),
+            })
+            .ok_err(std::convert::identity),
+    }
+}
+
+/// Handle possibly missing key or value portions of messages
+fn flatten_key_value(result: DecodeResult) -> Option<Result<(Row, Row), DataflowError>> {
+    let DecodeResult { key, value, .. } = result;
+    match (key, value) {
+        (Some(key), Some(value)) => match (key, value) {
+            (Ok(key), Ok(value)) => Some(Ok((key, value))),
+            // always prioritize the value error if either or both have an error
+            (_, Err(e)) => Some(Err(e)),
+            (Err(e), _) => Some(Err(e)),
+        },
+        (None, None) => None,
+        _ => Some(Err(DataflowError::DecodeError(DecodeError::Text(
+            "Key and/or Value are not present for message".to_string(),
+        )))),
     }
 }

@@ -9,7 +9,7 @@
 
 //! Data type formatting functions.
 //!
-//! https://www.postgresql.org/docs/current/functions-formatting.html
+//! <https://www.postgresql.org/docs/current/functions-formatting.html>
 
 use std::convert::TryFrom;
 use std::fmt;

@@ -25,6 +25,7 @@ use std::convert::TryInto;
 use std::mem::transmute;
 
 use crate::schema::{Schema, SchemaNode, SchemaPiece};
+use crate::types::AvroMap;
 use crate::types::{DecimalValue, Value};
 use crate::util::{zig_i32, zig_i64};
 
@@ -103,8 +104,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
             encode_long(ts, buffer)
         }
         Value::Double(x) => buffer.extend_from_slice(&unsafe { transmute::<f64, [u8; 8]>(*x) }),
-        Value::Decimal(DecimalValue { unscaled, .. })
-        | Value::APD(DecimalValue { unscaled, .. }) => match schema.name {
+        Value::Decimal(DecimalValue { unscaled, .. }) => match schema.name {
             None => encode_bytes(unscaled, buffer),
             Some(_) => buffer.extend(unscaled),
         },
@@ -140,7 +140,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
                 buffer.push(0u8);
             }
         }
-        Value::Map(items) => {
+        Value::Map(AvroMap(items)) => {
             if let SchemaPiece::Map(inner) = schema.inner {
                 if !items.is_empty() {
                     encode_long(items.len() as i64, buffer);
@@ -200,7 +200,7 @@ mod tests {
         let mut buf = Vec::new();
         let empty: HashMap<String, Value> = HashMap::new();
         encode(
-            &Value::Map(empty),
+            &Value::Map(AvroMap(empty)),
             &r#"{"type": "map", "values": "int"}"#.parse().unwrap(),
             &mut buf,
         );

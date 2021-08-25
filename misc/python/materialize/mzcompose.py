@@ -15,44 +15,43 @@ documentation][user-docs].
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
+import functools
+import importlib
+import importlib.util
+import ipaddress
+import json
+import os
+import random
+import re
+import shlex
+import subprocess
+import sys
+import time
+from inspect import getmembers, isfunction
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
     Any,
-    Dict,
-    IO,
-    List,
-    Optional,
-    Collection,
-    Type,
     Callable,
+    Collection,
+    Dict,
+    Iterable,
+    List,
+    Literal,
     Match,
+    Optional,
+    Type,
+    TypedDict,
     TypeVar,
     Union,
-    Iterable,
     cast,
 )
-from typing_extensions import Literal, TypedDict
-import functools
-import os
-import pathlib
-import shlex
-import json
-import subprocess
-import sys
-import random
-import re
-import time
-import yaml
 
 import pg8000  # type: ignore
 import pymysql
 import yaml
 
-from materialize import errors
-from materialize import mzbuild
-from materialize import spawn
-from materialize import ui
+from materialize import errors, mzbuild, spawn, ui
 
 T = TypeVar("T")
 say = ui.speaker("C> ")
@@ -74,8 +73,9 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 )
 
 
-LINT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
-LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5"]
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
+DEFAULT_DEBEZIUM_VERSION = "1.6"
+LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 
 class LintError:
@@ -91,11 +91,21 @@ class LintError:
 
 
 def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
+    if "services" not in composition:
+        return
+
     for (name, service) in composition["services"].items():
         if service.get("mzbuild") == "materialized":
             lint_materialized_service(path, name, service, errors)
         elif "mzbuild" not in service and "image" in service:
             lint_image_name(path, service["image"], errors)
+
+        if isinstance(service.get("environment"), dict):
+            errors.append(
+                LintError(
+                    path, f"environment for service {name} uses dict instead of list"
+                )
+            )
 
 
 def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
@@ -112,12 +122,12 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
 
     if repo == "confluentinc" and image.startswith("cp-"):
         # An '$XXX' environment variable may have been used to specify the version
-        if "$" not in tag and tag != LINT_CONFLUENT_PLATFORM_VERSION:
+        if "$" not in tag and tag != DEFAULT_CONFLUENT_PLATFORM_VERSION:
             errors.append(
                 LintError(
                     path,
                     f"image {spec} depends on wrong version of Confluent Platform "
-                    f"(want {LINT_CONFLUENT_PLATFORM_VERSION})",
+                    f"(want {DEFAULT_CONFLUENT_PLATFORM_VERSION})",
                 )
             )
 
@@ -170,12 +180,13 @@ def lint_materialized_service(
 
 
 class Composition:
-    """A parsed mzcompose.yml file."""
+    """A parsed mzcompose.yml with a loaded mzworkflows.py file."""
 
     def __init__(self, repo: mzbuild.Repository, name: str):
         self.name = name
         self.repo = repo
         self.images: List[mzbuild.Image] = []
+        self.python_funcs: Dict[str, Callable[[Composition], None]] = {}
 
         default_tag = os.getenv(f"MZBUILD_TAG", None)
 
@@ -184,15 +195,48 @@ class Composition:
         else:
             raise errors.UnknownComposition
 
-        with open(self.path) as f:
-            compose = yaml.safe_load(f)
+        # load the mzcompose.yml file, if one exists
+        mzcompose_yml = self.path / "mzcompose.yml"
+        if mzcompose_yml.exists():
+            with open(mzcompose_yml) as f:
+                compose = yaml.safe_load(f) or {}
+        else:
+            compose = {}
+
+        if "version" not in compose:
+            compose["version"] = "3.7"
+
+        if "services" not in compose:
+            compose["services"] = {}
 
         # Stash away sub workflows so that we can load them with the correct environment variables
-        self.workflows = compose.pop("mzworkflows", None)
+        self.yaml_workflows = compose.pop("mzworkflows", {})
+
+        # Load the mzworkflows.py file, if one exists
+        mzworkflows_py = self.path / "mzworkflows.py"
+        if mzworkflows_py.exists():
+            spec = importlib.util.spec_from_file_location("mzworkflows", mzworkflows_py)
+            assert spec
+            module = importlib.util.module_from_spec(spec)
+            assert isinstance(spec.loader, importlib.abc.Loader)
+            spec.loader.exec_module(module)
+            for name, fn in getmembers(module, isfunction):
+                if name.startswith("workflow_"):
+                    # The name of the workflow is the name of the function
+                    # with the "workflow_" prefix stripped and any underscores
+                    # replaced with dashes.
+                    name = name[len("workflow_") :].replace("_", "-")
+                    self.python_funcs[name] = fn
+
+            for python_service in getattr(module, "services", []):
+                compose["services"][python_service.name] = python_service.config
 
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
-        for config in compose["services"].values():
+        for name, config in compose["services"].items():
+            compose["services"][name] = _substitute_env_vars(
+                config, {k: v for k, v in os.environ.items()}
+            )
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
 
@@ -213,9 +257,24 @@ class Composition:
                 else:
                     self.images.append(image)
 
-                if "propagate-uid-gid" in config:
+                if "propagate_uid_gid" in config:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
-                    del config["propagate-uid-gid"]
+                    del config["propagate_uid_gid"]
+
+            if self.repo.rd.coverage:
+                # Emit coverage information to a file in a directory that is
+                # bind-mounted to the "coverage" directory on the host. We
+                # inject the configuration to all services for simplicity, but
+                # this only have an effect if the service runs instrumented Rust
+                # binaries.
+                config.setdefault("environment", []).append(
+                    f"LLVM_PROFILE_FILE=/coverage/{name}-%m.profraw"
+                )
+                config.setdefault("volumes", []).append("./coverage:/coverage")
+
+        # Add default volumes
+        compose.setdefault("volumes", {})["mzdata"] = None
+        compose.setdefault("volumes", {})["tmp"] = None
 
         deps = self.repo.resolve_dependencies(self.images)
         for config in compose["services"].values():
@@ -234,7 +293,10 @@ class Composition:
     def get_env(self, workflow_name: str, parent_env: Dict[str, str]) -> Dict[str, str]:
         """Return the desired environment for a workflow."""
 
-        raw_env = self.workflows[workflow_name].get("env")
+        if workflow_name in self.yaml_workflows:
+            raw_env = self.yaml_workflows[workflow_name].get("env")
+        else:
+            raw_env = {}
 
         if not isinstance(raw_env, dict) and raw_env is not None:
             raise errors.BadSpec(
@@ -258,20 +320,35 @@ class Composition:
         return env
 
     def get_workflow(
-        self, parent_env: Dict[str, str], workflow_name: str
+        self, workflow_name: str, parent_env: Dict[str, str]
     ) -> "Workflow":
         """Return sub-workflow, with env vars substituted using the supplied environment."""
-        if not self.workflows:
+        if not self.yaml_workflows and not self.python_funcs:
             raise KeyError(f"No workflows defined for composition {self.name}")
-        if workflow_name not in self.workflows:
+        if (
+            workflow_name not in self.yaml_workflows
+            and workflow_name not in self.python_funcs
+        ):
             raise KeyError(f"No workflow called {workflow_name} in {self.name}")
 
         # Build this workflow, performing environment substitution as necessary
         workflow_env = self.get_env(workflow_name, parent_env)
-        workflow = _substitute_env_vars(self.workflows[workflow_name], workflow_env)
 
+        # Return a PythonWorkflow if an appropriately-named Python function exists
+        if workflow_name in self.python_funcs:
+            return PythonWorkflow(
+                name=workflow_name,
+                func=self.python_funcs[workflow_name],
+                env=workflow_env,
+                composition=self,
+            )
+
+        # Otherwise, look for a YAML sub-workflow
+        yaml_workflow = _substitute_env_vars(
+            self.yaml_workflows[workflow_name], workflow_env
+        )
         built_steps = []
-        for raw_step in workflow["steps"]:
+        for raw_step in yaml_workflow["steps"]:
             # A step could be reused over several workflows, so operate on a copy
             raw_step = raw_step.copy()
 
@@ -295,21 +372,25 @@ class Composition:
         if not name in repo.compositions:
             raise errors.UnknownComposition
 
-        path = repo.compositions[name]
-        with open(path) as f:
-            composition = yaml.safe_load(f)
+        errs: List[LintError] = []
 
-        errors: List[LintError] = []
-        lint_composition(path, composition, errors)
-        return errors
+        path = repo.compositions[name] / "mzcompose.yml"
+
+        if path.exists():
+            with open(path) as f:
+                composition = yaml.safe_load(f) or {}
+
+            lint_composition(path, composition, errs)
+        return errs
 
     def run(
         self,
         args: List[str],
         env: Optional[Dict[str, str]] = None,
         capture: bool = False,
+        capture_combined: bool = False,
         check: bool = True,
-    ) -> subprocess.CompletedProcess:
+    ) -> "subprocess.CompletedProcess[str]":
         """Invokes docker-compose on the composition.
 
         Arguments to specify the files in the composition and the project
@@ -321,25 +402,36 @@ class Composition:
                 These are merged with the current environment.
             capture: Whether to capture the child's stdout and stderr, or
                 whether to emit directly to the current stdout/stderr streams.
+            capture_combined: capture stdout and stderr, and direct all output
+                to the stdout property on the returned object
             check: Whether to raise an error if the child process exits with
                 a failing exit code.
         """
         self.file.seek(0)
         if env is not None:
             env = dict(os.environ, **env)
+
+        stdout = 1
+        stderr = 2
+        if capture:
+            stdout = stderr = subprocess.PIPE
+        if capture_combined:
+            stdout = subprocess.PIPE
+            stderr = subprocess.STDOUT
         return subprocess.run(
             [
                 "docker-compose",
                 f"-f/dev/fd/{self.file.fileno()}",
                 "--project-directory",
-                self.path.parent,
+                self.path,
                 *args,
             ],
             env=env,
             close_fds=False,
             check=check,
-            stdout=subprocess.PIPE if capture else 1,
-            stderr=subprocess.PIPE if capture else 2,
+            stdout=stdout,
+            stderr=stderr,
+            encoding="utf-8",
         )
 
     def find_host_ports(self, service: str) -> List[str]:
@@ -348,17 +440,58 @@ class Composition:
         # output depends on terminal width (!). Using the `-q` flag is safe,
         # however, and we can pipe the container IDs into `docker inspect`,
         # which supports machine-readable output.
-        containers = self.run(["ps", "-q"], capture=True).stdout.splitlines()
-        metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers])
-        metadata = [json.loads(line) for line in metadata.splitlines()]
         ports = []
-        for md in metadata:
-            if md["Config"]["Labels"]["com.docker.compose.service"] == service:
-                for (name, port_entry) in md["NetworkSettings"]["Ports"].items():
-                    for p in port_entry or []:
-                        if p["HostPort"] not in ports:
-                            ports.append(p["HostPort"])
+        for info in self.inspect_service_containers(service):
+            for (name, port_entry) in info["NetworkSettings"]["Ports"].items():
+                for p in port_entry or []:
+                    # When IPv6 is enabled, Docker will bind each port twice. Consider
+                    # only IPv4 address to avoid spurious warnings about duplicate
+                    # ports.
+                    if p["HostPort"] not in ports and isinstance(
+                        ipaddress.ip_address(p["HostIp"]), ipaddress.IPv4Address
+                    ):
+                        ports.append(p["HostPort"])
         return ports
+
+    def inspect_service_containers(
+        self, service: str, include_stopped: bool = False
+    ) -> Iterable[Dict[str, Any]]:
+        """
+        Return the JSON from `docker inspect` for each container in the given compose service
+
+        There is no explicit documentation of the structure of the returned
+        fields, but you can see them in the docker core repo:
+        https://github.com/moby/moby/blob/91dc595e9648318/api/types/types.go#L345-L379
+        """
+        cmd = ["ps", "-q"]
+        if include_stopped:
+            cmd.append("-a")
+        containers = self.run(cmd, capture=True).stdout.splitlines()
+        if not containers:
+            return
+        metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers])
+        for line in metadata.splitlines():
+            info = json.loads(line)
+            labels = info["Config"].get("Labels")
+            if (
+                labels is not None
+                and labels.get("com.docker.compose.service") == service
+                and labels.get("com.docker.compose.project") == self.name
+            ):
+                yield info
+
+    def service_logs(self, service_name: str, tail: int = 20) -> str:
+        proc = self.run(
+            [
+                "logs",
+                "--tail",
+                str(tail),
+                service_name,
+            ],
+            check=True,
+            capture_combined=True,
+        )
+        return proc.stdout
 
     def get_container_id(self, service: str, running: bool = False) -> str:
         """Given a service name, tries to find a unique matching container id
@@ -423,7 +556,8 @@ def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
         for k, v in val.items():
             val[k] = _substitute_env_vars(v, env)
     elif isinstance(val, list):
-        val = cast(T, [_substitute_env_vars(v, env) for v in val])
+        for i, v in enumerate(val):
+            val[i] = _substitute_env_vars(v, env)
     return val
 
 
@@ -511,6 +645,302 @@ class Workflow:
         return self.composition.run(args, self.env, capture=capture)
 
 
+class PythonServiceConfig(TypedDict, total=False):
+    mzbuild: str
+    image: str
+    hostname: str
+    command: str
+    ports: List[int]
+    environment: List[str]
+    depends_on: List[str]
+    entrypoint: List[str]
+    volumes: List[str]
+    propagate_uid_gid: bool
+    init: bool
+
+
+class PythonService:
+    """
+    A PythonService is a service that has been specified in the 'services' variable of mzworkflows.py
+    """
+
+    def __init__(self, name: str, config: PythonServiceConfig) -> None:
+        self.name = name
+        self.config = config
+
+    def port(self) -> int:
+        return self.config["ports"][0]
+
+
+class Materialized(PythonService):
+    def __init__(
+        self,
+        name: str = "materialized",
+        hostname: Optional[str] = None,
+        image: Optional[str] = None,
+        port: int = 6875,
+        data_directory: str = "/share/mzdata",
+        environment: List[str] = [
+            "MZ_DEV=1",
+            "MZ_LOG_FILTER",
+            "MZ_SOFT_ASSERTIONS=1",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "ALL_PROXY",
+            "NO_PROXY",
+        ],
+        volumes: List[str] = ["mzdata:/share/mzdata", "tmp:/share/tmp"],
+    ) -> None:
+        command = f"--data-directory={data_directory} --experimental --disable-telemetry --listen-addr 0.0.0.0:{port}"
+
+        config: PythonServiceConfig = (
+            {"image": image} if image else {"mzbuild": "materialized"}
+        )
+
+        if hostname:
+            config["hostname"] = hostname
+
+        config.update(
+            {
+                "command": command,
+                "ports": [port],
+                "environment": environment,
+                "volumes": volumes,
+            }
+        )
+
+        super().__init__(name=name, config=config)
+
+
+class Zookeeper(PythonService):
+    def __init__(
+        self,
+        name: str = "zookeeper",
+        image: str = f"confluentinc/cp-zookeeper:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        port: int = 2181,
+        environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
+    ) -> None:
+        super().__init__(
+            name="zookeeper",
+            config={"image": image, "ports": [port], "environment": environment},
+        )
+
+
+class Kafka(PythonService):
+    def __init__(
+        self,
+        name: str = "kafka",
+        image: str = f"confluentinc/cp-kafka:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        port: int = 9092,
+        auto_create_topics: bool = False,
+        environment: List[str] = [
+            "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
+            "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092",
+            "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
+            "KAFKA_MIN_INSYNC_REPLICAS=1",
+            "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
+        ],
+        depends_on: List[str] = ["zookeeper"],
+    ) -> None:
+        config: PythonServiceConfig = {
+            "image": image,
+            "ports": [port],
+            "environment": environment
+            + [f"KAFKA_AUTO_CREATE_TOPICS_ENABLE={auto_create_topics}"],
+            "depends_on": depends_on,
+        }
+        super().__init__(name=name, config=config)
+
+
+class SchemaRegistry(PythonService):
+    def __init__(
+        self,
+        name: str = "schema-registry",
+        image: str = f"confluentinc/cp-schema-registry:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
+        port: int = 8081,
+        environment: List[str] = [
+            "SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092",
+            "SCHEMA_REGISTRY_HOST_NAME=localhost",
+        ],
+        depends_on: List[str] = ["kafka", "zookeeper"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+                "environment": environment,
+                "depends_on": depends_on,
+            },
+        )
+
+
+class Postgres(PythonService):
+    def __init__(
+        self,
+        name: str = "postgres",
+        mzbuild: str = "postgres",
+        port: int = 5432,
+        command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20",
+        environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": mzbuild,
+                "command": command,
+                "ports": [port],
+                "environment": environment,
+            },
+        )
+
+
+class Debezium(PythonService):
+    def __init__(
+        self,
+        name: str = "debezium",
+        image: str = f"debezium/connect:{DEFAULT_DEBEZIUM_VERSION}",
+        port: int = 8083,
+        environment: List[str] = [
+            "BOOTSTRAP_SERVERS=kafka:9092",
+            "CONFIG_STORAGE_TOPIC=connect_configs",
+            "OFFSET_STORAGE_TOPIC=connect_offsets",
+            "STATUS_STORAGE_TOPIC=connect_statuses",
+            # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
+            # record the schema
+            "KEY_CONVERTER=io.confluent.connect.avro.AvroConverter",
+            "VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter",
+            "CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
+            "CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
+        ],
+        depends_on: List[str] = ["kafka", "schema-registry"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+                "environment": environment,
+                "depends_on": depends_on,
+            },
+        )
+
+
+class Testdrive(PythonService):
+    def __init__(
+        self,
+        name: str = "testdrive-svc",
+        mzbuild: str = "testdrive",
+        no_reset: bool = False,
+        default_timeout: Optional[int] = None,
+        entrypoint: List[str] = [
+            "testdrive",
+            "--kafka-addr=kafka:9092",
+            "--schema-registry-url=http://schema-registry:8081",
+            "--materialized-url=postgres://materialize@materialized:6875",
+            "--validate-catalog=/share/mzdata/catalog",
+            "${TD_TEST:-$$*}",
+        ],
+        environment: List[str] = [
+            "TMPDIR=/share/tmp",
+            "MZ_LOG_FILTER",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ],
+        volumes: List[str] = [".:/workdir", "mzdata:/share/mzdata", "tmp:/share/tmp"],
+    ) -> None:
+        if no_reset:
+            entrypoint.append("--no-reset")
+
+        if default_timeout:
+            entrypoint.append(f"--default-timeout {default_timeout}")
+
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": mzbuild,
+                "entrypoint": [
+                    "bash",
+                    "-c",
+                    " ".join(entrypoint),
+                    "bash",
+                ],
+                "environment": environment,
+                "volumes": volumes,
+                "propagate_uid_gid": True,
+                "init": True,
+            },
+        )
+
+
+class SqlLogicTest(PythonService):
+    def __init__(
+        self,
+        name: str = "sqllogictest-svc",
+        mzbuild: str = "sqllogictest",
+        environment: List[str] = [
+            "RUST_BACKTRACE=full",
+            "PGUSER=postgres",
+            "PGHOST=postgres",
+            "PGPASSWORD=postgres",
+            "MZ_SOFT_ASSERTIONS=1",
+        ],
+        volumes: List[str] = ["../..:/workdir"],
+        depends_on: List[str] = ["postgres"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": mzbuild,
+                "environment": environment,
+                "volumes": volumes,
+                "depends_on": depends_on,
+                "propagate_uid_gid": True,
+                "init": True,
+            },
+        )
+
+
+class PythonWorkflow(Workflow):
+    """
+    A PythonWorkflow is a workflow that has been specified as a Python function in a mzworkflows.py file
+    """
+
+    def __init__(
+        self,
+        name: str,
+        func: Callable,
+        env: Dict[str, str],
+        composition: Composition,
+    ) -> None:
+        self.name = name
+        self.func = func
+        self.env = env
+        self.composition = composition
+
+    def overview(self) -> str:
+        return "{} [{}]".format(self.name, self.func)
+
+    def __repr__(self) -> str:
+        return "Workflow<{}>".format(self.overview())
+
+    def run(self) -> None:
+        print("Running Python function {}".format(self.name))
+        old_env = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(self.env)
+
+        try:
+            self.func(self)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 class Steps:
     """A registry of named `WorkflowStep`_"""
 
@@ -524,18 +954,34 @@ class Steps:
             raise errors.UnknownItem("step", name, list(cls._steps))
 
     @classmethod
-    def register(cls, name: str) -> Callable[[Type[T]], Type[T]]:
+    def register(
+        cls, name: str
+    ) -> Callable[[Type["WorkflowStep"]], Type["WorkflowStep"]]:
         if name in cls._steps:
             raise ValueError(f"Double registration of step name: {name}")
 
-        def reg(to_register: Type[T]) -> Type[T]:
-            if not issubclass(to_register, WorkflowStep):
-                raise ValueError(
-                    f"Registered step must be a WorkflowStep: {to_register}"
-                )
+        def reg(to_register: Type["WorkflowStep"]) -> Type["WorkflowStep"]:
             cls._steps[name] = to_register
             to_register.name = name
-            return to_register  # type: ignore
+
+            # Allow the step to also be called as a Workflow.step_name() classmethod
+            def run_step(workflow: Workflow, **kwargs: Any) -> None:
+                step: WorkflowStep = to_register(**kwargs)
+                step.run(workflow)
+
+            func_name = name.replace("-", "_")
+            if func_name == "run":
+                # Temporary workaround for the fact that `Workflow.run` already
+                # exists.
+                func_name = "run_service"
+            if not hasattr(Workflow, func_name):
+                setattr(Workflow, func_name, run_step)
+            else:
+                raise errors.Failed(
+                    f"Unable to register method Workflow.{func_name} as one already exists."
+                )
+
+            return to_register
 
         return reg
 
@@ -598,6 +1044,34 @@ class StartServicesStep(WorkflowStep):
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
             raise errors.Failed(f"ERROR: services didn't come up cleanly: {services}")
+
+
+@Steps.register("start-and-wait-for-tcp")
+class StartAndWaitForTcp(WorkflowStep):
+    """
+    Params:
+      services: A list of PythonService objects to start and wait until their TCP ports are open
+    """
+
+    def __init__(self, *, services: List[PythonService]) -> None:
+        if not isinstance(services, list):
+            raise errors.BadSpec(
+                f"services for start-and-wait-for-tcp should be a list, got: {services}"
+            )
+
+        for service in services:
+            if not isinstance(service, PythonService):
+                raise errors.BadSpec(
+                    f"services for start-and-wait-for-tcp should be a list of PythonService, got: {service}"
+                )
+
+        self._services = services
+
+    def run(self, workflow: Workflow) -> None:
+        for service in self._services:
+            # Those two methods are loaded dynamically, so silence any mypi warnings about them
+            workflow.start_services(services=[service.name])  # type: ignore
+            workflow.wait_for_tcp(host=service.name, port=service.port())  # type: ignore
 
 
 @Steps.register("kill-services")
@@ -681,6 +1155,23 @@ class RemoveServicesStep(WorkflowStep):
             raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
 
 
+@Steps.register("remove-volumes")
+class RemoveVolumesStep(WorkflowStep):
+    """
+    Params:
+      volumes: List of volume names
+    """
+
+    def __init__(self, *, volumes: List[str]) -> None:
+        self._volumes = volumes
+        if not isinstance(self._volumes, list):
+            raise errors.BadSpec(f"volumes should be a list, got: {self._volumes}")
+
+    def run(self, workflow: Workflow) -> None:
+        volumes = (f"{workflow.composition.name}_{v}" for v in self._volumes)
+        spawn.runv(["docker", "volume", "rm", *volumes])
+
+
 @Steps.register("wait-for-postgres")
 class WaitForPgStep(WorkflowStep):
     """
@@ -697,10 +1188,10 @@ class WaitForPgStep(WorkflowStep):
     def __init__(
         self,
         *,
-        dbname: str,
+        dbname: str = "postgres",
         port: Optional[int] = None,
         host: str = "localhost",
-        timeout_secs: int = 60,
+        timeout_secs: int = 120,
         query: str = "SELECT 1",
         user: str = "postgres",
         password: str = "postgres",
@@ -723,24 +1214,33 @@ class WaitForPgStep(WorkflowStep):
         if self._port is None:
             ports = workflow.composition.find_host_ports(self._service)
             if len(ports) != 1:
-                raise errors.Failed(
-                    f"Unable to unambiguously determine port for {self._service}, "
-                    f"found ports: {','.join(ports)}"
-                )
+                logs = workflow.composition.service_logs(self._service)
+                if ports:
+                    msg = (
+                        f"Unable to unambiguously determine port for {self._service},"
+                        f"found ports: {','.join(ports)}\nService logs:\n{logs}"
+                    )
+                else:
+                    msg = f"No ports found for {self._service}\nService logs:\n{logs}"
+                raise errors.Failed(msg)
             port = int(ports[0])
         else:
             port = self._port
-        wait_for_pg(
-            dbname=self._dbname,
-            host=self._host,
-            port=port,
-            timeout_secs=self._timeout_secs,
-            query=self._query,
-            user=self._user,
-            password=self._password,
-            expected=self._expected,
-            print_result=self._print_result,
-        )
+        try:
+            wait_for_pg(
+                dbname=self._dbname,
+                host=self._host,
+                port=port,
+                timeout_secs=self._timeout_secs,
+                query=self._query,
+                user=self._user,
+                password=self._password,
+                expected=self._expected,
+                print_result=self._print_result,
+            )
+        except errors.Failed as e:
+            logs = workflow.composition.service_logs(self._service)
+            raise errors.Failed(f"{e}:\nService logs:\n{logs}")
 
 
 @Steps.register("wait-for-mz")
@@ -900,7 +1400,7 @@ class WaitForTcpStep(WorkflowStep):
         *,
         host: str = "localhost",
         port: int,
-        timeout_secs: int = 60,
+        timeout_secs: int = 120,
         dependencies: Optional[List[WaitDependency]] = None,
     ) -> None:
         self._host = host
@@ -911,13 +1411,11 @@ class WaitForTcpStep(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         ui.progress(f"waiting for {self._host}:{self._port}", "C")
         for remaining in ui.timeout_loop(self._timeout_secs):
-            cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
+            cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:focal-20210723".split()
 
             try:
-                executed = _check_tcp(
-                    cmd[:], self._host, self._port, self._timeout_secs
-                )
-            except subprocess.CalledProcessError as e:
+                _check_tcp(cmd[:], self._host, self._port, self._timeout_secs)
+            except subprocess.CalledProcessError:
                 ui.progress(" {}".format(int(remaining)))
             else:
                 ui.progress(" success!", finish=True)
@@ -929,13 +1427,28 @@ class WaitForTcpStep(WorkflowStep):
                     _check_tcp(
                         cmd[:], host, port, self._timeout_secs, kind="dependency "
                     )
-                except subprocess.CalledProcessError as e:
+                except subprocess.CalledProcessError:
                     message = f"Dependency is down {host}:{port}"
+                    try:
+                        dep_logs = workflow.composition.service_logs(host)
+                    except Exception as e:
+                        dep_logs = f"unable to determine logs: {e}"
                     if "hint" in dep:
                         message += f"\n    hint: {dep['hint']}"
+                    message += "\nDependency service logs:\n"
+                    message += dep_logs
+                    ui.progress(" error!", finish=True)
                     raise errors.Failed(message)
 
-        raise errors.Failed(f"Unable to connect to {self._host}:{self._port}")
+        ui.progress(" error!", finish=True)
+        try:
+            logs = workflow.composition.service_logs(self._host)
+        except Exception as e:
+            logs = f"unable to determine logs: {e}"
+
+        raise errors.Failed(
+            f"Unable to connect to {self._host}:{self._port}\nService logs:\n{logs}"
+        )
 
 
 def _check_tcp(
@@ -1221,7 +1734,7 @@ class WorkflowWorkflowStep(WorkflowStep):
         try:
             # Run the specified workflow with the context of the parent workflow
             child_workflow = workflow.composition.get_workflow(
-                workflow.env, self._workflow
+                self._workflow, workflow.env
             )
             print(f"Running workflow {child_workflow.name} ...")
             child_workflow.run()
@@ -1229,7 +1742,7 @@ class WorkflowWorkflowStep(WorkflowStep):
             raise errors.UnknownItem(
                 f"workflow in {workflow.composition.name}",
                 self._workflow,
-                (w for w in workflow.composition.workflows),
+                (w for w in workflow.composition.yaml_workflows),
             )
 
 
@@ -1248,6 +1761,11 @@ class RunStep(WorkflowStep):
       - command: the command to run. These are the arguments to the entrypoint
       - daemon: run as a daemon (default: False)
       - service_ports: expose and use service ports. (Default: True)
+      - force_service_name: ensure that this container has exactly the name of
+        its service. Only one container can exist with a given name at the same
+        time, so this should only be used when a start_services step cannot be used --e.g.
+        because it is not desired for it to be restarted on completion, or
+        because it needs to be passed command-line arguments.
     """
 
     def __init__(
@@ -1258,6 +1776,7 @@ class RunStep(WorkflowStep):
         daemon: bool = False,
         entrypoint: Optional[str] = None,
         service_ports: bool = True,
+        force_service_name: bool = False,
     ) -> None:
         cmd = []
         if daemon:
@@ -1269,6 +1788,8 @@ class RunStep(WorkflowStep):
             cmd.extend(shlex.split(command))
         elif isinstance(command, list):
             cmd.extend(command)
+        self._service = service
+        self._force_service_name = force_service_name
         self._service_ports = service_ports
         self._command = cmd
 
@@ -1278,6 +1799,7 @@ class RunStep(WorkflowStep):
                 [
                     "run",
                     *(["--service-ports"] if self._service_ports else []),
+                    *(["--name", self._service] if self._force_service_name else []),
                     *self._command,
                 ]
             )
@@ -1292,25 +1814,25 @@ class EnsureStaysUpStep(WorkflowStep):
         self._uptime_secs = seconds
 
     def run(self, workflow: Workflow) -> None:
-        pattern = f"{workflow.composition.name}_{self._container}"
         ui.progress(f"Ensuring {self._container} stays up ", "C")
         for i in range(self._uptime_secs, 0, -1):
             time.sleep(1)
-            try:
-                stdout = spawn.capture(
-                    ["docker", "ps", "--format={{.Names}}"], unicode=True
+            containers = [
+                s["Name"]
+                for s in workflow.composition.inspect_service_containers(
+                    self._container, include_stopped=True
                 )
-            except subprocess.CalledProcessError as e:
-                raise errors.Failed(f"{e.stdout}")
-            found = False
-            for line in stdout.splitlines():
-                if line.startswith(pattern):
-                    found = True
-                    break
-            if not found:
-                print(f"failed! {pattern} logs follow:")
-                print_docker_logs(pattern, 10)
-                raise errors.Failed(f"container {self._container} stopped running!")
+            ]
+            if not containers:
+                try:
+                    logs = workflow.composition.service_logs(self._container)
+                except subprocess.CalledProcessError as e:
+                    logs = (
+                        f"Unable to determine service logs, docker output:\n{e.output}"
+                    )
+                raise errors.Failed(
+                    f"container {self._container} stopped running!\nService logs:\n{logs}"
+                )
             ui.progress(f" {i}")
         print()
 
@@ -1339,7 +1861,7 @@ class WaitStep(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         say(f"Waiting for the service {self._service} to exit")
         ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
-        container_ids = [c for c in ps_proc.stdout.decode("utf-8").strip().split("\n")]
+        container_ids = [c for c in ps_proc.stdout.strip().split("\n")]
         if len(container_ids) > 1:
             raise errors.Failed(
                 f"Expected to get a single container for {self._service}; got: {container_ids}"
@@ -1366,15 +1888,6 @@ class WaitStep(WorkflowStep):
 
         if self._print_logs:
             spawn.runv(["docker", "logs", container_id])
-
-
-def print_docker_logs(pattern: str, tail: int = 0) -> None:
-    out = spawn.capture(
-        ["docker", "ps", "-a", "--format={{.Names}}"], unicode=True
-    ).splitlines()
-    for line in out:
-        if line.startswith(pattern):
-            spawn.runv(["docker", "logs", "--tail", str(tail), line])
 
 
 def wait_for_pg(

@@ -23,24 +23,24 @@ services:
      - *materialized
     command: --workers ${MZ_WORKERS:-1} --differential-idle-merge-effort=1000 --disable-telemetry
     environment:
-      - MZ_LOG=dataflow=error,info
+      - MZ_LOG_FILTER=dataflow=error,info
       - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+    - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.4
     ports:
       - *kafka
     depends_on: [zookeeper]
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_BROKER_ID: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_JMX_PORT: 9991
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+    - KAFKA_BROKER_ID=1
+    - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    - KAFKA_JMX_PORT=9991
+    - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
     ports:
@@ -67,7 +67,7 @@ services:
     depends_on: [kafka, schema-registry, materialized]
   dashboard:
     mzbuild: dashboard
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:

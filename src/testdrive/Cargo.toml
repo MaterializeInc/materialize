@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 async-compression = { version = "0.3.8", features = ["tokio", "gzip"] }
-async-trait = "0.1.50"
+async-trait = "0.1.51"
 atty = "0.2.0"
 aws-util = { path = "../aws-util" }
 byteorder = "1.4.3"
@@ -16,46 +16,45 @@ ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
 flate2 = "1.0.20"
-futures = "0.3.14"
+futures = "0.3.16"
 interchange = { path = "../interchange" }
-itertools = "0.9.0"
+itertools = "0.10.1"
 kafka-util = { path = "../kafka-util" }
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 md-5 = "0.9.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
-parse_duration = "2.1.1"
 pgrepr = { path = "../pgrepr" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 protobuf = { version = "2.23.0", features = ["with-serde"] }
-rand = "0.8.3"
+rand = "0.8.4"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.5.4"
 repr = { path = "../repr" }
-reqwest = { version = "0.11.3", features = ["native-tls-vendored"] }
-rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_sqs = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
-serde = "1.0.126"
-serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
-serde_json = "1.0.64"
+reqwest = { version = "0.11.4", features = ["native-tls-vendored"] }
+rusoto_core = "0.47.0"
+rusoto_credential = "0.47.0"
+rusoto_kinesis = "0.47.0"
+rusoto_s3 = "0.47.0"
+rusoto_sqs = "0.47.0"
+rusoto_sts = "0.47.0"
+serde = "1.0.128"
+serde-protobuf = "0.8.2"
+serde_json = "1.0.66"
 sql-parser = { path = "../sql-parser" }
-structopt = "0.3.21"
+structopt = "0.3.22"
 tempfile = "3.2.0"
 termcolor = "1.1.2"
-tokio = "1.6.0"
+tokio = "1.10.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
-tokio-stream = "0.1.6"
+tokio-stream = "0.1.7"
 url = "2.2.2"
 uuid = "0.8.2"
 
 [dev-dependencies]
-assert_cmd = "1.0.4"
-predicates = "1.0.8"
+assert_cmd = "2.0.0"
+predicates = "2.0.2"
 
 [build-dependencies]
 protoc = { path = "../protoc" }

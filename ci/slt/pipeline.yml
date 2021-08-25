@@ -8,13 +8,11 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - command: ci/slt/slt.sh
+  - id: sqllogictest
+    label: ":bulb: SQL logic tests"
     timeout_in_minutes: 300
     artifact_paths: target/slt-summary.json
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: sqllogictest
-  - wait
-  - command: bin/ci-builder run stable ci/slt/upload.sh
-    timeout_in_minutes: 10

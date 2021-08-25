@@ -33,7 +33,7 @@ INSERT INTO schema2.t1 VALUES (2);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 > SELECT COUNT(*) > 0 FROM mz_source;
@@ -44,7 +44,7 @@ INSERT INTO schema1.t1 SELECT * FROM schema1.t1;
 INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 
 ! CREATE VIEWS FROM SOURCE mz_source;
-unknown schema 'schema1'
+unknown schema 'schema2'
 
 ! CREATE VIEWS FROM SOURCE mz_source (t1);
 table t1 is ambiguous, consider specifying the schema

@@ -16,6 +16,7 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::net::Shutdown;
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -27,6 +28,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use log::info;
+use postgres::Row;
 use tempfile::NamedTempFile;
 
 use util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
@@ -90,8 +92,9 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
     // Return an error to the coordinator, so that we can shutdown cleanly.
     info!("test_no_block: writing fake schema registry error");
     write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
-    info!("test_no_block: dropping fake schema registry connection");
-    drop(stream);
+    info!("test_no_block: shutting down fake schema registry connection");
+
+    stream.shutdown(Shutdown::Write).unwrap();
 
     // Verify that the schema registry error was returned to the client, for
     // good measure.
@@ -147,6 +150,82 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_reads.batch_execute(
+        "BEGIN;
+         DECLARE c CURSOR FOR TAIL t;",
+    )?;
+
+    let data = format!("line {}", 42);
+    client_writes.execute(
+        "INSERT INTO t VALUES ($1), ($2), ($3)",
+        &[&data, &data, &data],
+    )?;
+    let row = client_reads.query_one("FETCH ALL c", &[])?;
+
+    assert_eq!(row.get::<_, i64>("mz_diff"), 3);
+    assert_eq!(row.get::<_, String>("data"), data);
+
+    Ok(())
+}
+
+#[test]
+fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_writes.batch_execute(
+        "CREATE MATERIALIZED VIEW counts AS SELECT data AS key, COUNT(data) AS count FROM t GROUP BY data",
+    )?;
+    client_reads.batch_execute(
+        "BEGIN;
+         DECLARE c CURSOR FOR TAIL counts;",
+    )?;
+
+    let data = format!("line {}", 42);
+    client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+    let row = client_reads.query_one("FETCH ALL c", &[])?;
+
+    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
+    assert_eq!(row.get::<_, String>("key"), data);
+    assert_eq!(row.get::<_, i64>("count"), 1);
+
+    // send another row with the same key, this will retract the previous
+    // count and emit an updated count
+
+    let data = format!("line {}", 42);
+    client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
+
+    let rows = client_reads.query("FETCH ALL c", &[])?;
+    let mut rows = rows.iter();
+
+    let row = rows.next().expect("missing result");
+    assert_eq!(row.get::<_, i64>("mz_diff"), -1);
+    assert_eq!(row.get::<_, String>("key"), data);
+    assert_eq!(row.get::<_, i64>("count"), 1);
+
+    let row = rows.next().expect("missing result");
+    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
+    assert_eq!(row.get::<_, String>("key"), data);
+    assert_eq!(row.get::<_, i64>("count"), 2);
+
+    Ok(())
+}
+
+#[test]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
@@ -167,9 +246,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         let data = format!("line {}", i);
         client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
         let row = client_reads.query_one("FETCH ALL c", &[])?;
-        assert_eq!(row.get::<_, i64>("diff"), 1);
+        assert_eq!(row.get::<_, i64>("mz_diff"), 1);
         assert_eq!(row.get::<_, String>("data"), data);
-        events.push((row.get::<_, MzTimestamp>("timestamp").0, data));
+        events.push((row.get::<_, MzTimestamp>("mz_timestamp").0, data));
     }
 
     // Now tail without a snapshot as of each timestamp, verifying that when we do
@@ -206,7 +285,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 
             let actual = client_reads.query_one("FETCH c", &[])?;
             assert_eq!(actual.get::<_, String>("data"), *expected_data);
-            assert_eq!(actual.get::<_, MzTimestamp>("timestamp").0, expected_ts);
+            assert_eq!(actual.get::<_, MzTimestamp>("mz_timestamp").0, expected_ts);
         }
     }
 
@@ -223,7 +302,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     let rows = client_reads.query("FETCH ALL c", &[])?;
     assert_eq!(rows.len(), 3);
     for i in 0..3 {
-        assert_eq!(rows[i].get::<_, i64>("diff"), 1);
+        assert_eq!(rows[i].get::<_, i64>("mz_diff"), 1);
         assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
     }
 
@@ -259,41 +338,184 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     for i in 1..=3 {
         let data = format!("line {}", i);
         client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
-        match client_reads.query("FETCH ALL c1", &[])?.as_slice() {
-            [data_row, progress_row] => {
-                assert_eq!(data_row.get::<_, bool>("progressed"), false);
-                assert_eq!(data_row.get::<_, i64>("diff"), 1);
-                assert_eq!(data_row.get::<_, String>("data"), data);
 
-                assert_eq!(progress_row.get::<_, bool>("progressed"), true);
-                assert_eq!(progress_row.get::<_, Option<i64>>("diff"), None);
+        // We have to try several times. It might be that the FETCH gets
+        // a batch that only contains continuous progress statements, without
+        // any data. We retry until we get the batch that has the data, and
+        // then verify that it also has a progress statement.
+        loop {
+            let rows = client_reads.query("FETCH ALL c1", &[])?;
+
+            let rows = rows.iter();
+
+            // find the data row in the sea of progress rows
+
+            // remove progress statements that occured before our data
+            let mut rows = rows.skip_while(|row| row.try_get::<_, String>("data").is_err());
+
+            // this must be the data row
+            let data_row = rows.next();
+
+            let data_row = match data_row {
+                Some(data_row) => data_row,
+                None => continue, //retry
+            };
+
+            assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
+            assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
+            assert_eq!(data_row.get::<_, String>("data"), data);
+
+            let mut num_progress_rows = 0;
+            for progress_row in rows {
+                assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
+                assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
                 assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
 
-                let data_ts: MzTimestamp = data_row.get("timestamp");
-                let progress_ts: MzTimestamp = progress_row.get("timestamp");
+                let data_ts: MzTimestamp = data_row.get("mz_timestamp");
+                let progress_ts: MzTimestamp = progress_row.get("mz_timestamp");
                 assert!(data_ts < progress_ts);
+
+                num_progress_rows += 1;
             }
-            _ => panic!("wrong number of rows returned"),
+
+            assert!(num_progress_rows > 0);
+
+            // success! break out of the loop
+            break;
         }
     }
 
-    // Test that tailing non-nullable columns with progress information
-    // turn sthem into nullable columns. See #6304.
-    {
-        client_writes.batch_execute("CREATE TABLE t2 (data text NOT NULL)")?;
-        client_writes.batch_execute("INSERT INTO t2 VALUES ('data')")?;
-        client_reads.batch_execute(
-            "COMMIT; BEGIN;
+    Ok(())
+}
+
+// Verifies that tailing non-nullable columns with progress information
+// turns them into nullable columns. See #6304.
+#[test]
+fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t2 (data text NOT NULL)")?;
+    client_writes.batch_execute("INSERT INTO t2 VALUES ('data')")?;
+    client_reads.batch_execute(
+        "COMMIT; BEGIN;
             DECLARE c2 CURSOR FOR TAIL t2 WITH (PROGRESS);",
-        )?;
-        let data_row = client_reads.query_one("FETCH 1 c2", &[])?;
-        assert_eq!(data_row.get::<_, bool>("progressed"), false);
-        assert_eq!(data_row.get::<_, i64>("diff"), 1);
-        assert_eq!(data_row.get::<_, String>("data"), "data");
-        let progress_row = client_reads.query_one("FETCH 1 c2", &[])?;
-        assert_eq!(progress_row.get::<_, bool>("progressed"), true);
-        assert_eq!(progress_row.get::<_, Option<i64>>("diff"), None);
-        assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
+    )?;
+
+    #[derive(PartialEq)]
+    enum State {
+        WaitingForData,
+        WaitingForProgress,
+        Done,
+    }
+
+    let mut state = State::WaitingForData;
+
+    // Wait for one progress statement after seeing the data update.
+    // Alternatively, we could just check any progress statement to make sure
+    // that columns are in fact `Options`
+
+    while state != State::Done {
+        let row = client_reads.query_one("FETCH 1 c2", &[])?;
+
+        if row.get::<_, bool>("mz_progressed") == false {
+            assert_eq!(row.get::<_, i64>("mz_diff"), 1);
+            assert_eq!(row.get::<_, String>("data"), "data");
+            state = State::WaitingForProgress;
+        } else if state == State::WaitingForProgress {
+            assert_eq!(row.get::<_, bool>("mz_progressed"), true);
+            assert_eq!(row.get::<_, Option<i64>>("mz_diff"), None);
+            assert_eq!(row.get::<_, Option<String>>("data"), None);
+            state = State::Done;
+        }
+    }
+
+    Ok(())
+}
+
+/// Verifies that we get continuous progress messages, regardless of if we
+/// receive data or not.
+#[test]
+fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
+
+    client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
+    client_reads.batch_execute(
+        "COMMIT; BEGIN;
+         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+    )?;
+
+    let mut last_ts = MzTimestamp(u64::MIN);
+    let mut verify_rows = move |rows: Vec<Row>| -> (usize, usize) {
+        let mut num_data_rows = 0;
+        let mut num_progress_rows = 0;
+
+        for row in rows {
+            let diff = row.get::<_, Option<i64>>("mz_diff");
+            match diff {
+                Some(diff) => {
+                    num_data_rows += 1;
+
+                    assert_eq!(diff, 1);
+                    assert_eq!(row.get::<_, bool>("mz_progressed"), false);
+                    let data = row.get::<_, Option<String>>("data");
+                    assert!(data.is_some());
+                }
+                None => {
+                    num_progress_rows += 1;
+
+                    assert_eq!(row.get::<_, bool>("mz_progressed"), true);
+                    assert_eq!(row.get::<_, Option<String>>("data"), None);
+                }
+            }
+
+            let ts: MzTimestamp = row.get("mz_timestamp");
+            assert!(last_ts < ts);
+            last_ts = ts;
+        }
+
+        (num_data_rows, num_progress_rows)
+    };
+
+    // make sure we see progress without any data ever being produced
+    loop {
+        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        let (num_data_rows, num_progress_rows) = verify_rows(rows);
+        assert_eq!(num_data_rows, 0);
+        if num_progress_rows > 0 {
+            break;
+        }
+    }
+
+    client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&"hello".to_owned()])?;
+
+    // fetch away the data message, plus maybe some progress messages
+    loop {
+        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        let (num_data_rows, num_progress_rows) = verify_rows(rows);
+        assert!(num_progress_rows > 0);
+        if num_data_rows == 1 {
+            break;
+        }
+    }
+
+    // Try and read some progress messages. The normal update interval is
+    // 1s, so only wait for two updates. Otherwise this would run for too long.
+    for _i in 1..=2 {
+        let rows = client_reads.query("FETCH ALL c1", &[])?;
+
+        let (num_data_rows, num_progress_rows) = verify_rows(rows);
+        assert_eq!(num_data_rows, 0);
+        assert!(num_progress_rows > 0);
     }
 
     Ok(())
@@ -495,12 +717,12 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 
     append(b"line 1\n")?;
     let row = client.query_one("FETCH ALL c", &[])?;
-    assert_eq!(row.get::<_, i64>("diff"), 1);
+    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
     assert_eq!(row.get::<_, String>("text"), "line 1");
 
     append(b"line 2\n")?;
     let row = client.query_one("FETCH ALL c", &[])?;
-    assert_eq!(row.get::<_, i64>("diff"), 1);
+    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
     assert_eq!(row.get::<_, String>("text"), "line 2");
 
     // Wait a little bit to make sure no more new rows arrive.
@@ -541,6 +763,10 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
 
         // Un-gracefully abort the connection.
         conn_task.abort();
+
+        // Need to await `conn_task` to actually deliver the `abort`. We don't
+        // care about the result though (it's probably `JoinError::Cancelled`).
+        let _ = conn_task.await;
 
         Ok::<_, Box<dyn Error>>(())
     })?;

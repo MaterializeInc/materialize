@@ -83,25 +83,14 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         // Test that catalog recovery correctly populates `mz_catalog_names`.
         assert_eq!(
             client
-                .query("SELECT global_id FROM mz_catalog_names ORDER BY 1", &[])?
+                .query(
+                    "SELECT global_id FROM mz_catalog_names WHERE global_id LIKE 'u%' ORDER BY 1",
+                    &[]
+                )?
                 .into_iter()
                 .map(|row| row.get(0))
                 .collect::<Vec<String>>(),
-            vec![
-                "s3000", "s3001", "s3002", "s3003", "s3004", "s3005", "s3006", "s3007", "s3008",
-                "s3009", "s3010", "s3011", "s3012", "s3013", "s3014", "s3015", "s3016", "s3017",
-                "s3018", "s3019", "s3020", "s3021", "s3022", "s3023", "s3024", "s3025", "s3026",
-                "s3027", "s3028", "s3029", "s3030", "s3031", "s3032", "s3033", "s4001", "s4002",
-                "s4003", "s4004", "s4005", "s4006", "s4007", "s4008", "s4009", "s4010", "s4011",
-                "s4012", "s4013", "s4014", "s4015", "s4016", "s4017", "s4018", "s4019", "s4020",
-                "s4021", "s4022", "s4023", "s4024", "s4025", "s4026", "s4027", "s4028", "s4029",
-                "s4030", "s4031", "s4032", "s4033", "s4034", "s4035", "s4036", "s4037", "s4038",
-                "s4039", "s4040", "s4041", "s4042", "s4043", "s4044", "s4045", "s4046", "s4047",
-                "s4048", "s5000", "s5001", "s5002", "s5003", "s5004", "s5005", "s5006", "s5007",
-                "s5008", "s5009", "s5010", "s5011", "s5012", "s5013", "s5014", "s5015", "s5016",
-                "s5017", "s5018", "s5019", "s5020", "s5021", "s5022", "s5023", "s5024", "u1", "u2",
-                "u3", "u4", "u5", "u6"
-            ]
+            vec!["u1", "u2", "u3", "u4", "u5", "u6"]
         );
     }
 
@@ -175,6 +164,35 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_pid_file() -> Result<(), Box<dyn Error>> {
+    let data_dir = tempfile::tempdir()?;
+    let config = util::Config::default().data_directory(data_dir.path());
+
+    // While `server1` is running, it should not be possible to start another
+    // server against the same data directory.
+    let server1 = util::start_server(config.clone())?;
+    match util::start_server(config.clone()) {
+        Ok(_) => panic!("unexpected success"),
+        Err(e) => {
+            if !e.to_string().contains("process already running") {
+                return Err(e);
+            }
+        }
+    }
+
+    // But it should be possible to start a server against a *different*
+    // data directory.
+    let _server2 = util::start_server(util::Config::default())?;
+
+    // Stopping `server1` should allow starting another server against the
+    // `server1`'s old data directory.
+    drop(server1);
+    util::start_server(config)?;
+
+    Ok(())
+}
+
+#[test]
 fn test_safe_mode() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(util::Config::default().safe_mode())?;
     let mut client = server.connect(postgres::NoTls)?;
@@ -187,7 +205,7 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
     let err = client
         .batch_execute("CREATE SINK snk FROM mz_sources INTO FILE '/ignored' FORMAT BYTES")
         .unwrap_db_error();
-    assert_eq!(err.message(), "cannot create file sink in safe mode");
+    assert_eq!(err.message(), "Expected one of KAFKA or AVRO, found FILE");
 
     // No Avro OCF sources or sinks.
     let err = client
@@ -275,5 +293,26 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         assert_eq!(res.text()?, tc.body);
     }
 
+    Ok(())
+}
+
+#[test]
+fn test_metrics_registry_hygiene() -> Result<(), Box<dyn Error>> {
+    // Minor setup chores to ensure the server has done at least a little work:
+    let server = util::start_server(util::Config::default())?;
+    let source_file = NamedTempFile::new()?;
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute(&format!(
+        "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
+        source_file.path().display()
+    ))?;
+    client.batch_execute(
+        "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
+    )?;
+
+    // Check that metrics are where we expect them:
+    let default_metrics = prometheus::default_registry().gather();
+    assert_eq!(0, default_metrics.len());
+    assert_ne!(0, server.metrics_registry.gather().len());
     Ok(())
 }

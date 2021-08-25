@@ -50,6 +50,7 @@ Chain
 Channel
 Char
 Character
+Characteristics
 Check
 Close
 Coalesce
@@ -59,6 +60,8 @@ Commit
 Committed
 Compression
 Confluent
+Connection
+Consistency
 Constraint
 Copy
 Create
@@ -86,6 +89,7 @@ Double
 Drop
 Else
 End
+Enforced
 Envelope
 Except
 Exists
@@ -113,12 +117,12 @@ Having
 Header
 Headers
 Hold
-Host
 Hour
 Hours
 If
 Ilike
 In
+Include
 Index
 Indexes
 Inner

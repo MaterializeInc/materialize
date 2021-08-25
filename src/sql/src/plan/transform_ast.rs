@@ -44,8 +44,6 @@ where
     f(&mut func_rewriter, ast);
     func_rewriter.status?;
 
-    f(&mut IdentFuncRewriter, ast);
-
     let mut desugarer = Desugarer::new();
     f(&mut desugarer, ast);
     desugarer.status
@@ -224,13 +222,31 @@ impl<'a> FuncRewriter<'a> {
                     let (lhs, rhs) = (args[0].clone(), args[1].clone());
                     match name.item.as_str() {
                         "mod" => lhs.modulo(rhs),
-                        "pow" => Expr::call(vec!["power"], vec![lhs, rhs]),
+                        "pow" => Expr::call(vec!["pg_catalog", "power"], vec![lhs, rhs]),
                         _ => return None,
                     }
                 } else {
                     return None;
                 };
                 Some((Ident::new(name.item), expr))
+            }
+            // Rewrites special keywords that SQL considers to be function calls
+            // to actual function calls. For example, `SELECT current_timestamp`
+            // is rewritten to `SELECT current_timestamp()`.
+            Expr::Identifier(ident) if ident.len() == 1 => {
+                let ident = normalize::ident(ident[0].clone());
+                let fn_ident = match ident.as_str() {
+                    "current_role" => Some("current_user"),
+                    "current_schema" | "current_timestamp" | "current_user" => Some(ident.as_str()),
+                    _ => None,
+                };
+                match fn_ident {
+                    None => None,
+                    Some(fn_ident) => {
+                        let expr = Expr::call_nullary(vec![fn_ident]);
+                        Some((Ident::new(ident), expr))
+                    }
+                }
             }
             _ => None,
         }
@@ -256,27 +272,6 @@ impl<'ast> VisitMut<'ast, Raw> for FuncRewriter<'_> {
         visit_mut::visit_expr_mut(self, expr);
         if let Some((_name, new_expr)) = self.rewrite_expr(expr) {
             *expr = new_expr;
-        }
-    }
-}
-
-// Rewrites special keywords that SQL considers to be function calls to actual
-// function calls. For example, `SELECT current_timestamp` is rewritten to
-// `SELECT current_timestamp()`.
-struct IdentFuncRewriter;
-
-impl<'ast> VisitMut<'ast, Raw> for IdentFuncRewriter {
-    fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Raw>) {
-        visit_mut::visit_expr_mut(self, expr);
-        if let Expr::Identifier(ident) = expr {
-            if ident.len() != 1 {
-                return;
-            }
-            let ident = normalize::ident(ident[0].clone());
-            if ident == "current_schema" || ident == "current_timestamp" || ident == "current_user"
-            {
-                *expr = Expr::call_nullary(vec![&ident]);
-            }
         }
     }
 }

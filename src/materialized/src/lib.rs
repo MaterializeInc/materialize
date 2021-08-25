@@ -13,13 +13,13 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use compile_time_run::run_command_str;
+use coord::PersistConfig;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -27,14 +27,17 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 
 use build_info::BuildInfo;
-use coord::{CacheConfig, LoggingConfig, PersistenceConfig};
+use coord::LoggingConfig;
+use ore::metrics::MetricsRegistry;
+use pid_file::PidFile;
 
 use crate::mux::Mux;
+use crate::server_metrics::Metrics;
 
 mod http;
 mod mux;
 mod server_metrics;
-mod version_check;
+mod telemetry;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -46,7 +49,7 @@ mod version_check;
 // [2]: https://github.com/jemalloc/jemalloc/issues/1467
 #[cfg(not(target_os = "macos"))]
 #[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const BUILD_INFO: BuildInfo = BuildInfo {
     version: env!("CARGO_PKG_VERSION"),
@@ -83,6 +86,8 @@ pub struct Config {
 
     // === Performance tuning options. ===
     pub logging: Option<LoggingConfig>,
+    /// The frequency at which to update introspection.
+    pub introspection_frequency: Duration,
     /// The historical window in which distinctions are maintained for
     /// arrangements.
     ///
@@ -101,25 +106,31 @@ pub struct Config {
     // === Connection options. ===
     /// The IP address and port to listen on.
     pub listen_addr: SocketAddr,
+    /// The IP address and port to serve the "third party" metrics registry from.
+    pub third_party_metrics_listen_addr: Option<SocketAddr>,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: PathBuf,
-    pub persistence: Option<PersistenceConfig>,
-    pub cache: Option<CacheConfig>,
+
+    // === Mode switches. ===
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
+    /// Whether to enable catalog-only mode.
+    pub disable_user_indexes: bool,
     /// Whether to run in safe mode.
     pub safe_mode: bool,
-    /// An optional telemetry endpoint. Use None to disable telemetry.
-    pub telemetry_url: Option<String>,
-    /// The frequency at which to update introspection
-    pub introspection_frequency: Duration,
+    /// Telemetry configuration.
+    pub telemetry: Option<TelemetryConfig>,
+    /// The place where the server's metrics will be reported from.
+    pub metrics_registry: MetricsRegistry,
+    /// Configuration of the persistence runtime and features.
+    pub persist: PersistConfig,
 }
 
 /// Configures TLS encryption for connections.
@@ -152,6 +163,15 @@ pub enum TlsMode {
         /// The path to a TLS certificate authority.
         ca: PathBuf,
     },
+}
+
+/// Telemetry configuration.
+#[derive(Debug, Clone)]
+pub struct TelemetryConfig {
+    /// The domain hosting the telemetry server.
+    pub domain: String,
+    /// The interval at which to report telemetry data.
+    pub interval: Duration,
 }
 
 /// Start a `materialized` server.
@@ -196,10 +216,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
-    // Set this metric once so that it shows up in the metric export.
-    crate::server_metrics::WORKER_COUNT
-        .with_label_values(&[&workers.to_string()])
-        .set(workers.try_into().unwrap());
+    // Attempt to acquire PID file lock.
+    let pid_file = PidFile::open(config.data_directory.join("materialized.pid"))?;
 
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
@@ -213,14 +231,30 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         logging: config.logging,
         data_directory: &config.data_directory,
         timestamp_frequency: config.timestamp_frequency,
-        cache: config.cache,
-        persistence: config.persistence,
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
+        disable_user_indexes: config.disable_user_indexes,
         safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
+        metrics_registry: config.metrics_registry.clone(),
+        persist: config.persist,
     })
     .await?;
+
+    // Register metrics.
+    let mut metrics_registry = config.metrics_registry;
+    let metrics =
+        Metrics::register_with(&mut metrics_registry, workers, coord_handle.start_instant());
+
+    // Listen on the third-party metrics port if we are configured for it.
+    if let Some(third_party_addr) = config.third_party_metrics_listen_addr {
+        tokio::spawn({
+            let server = http::ThirdPartyServer::new(metrics_registry.clone(), metrics.clone());
+            async move {
+                server.serve(third_party_addr).await;
+            }
+        });
+    }
 
     // Launch task to serve connections.
     //
@@ -231,51 +265,44 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
     tokio::spawn({
-        let start_time = coord_handle.start_instant();
+        let pgwire_server = pgwire::Server::new(pgwire::Config {
+            tls: pgwire_tls,
+            coord_client: coord_client.clone(),
+            metrics_registry: &metrics_registry,
+        });
+        let http_server = http::Server::new(http::Config {
+            tls: http_tls,
+            coord_client: coord_client.clone(),
+            metrics_registry: metrics_registry,
+            global_metrics: metrics,
+            pgwire_metrics: pgwire_server.metrics(),
+        });
+        let mut mux = Mux::new();
+        mux.add_handler(pgwire_server);
+        mux.add_handler(http_server);
         async move {
             // TODO(benesch): replace with `listener.incoming()` if that is
             // restored when the `Stream` trait stabilizes.
             let mut incoming = TcpListenerStream::new(listener);
-
-            let mut mux = Mux::new();
-            mux.add_handler(pgwire::Server::new(pgwire::Config {
-                tls: pgwire_tls,
-                coord_client: coord_client.clone(),
-            }));
-            mux.add_handler(http::Server::new(http::Config {
-                tls: http_tls,
-                coord_client,
-                start_time,
-            }));
             mux.serve(incoming.by_ref().take_until(drain_tripwire))
                 .await;
         }
     });
 
-    tokio::spawn({
-        let start_time = coord_handle.start_instant();
-        let frequency = config.introspection_frequency;
-        async move {
-            loop {
-                server_metrics::update_uptime(start_time);
-                tokio::time::sleep(frequency).await;
-            }
-        }
-    });
-
-    // Start a task that checks for the latest version and prints a warning if
-    // it finds a different version than currently running.
-    if let Some(telemetry_url) = config.telemetry_url {
-        tokio::spawn(version_check::check_version_loop(
-            telemetry_url,
-            coord_handle.cluster_id(),
-            coord_handle.session_id(),
-            coord_handle.start_instant(),
-        ));
+    // Start telemetry reporting loop.
+    if let Some(telemetry) = config.telemetry {
+        let config = telemetry::Config {
+            domain: telemetry.domain,
+            interval: telemetry.interval,
+            cluster_id: coord_handle.cluster_id(),
+            coord_client,
+        };
+        tokio::spawn(async move { telemetry::report_loop(config).await });
     }
 
     Ok(Server {
         local_addr,
+        _pid_file: pid_file,
         _drain_trigger: drain_trigger,
         _coord_handle: coord_handle,
     })
@@ -284,6 +311,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 /// A running `materialized` server.
 pub struct Server {
     local_addr: SocketAddr,
+    _pid_file: PidFile,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
     _coord_handle: coord::Handle,

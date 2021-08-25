@@ -26,7 +26,7 @@ $ schema-registry-wait-schema schema=postgres.public.alter_change_decimal-value
 
 > SELECT * FROM alter_change_decimal;
 <null>
-0.000
+0
 12.345
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

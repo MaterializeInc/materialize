@@ -17,6 +17,26 @@ Recursive types are not supported: .Self
   FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA '${testdrive.protobuf-descriptors}'
 Recursive types are not supported: .Mutual1
 
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.UInt32' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "uint32" is not supported
+
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.UInt64' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "uint64" is not supported
+
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Fixed32' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "fixed32" is not supported
+
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Fixed64' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Protobuf type "fixed64" is not supported
+
 > CREATE SOURCE protomessages FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA '${testdrive.protobuf-descriptors}'
@@ -49,9 +69,8 @@ $ kafka-ingest format=protobuf topic=messages message=struct timestamp=1
 
 $ kafka-create-topic topic=corrupted-messages
 
-$ kafka-ingest format=protobuf topic=corrupted-messages message=struct timestamp=1 corrupt-values=true
-{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
-{"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+$ kafka-ingest format=bytes topic=corrupted-messages timestamp=1
+garbage
 
 ! SELECT * from corrupted_proto_messages
 Decode error: Text: protobuf deserialization error: Deserializing into rust object: protobuf error
@@ -76,3 +95,20 @@ $ kafka-ingest format=protobuf topic=messages-partitioned message=struct timesta
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-partitioned-${testdrive.seed}'
   WITH (start_offset=[1,0])
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+
+$ kafka-create-topic topic=tester
+
+$ set schema
+syntax = "proto3";
+
+message SimpleId {
+  string id = 1;
+}
+
+$ kafka-ingest topic=tester format=protobuf message=simpleid schema=${schema} publish=true
+{"id": "a"}
+
+! CREATE MATERIALIZED SOURCE tester
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tester-${testdrive.seed}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+confluent schema registry protobuf schemas not yet supported

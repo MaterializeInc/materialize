@@ -10,3 +10,4 @@
 //! Common subexpression elimination.
 
 pub mod map;
+pub mod relation_cse;

@@ -22,7 +22,8 @@ use serde_protobuf::descriptor::{
 use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
-use repr::adt::decimal::Significand;
+use ore::str::StrExt;
+use repr::adt::numeric::Numeric;
 use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
 
 fn proto_message_name(message_name: &str) -> String {
@@ -47,35 +48,34 @@ fn validate_proto_field<'a>(
             validate_proto_field_resolved(seen_messages, field, descriptors)?;
             ScalarType::Jsonb
         }
-        FieldLabel::Optional => {
-            match field.field_type(descriptors) {
-                FieldType::Bool => ScalarType::Bool,
-                FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
-                FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
-                FieldType::Enum(_) => ScalarType::String,
-                FieldType::Float => ScalarType::Float32,
-                FieldType::Double => ScalarType::Float64,
-                FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
-                    ScalarType::Decimal(38, 0)
-                } // is that right
-                FieldType::String => ScalarType::String,
-                FieldType::Bytes => ScalarType::Bytes,
-                FieldType::Message(m) => {
-                    if seen_messages.contains(m.name()) {
-                        bail!("Recursive types are not supported: {}", m.name());
-                    }
-                    seen_messages.insert(m.name());
-                    for f in m.fields().iter() {
-                        validate_proto_field_resolved(seen_messages, &f, descriptors)?;
-                    }
-                    seen_messages.remove(m.name());
-                    ScalarType::Jsonb
+        FieldLabel::Optional => match field.field_type(descriptors) {
+            FieldType::Bool => ScalarType::Bool,
+            FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
+            FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
+            FieldType::Enum(_) => ScalarType::String,
+            FieldType::Float => ScalarType::Float32,
+            FieldType::Double => ScalarType::Float64,
+            FieldType::UInt32 => bail!("Protobuf type \"uint32\" is not supported"),
+            FieldType::UInt64 => bail!("Protobuf type \"uint64\" is not supported"),
+            FieldType::Fixed32 => bail!("Protobuf type \"fixed32\" is not supported"),
+            FieldType::Fixed64 => bail!("Protobuf type \"fixed64\" is not supported"),
+            FieldType::String => ScalarType::String,
+            FieldType::Bytes => ScalarType::Bytes,
+            FieldType::Message(m) => {
+                if seen_messages.contains(m.name()) {
+                    bail!("Recursive types are not supported: {}", m.name());
                 }
-                FieldType::Group => bail!("Unions are currently not supported"),
-                FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
-                FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+                seen_messages.insert(m.name());
+                for f in m.fields().iter() {
+                    validate_proto_field_resolved(seen_messages, &f, descriptors)?;
+                }
+                seen_messages.remove(m.name());
+                ScalarType::Jsonb
             }
-        }
+            FieldType::Group => bail!("Unions are currently not supported"),
+            FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
+            FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+        },
     })
 }
 
@@ -134,14 +134,15 @@ pub fn decode_descriptors(descriptors: &[u8]) -> Result<Descriptors> {
 pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
     let proto_name = proto_message_name(message_name);
     let message = descriptors.message_by_name(&proto_name).ok_or_else(|| {
+        // TODO(benesch): the error message here used to include the names of
+        // all messages in the descriptor set, but that one feature required
+        // maintaining a fork of serde_protobuf. I sent the patch upstream [0],
+        // and we can add the error message improvement back if that patch is
+        // accepted.
+        // [0]: https://github.com/dflemstr/serde-protobuf/pull/9
         anyhow!(
-            "Message {:?} not found in file descriptor set: {}",
-            proto_name,
-            descriptors
-                .iter_messages()
-                .map(|m| m.name())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "Message {} not found in file descriptor set",
+            proto_name.quoted()
         )
     })?;
     let mut seen_messages = HashSet::new();
@@ -253,8 +254,8 @@ fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
         ProtoValue::Bool(false) => Ok(Datum::False),
         ProtoValue::I32(i) => Ok(Datum::Int32(*i)),
         ProtoValue::I64(i) => Ok(Datum::Int64(*i)),
-        ProtoValue::U32(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
-        ProtoValue::U64(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
+        ProtoValue::U32(u) => Ok(Datum::from(Numeric::from(*u))),
+        ProtoValue::U64(u) => Ok(Datum::from(Numeric::from(*u))),
         ProtoValue::F32(f) => Ok(Datum::Float32((*f).into())),
         ProtoValue::F64(f) => Ok(Datum::Float64((*f).into())),
         ProtoValue::String(s) => Ok(Datum::String(s)),
@@ -287,7 +288,7 @@ fn default_datum_from_field<'a>(
         FieldType::Float => Ok(Datum::Float32(OrderedFloat::from(0.0))),
         FieldType::Double => Ok(Datum::Float64(OrderedFloat::from(0.0))),
         FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
-            Ok(Datum::Decimal(Significand::new(0)))
+            Ok(Datum::from(Numeric::from(0)))
         }
         FieldType::String => Ok(Datum::String("")),
         FieldType::Bytes => Ok(Datum::Bytes(&[])),
@@ -378,8 +379,8 @@ fn json_from_serde_value(
         SerdeValue::I64(i) => Datum::Int64(*i),
         SerdeValue::U8(i) => Datum::Int32(*i as i32),
         SerdeValue::U16(i) => Datum::Int32(*i as i32),
-        SerdeValue::U32(u) => Datum::Decimal(Significand::new(*u as i128)),
-        SerdeValue::U64(u) => Datum::Decimal(Significand::new(*u as i128)),
+        SerdeValue::U32(u) => Datum::from(Numeric::from(*u)),
+        SerdeValue::U64(u) => Datum::from(Numeric::from(*u)),
         SerdeValue::F32(f) => Datum::Float32((*f).into()),
         SerdeValue::F64(f) => Datum::Float64((*f).into()),
         SerdeValue::String(s) => Datum::String(s),
@@ -485,7 +486,6 @@ mod tests {
         Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
     };
 
-    use repr::adt::decimal::Significand;
     use repr::{Datum, DatumList, RelationDesc, ScalarType};
 
     use gen::fuzz::{
@@ -528,10 +528,10 @@ mod tests {
                 | (FieldType::SFixed64, FieldLabel::Optional, ScalarType::Int64)
                 | (FieldType::Float, FieldLabel::Optional, ScalarType::Float32)
                 | (FieldType::Double, FieldLabel::Optional, ScalarType::Float64)
-                | (FieldType::UInt32, FieldLabel::Optional, ScalarType::Decimal(38, 0))
-                | (FieldType::Fixed32, FieldLabel::Optional, ScalarType::Decimal(38,0))
-                | (FieldType::UInt64, FieldLabel::Optional, ScalarType::Decimal(38, 0))
-                | (FieldType::Fixed64, FieldLabel::Optional, ScalarType::Decimal(38,0))
+                | (FieldType::UInt32, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
+                | (FieldType::Fixed32, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
+                | (FieldType::UInt64, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
+                | (FieldType::Fixed64, FieldLabel::Optional, ScalarType::Numeric {scale: Some(0)})
                 | (FieldType::String, FieldLabel::Optional, &ScalarType::String)
                 | (FieldType::Bytes, FieldLabel::Optional, ScalarType::Bytes)
                 | (FieldType::Message(_), FieldLabel::Optional, ScalarType::Jsonb) => (),
@@ -570,7 +570,7 @@ mod tests {
             "age",
             2,
             FieldLabel::Optional,
-            InternalFieldType::UInt32,
+            InternalFieldType::Int32,
             None,
         ));
         descriptors.add_message(m1);
@@ -642,8 +642,6 @@ mod tests {
         test_record.set_string_field("one".to_string());
         test_record.set_int64_field(10000);
         test_record.set_color_field(Color::BLUE);
-        test_record.set_uint_field(5);
-        test_record.set_uint64_field(55);
         test_record.set_float_field(5.456);
         test_record.set_double_field(99.99);
 
@@ -663,8 +661,6 @@ mod tests {
             Datum::String("one"),
             Datum::Int64(10000),
             Datum::String("BLUE"),
-            Datum::Decimal(Significand::new(5)),
-            Datum::Decimal(Significand::new(55)),
             Datum::Float32(OrderedFloat::from(5.456)),
             Datum::Float64(OrderedFloat::from(99.99)),
         ];
@@ -693,8 +689,6 @@ mod tests {
             Datum::String(""),
             Datum::Int64(0),
             Datum::String("RED"),
-            Datum::Decimal(Significand::new(0)),
-            Datum::Decimal(Significand::new(0)),
             Datum::Float32(OrderedFloat::from(0.0)),
             Datum::Float64(OrderedFloat::from(0.0)),
         ];
@@ -769,8 +763,6 @@ mod tests {
                     ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
                     ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
                     ("string_field", Datum::String("one")),
-                    ("uint64_field", Datum::Float64(OrderedFloat::from(0.0))),
-                    ("uint_field", Datum::Float64(OrderedFloat::from(0.0))),
                 ]
             );
         } else {
@@ -867,8 +859,6 @@ mod tests {
                             ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
                             ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
                             ("string_field", Datum::String("")),
-                            ("uint64_field", Datum::Float64(OrderedFloat::from(0.0))),
-                            ("uint_field", Datum::Float64(OrderedFloat::from(0.0))),
                         ]
                     );
                 } else {

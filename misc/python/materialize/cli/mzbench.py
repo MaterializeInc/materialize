@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# mzbuild.py -- script to run materialized benchmarks
+# mzbench.py -- script to run materialized benchmarks
 
 import argparse
 import csv
@@ -18,10 +18,8 @@ import pathlib
 import subprocess
 import sys
 import typing
-from typing import List, Dict, Any, Optional, Tuple, Union
 import uuid
-import webbrowser
-import collections
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 class Bench:
@@ -47,6 +45,9 @@ class Bench:
         raise NotImplementedError
 
 
+ArgList = List[Union[str, pathlib.Path]]
+
+
 class SuccessOutputBench(Bench):
     """Benchmarks that run `mzcompose` and parse its output looking for various fields.
     In order to be usable with this class, the benchmark must emit a line of the form
@@ -56,21 +57,28 @@ class SuccessOutputBench(Bench):
     `Grafana URL: <url>`."""
 
     def __init__(
-        self, composition: str, mz_root: str, run_workflow: str, setup_workflow: str
+        self,
+        composition: str,
+        mz_root: str,
+        run_workflow: str,
+        setup_workflow: str,
+        cleanup: bool,
     ) -> None:
         self.composition = composition
         self.mz_root = mz_root
         self.run_workflow = run_workflow
-        root = mzcompose_location(self.mz_root)
-        self.run_benchmark: List[Union[str, pathlib.Path]] = [
-            root,
+        self.root = mzcompose_location(self.mz_root)
+        if cleanup:
+            self.teardown()
+        self.run_benchmark: ArgList = [
+            self.root,
             "--mz-find",
             self.composition,
             "run",
             self.run_workflow,
         ]
-        setup_benchmark: List[Union[str, pathlib.Path]] = [
-            root,
+        setup_benchmark: ArgList = [
+            self.root,
             "--mz-find",
             self.composition,
             "run",
@@ -139,7 +147,20 @@ class SuccessOutputBench(Bench):
         }
 
     def teardown(self) -> None:
-        pass
+        cleanup: ArgList = [
+            self.root,
+            "--mz-find",
+            self.composition,
+            "down",
+            "-v",
+        ]
+        try:
+            subprocess.check_output(cleanup, stderr=subprocess.STDOUT)
+        except (subprocess.CalledProcessError,) as e:
+            print(
+                f"Failed to cleanup prior state! Output from failed command:\n{e.output.decode()}"
+            )
+            raise
 
 
 from materialize import ui
@@ -182,22 +203,6 @@ def main(args: argparse.Namespace) -> None:
 
     worker_counts = enumerate_cpu_counts()
 
-    if not args.no_cleanup:
-        cleanup = [
-            mzcompose_location(mz_root),
-            "--mz-find",
-            args.composition,
-            "down",
-            "-v",
-        ]
-        try:
-            subprocess.check_output(cleanup, stderr=subprocess.STDOUT)
-        except (subprocess.CalledProcessError,) as e:
-            print(
-                f"Failed to cleanup prior state! Output from failed command:\n{e.output.decode()}"
-            )
-            raise
-
     if args.no_benchmark_this_checkout:
         git_references = args.git_references
     else:
@@ -218,6 +223,7 @@ def main(args: argparse.Namespace) -> None:
         mz_root,
         f"run-benchmark-{args.size}",
         f"setup-benchmark-{args.size}",
+        not args.no_cleanup,
     )
 
     metadata_field_names = [
@@ -242,7 +248,7 @@ def main(args: argparse.Namespace) -> None:
                 "web",
                 f"perf-dash-web",
             ]
-            output = subprocess.check_output(web_command, stderr=subprocess.STDOUT)
+            subprocess.check_output(web_command, stderr=subprocess.STDOUT)
         except (subprocess.CalledProcessError,) as e:
             print(f"Failed to open browser to perf-dash:\n{e.output.decode()}")
             raise
@@ -269,7 +275,8 @@ def main(args: argparse.Namespace) -> None:
             }
         )
 
-    bench.teardown()
+    if not args.no_teardown:
+        bench.teardown()
 
 
 def enumerate_cpu_counts() -> typing.List[int]:
@@ -330,7 +337,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-cleanup",
         action="store_true",
-        help="Skip running `mzcompose down -v` and leave state from previous runs",
+        help="Skip running `mzcompose down -v` at the beginning and leave state from previous runs",
     )
 
     parser.add_argument(
@@ -361,6 +368,12 @@ if __name__ == "__main__":
         type=str,
         nargs="*",
         help="Materialized builds to test as well, identified by git reference",
+    )
+
+    parser.add_argument(
+        "--no-teardown",
+        action="store_true",
+        help="Don't tear down benchmark state before exiting",
     )
 
     args = parser.parse_args()

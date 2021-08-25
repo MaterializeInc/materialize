@@ -9,7 +9,9 @@ menu:
 
 {{< cloud-notice >}}
 
-Currently, Materialize Cloud secures your connections through [TLS](https://en.wikipedia.org/wiki/Transport_Layer_Security). In the future, the managed Materialize Cloud product will offer additional security options, such as:
+Currently, Materialize Cloud secures your connections by enforcing that clients connect via
+[TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security). In the future, the managed
+Materialize Cloud product will offer additional security options, such as:
 
 * Two-factor authentication
 * Encryption at rest

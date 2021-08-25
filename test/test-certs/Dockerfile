@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:bionic-20200403
+MZFROM ubuntu-base
 RUN apt-get update && apt-get install openjdk-8-jdk openssl -y
 COPY . /
 RUN ./create-certs.sh
 
-FROM ubuntu:bionic-20200403
+MZFROM ubuntu-base
 COPY --from=0 /secrets /secrets

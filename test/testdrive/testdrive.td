@@ -43,9 +43,10 @@ row 2
 
 $ set-regex match=u\d+ replacement=UID
 
-? EXPLAIN SELECT * FROM t1, t1;
+? EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
 %0 =
 | Get materialize.public.t1 (UID)
+| Filter !(isnull(#0))
 | ArrangeBy ()
 
 %1 =
@@ -140,3 +141,24 @@ $ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
 {"before": null, "after": {"row": {"a": "UID"}}}
 {"before": null, "after": {"row": {"a": "UID"}}}
+
+# $ postgresql-connect
+
+> CREATE TABLE postgres_connect (f1 INTEGER);
+
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-addr}
+
+$ postgres-execute connection=conn1
+BEGIN;
+INSERT INTO postgres_connect VALUES (1);
+
+# Table is still empty, the transaction we just started is not committed yet
+> SELECT COUNT(*) = 0 FROM postgres_connect;
+true
+
+$ postgres-execute connection=conn1
+INSERT INTO postgres_connect VALUES (2);
+COMMIT;
+
+> SELECT COUNT(*) = 2 FROM postgres_connect;
+true

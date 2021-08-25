@@ -1,0 +1,61 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+build-scalar-type
+int32
+----
+Int32
+
+build-scalar-type
+int64
+----
+Int64
+
+build-scalar-type
+bool
+----
+Bool
+
+build-scalar-type
+timestamp_tz
+---
+
+build-scalar-type
+(decimal 10 2)
+----
+TimestampTz
+
+build-scalar-type
+(numeric 11)
+----
+Numeric { scale: Some(11) }
+
+build-scalar-type
+(array oid)
+----
+Array(Oid)
+
+build-scalar-type
+(list jsonb 100)
+----
+List { element_type: Jsonb, custom_oid: Some(100) }
+
+build-scalar-type
+(record
+    [["col1name" (date true)]
+     ["col2name" ((list (map bytes 98) null) false)]
+     ["col3name" ((list interval 34234) false) ]]
+     0 "recordname")
+----
+Record { fields: [(ColumnName("col1name"), ColumnType { scalar_type: Date, nullable: true }), (ColumnName("col2name"), ColumnType { scalar_type: List { element_type: Map { value_type: Bytes, custom_oid: Some(98) }, custom_oid: None }, nullable: false }), (ColumnName("col3name"), ColumnType { scalar_type: List { element_type: Interval, custom_oid: Some(34234) }, nullable: false })], custom_oid: Some(0), custom_name: Some("recordname") }
+
+build-scalar-type
+nonexistent
+----
+error: ScalarType::Nonexistent is not a supported enum.

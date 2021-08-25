@@ -15,6 +15,7 @@
 use std::convert::TryFrom;
 
 use anyhow::bail;
+use uncased::UncasedStr;
 
 use repr::adt::interval::Interval;
 use repr::{RelationDesc, ScalarType};
@@ -44,7 +45,7 @@ pub fn plan_set_variable(
     }: SetVariableStatement,
 ) -> Result<Plan, anyhow::Error> {
     if local {
-        unsupported!("SET LOCAL");
+        bail_unsupported!("SET LOCAL");
     }
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
@@ -60,7 +61,7 @@ pub fn describe_show_variable(
     _: &StatementContext,
     ShowVariableStatement { variable, .. }: ShowVariableStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let desc = if variable.as_str() == unicase::Ascii::new("ALL") {
+    let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::empty()
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("setting", ScalarType::String.nullable(false))
@@ -76,7 +77,7 @@ pub fn plan_show_variable(
     _: &StatementContext,
     ShowVariableStatement { variable }: ShowVariableStatement,
 ) -> Result<Plan, anyhow::Error> {
-    if variable.as_str() == unicase::Ascii::new("ALL") {
+    if variable.as_str() == UncasedStr::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
         Ok(Plan::ShowVariable(ShowVariablePlan {
@@ -99,8 +100,8 @@ pub fn plan_discard(
     match target {
         DiscardTarget::All => Ok(Plan::DiscardAll),
         DiscardTarget::Temp => Ok(Plan::DiscardTemp),
-        DiscardTarget::Sequences => unsupported!("DISCARD SEQUENCES"),
-        DiscardTarget::Plans => unsupported!("DISCARD PLANS"),
+        DiscardTarget::Sequences => bail_unsupported!("DISCARD SEQUENCES"),
+        DiscardTarget::Plans => bail_unsupported!("DISCARD PLANS"),
     }
 }
 

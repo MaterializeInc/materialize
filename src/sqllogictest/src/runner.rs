@@ -38,9 +38,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use coord::PersistConfig;
 use fallible_iterator::FallibleIterator;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
+use ore::metrics::MetricsRegistry;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -51,6 +53,7 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
 use pgrepr::{Interval, Jsonb, Numeric, Value};
+use repr::adt::numeric;
 use repr::ColumnName;
 use sql::ast::Statement;
 
@@ -303,13 +306,17 @@ impl<'a> FromSql<'a> for Slt {
             PgType::FLOAT4 => Self(Value::Float4(types::float4_from_sql(raw)?)),
             PgType::FLOAT8 => Self(Value::Float8(types::float8_from_sql(raw)?)),
             PgType::DATE => Self(Value::Date(NaiveDate::from_sql(ty, raw)?)),
+            PgType::INT2 => Self(Value::Int2(types::int2_from_sql(raw)?)),
             PgType::INT4 => Self(Value::Int4(types::int4_from_sql(raw)?)),
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
-            PgType::TEXT => Self(Value::Text(types::text_from_sql(raw)?.to_string())),
+            PgType::REGPROC => Self(Value::Int4(types::oid_from_sql(raw)? as i32)),
+            PgType::TEXT | PgType::BPCHAR | PgType::VARCHAR => {
+                Self(Value::Text(types::text_from_sql(raw)?.to_string()))
+            }
             PgType::TIME => Self(Value::Time(NaiveTime::from_sql(ty, raw)?)),
             PgType::TIMESTAMP => Self(Value::Timestamp(NaiveDateTime::from_sql(ty, raw)?)),
             PgType::TIMESTAMPTZ => Self(Value::TimestampTz(DateTime::<Utc>::from_sql(ty, raw)?)),
@@ -379,8 +386,11 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::JSONB
                 | PgType::NUMERIC
                 | PgType::OID
+                | PgType::REGPROC
                 | PgType::RECORD
                 | PgType::TEXT
+                | PgType::BPCHAR
+                | PgType::VARCHAR
                 | PgType::TIME
                 | PgType::TIMESTAMP
                 | PgType::TIMESTAMPTZ
@@ -423,15 +433,23 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
     match (typ, d.0) {
         (Type::Bool, Value::Bool(b)) => b.to_string(),
 
+        (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
-        (Type::Integer, Value::Numeric(d)) => format!("{:.0}", d),
-        (Type::Integer, Value::Float4(f)) => format!("{:.0}", f.trunc()),
-        (Type::Integer, Value::Float8(f)) => format!("{:.0}", f.trunc()),
+        (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
+        (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
         (Type::Integer, Value::Text(_)) => "0".to_string(),
         (Type::Integer, Value::Bool(b)) => i8::from(b).to_string(),
+        (Type::Integer, Value::Numeric(d)) => {
+            let mut d = d.0 .0.clone();
+            let mut cx = numeric::cx_datum();
+            cx.round(&mut d);
+            numeric::munge_numeric(&mut d).unwrap();
+            d.to_standard_notation_string()
+        }
 
+        (Type::Real, Value::Int2(i)) => format!("{:.3}", i),
         (Type::Real, Value::Int4(i)) => format!("{:.3}", i),
         (Type::Real, Value::Int8(i)) => format!("{:.3}", i),
         (Type::Real, Value::Float4(f)) => match mode {
@@ -443,8 +461,15 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Mode::Cockroach => format!("{}", f),
         },
         (Type::Real, Value::Numeric(d)) => match mode {
-            Mode::Standard => format!("{:.3}", d),
-            Mode::Cockroach => format!("{}", d),
+            Mode::Standard => {
+                let mut d = d.0 .0.clone();
+                if d.exponent() < -3 {
+                    numeric::rescale(&mut d, 3).unwrap();
+                }
+                numeric::munge_numeric(&mut d).unwrap();
+                d.to_standard_notation_string()
+            }
+            Mode::Cockroach => d.0 .0.to_standard_notation_string(),
         },
 
         (Type::Text, Value::Text(s)) => {
@@ -455,7 +480,6 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             }
         }
         (Type::Text, Value::Bool(b)) => b.to_string(),
-        (Type::Text, Value::Numeric(d)) => format!("{:.0}", d),
         (Type::Text, Value::Float4(f)) => format!("{:.3}", f),
         (Type::Text, Value::Float8(f)) => format!("{:.3}", f),
         // Bytes are printed as text iff they are valid UTF-8. This
@@ -467,6 +491,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
             Ok(s) => s.to_string(),
             Err(_) => format!("{:?}", b),
         },
+        (Type::Text, Value::Numeric(d)) => d.0 .0.to_standard_notation_string(),
         // Everything else gets normal text encoding. This correctly handles things
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {
@@ -515,8 +540,6 @@ impl Runner {
         let mz_config = materialized::Config {
             logging: None,
             timestamp_frequency: Duration::from_secs(1),
-            cache: None,
-            persistence: None,
             logical_compaction_window: None,
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),
@@ -525,9 +548,13 @@ impl Runner {
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             experimental_mode: true,
+            disable_user_indexes: false,
             safe_mode: false,
-            telemetry_url: None,
+            telemetry: None,
             introspection_frequency: Duration::from_secs(1),
+            metrics_registry: MetricsRegistry::new(),
+            persist: PersistConfig::disabled(),
+            third_party_metrics_listen_addr: None,
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;

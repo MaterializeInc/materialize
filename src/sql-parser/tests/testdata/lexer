@@ -103,7 +103,7 @@ e'\x1fg'
 parse-statement roundtrip
 SELECT $$Postgre's SQL$$, $eOf$Postgre's SQL$eOf$, end
 ----
-SELECT '$Postgre''s SQL', '$Postgre''s SQL', end
+SELECT 'Postgre''s SQL', 'Postgre''s SQL', end
 
 parse-statement roundtrip
 SELECT $$POST
@@ -118,6 +118,11 @@ SELECT $EOF$PostgreSQL$$eof$$
 error: unterminated dollar-quoted string
 SELECT $EOF$PostgreSQL$$eof$$
        ^
+
+parse-statement roundtrip
+SELECT $$$$
+----
+SELECT ''
 
 # Numeric literals
 parse-scalar
@@ -156,6 +161,25 @@ parse-scalar
 error: extra token after expression
 1e10.1
     ^
+
+parse-scalar
+1e+
+----
+error: missing required exponent
+1e+
+  ^
+
+parse-scalar
+1e-
+----
+error: missing required exponent
+1e-
+  ^
+
+parse-statement roundtrip
+SELECT 1e
+----
+SELECT 1 AS e
 
 # Test that unexpected unicode characters do not cause the error message to
 # crash when rendered...

@@ -15,7 +15,11 @@ contain multiple records serialized as JSON, separated by newlines.
 
 {{< diagram "create-source-s3-json.svg" >}}
 
-{{% create-source/syntax-details connector="s3" formats="text bytes" envelopes="append-only" %}}
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="s3" formats="text bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Example
 
@@ -59,10 +63,10 @@ To access the data as JSON we can use standard JSON [functions](/sql/functions/#
 ```sql
 > CREATE MATERIALIZED VIEW json_example AS
   SELECT
-    jsonified->>user_id AS user_id,
-    jsonified->>disks_used AS disks_used,
-    jsonified->>cpu_used_minutes AS cpu_used_minutes
-  FROM (SELECT text::JSONB FROM json_source) AS jsonified;
+    jsonified.data->>user_id AS user_id,
+    jsonified.data->>disks_used AS disks_used,
+    jsonified.data->>cpu_used_minutes AS cpu_used_minutes
+  FROM (SELECT text::JSONB AS data FROM json_source) AS jsonified;
 ```
 
 This creates a source that...

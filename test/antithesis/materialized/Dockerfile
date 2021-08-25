@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:bionic-20200403
+MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install ca-certificates
 
-COPY libvoidstar.so /usr/local/lib
+COPY libvoidstar.so /usr/lib
 RUN ldconfig
 
 COPY materialized /usr/local/bin/

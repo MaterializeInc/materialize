@@ -13,7 +13,7 @@ Once you've created a deployment, you'll need to install TLS certificates on you
 
 {{% cloud-connection-details %}}
 
-**Note:** Right now, we only support one user per account. If you'd like multiple users to access your Cloud console, you'll need to share the login. Alternatively, any user can connect to a Cloud deployment as long as you share your TLS certificates and your psql connection string.
+**Note:** Right now, we only support one user per account. If you'd like multiple users to access your Cloud console, you'll need to share the login. Alternatively, any user can connect to a Cloud deployment as long as you share your TLS certificates and your `psql` connection string.
 
 ## Related topics
 

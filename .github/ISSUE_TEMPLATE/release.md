@@ -13,7 +13,11 @@ about: >
 
 ## Announce the imminent release internally
 
-- [x] Create this release issue.
+- [x] Create this release issue. Determine whether this is a feature release or
+  a patch release by checking the [milestones
+  page](https://github.com/MaterializeInc/materialize/milestones) -- if the date
+  is correct for the next feature release double check with the PMs in the
+  #release slack channel and use that version, otherwise it's a patch release.
 - [ ] Check for open blocking issues:
   - [ ] For any release, check if there are any open [`M-release-blocker`][rel-blockers]
     issues or PRs
@@ -22,10 +26,6 @@ about: >
     a list here, or state that there are none:
 
   > unknown number of milestone blockers or release blockers
-- [ ] Link to this issue in the #release Slack channel and be sure to directly notify the @relnotes-team.
-
-  If there are open blockers, clarify if they should block this release until they're
-  merged when you link to this issue.
 
 [rel-blockers]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-release-blocker
 [blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+label%3AM-milestone-blocker
@@ -39,27 +39,19 @@ production readiness.
 
 - [ ] Choose the commit for the release. Unless there are open release blockers above,
   this should just be the head commit of the main branch. Checkout that commit.
-- [ ] Choose the name for the release candidate following the format
-  `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
-  v0.2.3 would be called v0.2.3-rc1. Use that to run the `bin/mkrelease`
-  script:
+
+- [ ] Create a new release candidate, specifying what kind of release this
+  should be (see `--help` for all the release types):
 
   ```shell
-  tag=v<VERSION>-rc<N>
-  bin/mkrelease -b rel-$tag $tag
+  bin/mkrelease new-rc biweekly
   ```
 
-- [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
+- [ ] Update the [release notes][] to include a new "unreleased" version so that new
+  changes don't get advertised as being part of this release as folks add notes.
 
-  Without checking out main to `main`, perform:
-
-  ```shell
-  next=v<NEXT_VERSION>-dev
-  bin/mkrelease --no-tag -b prepare-$next $next
-  ```
-
-  > **NOTE:** `NEXT_VERSION` should always be a patch-level change, even if the next release is
-  > anticipated to be a minor or major version bump.
+  > **NOTE:** the next "unreleased" version should always be a patch-level change, even if the next
+  > release is currently anticipated to be a minor or major version bump.
   >
   > For example, if the version being released is `v0.5.9`, `<NEXT_VERSION>` should always be
   > `0.5.10`, not `0.6.0`, even if we expect that to be the true next version.
@@ -69,12 +61,21 @@ production readiness.
   > `v0.5.10-dev` -> `v0.6.0` when they upgrade than upgrading and going from `v0.6.0-dev` ->
   > `v0.5.10`.
 
-  - [ ] Related to the above note, **if this is a feature release** (i.e. the
-    product team has decided that we are bumping the major or minor version) you
-    must also update [the release notes][releases]: the highest unreleased
-    version will be incorrect. It will be a patch version (i.e. the `Y` in
-    `W.X.Y`) instead of a major or minor version change (`W` or `X`), update the
-    release notes to reflect the version that is actually being released.
+  - Related to the above note, **if this is a feature release** (i.e. the product team has
+    decided that we are bumping the major or minor version) you must also update two items because
+    the highest unreleased version will be incorrect. It will be a patch version (i.e. the `Y` in
+    `W.X.Y`) instead of a major or minor version change (`W` or `X`), update the release notes to
+    reflect the version that is actually being released:
+    - [ ] The [release notes][]
+    - [ ] Some recent migration versions in `src/coord/src/catalog/migrate.rs`
+
+- [ ] Incorporate this tag into `main`'s history by preparing dev on top of it.
+
+  Without checking out `main`, perform:
+
+  ```shell
+  bin/mkrelease incorporate
+  ```
 
   Open a PR with this change, and land it.
 
@@ -85,6 +86,16 @@ production readiness.
   $ gh pr create --web
   ```
 
+- [ ] Collect all PRs in this release using the list-prs command and create a slack post in
+  `#release` with the output:
+
+  ```shell
+  bin/mkrelease list-prs
+  ```
+
+- [ ] Review all PRs in the release that were not reviewed by another engineer
+  prior to being merged into main.
+
 [gh]: https://cli.github.com/
 
 ### Review Release Notes
@@ -93,12 +104,12 @@ Release notes should be updated by engineers as they merge PRs. The release note
 team is responsible for reviewing release notes and the release announcement before
 a release is published.
 
-- [ ] Post the following message to the `#release` channel in slack:
+- [ ] Post the following message to the `#release` channel in slack, modifying the link to the issue to point to this one:
 
   > @relnotes-team the release is in progress, now's a great time to verify or
-  > prepare the release notes
-  > (https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md)
-  > and any announcement posts
+  > prepare the release notes and any announcement posts.
+  > * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
+  > * release issue: https://github.com/MaterializeInc/materialize/issues/
 
 ### Test the release candidate
 
@@ -123,16 +134,15 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   - [ ] "link to test run"
 
-- [ ] **cloud engineer** Start the load tests according to [the same instructions][load-instr],
-  using your release tag as the `git-ref` value for the release benchmarks. You can use [This
-  commit][] as an example to follow.
+- [ ] Wait for the docker build of the tag to complete and then start the load tests according to
+  [these instructions][load-instr], using your release tag as the `git-ref` value for the release
+  benchmarks. You can use [This commit][] as an example to follow.
 
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
-- [ ] **cloud engineer** Find the load tests in
-  https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them in #release, validating
-  that data is present. Note that the default view of that dashboard is of a full day, so it may
-  look like the test started and aborted suddenly:
+- [ ] Find the load tests in https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them
+  in #release, validating that data is present. Note that the default view of that dashboard is of
+  a full day, so it may look like the test started and aborted suddenly:
 
   - [ ] chbench
   - [ ] billing-demo
@@ -158,12 +168,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] perf-kinesis: The "Time behind external source" dashboard panel in Grafana should
     have remained at 0ms or similar for the entirety of the run.
 
-- [ ] **cloud engineer** Let the chaos test run for 24 hours. The test's `chaos_run` container
-  should complete with a `0` exit code. To check this, SSH into the EC2 instance running the chaos
-  test and run `docker ps -a`. You can ssh in using our [teleport cluster][], the chaos test has a
-  `purpose=chaos` label.
+- [ ] Let the chaos test run for 24 hours. The test's `chaos_run` container should complete with a
+  `0` exit code. To check this, SSH into the EC2 instance running the chaos test and run `docker ps
+  -a`. You can ssh in using our [teleport cluster][], the chaos test has a `purpose=chaos` label.
 
-- [ ] **cloud engineer** Remove all load test machines, documented on [the same page][load-instr].
+- [ ] Remove all load test machines, [documented here][load-instr].
 
 [teleport cluster]: https://tsh.i.mtrlz.dev/cluster/tsh/nodes
 
@@ -175,21 +184,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   was only one RC, then the final RC tag would be `-rc1`.
 
   ```shell
-  $ tag=v<VERSION>
-  $ bin/mkrelease --checkout ${tag}-rcN $tag
-  git push origin $tag
+  $ bin/mkrelease finish
   ```
-- [ ] Incorporate this tag into `main`'s history, and update the user doc config to mark this as
-  released:
 
-  ```console
-  $ next=v<NEXT_VERSION>-dev
-  $ bin/mkrelease --no-tag -b continue-$next $next
-  ... snip ...
-  Update doc/user/config.toml with 0.6.1 [y/N]: y
-  ...
-  Create a PR with your branch: 'continue-$next'
-  ```
+  That will create a new branch named `continue-<version>`, the exact name will
+  be output as the last line of the script.
 
   Open a PR with that branch, and land it. This is possible using [gh] from the
   terminal: `gh pr create --web`
@@ -220,16 +219,27 @@ in the infrastructure repository. All of these tests can be run in parallel.
     ```shell
     docker run --rm -i ubuntu:bionic <<EOF
     apt-get update && apt-get install -y gpg ca-certificates
-    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
-    sh -c 'echo "deb http://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list'
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
+    echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list
     apt-get update && apt-get install -y materialized
     materialized --version
     EOF
     ```
-  - [ ] `docker run --rm materialize/materialized:latest --version`
+  - [ ] `docker pull materialize/materialized:latest && docker run --rm materialize/materialized:latest --version`
   - [ ] substitute in the correct version in this one: `docker run --rm materialize/materialized:v0.X.Y --version`
 
 [bintray]: https://bintray.com/beta/#/materialize/apt/materialized
+
+### Open a PR on the cloud repo enabling the new version
+
+- [ ] Issue a PR to the cloud repo to allow the released version following [the instructions][].
+- [ ] After that PR has been merged, a PR suggesting a merge from `main` -> `production` will be
+  automatically created and assigned to you. Request somebody on the
+  [@MaterializeInc/cloud-deployers][deployers] team review it; once approved, merge the PR and it
+  will be automatically deployed to production.
+
+[the instructions]: https://github.com/MaterializeInc/cloud/blob/main/doc/misc.md#updating-to-a-new-materialize-release
+[deployers]: https://github.com/orgs/MaterializeInc/teams/cloud-deployers/members
 
 ### Convert the GitHub Tag into a GitHub Release
 
@@ -264,9 +274,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
     > channel and publish any appropriate blog posts
 
   - Post a link to the release tag in the `#general` channel, something like the
-    following, substituting in the correct version:
+    following, substituting in the correct version for the X and Y:
 
-    > 🎉🤘 Release v0.X.Y is complete! https://github.com/MaterializeInc/materialize/releases/tag/v0.X.Y 🤘🎉
+    > `🎉🤘 Release v0.X.Y is complete! https://github.com/MaterializeInc/materialize/releases/tag/v0.X.Y 🤘🎉`
 
 ## Finish
 

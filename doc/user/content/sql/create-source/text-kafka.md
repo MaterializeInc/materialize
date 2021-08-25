@@ -15,7 +15,15 @@ Kafka topic.
 
 {{< diagram "create-source-text-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="text bytes" envelopes="upsert append-only" %}}
+#### `format_spec`
+
+{{< diagram "format-spec.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="text bytes" envelopes="upsert append-only" keyConstraint=false %}}
 
 ## Examples
 
@@ -36,22 +44,6 @@ This creates a source that...
   `localhost:9092`.
 - Uses message keys to determine what should be inserted, deleted, and updated.
 - Treats both message keys and values as text.
-
-### Caching records to local disk
-
-```sql
-CREATE SOURCE cached_records
-FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
-WITH (cache = true)
-FORMAT TEXT
-```
-
-This creates a source that...
-
-- Is append-only.
-- Decodes data received from the `data` topic published by Kafka running on
-  `localhost:9092` as text.
-- Caches messages from the `data` topic to local disk.
 
 ### Setting partition offsets
 

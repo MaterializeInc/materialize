@@ -16,7 +16,9 @@
 name
 ----
 _bool
+_bpchar
 _bytea
+_char
 _date
 _float4
 _float8
@@ -28,16 +30,17 @@ _jsonb
 _numeric
 _oid
 _record
+_regproc
 _text
 _time
 _timestamp
 _timestamptz
 _uuid
+_varchar
 any
 anyarray
 anyelement
 anynonarray
-apd
 bool
 bpchar
 bytea
@@ -55,6 +58,7 @@ map
 numeric
 oid
 record
+regproc
 text
 time
 timestamp
@@ -66,7 +70,9 @@ varchar
 name             type
 ----------------------
 _bool            system
+_bpchar          system
 _bytea           system
+_char            system
 _date            system
 _float4          system
 _float8          system
@@ -78,16 +84,17 @@ _jsonb           system
 _numeric         system
 _oid             system
 _record          system
+_regproc         system
 _text            system
 _time            system
 _timestamp       system
 _timestamptz     system
 _uuid            system
+_varchar         system
 any              system
 anyarray         system
 anyelement       system
 anynonarray      system
-apd              system
 bool             system
 bpchar           system
 bytea            system
@@ -104,6 +111,7 @@ list             system
 map              system
 numeric          system
 oid              system
+regproc          system
 record           system
 text             system
 time             system
@@ -223,6 +231,15 @@ other_int_map_c     user
 > CREATE TYPE text_array_list_c AS LIST (element_type=_text);
 > CREATE TABLE text_array_list_t (a text_array_list_c);
 > INSERT INTO text_array_list_t VALUES (LIST[ARRAY['a','b']]);
+
+> CREATE TYPE varchar_array_list_c AS LIST (element_type=_varchar);
+> CREATE TABLE varchar_array_list_t (a varchar_array_list_c);
+> INSERT INTO varchar_array_list_t VALUES (LIST[ARRAY['a'::varchar,'b'::varchar]]);
+
+# Enable this when closing #7613
+# > CREATE TYPE char_array_list_c AS LIST (element_type=_char);
+# > CREATE TABLE char_array_list_t (a char_array_list_c);
+# > INSERT INTO char_array_list_t VALUES (LIST[ARRAY['a'::char,'b'::char]]);
 
 > CREATE TYPE float4_array_list_c AS LIST (element_type=_float4);
 > CREATE TABLE float4_array_list_t (a float4_array_list_c);

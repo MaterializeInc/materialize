@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
-use log::info;
+use log::debug;
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, AwsCredentials, ChainProvider, StaticProvider};
 use rusoto_kinesis::KinesisClient;
@@ -24,10 +24,10 @@ use rusoto_sqs::SqsClient;
 
 use crate::aws::ConnectInfo;
 
-/// Get an [`HttpClient`]  that respects the `http_proxy` environment variables
-pub(crate) fn http() -> Result<HttpClient<http_util::ProxiedConnector>, anyhow::Error> {
+/// Gets an [`HttpClient`] that respects the system proxy configuration.
+pub(crate) fn http() -> Result<HttpClient<mz_http_proxy::hyper::Connector>, anyhow::Error> {
     Ok(HttpClient::from_connector(
-        http_util::connector().map_err(|e| anyhow!(e))?,
+        mz_http_proxy::hyper::connector().map_err(|e| anyhow!(e))?,
     ))
 }
 
@@ -57,16 +57,16 @@ wrapped in an [`AutoRefreshingProvider`].
 The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 automatically fetching updated credentials if they've expired.
 "]
-pub async fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
+pub fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
     let request_dispatcher = http().context(
         concat!("creating HTTP client for ", $client_name))?;
     let the_client = if let Some(creds) = conn_info.credentials {
-        info!(concat!("Creating a new", $client_name, " from provided access_key and secret_access_key"));
+        debug!(concat!("Creating a new ", $client_name, " from provided access_key and secret_access_key"));
         let provider = StaticProvider::from(AwsCredentials::from(creds));
 
         $client::new_with(request_dispatcher, provider, conn_info.region)
     } else {
-        info!(
+        debug!(
             concat!("AWS access_key_id and secret_access_key not provided, \
                creating a new ", $client_name, " using a chain provider.")
         );

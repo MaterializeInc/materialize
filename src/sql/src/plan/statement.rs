@@ -12,7 +12,7 @@
 //! This module houses the entry points for planning a SQL statement.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use anyhow::bail;
@@ -85,6 +85,7 @@ impl StatementDesc {
 ///
 /// See the documentation of [`StatementDesc`] for details.
 pub fn describe(
+    pcx: &PlanContext,
     catalog: &dyn Catalog,
     stmt: Statement<Raw>,
     param_types_in: &[Option<pgrepr::Type>],
@@ -97,9 +98,8 @@ pub fn describe(
     }
 
     let scx = StatementContext {
+        pcx: Some(pcx),
         catalog,
-        pcx: &PlanContext::default(),
-        ids: HashSet::new(),
         param_types: Rc::new(RefCell::new(param_types)),
     };
 
@@ -169,7 +169,7 @@ pub fn describe(
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
 pub fn plan(
-    pcx: &PlanContext,
+    pcx: Option<&PlanContext>,
     catalog: &dyn Catalog,
     stmt: Statement<Raw>,
     params: &Params,
@@ -184,7 +184,6 @@ pub fn plan(
     let scx = &StatementContext {
         pcx,
         catalog,
-        ids: HashSet::new(),
         param_types: Rc::new(RefCell::new(param_types)),
     };
 
@@ -242,12 +241,13 @@ pub fn plan(
 }
 
 pub fn plan_copy_from(
+    pcx: &PlanContext,
     catalog: &dyn Catalog,
     id: GlobalId,
     columns: Vec<usize>,
     rows: Vec<repr::Row>,
 ) -> Result<super::HirRelationExpr, anyhow::Error> {
-    query::plan_copy_from_rows(catalog, id, columns, rows)
+    query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
@@ -279,15 +279,34 @@ impl PartialEq<CatalogItemType> for ObjectType {
 /// Immutable state that applies to the planning of an entire `Statement`.
 #[derive(Debug, Clone)]
 pub struct StatementContext<'a> {
-    pub pcx: &'a PlanContext,
+    /// The optional PlanContext, which will be present for statements that execute
+    /// within the OneShot QueryLifetime and None otherwise (views). This is an
+    /// awkward field and should probably be relocated to a place that fits our
+    /// execution model more closely.
+    pcx: Option<&'a PlanContext>,
     pub catalog: &'a dyn Catalog,
-    pub ids: HashSet<GlobalId>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
 }
 
 impl<'a> StatementContext<'a> {
+    pub fn new(
+        pcx: Option<&'a PlanContext>,
+        catalog: &'a dyn Catalog,
+        param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+    ) -> StatementContext<'a> {
+        StatementContext {
+            pcx,
+            catalog,
+            param_types,
+        }
+    }
+
+    pub fn pcx(&self) -> Result<&PlanContext, anyhow::Error> {
+        self.pcx.ok_or_else(|| anyhow::anyhow!("no plan context"))
+    }
+
     pub fn allocate_name(&self, name: PartialName) -> FullName {
         FullName {
             database: match name.database {

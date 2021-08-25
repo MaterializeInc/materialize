@@ -183,10 +183,9 @@ Now that we have the `FileDescriptorSet`, we can generate a `protobuf` source:
 
 ```sql
 CREATE SOURCE billing_source
-FROM 'kafka://localhost/events'
-FORMAT PROTOBUF
-    MESSAGE 'billing.Batch'
-    USING 'file://<local path to SCHEMA>'
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+FORMAT PROTOBUF MESSAGE 'billing.Batch'
+    USING SCHEMA FILE '[path to schema]';
 ```
 
 ### Normalizing data

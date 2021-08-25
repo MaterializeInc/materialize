@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - command: bin/ci-builder run stable ci/deploy/devsite.sh
+  - command: bin/ci-builder run nightly ci/deploy/devsite.sh
     branches: main
     timeout_in_minutes: 30
     agents:
@@ -27,3 +27,8 @@ steps:
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/macos
+
+  - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.deploy.pypi
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy/pypi

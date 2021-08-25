@@ -260,9 +260,11 @@ pub fn create_statement(
             connector: _,
             with_options: _,
             format: _,
+            key_envelope: _,
             envelope: _,
             if_not_exists,
             materialized,
+            key_constraint: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
@@ -526,7 +528,7 @@ pub fn aws_connect_info(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
     use std::error::Error;
     use std::rc::Rc;
 
@@ -534,16 +536,11 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
-    use crate::plan::PlanContext;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
-        let scx = &StatementContext {
-            pcx: &PlanContext::default(),
-            catalog: &DummyCatalog,
-            ids: HashSet::new(),
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
-        };
+        let scx =
+            &StatementContext::new(None, &DummyCatalog, Rc::new(RefCell::new(BTreeMap::new())));
 
         let parsed = sql_parser::parser::parse_statements(
             "create materialized view foo as select 1 as bar",

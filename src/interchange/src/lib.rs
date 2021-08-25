@@ -9,8 +9,10 @@
 
 //! Translations for various data serialization formats.
 
-#![deny(missing_debug_implementations)]
+#![warn(missing_debug_implementations)]
 
 pub mod avro;
+pub mod encode;
 pub mod envelopes;
+pub mod json;
 pub mod protobuf;

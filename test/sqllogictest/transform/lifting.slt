@@ -290,7 +290,7 @@ explain select * from (select 1 as a from t), generate_series(a+1, 4);
 ----
 %0 =
 | Get materialize.public.t (u1)
-| FlatMap generate_series(2, 4)
+| FlatMap generate_series(2, 4, 1)
 | | demand = (#2)
 | Map 1
 | Project (#3, #2)
@@ -402,7 +402,6 @@ explain select distinct 123 from (select distinct a from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=(#0)
 | Distinct group=()
 | Map 123
 
@@ -478,8 +477,7 @@ explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal fr
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=((#0 + 1))
-| Distinct group=((#0 + 2))
+| Distinct group=(((#0 + 1) + 2))
 
 EOF
 
@@ -498,8 +496,7 @@ explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 a
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=((#0 + 1))
-| Distinct group=((#0 + 2))
+| Distinct group=(((#0 + 1) + 2))
 | Map 123
 
 EOF
@@ -579,5 +576,234 @@ select a, b, min(2), max(3) from t where b = 1 group by a, b;
 | Filter (#1 = 1)
 | Distinct group=(#0)
 | Map 1, 2, 3
+
+EOF
+
+# regression tests for #6943
+query T multiline
+explain select min(1/x) from (select a as y, 0 as x from t);
+----
+%0 = Let l0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+
+%1 =
+| Get %0 (l0)
+| Map (err: division by zero)
+
+%2 =
+| Get %0 (l0)
+| Negate
+
+%3 =
+| Constant ()
+
+%4 =
+| Union %2 %3
+| Map null
+
+%5 =
+| Union %1 %4
+
+EOF
+
+query T multiline
+explain select sum(1/x) from (select a as y, 0 as x from t);
+----
+%0 = Let l0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+
+%1 =
+| Get %0 (l0)
+| Map (err: division by zero)
+
+%2 =
+| Get %0 (l0)
+| Negate
+
+%3 =
+| Constant ()
+
+%4 =
+| Union %2 %3
+| Map null
+
+%5 =
+| Union %1 %4
+
+EOF
+
+query T multiline
+explain select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+%0 = Let l0 =
+| Get materialize.public.t (u1)
+| Filter (#0 = 1308)
+
+%1 =
+| Get materialize.public.t_pk (u3)
+| ArrangeBy (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%4 =
+| Union %2 %3
+
+%5 = Let l1 =
+| Join %1 %4 (= #0 #2)
+| | implementation = Differential %4 %1.(#0)
+| | demand = (#0)
+| Filter (#0 <= 195), (#0 >= 38)
+| Reduce group=()
+| | agg min(#0)
+
+%6 =
+| Get %5 (l1)
+| Negate
+| Project ()
+
+%7 =
+| Constant ()
+
+%8 =
+| Union %6 %7
+| Map null
+
+%9 =
+| Union %5 %8
+
+EOF
+
+query T multiline
+explain select min(a) from t where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+%0 = Let l0 =
+| Get materialize.public.t (u1)
+| Filter (#0 = 1308)
+
+%1 =
+| Get materialize.public.t (u1)
+| Filter (#0 <= 195), (#0 >= 38)
+| ArrangeBy (#0)
+
+%2 =
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%4 =
+| Union %2 %3
+
+%5 = Let l1 =
+| Join %1 %4 (= #0 #2)
+| | implementation = Differential %4 %1.(#0)
+| | demand = (#0)
+| Reduce group=()
+| | agg min(#0)
+
+%6 =
+| Get %5 (l1)
+| Negate
+| Project ()
+
+%7 =
+| Constant ()
+
+%8 =
+| Union %6 %7
+| Map null
+
+%9 =
+| Union %5 %8
+
+EOF
+
+statement ok
+insert into t_pk values (40);
+
+# check no error is returned, but a NULL result
+query I
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+NULL
+
+statement ok
+insert into t values (1308);
+
+query I
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+NULL
+
+statement ok
+insert into t_pk values (1308);
+
+query I
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+NULL
+
+statement ok
+insert into t values (1308);
+
+statement error more than one record produced in subquery
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+
+# check that literal errors are not lifted beyond Joins, but also that that doesn't lead to
+# a stack overflow due to LiteralLifting and JoinImplementation fighting against each other
+statement ok
+create table t1 (f1 double precision, f2 double precision not null);
+
+query T multiline
+explain select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) where a2.f2 = 9;
+----
+%0 =
+| Get materialize.public.t1 (u5)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t1 (u5)
+| Filter (#1 = 9)
+
+%2 =
+| Get materialize.public.t1 (u5)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| ArrangeBy ()
+
+%3 =
+| Join %0 %1 %2
+| | implementation = Differential %1 %2.() %0.()
+| | demand = (#0..#3)
+| Project (#0..#3)
+
+EOF
+
+# count(null) is always 0
+query T multiline
+explain select count(null) from t;
+----
+%0 =
+| Constant (0)
 
 EOF

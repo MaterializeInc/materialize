@@ -125,7 +125,8 @@ the [release notes](/release-notes).
 There are several aspects of the product that are not considered part of
 Materialize's stable interface:
 
-  * Features that requires [experimental mode](/cli/#experimental-mode)
+  * Features that require [experimental mode](/cli/#experimental-mode)
+  * Features that are in beta (labeled as such in their documentation)
   * The [Grafana monitoring dashboard](/ops/monitoring)
   * Any HTTP interfaces, including:
     * Memory profiling tools
@@ -139,7 +140,7 @@ If you choose to use these unstable interfaces, you do so at your own risk.
 Backwards-incompatible changes may be made to these unstable interfaces at any
 time and without mention in the release notes.
 
-[Linux]: https://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz
-[macOS]: https://downloads.mtrlz.dev/materialized-latest-x86_64-apple-darwin.tar.gz
+[Linux]: https://binaries.materialize.com/materialized-latest-x86_64-unknown-linux-gnu.tar.gz
+[macOS]: https://binaries.materialize.com/materialized-latest-x86_64-apple-darwin.tar.gz
 [github]: https://github.com/MaterializeInc/materialize
 [Semantic Versioning]: https://semver.org

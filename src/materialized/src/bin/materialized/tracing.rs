@@ -9,6 +9,7 @@
 
 use std::marker::PhantomData;
 
+use ore::metrics::ThirdPartyMetric;
 use prometheus::IntCounterVec;
 use tracing::span::{Attributes, Record};
 use tracing::subscriber::Interest;
@@ -122,13 +123,13 @@ where
 /// A tracing `Layer` that allows hooking into the reporting/filtering chain for log messages,
 /// incrementing a counter for the severity of messages reported.
 pub struct MetricsRecorderLayer<S> {
-    counter: IntCounterVec,
+    counter: ThirdPartyMetric<IntCounterVec>,
     _inner: PhantomData<S>,
 }
 
 impl<S> MetricsRecorderLayer<S> {
     /// Construct a metrics-recording layer.
-    pub fn new(counter: IntCounterVec) -> Self {
+    pub fn new(counter: ThirdPartyMetric<IntCounterVec>) -> Self {
         Self {
             counter,
             _inner: PhantomData,
@@ -143,7 +144,7 @@ where
     fn on_event(&self, ev: &Event<'_>, _ctx: Context<'_, S>) {
         let metadata = ev.metadata();
         self.counter
-            .with_label_values(&[&metadata.level().to_string()])
+            .third_party_metric_with_label_values(&[&metadata.level().to_string()])
             .inc();
     }
 }
@@ -154,16 +155,20 @@ mod test {
 
     use super::MetricsRecorderLayer;
     use log::{error, info, warn};
-    use prometheus::{IntCounterVec, Opts, Registry};
+    use ore::metric;
+    use ore::metrics::raw::IntCounterVec;
+    use ore::metrics::{MetricsRegistry, ThirdPartyMetric};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
     #[test]
     fn increments_per_sev_counter() {
-        let counter_opts = Opts::new("test_counter", "test counter help");
-        let counter = IntCounterVec::new(counter_opts, &["severity"]).unwrap();
-        let r = Registry::new();
-        r.register(Box::new(counter.clone())).unwrap();
+        let r = MetricsRegistry::new();
+        let counter: ThirdPartyMetric<IntCounterVec> = r.register_third_party_visible(metric!(
+            name: "test_counter",
+            help: "a test counter",
+            var_labels: ["severity"],
+        ));
         tracing_subscriber::registry()
             .with(MetricsRecorderLayer::new(counter))
             .init();
@@ -172,6 +177,8 @@ mod test {
         (0..5).for_each(|_| warn!("a warning"));
         error!("test error");
         error!("test error");
+
+        println!("gathered: {:?}", r.gather());
 
         let metric = r
             .gather()

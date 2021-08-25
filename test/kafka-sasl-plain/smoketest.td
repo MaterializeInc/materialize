@@ -71,6 +71,26 @@ a
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ kafka-verify format=avro sink=materialize.public.data_snk
+$ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}
 {"before": null, "after": {"row": {"a": 2}}}
+
+# Check environment variables; defined in mzcompose.yml
+
+> CREATE MATERIALIZED SOURCE env_pw_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      security_protocol = 'SASL_SSL',
+      sasl_mechanisms = 'PLAIN',
+      sasl_username = 'materialize',
+      sasl_password_env = 'SASL_PASSWORD',
+      ssl_ca_location = '/share/secrets/ca.crt'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM env_pw_data
+a
+---
+1
+2

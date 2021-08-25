@@ -8,20 +8,37 @@
 // by the Apache License, Version 2.0.
 
 //! Functionality for creating S3 sources
+//!
+//! This source is constructed as a collection of Tokio tasks that communicate over local
+//! (worker-pinned) queues to send data into dataflow. We spin up a single "downloader" task which
+//! is responsible for performing s3 object downloads and shuffling the data into dataflow. Then,
+//! for each object source, we spin up another task which is responsible for collecting object names
+//! from an object name source and sending that name to the downloader.
+//!
+//! ```text
+//! +----------------+
+//! | bucket scanner +-                               -------
+//! +----------------+ \---                         -/       \-
+//! +----------------+     \--   +------------+    /           \
+//! | sqs listener   +--------X->| downloader +--->| dataflow  |
+//! +----------------+     /--   +------------+    \           /
+//!        .  .  .  .   /--                         -\       /-
+//!       etc .  .  . --                              -------
+//!        .  .  .  .
+//! ```
 
 use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
+use std::fmt::Formatter;
 use std::io::Read;
 use std::ops::AddAssign;
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
-use anyhow::{anyhow, Error};
+use anyhow::anyhow;
 use flate2::read::MultiGzDecoder;
+use futures::FutureExt;
 use globset::GlobMatcher;
-use metrics::BucketMetrics;
-use notifications::Event;
-use repr::MessagePayload;
+use rusoto_core::RusotoError;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
@@ -29,7 +46,7 @@ use rusoto_sqs::{
 };
 use timely::scheduling::SyncActivator;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc as tokio_mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
@@ -37,12 +54,18 @@ use dataflow_types::{
     Compression, ExternalSourceConnector, MzOffset, S3KeySource, SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
+use metrics::BucketMetrics;
+use notifications::Event;
+use repr::MessagePayload;
 
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 use self::metrics::ScanBucketMetrics;
 use self::notifications::{EventType, TestEvent};
+use ore::retry::Retry;
+
+use super::metrics::SourceBaseMetrics;
 
 mod metrics;
 mod notifications;
@@ -61,9 +84,19 @@ pub struct S3SourceReader {
     /// Unique source ID
     id: SourceInstanceId,
     /// Receiver channel that ingests records
-    receiver_stream: Receiver<Result<InternalMessage, Error>>,
+    receiver_stream: Receiver<S3Result<InternalMessage>>,
+    dataflow_status: tokio::sync::watch::Sender<DataflowStatus>,
     /// Total number of records that this source has read
     offset: S3Offset,
+}
+
+/// Current dataflow status
+///
+/// Used to signal the S3 and SQS services to shut down
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum DataflowStatus {
+    Running,
+    Stopped,
 }
 
 /// Number of records This source has downloaded
@@ -92,16 +125,19 @@ struct KeyInfo {
 
 async fn download_objects_task(
     source_id: String,
-    mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
-    tx: SyncSender<anyhow::Result<InternalMessage>>,
+    mut rx: Receiver<S3Result<KeyInfo>>,
+    tx: Sender<S3Result<InternalMessage>>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
     compression: Compression,
+    metrics: SourceBaseMetrics,
 ) {
-    let client = match aws_util::client::s3(aws_info).await {
+    let client = match aws_util::client::s3(aws_info) {
         Ok(client) => client,
         Err(e) => {
-            tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
+            tx.send(Err(S3Error::ClientConstructionFailed(e)))
+                .await
                 .unwrap_or_else(|e| {
                     log::debug!("unable to send error on stream creating s3 client: {}", e)
                 });
@@ -115,55 +151,121 @@ async fn download_objects_task(
     }
     let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
 
-    while let Some(msg) = rx.recv().await {
+    loop {
+        let msg = tokio::select! {
+            msg = rx.recv() => {
+                if let Some(msg) = msg {
+                    msg
+                } else {
+                    break;
+                }
+            }
+            status = shutdown_rx.changed() => {
+                if status.is_ok() {
+                    if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
+                        log::debug!("source_id={} download_objects received dataflow shutdown message", source_id);
+                        break;
+                    }
+                }
+                continue;
+            }
+        };
+
         match msg {
             Ok(msg) => {
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
-                    let is_new = bi.keys.insert(msg.key.clone());
-                    if !is_new {
+                    if bi.keys.contains(&msg.key) {
                         bi.metrics.objects_duplicate.inc();
+                        log::debug!(
+                            "source_id={} skipping object because it was already seen: {}/{}",
+                            source_id,
+                            msg.bucket,
+                            msg.key
+                        );
                         continue;
                     }
                 } else {
-                    let mut keys = HashSet::new();
-                    keys.insert(msg.key.clone());
                     let bi = BucketInfo {
-                        keys,
-                        metrics: BucketMetrics::new(&source_id, &msg.bucket),
+                        keys: HashSet::new(),
+                        metrics: BucketMetrics::new(&metrics, &source_id, &msg.bucket),
                     };
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
 
-                let update = download_object(
-                    &tx,
-                    &activator,
-                    &client,
-                    msg.bucket.clone(),
-                    msg.key,
-                    compression,
-                )
-                .await;
+                let (tx, activator, client, msg_ref, sid) =
+                    (&tx, &activator, &client, &msg, &source_id);
 
+                let result = Retry::default()
+                    .retry(|state| async move {
+                        let (download_status, update) = download_object(
+                            tx,
+                            &activator,
+                            &client,
+                            &msg_ref.bucket,
+                            &msg_ref.key,
+                            compression,
+                            sid,
+                        )
+                        .await;
+
+                        match download_status {
+                            // Exit retry loop
+                            DownloadStatus::Ok => Ok((DownloadStatus::Ok, update)),
+                            DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
+                            // Retriable error
+                            DownloadStatus::Retry(e) => {
+                                log::debug!(
+                                    "Failed to download object: {}/{} (attempt {})",
+                                    msg_ref.bucket,
+                                    msg_ref.key,
+                                    state.i
+                                );
+                                Err((DownloadStatus::Retry(e), update))
+                            }
+                        }
+                    })
+                    .await;
+                // We use Result to communicate with Retry, both variants have the same data
+                let (status, update) = match result {
+                    Err((status, update)) | Ok((status, update)) => (status, update),
+                };
+                let bucket_info = seen_buckets.get_mut(&msg.bucket).expect("just inserted");
                 if let Some(update) = update {
-                    seen_buckets
-                        .get_mut(&msg.bucket)
-                        .expect("just inserted")
-                        .metrics
-                        .inc(1, update.bytes, update.messages);
-                    if update.sent == Sent::SenderClosed {
+                    bucket_info.metrics.inc(1, update.bytes, update.messages);
+                }
+                // Extract and handle status updates
+                match status {
+                    // Retry making it out of the retry loop means retries failed
+                    DownloadStatus::Retry(e) => {
+                        if tx.send(Err(e)).await.is_err() {
+                            rx.close();
+                            break;
+                        };
+                    }
+                    DownloadStatus::SendFailed => {
                         rx.close();
                         break;
                     }
-                }
+                    DownloadStatus::Ok => {
+                        log::debug!(
+                            "source_id={} successfully downloaded {}/{}",
+                            source_id,
+                            msg.bucket,
+                            msg.key
+                        );
+                        bucket_info.keys.insert(msg.key);
+                    }
+                };
             }
             Err(e) => {
-                if tx.send(Err(e)).is_err() {
+                if tx.send(Err(e)).await.is_err() {
+                    rx.close();
                     break;
                 }
             }
         }
     }
-    log::debug!("exiting download objects task source_id={}", source_id);
+    log::debug!("source_id={} exiting download objects task", source_id);
 }
 
 async fn scan_bucket_task(
@@ -171,12 +273,13 @@ async fn scan_bucket_task(
     source_id: String,
     glob: Option<GlobMatcher>,
     aws_info: aws::ConnectInfo,
-    tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
+    tx: Sender<S3Result<KeyInfo>>,
+    base_metrics: SourceBaseMetrics,
 ) {
-    let client = match aws_util::client::s3(aws_info).await {
+    let client = match aws_util::client::s3(aws_info) {
         Ok(client) => client,
         Err(e) => {
-            tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
+            tx.send(Err(S3Error::ClientConstructionFailed(e)))
                 .await
                 .unwrap_or_else(|e| {
                     log::debug!("unable to send error on stream creating s3 client: {}", e)
@@ -197,7 +300,8 @@ async fn scan_bucket_task(
     if is_literal_object {
         let key = glob.unwrap().glob().glob();
         log::debug!(
-            "downloading single object from s3 bucket={} key={}",
+            "source_id={} downloading single object from s3 bucket={} key={}",
+            source_id,
             bucket,
             key
         );
@@ -208,35 +312,39 @@ async fn scan_bucket_task(
             }))
             .await
         {
-            log::debug!("Unable to send single key to downloader: {}", e);
+            log::debug!(
+                "source_id={} Unable to send single key to downloader: {}",
+                source_id,
+                e
+            );
         };
 
         return;
     } else {
         log::debug!(
-            "scanning bucket to find objects to download bucket={}",
+            "source_id={} scanning bucket to find objects to download bucket={}",
+            source_id,
             bucket
         );
     }
 
-    let scan_metrics = ScanBucketMetrics::new(&source_id, &bucket);
+    let scan_metrics = ScanBucketMetrics::new(&base_metrics, &source_id, &bucket);
 
     let mut continuation_token = None;
-    let mut allowed_errors = 10;
     loop {
-        let response = client
-            .list_objects_v2(ListObjectsV2Request {
-                bucket: bucket.clone(),
-                prefix: prefix.clone(),
-                continuation_token: continuation_token.clone(),
-                ..Default::default()
+        let response = Retry::default()
+            .retry(|_| {
+                client.list_objects_v2(ListObjectsV2Request {
+                    bucket: bucket.clone(),
+                    prefix: prefix.clone(),
+                    continuation_token: continuation_token.clone(),
+                    ..Default::default()
+                })
             })
             .await;
 
         match response {
             Ok(response) => {
-                allowed_errors = 10;
-
                 if let Some(c) = response.contents {
                     let keys = c
                         .into_iter()
@@ -267,25 +375,25 @@ async fn scan_bucket_task(
                 continuation_token = response.next_continuation_token;
             }
             Err(e) => {
-                allowed_errors -= 1;
-                if allowed_errors == 0 {
-                    log::error!("failed to list bucket {}: {}", bucket, e);
-                    break;
-                } else {
-                    log::warn!(
-                        "unable to list bucket {}: {} ({} retries remaining)",
-                        bucket,
-                        e,
-                        allowed_errors
-                    );
-                }
+                let err_string = format!("{}", e);
+                tx.send(Err(S3Error::ListObjectsFailed(e)))
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::debug!("unable to send error on listing objects: {}", e)
+                    });
 
-                time::sleep(Duration::from_secs(1)).await;
+                log::error!("failed to list bucket {}: {}", bucket, err_string);
+                tx.send(Err(S3Error::RetryFailed))
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::debug!("unable to send error on retries failed: {}", e)
+                    });
+                break;
             }
         }
     }
     log::debug!(
-        "exiting bucket scan task source_id={} bucket={}",
+        "source_id={} exiting bucket scan task bucket={}",
         source_id,
         bucket
     );
@@ -296,21 +404,27 @@ async fn read_sqs_task(
     glob: Option<GlobMatcher>,
     queue: String,
     aws_info: aws::ConnectInfo,
-    tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
+    tx: Sender<S3Result<KeyInfo>>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
+    base_metrics: SourceBaseMetrics,
 ) {
     log::debug!(
-        "starting read sqs task queue={} source_id={}",
+        "source_id={} starting read sqs task queue={}",
+        source_id,
         queue,
-        source_id
     );
 
-    let client = match aws_util::client::sqs(aws_info).await {
+    let client = match aws_util::client::sqs(aws_info) {
         Ok(client) => client,
         Err(e) => {
-            tx.send(Err(anyhow!("Unable to create sqs client: {}", e)))
+            tx.send(Err(S3Error::ClientConstructionFailed(e)))
                 .await
                 .unwrap_or_else(|e| {
-                    log::debug!("unable to send error on stream creating sqs client: {}", e)
+                    log::debug!(
+                        "source_id={} unable to send error on stream creating sqs client: {}",
+                        source_id,
+                        e
+                    )
                 });
             return;
         }
@@ -344,22 +458,40 @@ async fn read_sqs_task(
 
     let mut allowed_errors = 10;
     'outer: loop {
-        let response = client
-            .receive_message(ReceiveMessageRequest {
-                max_number_of_messages: Some(10),
-                queue_url: queue_url.clone(),
-                visibility_timeout: Some(500),
-                // the maximum possible time for a long poll
-                wait_time_seconds: Some(20),
-                ..Default::default()
-            })
-            .await;
+        let sqs_fut = client.receive_message(ReceiveMessageRequest {
+            max_number_of_messages: Some(10),
+            queue_url: queue_url.clone(),
+            visibility_timeout: Some(500),
+            // the maximum possible time for a long poll
+            wait_time_seconds: Some(20),
+            ..Default::default()
+        });
+        let response = tokio::select! {
+            response = sqs_fut => response,
+            status = shutdown_rx.changed() => {
+                if status.is_ok() {
+                    if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
+                        log::debug!("source_id={} scan_sqs received dataflow shutdown message", source_id);
+                        break;
+                    }
+                }
+                continue;
+            }
+        };
 
         match response {
             Ok(response) => {
                 let messages = if let Some(m) = response.messages {
                     if tx.is_closed() {
-                        release_messages(&client, None, m.into_iter(), queue_url.clone()).await;
+                        release_messages(
+                            &client,
+                            None,
+                            m.into_iter(),
+                            queue_url.clone(),
+                            &source_id,
+                            None,
+                        )
+                        .await;
                         break;
                     }
 
@@ -374,9 +506,10 @@ async fn read_sqs_task(
 
                 let mut msgs_iter = messages.into_iter();
                 while let Some(message) = msgs_iter.next() {
-                    let cancelled_message = process_message(
+                    let cancelled = process_message(
                         message,
                         glob,
+                        base_metrics.clone(),
                         &mut metrics,
                         &source_id,
                         &tx,
@@ -384,9 +517,16 @@ async fn read_sqs_task(
                         &queue_url,
                     )
                     .await;
-                    if cancelled_message.is_some() {
-                        release_messages(&client, cancelled_message, msgs_iter, queue_url.clone())
-                            .await;
+                    if let Some((cancelled_message, key)) = cancelled {
+                        release_messages(
+                            &client,
+                            Some(cancelled_message),
+                            msgs_iter,
+                            queue_url.clone(),
+                            &source_id,
+                            Some(key),
+                        )
+                        .await;
                         break 'outer;
                     }
                 }
@@ -410,33 +550,40 @@ async fn read_sqs_task(
             }
         }
     }
-    log::debug!("exiting sqs reader source_id={} queue={}", source_id, queue);
+    log::debug!("source_id={} exiting sqs reader queue={}", source_id, queue);
 }
 
 /// Send the relevant parts of the message to the download objects task
 ///
 /// Returns any message that wasn't able to be processed to be released back to
-/// the SQS service.
+/// the SQS service, as well as the specific key that we failed to process from
+/// that message.
 async fn process_message(
     message: rusoto_sqs::Message,
     glob: Option<&GlobMatcher>,
+    base_metrics: SourceBaseMetrics,
     metrics: &mut HashMap<String, ScanBucketMetrics>,
     source_id: &str,
-    tx: &tokio_mpsc::Sender<Result<KeyInfo, Error>>,
+    tx: &Sender<S3Result<KeyInfo>>,
     client: &rusoto_sqs::SqsClient,
     queue_url: &str,
-) -> Option<rusoto_sqs::Message> {
+) -> Option<(rusoto_sqs::Message, String)> {
     if let Some(body) = message.body.as_ref() {
         let event: Result<Event, _> = serde_json::from_str(body);
         match event {
             Ok(event) => {
                 if event.records.is_empty() {
-                    log::debug!("sqs event is surpsingly empty {:#?}", event);
+                    log::debug!(
+                        "source_id={} sqs event is surprisingly empty {:#?}",
+                        source_id,
+                        event
+                    );
                 }
 
                 for record in event.records {
                     log::trace!(
-                        "processing message from sqs for key={} type={:?}",
+                        "source_id={} processing message from sqs for key={} type={:?}",
+                        source_id,
                         record.s3.object.key,
                         record.event_type
                     );
@@ -452,18 +599,25 @@ async fn process_message(
                             if let Some(m) = metrics.get(&record.s3.bucket.name) {
                                 m.objects_discovered.inc()
                             } else {
-                                let m = ScanBucketMetrics::new(&source_id, &record.s3.bucket.name);
+                                let m = ScanBucketMetrics::new(
+                                    &base_metrics,
+                                    &source_id,
+                                    &record.s3.bucket.name,
+                                );
                                 m.objects_discovered.inc();
                                 metrics.insert(record.s3.bucket.name.clone(), m);
                             }
 
                             let ki = Ok(KeyInfo {
                                 bucket: record.s3.bucket.name,
-                                key,
+                                key: key.clone(),
                             });
                             if tx.send(ki).await.is_err() {
-                                log::info!("sqs reader is closed, marking message as visible");
-                                return Some(message);
+                                log::debug!(
+                                    "source_id={} sqs reader is closed, marking message as visible",
+                                    source_id
+                                );
+                                return Some((message, key));
                             }
                         }
                     }
@@ -496,7 +650,11 @@ async fn process_message(
         })
         .await
     {
-        log::warn!("Error deleting processed SQS message: {}", e)
+        log::warn!(
+            "source_id={} Error deleting processed SQS message: {}",
+            source_id,
+            e
+        )
     }
 
     None
@@ -506,47 +664,87 @@ async fn process_message(
 struct DownloadMetricUpdate {
     bytes: u64,
     messages: u64,
-    sent: Sent,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Sent {
-    Success,
-    SenderClosed,
+#[derive(Debug)]
+enum DownloadStatus {
+    Ok,
+    Retry(S3Error),
+    SendFailed,
 }
+
+#[derive(Debug)]
+enum S3Error {
+    BodyMissing(String),
+    ClientConstructionFailed(anyhow::Error),
+    Decode(String, std::io::Error),
+    GetObjectError {
+        bucket: String,
+        key: String,
+        err: RusotoError<rusoto_s3::GetObjectError>,
+    },
+    ListObjectsFailed(RusotoError<rusoto_s3::ListObjectsV2Error>),
+    Read(std::io::Error),
+    RetryFailed,
+}
+
+impl std::fmt::Display for S3Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            S3Error::BodyMissing(body) => write!(f, "Get object response had no body: {}", body),
+            S3Error::ClientConstructionFailed(err) => err.fmt(f),
+            S3Error::Decode(key, err) => {
+                write!(f, "Failed to decode object {} using gzip: {}", key, err)
+            }
+            S3Error::GetObjectError { bucket, key, err } => {
+                write!(f, "getting object {}/{}: {}", bucket, key, err)
+            }
+            S3Error::ListObjectsFailed(err) => err.fmt(f),
+            S3Error::Read(err) => err.fmt(f),
+            S3Error::RetryFailed => write!(f, "Retry failed to produce result"),
+        }
+    }
+}
+
+type S3Result<R> = Result<R, S3Error>;
 
 async fn download_object(
-    tx: &SyncSender<anyhow::Result<InternalMessage>>,
+    tx: &Sender<S3Result<InternalMessage>>,
     activator: &SyncActivator,
     client: &S3Client,
-    bucket: String,
-    key: String,
+    bucket: &str,
+    key: &str,
     compression: Compression,
-) -> Option<DownloadMetricUpdate> {
+    source_id: &str,
+) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
     let obj = match client
         .get_object(GetObjectRequest {
-            bucket: bucket.clone(),
+            bucket: bucket.to_string(),
             key: key.to_string(),
             ..Default::default()
         })
         .await
     {
         Ok(obj) => obj,
-        Err(e) => {
-            tx.send(Err(anyhow!("Unable to GET object: {}", e)))
-                .unwrap_or_else(|e| log::debug!("unable to send error on stream: {}", e));
-            return None;
+        Err(err) => {
+            return (
+                DownloadStatus::Retry(S3Error::GetObjectError {
+                    bucket: bucket.to_string(),
+                    key: key.to_string(),
+                    err,
+                }),
+                None,
+            );
         }
     };
 
     // If the Content-Type does not match the compression specified for this
-    // source, emit a debug warning messages and ignore this object
+    // source, emit a debug message and trust the user-specified compression
     if let Some(s) = obj.content_encoding.as_deref() {
         match (s, compression) {
             ("gzip", Compression::Gzip) => (),
             ("identity", Compression::None) => (),
-            // TODO: switch to `("identity" | "gzip", _)` when or_patterns stabilizes
-            ("identity", _) | ("gzip", _) => {
+            ("identity" | "gzip", _) => {
                 log::debug!("object {} has mismatched Content-Type: {}", key, s)
             }
             _ => log::debug!("object {} has unrecognized Content-Type: {}", key, s),
@@ -557,15 +755,14 @@ async fn download_object(
         let mut reader = body.into_async_read();
         // unwrap is safe because content length is not allowed to be negative
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
-        let mut messages = 0;
-        let mut bytes_read = 0;
 
-        let mut sent = Sent::Success;
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
-                let activate = !buf.is_empty();
+                if buf.is_empty() {
+                    return (DownloadStatus::Ok, None);
+                }
 
-                bytes_read = buf.len() as u64;
+                let bytes_read = buf.len() as u64;
 
                 let buf = match compression {
                     Compression::None => buf,
@@ -575,72 +772,67 @@ async fn download_object(
                         match decoder.read_to_end(&mut decoded) {
                             Ok(_) => {}
                             Err(e) => {
-                                if let Err(e) = tx.send(Err(anyhow!(
-                                    "Failed to decode object {} using gzip: {}",
-                                    key,
-                                    e
-                                ))) {
-                                    log::debug!("unable to send error on stream: {}", e);
-                                }
-                                return Some(DownloadMetricUpdate {
+                                let metrics = DownloadMetricUpdate {
                                     bytes: bytes_read,
-                                    messages,
-                                    sent: Sent::SenderClosed,
-                                });
+                                    messages: 0,
+                                };
+                                return (
+                                    DownloadStatus::Retry(S3Error::Decode(key.into(), e)),
+                                    Some(metrics),
+                                );
                             }
                         }
                         decoded
                     }
                 };
 
+                let mut messages = 0;
                 let mut chunk_idx = 0;
                 const CHUNK_SIZE: usize = 4096;
+                let mut download_status = DownloadStatus::Ok;
                 while chunk_idx < buf.len() {
                     let chunk_bound = std::cmp::min(chunk_idx + CHUNK_SIZE, buf.len());
                     let chunk = (&buf[chunk_idx..chunk_bound]).to_vec();
-                    if tx
-                        .send(Ok(InternalMessage {
-                            record: MessagePayload::Data(chunk),
-                        }))
-                        .is_err()
-                    {
-                        sent = Sent::SenderClosed;
+                    let sent = tx.send(Ok(InternalMessage {
+                        record: MessagePayload::Data(chunk),
+                    }));
+                    if sent.await.is_err() {
+                        log::debug!("source_id={} unable to send chunk to dataflow", source_id);
+                        download_status = DownloadStatus::SendFailed;
                         break;
                     } else {
                         messages += 1;
                     }
                     chunk_idx = chunk_bound;
                 }
-                log::trace!("sent {} chunks to reader", messages);
-                if sent != Sent::SenderClosed {
-                    if let Err(e) = tx.send(Ok(InternalMessage {
+                log::trace!("sent {} chunks to dataflow", messages);
+                if !matches!(download_status, DownloadStatus::SendFailed) {
+                    let sent = tx.send(Ok(InternalMessage {
                         record: MessagePayload::EOF,
-                    })) {
-                        log::debug!("unable to send EOF on stream: {}", e);
+                    }));
+                    if sent.await.is_err() {
+                        log::debug!("source_id={} unable to send EOF to dataflow", source_id);
+                        download_status = DownloadStatus::SendFailed;
                     }
-                }
-                if activate {
-                    activator.activate().expect("s3 reader activation failed");
-                }
+                };
+                activator.activate().expect("s3 reader activation failed");
+                (
+                    download_status,
+                    Some(DownloadMetricUpdate {
+                        bytes: bytes_read,
+                        messages,
+                    }),
+                )
             }
             Err(e) => {
-                if let Err(e) = tx.send(Err(anyhow!("Unable to read object: {}", e))) {
-                    log::debug!("unable to send error on stream: {}", e);
-                    sent = Sent::SenderClosed;
-                }
+                return (DownloadStatus::Retry(S3Error::Read(e)), None);
             }
         }
-
-        Some(DownloadMetricUpdate {
-            bytes: bytes_read,
-            messages,
-            sent,
-        })
     } else {
-        if let Err(e) = tx.send(Err(anyhow!("Get object response had no body: {}", key))) {
-            log::debug!("unable to send error on stream: {}", e);
-        }
-        None
+        return (
+            DownloadStatus::Retry(S3Error::BodyMissing(key.into())),
+            None,
+        );
     }
 }
 
@@ -653,6 +845,7 @@ impl SourceReader for S3SourceReader {
         connector: ExternalSourceConnector,
         _encoding: SourceDataEncoding,
         _: Option<Logger>,
+        metrics: SourceBaseMetrics,
     ) -> Result<(S3SourceReader, Option<PartitionId>), anyhow::Error> {
         let s3_conn = match connector {
             ExternalSourceConnector::S3(s3_conn) => s3_conn,
@@ -662,43 +855,61 @@ impl SourceReader for S3SourceReader {
         };
 
         // a single arbitrary worker is responsible for scanning the bucket
-        let receiver = {
-            let (dataflow_tx, dataflow_rx) = std::sync::mpsc::sync_channel(10_000);
-            let (keys_tx, keys_rx) = tokio_mpsc::channel(10_000);
+        let (receiver, shutdowner) = {
+            let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(10_000);
+            let (keys_tx, keys_rx) = tokio::sync::mpsc::channel(10_000);
+            let (shutdowner, shutdown_rx) = tokio::sync::watch::channel(DataflowStatus::Running);
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
+
             tokio::spawn(download_objects_task(
                 source_id.to_string(),
                 keys_rx,
                 dataflow_tx,
+                shutdown_rx.clone(),
                 aws_info.clone(),
                 consumer_activator,
                 s3_conn.compression,
+                metrics.clone(),
             ));
             for key_source in s3_conn.key_sources {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
-                        log::debug!("reading s3 bucket={} worker={}", bucket, worker_id);
+                        log::debug!(
+                            "source_id={} reading s3 bucket={} worker={}",
+                            source_id,
+                            bucket,
+                            worker_id
+                        );
                         tokio::spawn(scan_bucket_task(
                             bucket,
                             source_id.to_string(),
                             glob.clone(),
                             aws_info.clone(),
                             keys_tx.clone(),
+                            metrics.clone(),
                         ));
                     }
                     S3KeySource::SqsNotifications { queue } => {
+                        log::debug!(
+                            "source_id={} reading sqs queue={} worker={}",
+                            source_id,
+                            queue,
+                            worker_id
+                        );
                         tokio::spawn(read_sqs_task(
                             source_id.to_string(),
                             glob.clone(),
                             queue,
                             aws_info.clone(),
                             keys_tx.clone(),
+                            shutdown_rx.clone(),
+                            metrics.clone(),
                         ));
                     }
                 }
             }
-            dataflow_rx
+            (dataflow_rx, shutdowner)
         };
 
         Ok((
@@ -706,6 +917,7 @@ impl SourceReader for S3SourceReader {
                 source_name,
                 id: source_id,
                 receiver_stream: receiver,
+                dataflow_status: shutdowner,
                 offset: S3Offset(0),
             },
             Some(PartitionId::None),
@@ -713,8 +925,8 @@ impl SourceReader for S3SourceReader {
     }
 
     fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
-        match self.receiver_stream.try_recv() {
-            Ok(Ok(InternalMessage { record })) => {
+        match self.receiver_stream.recv().now_or_never() {
+            Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
                     partition: PartitionId::None,
@@ -724,18 +936,37 @@ impl SourceReader for S3SourceReader {
                     payload: Some(record),
                 }))
             }
-            Ok(Err(e)) => {
+            Some(Some(Err(e))) => {
                 log::warn!(
                     "when reading source '{}' ({}): {}",
                     self.source_name,
                     self.id,
                     e
                 );
-                Err(e)
+                match e {
+                    S3Error::ClientConstructionFailed(err) => {
+                        Err(anyhow!("Client construction failed: {}", err))
+                    }
+                    S3Error::RetryFailed => Err(anyhow!("Retry failed")),
+                    S3Error::BodyMissing(_)
+                    | S3Error::Decode(_, _)
+                    | S3Error::GetObjectError { .. }
+                    | S3Error::ListObjectsFailed(_)
+                    | S3Error::Read(_) => Ok(NextMessage::Pending),
+                }
             }
-            Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
-            Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
+            None => Ok(NextMessage::Pending),
+            Some(None) => Ok(NextMessage::Finished),
         }
+    }
+}
+
+impl Drop for S3SourceReader {
+    fn drop(&mut self) {
+        log::debug!("source_id={} Dropping S3SourceReader", self.id);
+        if let Err(e) = self.dataflow_status.send(DataflowStatus::Stopped) {
+            log::warn!("unable to send shutdown update: {}", e);
+        };
     }
 }
 
@@ -747,6 +978,8 @@ async fn release_messages(
     message: Option<rusoto_sqs::Message>,
     messages: impl Iterator<Item = rusoto_sqs::Message>,
     queue_url: String,
+    source_id: &str,
+    failed_key: Option<String>,
 ) {
     if let Err(e) = client
         .change_message_visibility_batch(ChangeMessageVisibilityBatchRequest {
@@ -757,9 +990,9 @@ async fn release_messages(
                 .enumerate()
                 .map(|(i, receipt_handle)| {
                     log::debug!(
-                        "releasing message receipt_handle={} queue_url={}",
-                        receipt_handle,
-                        queue_url
+                        "source_id={} releasing message unprocessed_key={}",
+                        source_id,
+                        failed_key.as_deref().unwrap_or("<none>")
                     );
                     ChangeMessageVisibilityBatchRequestEntry {
                         id: i.to_string(),

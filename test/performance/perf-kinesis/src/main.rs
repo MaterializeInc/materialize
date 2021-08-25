@@ -63,7 +63,7 @@ async fn run() -> Result<(), anyhow::Error> {
     // Initialize test resources in Kinesis.
     let region: Region = args.aws_region.parse().context("parsing AWS region")?;
     let kinesis_client =
-        aws_util::client::kinesis(aws::ConnectInfo::new(region, None, None, None)?).await?;
+        aws_util::client::kinesis(aws::ConnectInfo::new(region, None, None, None)?)?;
     let stream_arn =
         kinesis::create_stream(&kinesis_client, &stream_name, args.shard_count).await?;
     log::info!("Created Kinesis stream {}", stream_name);

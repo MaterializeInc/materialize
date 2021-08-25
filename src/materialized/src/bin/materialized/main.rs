@@ -36,11 +36,16 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
+use chrono::Utc;
 use clap::AppSettings;
+use coord::PersistConfig;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{info, warn};
-use prometheus::{register_int_counter_vec, IntCounterVec};
+use log::info;
+use ore::cgroup::{detect_memory_limit, MemoryLimit};
+use ore::metric;
+use ore::metrics::ThirdPartyMetric;
+use ore::metrics::{raw::IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 
@@ -55,7 +60,7 @@ type OptionalDuration = Option<Duration>;
 fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
     match s {
         "off" => Ok(None),
-        _ => Ok(Some(parse_duration::parse(s)?)),
+        _ => Ok(Some(repr::util::parse_duration(s)?)),
     }
 }
 
@@ -89,9 +94,32 @@ struct Args {
     #[structopt(long, hidden = true)]
     safe: bool,
 
-    /// Enable persistent tables. Has to be used with --experimental.
     #[structopt(long)]
-    persistent_tables: bool,
+    disable_user_indexes: bool,
+
+    /// The address on which metrics visible to "third parties" get exposed.
+    ///
+    /// These metrics are structured to allow an infrastructure provider to monitor an installation
+    /// without needing access to more sensitive data, like names of sources/sinks.
+    ///
+    /// This address is never served TLS-encrypted or authenticated, and while only "non-sensitive"
+    /// metrics are served from it, care should be taken to not expose the listen address to the
+    /// public internet or other unauthorized parties.
+    #[structopt(
+        long,
+        hidden = true,
+        value_name = "HOST:PORT",
+        env = "MZ_THIRD_PARTY_METRICS_ADDR"
+    )]
+    third_party_metrics_listen_addr: Option<SocketAddr>,
+
+    /// Enable persistent user tables. Has to be used with --experimental.
+    #[structopt(long, hidden = true)]
+    persistent_user_tables: bool,
+
+    /// Enable persistent system tables. Has to be used with --experimental.
+    #[structopt(long, hidden = true)]
+    persistent_system_tables: bool,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -101,7 +129,7 @@ struct Args {
     #[structopt(long, hidden = true)]
     debug_introspection: bool,
     /// Retain prometheus metrics for this amount of time.
-    #[structopt(short, long, hidden = true, parse(try_from_str = parse_duration::parse), default_value = "5min")]
+    #[structopt(short, long, hidden = true, parse(try_from_str = repr::util::parse_duration), default_value = "5min")]
     retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
@@ -120,18 +148,12 @@ struct Args {
     #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
     /// Default frequency with which to advance timestamps
-    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str = parse_duration::parse), value_name = "DURATION", default_value = "1s")]
+    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
+    /// Default frequency with which to scrape prometheus metrics
+    #[structopt(long, env = "MZ_METRICS_SCRAPING_FREQUENCY", hidden = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1s")]
+    metrics_scraping_frequency: OptionalDuration,
 
-    /// Maximum number of source records to buffer in memory before flushing to
-    /// disk.
-    #[structopt(
-        long,
-        env = "MZ_CACHE_MAX_PENDING_RECORDS",
-        value_name = "N",
-        default_value = "1000000"
-    )]
-    cache_max_pending_records: usize,
     /// [ADVANCED] Timely progress tracking mode.
     #[structopt(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
     timely_progress_mode: timely::worker::ProgressMode,
@@ -169,8 +191,13 @@ struct Args {
     /// in a directive to suppress all log messages, even errors.
     ///
     /// The default value for this option is "info".
-    #[structopt(long, env = "MZ_LOG_FILTER", value_name = "FILTER")]
-    log_filter: Option<String>,
+    #[structopt(
+        long,
+        env = "MZ_LOG_FILTER",
+        value_name = "FILTER",
+        default_value = "info"
+    )]
+    log_filter: String,
 
     // == Connection options.
     /// The address on which to listen for connections.
@@ -257,11 +284,14 @@ struct Args {
     // TODO(benesch): add an environment variable once we upgrade to clap v3.
     // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
     /// Disable telemetry reporting.
-    #[structopt(long, conflicts_with = "telemetry-url")]
+    #[structopt(long, conflicts_with_all = &["telemetry-domain", "telemetry-interval"])]
     disable_telemetry: bool,
-    /// The URL of the telemetry server to report to.
-    #[structopt(long, env = "MZ_TELEMETRY_URL", hidden = true)]
-    telemetry_url: Option<String>,
+    /// The domain hosting the telemetry server.
+    #[structopt(long, env = "MZ_TELEMETRY_DOMAIN", hidden = true)]
+    telemetry_domain: Option<String>,
+    /// The interval at which to report telemetry data.
+    #[structopt(long, env = "MZ_TELEMETRY_INTERVAL", parse(try_from_str = repr::util::parse_duration), hidden = true)]
+    telemetry_interval: Option<Duration>,
 }
 
 /// This type is a hack to allow a dynamic default for the `--workers` argument,
@@ -271,7 +301,12 @@ struct WorkerCount(usize);
 
 impl Default for WorkerCount {
     fn default() -> Self {
-        WorkerCount(cmp::max(1, num_cpus::get_physical() / 2))
+        WorkerCount(cmp::max(
+            1,
+            // When inside a cgroup with a cpu limit,
+            // the logical cpus can be lower than the physical cpus.
+            cmp::min(num_cpus::get(), num_cpus::get_physical()) / 2,
+        ))
     }
 }
 
@@ -330,12 +365,14 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Configure Timely and Differential workers.
     let log_logging = args.debug_introspection;
     let retain_readings_for = args.retain_prometheus_metrics;
+    let metrics_scraping_frequency = args.metrics_scraping_frequency;
     let logging = args
         .introspection_frequency
         .map(|granularity| coord::LoggingConfig {
             granularity,
             log_logging,
             retain_readings_for,
+            metrics_scraping_frequency,
         });
     if log_logging && logging.is_none() {
         bail!(
@@ -381,63 +418,30 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
-    // Configure source caching.
-    let cache = if args.experimental {
-        let cache_directory = data_directory.join("cache");
-        fs::create_dir_all(&cache_directory).with_context(|| {
-            format!(
-                "creating source caching directory: {}",
-                cache_directory.display()
-            )
-        })?;
-
-        Some(coord::CacheConfig {
-            max_pending_records: args.cache_max_pending_records,
-            path: cache_directory,
-        })
-    } else {
-        None
-    };
-
-    let persistence = if args.experimental && args.persistent_tables {
-        let traces_path = data_directory.join("table_traces");
-        let wals_path = data_directory.join("table_wals");
-        fs::create_dir_all(&traces_path).with_context(|| {
-            format!(
-                "trying to create traces directory: {}",
-                traces_path.display()
-            )
-        })?;
-        fs::create_dir_all(&wals_path)
-            .with_context(|| format!("trying to create wal directory: {}", wals_path.display()))?;
-
-        Some(coord::PersistenceConfig {
-            traces_path,
-            wals_path,
-        })
-    } else if args.persistent_tables {
-        bail!("cannot specify --persistent-tables without --experimental");
-    } else {
-        None
-    };
-
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
-    // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry
-    // URL. Otherwise (the defaults), enable the production server for release mode
-    // and disable telemetry in debug mode. This should allow for good defaults (on
-    // in release, off in debug), but also easy development during testing of this
-    // feature via the environment variable.
-    let telemetry_url = match args.disable_telemetry {
-        true => None,
-        false => match args.telemetry_url {
-            Some(url) => Some(url),
-            None => match cfg!(debug_assertions) {
-                true => None,
-                false => Some("https://telemetry.materialize.com".into()),
-            },
-        },
+    // custom telemetry domain or interval is provided, enable telemetry as
+    // specified. Otherwise (the defaults), enable the production server for
+    // release mode and disable telemetry in debug mode. This should allow for
+    // good defaults (on in release, off in debug), but also easy development
+    // during testing of this feature via the command-line flags.
+    let telemetry = if args.disable_telemetry
+        || (cfg!(debug_assertions)
+            && args.telemetry_domain.is_none()
+            && args.telemetry_interval.is_none())
+    {
+        None
+    } else {
+        Some(materialized::TelemetryConfig {
+            domain: args
+                .telemetry_domain
+                .unwrap_or_else(|| "cloud.materialize.com".into()),
+            interval: args
+                .telemetry_interval
+                .unwrap_or_else(|| Duration::from_secs(3600)),
+        })
     };
 
+    let metrics_registry = MetricsRegistry::new();
     // Configure tracing.
     {
         use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -447,34 +451,25 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
         use crate::tracing::FilterLayer;
 
-        // TODO(benesch): remove the MZ_LOG fallback and move the default into
-        // structopt when sufficient time has passed (say, June 2021).
-        let directives = args
-            .log_filter
-            .or_else(|| env::var("MZ_LOG").ok())
-            .unwrap_or_else(|| "info".into());
-
-        let env_filter = EnvFilter::try_new(directives)
+        let env_filter = EnvFilter::try_new(args.log_filter)
             .context("parsing --log-filter option")?
             // Ensure panics are logged, even if the user has specified
             // otherwise.
             .add_directive("panic=error".parse().unwrap());
 
-        lazy_static! {
-            static ref LOG_MESSAGE_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_log_message_total",
-                "The number of log messages produced by this materialized instance",
-                &["severity"]
-            )
-            .unwrap();
-        }
+        let log_message_counter: ThirdPartyMetric<IntCounterVec> = metrics_registry
+            .register_third_party_visible(metric!(
+                name: "mz_log_message_total",
+                help: "The number of log messages produced by this materialized instance",
+                var_labels: ["severity"],
+            ));
 
         match args.log_file.as_deref() {
             Some("stderr") => {
                 // The user explicitly directed logs to stderr. Log only to stderr
                 // with the user-specified `env_filter`.
                 tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(LOG_MESSAGE_COUNTER.clone()))
+                    .with(MetricsRecorderLayer::new(log_message_counter))
                     .with(env_filter)
                     .with(
                         fmt::layer()
@@ -491,7 +486,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     None => LevelFilter::WARN,
                 };
                 tracing_subscriber::registry()
-                    .with(MetricsRecorderLayer::new(LOG_MESSAGE_COUNTER.clone()))
+                    .with(MetricsRecorderLayer::new(log_message_counter))
                     .with(env_filter)
                     .with({
                         let path = match log_file {
@@ -524,7 +519,23 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Configure prometheus process metrics.
-    mz_process_collector::register_default_process_collector()?;
+    mz_process_collector::register_default_process_collector(&metrics_registry);
+
+    // When inside a cgroup with a cpu limit,
+    // the logical cpus can be lower than the physical cpus.
+    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let memory_limit = detect_memory_limit().unwrap_or_else(|| MemoryLimit {
+        max: None,
+        swap_max: None,
+    });
+    let memory_max_str = match memory_limit.max {
+        Some(max) => format!(", {}KiB limit", max / 1024),
+        None => "".to_owned(),
+    };
+    let swap_max_str = match memory_limit.swap_max {
+        Some(max) => format!(", {}KiB limit", max / 1024),
+        None => "".to_owned(),
+    };
 
     // Print system information as the very first thing in the logs. The goal is
     // to increase the probability that we can reproduce a reported bug if all
@@ -537,15 +548,21 @@ materialized {mz_version}
 {dep_versions}
 invoked as: {invocation}
 os: {os}
-cpus: {ncpus_logical} logical, {ncpus_physical} physical
+cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
 cpu0: {cpu0}
-memory: {memory_total}KB total, {memory_used}KB used
-swap: {swap_total}KB total, {swap_used}KB used",
+memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
+swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
-            env::vars()
+            env::vars_os()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
                 .filter(|(name, _value)| name.starts_with("MZ_"))
                 .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
                 .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
@@ -554,14 +571,19 @@ swap: {swap_total}KB total, {swap_used}KB used",
         os = os_info::get(),
         ncpus_logical = num_cpus::get(),
         ncpus_physical = num_cpus::get_physical(),
+        ncpus_useful = ncpus_useful,
         cpu0 = {
-            let cpu0 = &system.get_processors()[0];
-            format!("{} {}MHz", cpu0.get_brand(), cpu0.get_frequency())
+            match &system.processors().get(0) {
+                None => "<unknown>".to_string(),
+                Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
+            }
         },
-        memory_total = system.get_total_memory(),
-        memory_used = system.get_used_memory(),
-        swap_total = system.get_total_swap(),
-        swap_used = system.get_used_swap(),
+        memory_total = system.total_memory(),
+        memory_used = system.used_memory(),
+        memory_limit = memory_max_str,
+        swap_total = system.total_swap(),
+        swap_used = system.used_swap(),
+        swap_limit = swap_max_str,
     );
 
     sys::adjust_rlimits();
@@ -579,6 +601,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
     // Start Tokio runtime.
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(ncpus_useful)
             // The default thread name exceeds the Linux limit on thread name
             // length, so pick something shorter.
             .thread_name_fn(|| {
@@ -590,24 +613,59 @@ swap: {swap_total}KB total, {swap_used}KB used",
             .build()?,
     );
 
+    // Configure persistence core.
+    let persist_config = {
+        let user_table_enabled = if args.experimental && args.persistent_user_tables {
+            true
+        } else if args.persistent_user_tables {
+            bail!("cannot specify --persistent-user-tables without --experimental");
+        } else {
+            false
+        };
+        let system_table_enabled = if args.experimental && args.persistent_system_tables {
+            true
+        } else if args.persistent_system_tables {
+            bail!("cannot specify --persistent-system-tables without --experimental");
+        } else {
+            false
+        };
+        let lock_info = format!(
+            "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
+            mz_version = materialized::BUILD_INFO.human_version(),
+            os = os_info::get(),
+            start_time = Utc::now(),
+            num_workers = args.workers.0,
+        );
+        PersistConfig {
+            // TODO: These paths are hardcoded for now, but we'll want to make
+            // them configurable once we add additional Log and Blob impls.
+            blob_path: data_directory.join("persist").join("blob"),
+            user_table_enabled,
+            system_table_enabled,
+            lock_info,
+        }
+    };
+
     let server = runtime.block_on(materialized::serve(materialized::Config {
         workers: args.workers.0,
         timely_worker,
         logging,
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
-        cache,
-        persistence,
         listen_addr: args.listen_addr,
+        third_party_metrics_listen_addr: args.third_party_metrics_listen_addr,
         tls,
         data_directory,
         symbiosis_url: args.symbiosis,
         experimental_mode: args.experimental,
+        disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
-        telemetry_url,
+        telemetry,
         introspection_frequency: args
             .introspection_frequency
             .unwrap_or_else(|| Duration::from_secs(1)),
+        metrics_registry,
+        persist: persist_config,
     }))?;
 
     eprintln!(
@@ -624,6 +682,20 @@ to improve both our software and your queries! Please reach out at:
 =======================================================================
 "
     );
+
+    if args.disable_user_indexes {
+        eprintln!(
+            "************************************************************************
+                                NOTE!
+************************************************************************
+Starting Materialize with user indexes disabled.
+
+For more details, see
+    https://materialize.com/docs/cli#user-indexes-disabled
+************************************************************************
+"
+        );
+    }
 
     if args.experimental {
         eprintln!(
@@ -645,16 +717,6 @@ longer be started in non-experimental/regular mode.
 For more details, see https://materialize.com/docs/cli#experimental-mode
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 "
-        );
-    }
-
-    // TODO(benesch): remove this message when sufficient time has passed
-    // (say, June 2021).
-    if env::var_os("MZ_LOG").is_some() {
-        warn!(
-            "The MZ_LOG environment variable is deprecated and will be removed \
-            in a future release. Use the MZ_LOG_FILTER environment variable or \
-            the --log-filter command-line option instead."
         );
     }
 

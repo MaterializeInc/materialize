@@ -13,7 +13,7 @@
 version: "3.7"
 services:
   kdc:
-    build: kdc
+    mzbuild: kafka-krb5-kdc
     volumes:
       - secrets:/var/lib/secret
       - ./kdc/krb5.conf:/etc/krb5.conf
@@ -27,15 +27,10 @@ services:
       - ./kdc/krb5.conf:/etc/krb5.conf
       - ./sasl.jaas.config:/etc/zookeeper/sasl.jaas.config
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      - ZOOKEEPER_CLIENT_PORT=2181
       # Despite the environment variable name, these are JVM options that are
       # passed through to Zookeeper.
-      KAFKA_OPTS: >-
-        -Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider
-        -Dzookeeper.sessionRequireClientSASLAuth=true
-        -Djava.security.auth.login.config=/etc/zookeeper/sasl.jaas.config
-        -Djava.security.krb5.conf=/etc/krb5.conf
-        -Dsun.security.krb5.debug=true
+      - KAFKA_OPTS=-Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider -Dzookeeper.sessionRequireClientSASLAuth=true -Djava.security.auth.login.config=/etc/zookeeper/sasl.jaas.config -Djava.security.krb5.conf=/etc/krb5.conf -Dsun.security.krb5.debug=true
 
   kafka:
     image: confluentinc/cp-kafka:5.5.4
@@ -47,31 +42,24 @@ services:
       - ./kdc/krb5.conf:/etc/krb5.conf
       - ./sasl.jaas.config:/etc/kafka/sasl.jaas.config
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka:9092
-      KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
-      KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_OPTS: >-
-        -Dzookeeper.sasl.client.canonicalize.hostname=false
-        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
-        -Djava.security.krb5.conf=/etc/krb5.conf
+      - KAFKA_BROKER_ID=1
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_ADVERTISED_LISTENERS=SASL_PLAINTEXT://kafka:9092
+      - KAFKA_INTER_BROKER_LISTENER_NAME=SASL_PLAINTEXT
+      - KAFKA_SASL_KERBEROS_SERVICE_NAME=kafka
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_OPTS=-Dzookeeper.sasl.client.canonicalize.hostname=false -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config -Djava.security.krb5.conf=/etc/krb5.conf
 
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
     environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: SASL_PLAINTEXT://kafka:9092
-      SCHEMA_REGISTRY_KAFKASTORE_SASL_KERBEROS_SERVICE_NAME: kafka
-      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: SASL_PLAINTEXT
-      KAFKA_OPTS: >-
-        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
-        -Djava.security.krb5.conf=/etc/krb5.conf
-      SCHEMA_REGISTRY_OPTS: >-
-        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
-        -Djava.security.krb5.conf=/etc/krb5.conf
+      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+      - SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081
+      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=SASL_PLAINTEXT://kafka:9092
+      - SCHEMA_REGISTRY_KAFKASTORE_SASL_KERBEROS_SERVICE_NAME=kafka
+      - SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL=SASL_PLAINTEXT
+      - KAFKA_OPTS=-Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config -Djava.security.krb5.conf=/etc/krb5.conf
+      - SCHEMA_REGISTRY_OPTS=-Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config -Djava.security.krb5.conf=/etc/krb5.conf
     volumes:
       - secrets:/var/lib/secret
       - ./kdc/krb5.conf:/etc/krb5.conf
@@ -111,7 +99,7 @@ services:
       - ../../:/workdir
       - secrets:/share/secrets
       - ./kdc/krb5.conf:/etc/krb5.conf
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     init: true
     depends_on: [kdc, kafka, zookeeper, materialized, schema-registry]
 

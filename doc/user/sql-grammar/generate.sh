@@ -18,7 +18,7 @@ cd "$(dirname "$0")"
 dest=../layouts/partials/sql-grammar
 
 # Clean up files from last run.
-rm -rf scratch $dest
+rm -rf scratch
 
 # Run the railroad diagram generator, using a pinned version from our custom
 # fork.
@@ -29,7 +29,7 @@ mkdir scratch
 (
     cd scratch
     unzip -j ../diagrams.zip
-    rm ../diagrams.zip Railroad-Diagram-Generator.svg index.html
+    rm ../diagrams.zip rr-1.62.svg index.html
     for f in *; do
         # Rewrite any underscores in filenames to hyphens, for consistency with
         # other Hugo partials.
@@ -38,4 +38,10 @@ mkdir scratch
         fi
     done
 )
+
+rm -rf $dest
 mv scratch $dest
+
+# ping hugo again
+sleep 3
+touch "$dest"/*

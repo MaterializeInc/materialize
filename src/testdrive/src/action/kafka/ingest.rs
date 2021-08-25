@@ -14,6 +14,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
+use ore::display::DisplayExt;
+use ore::result::ResultExt;
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 
@@ -30,8 +32,6 @@ pub struct IngestAction {
     key_format: Option<Format>,
     timestamp: Option<i64>,
     publish: bool,
-    corrupt_keys: bool,
-    corrupt_values: bool,
     rows: Vec<String>,
     repeat: isize,
 }
@@ -44,6 +44,8 @@ enum Format {
     },
     Protobuf {
         message: protobuf::MessageType,
+        schema: Option<String>,
+        confluent_wire_format: bool,
     },
     Bytes {
         terminator: Option<u8>,
@@ -73,19 +75,11 @@ impl Transcoder {
         let deserializer = serde_json::Deserializer::from_reader(row);
         match deserializer.into_iter().next() {
             None => Ok(None),
-            Some(r) => r
-                .map(Some)
-                .map_err(|e| format!("parsing json: {}", e.to_string())),
+            Some(r) => r.map(Some).map_err(|e| format!("parsing json: {:#}", e)),
         }
     }
 
-    /// Take an encoded row and return the results transcoded into the desired format
-    ///
-    /// #Arguments
-    ///
-    /// * `corrupt_buffer`: A boolean flag to determine if the transcoder should
-    ///   corrupt the results in an encoding aware fashion
-    fn transcode<R>(&self, mut row: R, corrupt_buffer: bool) -> Result<Option<Vec<u8>>, String>
+    fn transcode<R>(&self, mut row: R) -> Result<Option<Vec<u8>>, String>
     where
         R: BufRead,
     {
@@ -107,63 +101,48 @@ impl Transcoder {
                         out.write_u8(0).unwrap();
                         out.write_i32::<NetworkEndian>(*schema_id).unwrap();
                     }
-                    out.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
-                    if corrupt_buffer {
-                        for x in &mut out {
-                            // We need to corrupt zero-values for Avro, because 0 is always an okay default
-                            *x = match &x {
-                                0 => 1,
-                                _ => *x ^ (*x >> 1),
-                            }
-                        }
-                    }
+                    out.extend(avro::to_avro_datum(&schema, val).map_err_to_string()?);
                     Ok(Some(out))
                 } else {
                     Ok(None)
                 }
             }
             Transcoder::Protobuf { message } => {
-                let val: Box<dyn protobuf::Message> = match message {
+                fn convert<T: protobuf::Message>(decoded: T) -> Box<dyn protobuf::Message> {
+                    let d: Box<dyn protobuf::Message> = Box::new(decoded);
+                    d
+                }
+                let val = match message {
                     protobuf::MessageType::Batch => {
-                        let decoded = Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?;
-                        if let Some(decoded) = decoded {
-                            Box::new(decoded)
-                        } else {
-                            return Ok(None);
-                        }
+                        Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?.map(convert)
+                    }
+                    protobuf::MessageType::Measurement => {
+                        Self::decode_json::<_, protobuf::gen::billing::Measurement>(row)?
+                            .map(convert)
                     }
                     protobuf::MessageType::Struct => {
-                        let decoded = Self::decode_json::<_, protobuf::gen::simple::Struct>(row)?;
-                        if let Some(decoded) = decoded {
-                            Box::new(decoded)
-                        } else {
-                            return Ok(None);
-                        }
+                        Self::decode_json::<_, protobuf::gen::simple::Struct>(row)?.map(convert)
+                    }
+                    protobuf::MessageType::SimpleId => {
+                        Self::decode_json::<_, protobuf::gen::simple::SimpleId>(row)?.map(convert)
                     }
                 };
-                let mut out = val.write_to_bytes().map_err(|e| e.to_string())?;
-                if corrupt_buffer {
-                    for x in &mut out {
-                        // Zero-ing out bytes is sufficient to corrupt Protobuf data
-                        *x = 0;
-                    }
-                }
-                Ok(Some(out))
+                let val = if let Some(decoded) = val {
+                    decoded
+                } else {
+                    return Ok(None);
+                };
+                Ok(Some(val.write_to_bytes().map_err_to_string()?))
             }
             Transcoder::Bytes { terminator } => {
                 let mut out = vec![];
                 match terminator {
                     Some(t) => {
-                        row.read_until(*t, &mut out).map_err(|e| e.to_string())?;
+                        row.read_until(*t, &mut out).map_err_to_string()?;
                         out.pop();
                     }
                     None => {
-                        row.read_to_end(&mut out).map_err(|e| e.to_string())?;
-                    }
-                }
-                if corrupt_buffer {
-                    for x in &mut out {
-                        *x = 0;
+                        row.read_to_end(&mut out).map_err_to_string()?;
                     }
                 }
                 Ok(Some(bytes::unescape(&out)?))
@@ -181,9 +160,16 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             schema: cmd.args.string("schema")?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         },
-        "protobuf" => Format::Protobuf {
-            message: cmd.args.parse("message")?,
-        },
+        "protobuf" => {
+            let message = cmd.args.parse("message")?;
+            let schema = cmd.args.opt_parse::<String>("schema")?;
+            let confluent_wire_format = cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true);
+            Format::Protobuf {
+                message,
+                schema,
+                confluent_wire_format,
+            }
+        }
         "bytes" => Format::Bytes { terminator: None },
         f => return Err(format!("unknown format: {}", f)),
     };
@@ -192,9 +178,16 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             schema: cmd.args.string("key-schema")?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         }),
-        Some("protobuf") => Some(Format::Protobuf {
-            message: cmd.args.parse("key-message")?,
-        }),
+        Some("protobuf") => {
+            let message = cmd.args.parse("key-message")?;
+            let schema = cmd.args.opt_parse::<String>("key-schema")?;
+            let confluent_wire_format = cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true);
+            Some(Format::Protobuf {
+                message,
+                schema,
+                confluent_wire_format,
+            })
+        }
         Some("bytes") => Some(Format::Bytes {
             terminator: match cmd.args.opt_parse::<char>("key-terminator")? {
                 Some(c) if c.is_ascii() => Some(c as u8),
@@ -206,8 +199,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         None => None,
     };
     let timestamp = cmd.args.opt_parse("timestamp")?;
-    let corrupt_keys = cmd.args.opt_parse("corrupt-keys")?.unwrap_or(false);
-    let corrupt_values = cmd.args.opt_parse("corrupt-values")?.unwrap_or(false);
     let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
     cmd.args.done()?;
 
@@ -218,8 +209,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         key_format,
         timestamp,
         publish,
-        corrupt_keys,
-        corrupt_values,
         rows: cmd.input,
         repeat,
     })
@@ -264,7 +253,7 @@ impl Action for IngestAction {
                     let schema_id = if self.publish {
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
                         let schema_id = ccsr_client
-                            .publish_schema(&ccsr_subject, &schema)
+                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Avro)
                             .await
                             .map_err(|e| format!("schema registry error: {}", e))?;
                         schema_id
@@ -272,14 +261,26 @@ impl Action for IngestAction {
                         1
                     };
                     let schema = avro::parse_schema(&schema)
-                        .map_err(|e| format!("parsing avro schema: {}", e))?;
+                        .map_err(|e| format!("parsing avro schema: {}\nschema={}", e, schema))?;
                     Ok::<_, String>(Transcoder::Avro {
                         schema,
                         schema_id,
                         confluent_wire_format,
                     })
                 }
-                Format::Protobuf { message } => Ok(Transcoder::Protobuf { message }),
+                Format::Protobuf {
+                    message, schema, ..
+                } => {
+                    if self.publish {
+                        let schema = schema.expect("schema");
+                        let ccsr_subject = format!("{}-{}", topic_name, typ);
+                        ccsr_client
+                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Protobuf)
+                            .await
+                            .map_err(|e| format!("schema registry error: {}", e))?;
+                    }
+                    Ok(Transcoder::Protobuf { message })
+                }
                 Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
             }
         };
@@ -297,9 +298,11 @@ impl Action for IngestAction {
                 let mut row = row.as_bytes();
                 let key = match &key_transcoder {
                     None => None,
-                    Some(kt) => kt.transcode(&mut row, self.corrupt_keys)?,
+                    Some(kt) => kt.transcode(&mut row)?,
                 };
-                let value = value_transcoder.transcode(&mut row, self.corrupt_values)?;
+                let value = value_transcoder
+                    .transcode(&mut row)
+                    .map_err(|e| format!("parsing row: {} {}", String::from_utf8_lossy(row), e))?;
                 let producer = &state.kafka_producer;
                 let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
                 futs.push(async move {
@@ -319,7 +322,7 @@ impl Action for IngestAction {
             }
         }
         while let Some(res) = futs.next().await {
-            res.map_err(|(e, _message)| e.to_string())?;
+            res.map_err(|(e, _message)| e.to_string_alt())?;
         }
         Ok(())
     }

@@ -9,7 +9,7 @@
 
 > CREATE MATERIALIZED SOURCE mz_source
   FROM POSTGRES
-  HOST 'host=toxiproxy port=5432 user=postgres password=postgres dbname=postgres'
+  CONNECTION 'host=toxiproxy port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source'
 
 > CREATE MATERIALIZED VIEWS FROM SOURCE mz_source;

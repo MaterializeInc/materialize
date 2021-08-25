@@ -65,7 +65,7 @@ SELECT (LIST[[[[1], [2]]], [[[3]]]])::text
 {{{{1},{2}}},{{{3}}}}
 
 # List(Int) cannot be cast to List(List(Int))
-query error CAST does not support casting from integer list to integer list list
+query error LIST expression cannot be cast to uniform type: integer vs integer list
 SELECT LIST[1, null] :: INT LIST LIST
 
 query T
@@ -1681,6 +1681,42 @@ SELECT ('{a,  }'::text list)::text
 query error invalid input syntax for type list: malformed literal; missing element: "\{  ,a\}"
 SELECT ('{  ,a}'::text list)::text
 
+# 🔬🔬🔬🔬 homogeneous text lists
+query T
+SELECT (LIST['ab'::char, 'cd'::varchar, 'ef'::text])::text
+----
+{a,cd,ef}
+
+# 🔬🔬 char lists
+# ensures that the list type does not pick up an elements' typmod
+
+query error char list not yet supported
+SELECT LIST['abc'::char(1), 'abc'::char(2), 'abc'::char(3)]::text;
+
+query error char list not yet supported
+SELECT LIST['abc'::char(3), 'abc'::char(2), 'abc'::char(1)]::text;
+
+query error char list not yet supported
+SELECT pg_typeof(LIST['abc'::char(1), 'abc'::char(2), 'abc'::char(3)]);
+
+# 🔬🔬 varchar lists
+# ensures that the list type does not pick up an elements' typmod
+
+query T
+SELECT LIST['abc'::varchar(1), 'abc'::varchar(2), 'abc'::varchar(3)]::text;
+----
+{a,ab,abc}
+
+query T
+SELECT LIST['abc'::varchar(3), 'abc'::varchar(2), 'abc'::varchar(1)]::text;
+----
+{abc,ab,a}
+
+query T
+SELECT pg_typeof(LIST['abc'::varchar(1), 'abc'::varchar(2), 'abc'::varchar(3)]);
+----
+character varying list
+
 # 🔬 Built-in operations
 
 # 🔬🔬 concatenation (||)
@@ -1703,17 +1739,28 @@ SELECT (LIST[1] || '{2}')::text
 ----
 {1,2}
 
-# Differently scaled decimals are implicitly castable to one another
+# Differently scaled numerics are implicitly castable to one another
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '{2.3}'::numeric(38,0) list)::text;
 ----
-{1.20000,2.00000}
+{1.2,2}
 
 # ...including on multiple dimensions
 query T
 SELECT ('{{1.2}}'::numeric(38,5) list list || '{{2.3}}'::numeric(38,0) list list)::text;
 ----
-{{1.20000},{2.00000}}
+{{1.2},{2}}
+
+# Determining common list element type for numerics does not rescale values
+query T
+SELECT LIST[1.234::numeric(39,2), 2.345]::text;
+----
+{1.23,2.345}
+
+query T
+SELECT LIST[1.234::numeric(39,2), 2.345]::numeric(39, 2) list::text;
+----
+{1.23,2.35}
 
 # 🔬🔬🔬 list + element
 
@@ -1725,7 +1772,7 @@ SELECT (LIST[1, 2] || 3)::text
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '2.3'::numeric(38,0))::text;
 ----
-{1.20000,2.00000}
+{1.2,2}
 
 # 🔬🔬🔬 element + list
 
@@ -1737,7 +1784,7 @@ SELECT (1 || LIST[2, 3])::text
 query T
 SELECT ('1.2'::numeric(38,5) || '{2.3}'::numeric(38,0) list)::text;
 ----
-{1.20000,2.00000}
+{1.2,2}
 
 # 🔬🔬🔬 list list + list (list + element)
 
@@ -1749,7 +1796,7 @@ SELECT (LIST[[1], [2]] || LIST[3])::text
 query T
 SELECT ('{{1.2}}'::numeric(38,5) list list || '{2.3}'::numeric(38,0) list)::text;
 ----
-{{1.20000},{2.00000}}
+{{1.2},{2}}
 
 # 🔬🔬🔬 list + list list (element + list)
 
@@ -1761,7 +1808,7 @@ SELECT (LIST[1] || LIST[[2], [3]])::text
 query T
 SELECT ('{1.2}'::numeric(38,5) list || '{{2.3}}'::numeric(38,0) list list)::text;
 ----
-{{1.20000},{2.00000}}
+{{1.2},{2}}
 
 # 🔬🔬🔬 NULL elements
 
@@ -2084,7 +2131,7 @@ CREATE TYPE numeric_list_c AS LIST (element_type=numeric);
 query T
 SELECT '{1.23,2.34}'::numeric_list_c::text
 ----
-{1,2}
+{1.23,2.34}
 
 statement ok
 CREATE TYPE jsonb_list_c AS LIST (element_type=jsonb);
@@ -2137,17 +2184,17 @@ SELECT (1 || '{2}'::int4_list_c)::text;
 query T
 SELECT ('{1.2,2.3}'::numeric_list_c)::text;
 ----
-{1,2}
+{1.2,2.3}
 
 query T
-SELECT ('{1.2,2.3}'::numeric_list_c::numeric(38,5) list)::text;
+SELECT ('{1.2,2.34567890}'::numeric_list_c::numeric(38,5) list)::text;
 ----
-{1.00000,2.00000}
+{1.2,2.34568}
 
 query T
 SELECT ('{1.2,2.3}'::numeric(38,5) list::numeric_list_c)::text;
 ----
-{1,2}
+{1.2,2.3}
 
 # 🔬 Implicit casts between custom types
 
@@ -2264,3 +2311,96 @@ query T
 SELECT ('{{1}}'::int4_list list || '{2}'::int4 list)::text
 ----
 {{1},{2}}
+
+# list_agg
+
+query T
+SELECT list_agg(a)::text FROM (SELECT 1 AS a WHERE false)
+----
+NULL
+
+query T
+SELECT list_agg(1)::text
+----
+{1}
+
+query T
+select list_agg(unnest)::text FROM (SELECT NULL) x JOIN LATERAL unnest(ARRAY[1,2,NULL]) ON true;
+----
+{NULL,1,2}
+
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3), (NULL), (NULL)
+
+query T
+SELECT list_agg(a)::text FROM (select a from t1 where a IS NOT NULL)
+----
+{1,2,3}
+
+query T
+SELECT list_agg(a)::text FROM (select a from t1 where a IS NULL)
+----
+{NULL,NULL}
+
+query T
+SELECT list_agg(a)::text FROM t1
+----
+{NULL,NULL,1,2,3}
+
+query T
+SELECT list_agg(a::text)::text FROM t1
+----
+{NULL,NULL,1,2,3}
+
+query T
+SELECT (list_agg(a) FILTER (WHERE a IS NOT NULL))::text FROM t1
+----
+{1,2,3}
+
+query T
+SELECT (list_agg(a) FILTER (WHERE a IS NULL))::text FROM t1
+----
+{NULL,NULL}
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT list_agg(1, 2)
+
+statement ok
+CREATE TABLE t2 (a int, b date)
+
+statement ok
+INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
+
+query T
+SELECT list_agg((a, b))::text FROM t2
+----
+{"(,2020-01-02)","(1,2020-01-01)"}
+
+query TTT
+SELECT list_agg((a, b))::text, list_agg(a)::text, list_agg(b)::text FROM t2
+----
+{"(,2020-01-02)","(1,2020-01-01)"}  {NULL,1}  {2020-01-01,2020-01-02}
+
+query T
+SELECT list_agg(ARRAY[1])::text
+----
+{{1}}
+
+query error list_agg on char
+SELECT list_agg('a'::char)::text
+
+query error list_agg on char
+SELECT list_agg('a'::char(2))::text
+
+query T
+SELECT list_agg(a)::text FROM (VALUES ('{1,2}'::int list), ('{3}'), (NULL)) v(a);
+----
+{NULL,{3},{1,2}}
+
+query T
+SELECT list_agg(a)::text FROM (VALUES (array[1,2]), (array[3]), (NULL)) v(a);
+----
+{NULL,{3},{1,2}}

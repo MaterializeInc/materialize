@@ -7,32 +7,70 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use lazy_static::lazy_static;
+use expr::GlobalId;
+use ore::metrics::MetricsRegistry;
+use ore::{
+    metric,
+    metrics::{raw::UIntCounterVec, raw::UIntGaugeVec, UIntGauge},
+};
 
-use prometheus::register_uint_gauge_vec;
-use prometheus::UIntGaugeVec;
-use prometheus::{register_int_counter_vec, IntCounterVec};
-use prometheus_static_metric::make_static_metric;
+use crate::decode::{DataDecoderInner, PreDelimitedFormat};
 
-make_static_metric! {
-    pub struct EventsRead: IntCounter {
-        "format" => { avro, csv, protobuf, raw, text, regex },
-        "status" => { success, error }
-    }
+/// Metrics specific to a single worker.
+#[derive(Clone, Debug)]
+pub struct Metrics {
+    events_read: UIntCounterVec,
+    debezium_upsert_count: UIntGaugeVec,
 }
 
-lazy_static! {
-    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
-        "mz_dataflow_events_read_total",
-        "Count of events we have read from the wire",
-        &["format", "status"]
-    )
-    .unwrap();
-    pub static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
-    pub(crate) static ref DEBEZIUM_UPSERT_COUNT: UIntGaugeVec = register_uint_gauge_vec!(
-        "mz_source_debezium_upsert_state_size",
-        "The number of keys that we are tracking in an upsert map.",
-        &["source_id", "worker_id"]
-    )
-    .unwrap();
+impl Metrics {
+    pub fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            events_read: registry.register(metric!(
+                name: "mz_dataflow_events_read_total",
+                help: "Count of events we have read from the wire",
+                var_labels: ["format", "status"],
+            )),
+            debezium_upsert_count: registry.register(metric!(
+                        name: "mz_source_debezium_upsert_state_size",
+                        help: "The number of keys that we are tracking in an upsert map.",
+                        var_labels: ["source_id", "worker_id"],
+            )),
+        }
+    }
+
+    fn counter_inc(&self, decoder: &DataDecoderInner, success: bool, n: usize) {
+        let format_label = match decoder {
+            DataDecoderInner::Avro(_) => "avro",
+            DataDecoderInner::Csv(_) => "csv",
+            DataDecoderInner::DelimitedBytes { format, .. }
+            | DataDecoderInner::PreDelimited(format) => match format {
+                PreDelimitedFormat::Bytes => "raw",
+                PreDelimitedFormat::Text => "text",
+                PreDelimitedFormat::Regex(..) => "regex",
+                PreDelimitedFormat::Protobuf(..) => "protobuf",
+            },
+        };
+        let success_label = if success { "success" } else { "error" };
+        self.events_read
+            .with_label_values(&[format_label, success_label])
+            .inc_by(n as u64);
+    }
+
+    pub(crate) fn count_successes(&self, decoder: &DataDecoderInner, n: usize) {
+        self.counter_inc(decoder, true, n);
+    }
+
+    pub(crate) fn count_errors(&self, decoder: &DataDecoderInner, n: usize) {
+        self.counter_inc(decoder, true, n);
+    }
+
+    pub(crate) fn debezium_upsert_count_for(
+        &self,
+        src_id: GlobalId,
+        dataflow_id: usize,
+    ) -> UIntGauge {
+        self.debezium_upsert_count
+            .with_label_values(&[&src_id.to_string(), &dataflow_id.to_string()])
+    }
 }

@@ -30,20 +30,94 @@ steps
 | Union %0 %1
 
 ====
-No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants] }], limit: 100 }, Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
+No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }
 ====
-Final:
-%0 =
+Applied Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
+%0 = Let l0 =
 | Get x (u0)
 | Filter #0
 
 %1 =
+| Union %0 %0
+
+====
+No change: Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project
+====
+Applied RelationCSE:
+%0 = Let l0 =
+| Get x (u0)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| Filter #0
+
+%2 = Let l2 =
+| Union %1 %1
+
+%3 =
+| Get %2 (l2)
+
+====
+Applied InlineLet:
+%0 = Let l1 =
 | Get x (u0)
 | Filter #0
 
-%2 =
-| Union %0 %1
+%1 =
+| Union %0 %0
+
+====
+Applied UpdateLet:
+%0 = Let l0 =
+| Get x (u0)
+| Filter #0
+
+%1 =
+| Union %0 %0
+
+====
+No change: FoldConstants { limit: Some(10000) }
+====
+Final:
+%0 = Let l0 =
+| Get x (u0)
+| Filter #0
+
+%1 =
+| Union %0 %0
 
 ====
 ----
 ----
+
+steps in=json format=test
+{"Filter":{"input":{"Join":{"inputs":[{"Get":{"id":{"Global":{"User":210}},"typ":{"column_types":[{"scalar_type":"Int64","nullable":true},{"scalar_type":"Int64","nullable":true}],"keys":[]}}},{"Get":{"id":{"Global":{"User":0}},"typ":{"column_types":[{"scalar_type":"Int64","nullable":true},{"scalar_type":"Int64","nullable":true}],"keys":[]}}}],"equivalences":[],"demand":null,"implementation":"Unimplemented"}},"predicates":[{"CallBinary":{"func":"Or","expr1":{"CallBinary":{"func":"And","expr1":{"CallUnary":{"func":"IsNull","expr":{"Column":0}}},"expr2":{"CallUnary":{"func":"IsNull","expr":{"Column":2}}}}},"expr2":{"CallBinary":{"func":"Eq","expr1":{"Column":0},"expr2":{"CallBinary":{"func":"AddInt64","expr1":{"Column":2},"expr2":{"Literal":[{"Ok":{"data":[5,1,0,0,0,0,0,0,0]}},{"scalar_type":"Int64","nullable":false}]}}}}}}}]}}
+----
+(Filter (Join [(get u210) (get x)] [] null Unimplemented) [(CallBinary Or (CallBinary And (CallUnary IsNull #0) (CallUnary IsNull #2)) (CallBinary Eq #0 (CallBinary AddInt64 #2 (1 Int64))))])
+====
+No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }
+====
+Applied Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
+(Join [(get u210) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null Unimplemented)
+====
+No change: Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }
+====
+Applied Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }:
+(Join [(ArrangeBy (get u210) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] [0 1 2 3] (Differential [1 null] [[0 [#0]]]))
+====
+No change: ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project
+====
+Applied RelationCSE:
+(let l0 (get u210) (let l1 (ArrangeBy (get l0) [[#0]]) (let l2 (get x) (let l3 (Join [(get l1) (get l2)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] [0 1 2 3] (Differential [1 null] [[0 [#0]]])) (get l3)))))
+====
+Applied InlineLet:
+(Join [(ArrangeBy (get u210) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] [0 1 2 3] (Differential [1 null] [[0 [#0]]]))
+====
+No change: UpdateLet, FoldConstants { limit: Some(10000) }
+====
+Final:
+(Join [(ArrangeBy (get u210) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] [0 1 2 3] (Differential [1 null] [[0 [#0]]]))
+====
+====
+Catalog defs:
+(defsource u210 ([(Int64 true) (Int64 true)] []))

@@ -203,8 +203,7 @@ There are currently three classes of sqllogictest files:
 
   2. Additional test files from CockroachDB are in
      [test/sqllogictest/cockroach](/test/sqllogictest/cockroach). Note that we
-     certainly don't pass every Cockroach sqllogictest test at the moment. You
-     can see the latest status at https://mtrlz.dev/civiz.
+     certainly don't pass every Cockroach sqllogictest test at the moment.
 
   3. Additional Materialize-specific sqllogictest files live in
      [test/sqllogictest](/test/sqllogictest).
@@ -222,42 +221,9 @@ that inhibits syncing with upstream.
 
 ### testdrive
 
-#### Overview
-
 Testdrive is a Materialize invention that feels a lot like sqllogictest, except
 it supports pluggable commands for interacting with external systems, like
-Kafka. Here's a representative snippet of a testdrive file:
-
-```
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
-{"before": null, "after": {"a": 1, "b": 1}}
-{"before": null, "after": {"a": 2, "b": 1}}
-{"before": null, "after": {"a": 3, "b": 1}}
-{"before": null, "after": {"a": 1, "b": 2}}
-
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
-{"before": null, "after": null}
-
-> SELECT * FROM data
-a b
----
-1 1
-2 1
-3 1
-1 2
-```
-
-The first two commands, the `$ kafka-ingest ...` commands, ingest some data into
-a topic named `data`. The next command, `> SELECT * FROM data` operates like a
-sqllogictest file. It runs the specified SQL command against Materialize and
-verifies the result.
-
-Commands in testdrive are introduced with a `$`, `>`, or `!` character. These
-were designed to be reminiscent of how your shell would look if you were running
-these commands manually. `$` commands take the name of a testdrive function
-(like `kafka-ingest` or `set`), followed by any number of `key=value` pairs. `>`
-and `!` introduce a SQL command that is expected to succeed or fail,
-respectively.
+Kafka. It has its own [documentation page](testdrive.md).
 
 Note that testdrive actually interacts with Materialize over the network, via
 the PostgreSQL wire protocol, so it tests more of Materialize than our
@@ -269,94 +235,6 @@ data type, like, say, `DATE`, the upstream CockroachDB sqllogictests will
 provide most of the coverage, but it's worth adding some (*very*) basic
 testdrive tests (e.g., `> SELECT DATE '1999-01-01'`) to ensure that our pgwire
 implementation is properly serializing dates.
-
-#### Usage via mzcompose
-
-The easiest way to run testdrive tests is via mzcompose.
-
-The mzcompose configuration will automatically set up all of testdrive's dependencies, including
-Zookeeper, Kafka, the Confluent Schema Registry, and mock versions of AWS S3 and Kinesis. From the
-`test/testdrive` directory:
-
-```
-TD_TEST=*.td ./mzcompose --mz-build-mode=dev run testdrive
-```
-
-Supported **environment variables** (in addition to the `--mz-build-mode` argument documented elsewhere):
-
-* `TD_TEST` (default `*.td`) is a glob of tests to run from the test/testdrive directory. The
-  default is to not run any of the "esoteric" tests.
-
-  ```
-  TD_TEST=joins.td ./mzcompose --mz-build-mode=dev run testdrive
-  ```
-
-* `AWS_REGION`/`AWS_ENDPOINT`: will be supplied to the testdrive `--aws-region`/`--aws-endpoint`
-  command line options, respectively.
-
-Supported **workflows** (target of `mzcompose run <workflow>`):
-
-* `testdrive`: Run tests with [LocalStack][] stubbing out AWS services. This allows you to run all
-  tests without needing to configure AWS credentials:
-
-  ```console
-  $ TD_TEST=*.td ./mzcompose run testdrive
-  ```
-
-* `ci`: Expect actual AWS credentials to be available (q.v. [our documentation][aws-creds-docs]),
-  either in the process environment or via AWS EC2 Profiles:
-
-  ```console
-  $ aws-vault exec scratch -- env TD_TEST=**/*.td ./mzcompose run local-aws
-  ```
-
-[aws-creds-docs]: https://handbook.dev.i.mtrlz.dev/setup/#configure-aws-vault
-
-#### Usage without mzcompose
-
-Like the [Unit Tests](#unitintegration-tests), many testdrive tests require Zookeeper, Kafka, and
-the Confluent Schema Registry, see the unit tests docs for starting them.
-
-For testdrive tests that interacts with Amazon AWS, you will need to be
-running [LocalStack][]. To install and
-run LocalStack:
-
-```shell
-$ pip install localstack
-$ START_WEB=false SERVICES=iam,sts,kinesis,s3 localstack start
-```
-
-If you've previously installed LocalStack, be sure it is v0.11 or later.
-
-Most testdrive scripts live in [test/testdrive](/test/testdrive). To run a
-testdrive script, you'll need two terminal windows open. In the first terminal,
-run Materialize:
-
-```shell
-$ cargo run --bin materialized --release
-```
-
-In the second terminal, run testdrive:
-
-```shell
-$ cargo run --bin testdrive --release -- test/testdrive/TESTFILE.td
-```
-
-If you are running services (Kafka, LocalStack, etc.) on nonstandard ports,
-you can configure the correct URLs with command-line options. Ask testdrive
-to tell you about these options with the `--help` flag:
-
-```
-cargo run --bin testdrive -- --help
-```
-
-Testdrive is the preferred system test framework when testing:
-
-* sources, sinks, and interactions with external systems in general,
-* interactions between objects in the catalog,
-* serialization of data types over the PostgreSQL wire protocol.
-
-[LocalStack]: https://github.com/localstack/localstack
 
 ## Long-running tests
 

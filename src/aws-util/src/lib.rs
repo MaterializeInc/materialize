@@ -9,7 +9,7 @@
 
 //! Internal AWS utility library for Materialize.
 
-#![deny(missing_docs, missing_debug_implementations)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 pub mod aws;
 pub mod client;

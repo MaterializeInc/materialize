@@ -37,14 +37,14 @@ pub fn handle_home(
     }))
 }
 
-pub async fn handle_static(
+pub fn handle_static(
     req: Request<Body>,
     _: &mut coord::SessionClient,
 ) -> Result<Response<Body>, anyhow::Error> {
     if req.method() == Method::GET {
         let path = req.uri().path();
-        let path = path.strip_prefix("/").unwrap_or(path);
-        match get_static_file(path).await {
+        let path = path.strip_prefix('/').unwrap_or(path);
+        match get_static_file(path) {
             Some(body) => Ok(Response::new(body)),
             None => Ok(util::error_response(StatusCode::NOT_FOUND, "not found")),
         }
@@ -57,14 +57,13 @@ pub async fn handle_static(
 const STATIC_DIR: include_dir::Dir = include_dir::include_dir!("src/http/static");
 
 #[cfg(not(feature = "dev-web"))]
-async fn get_static_file(path: &str) -> Option<Body> {
+fn get_static_file(path: &str) -> Option<Body> {
     STATIC_DIR.get_file(path).map(|f| Body::from(f.contents()))
 }
 
 #[cfg(feature = "dev-web")]
-async fn get_static_file(path: &str) -> Option<Body> {
-    use futures::future::TryFutureExt;
-    use tokio::fs;
+fn get_static_file(path: &str) -> Option<Body> {
+    use std::fs;
 
     #[cfg(not(debug_assertions))]
     compile_error!("cannot enable insecure `dev-web` feature in release mode");
@@ -76,7 +75,7 @@ async fn get_static_file(path: &str) -> Option<Body> {
         path
     );
     let prod_path = format!("{}/src/http/static/{}", env!("CARGO_MANIFEST_DIR"), path);
-    match fs::read(dev_path).or_else(|_| fs::read(prod_path)).await {
+    match fs::read(dev_path).or_else(|_| fs::read(prod_path)) {
         Ok(contents) => Some(Body::from(contents)),
         Err(e) => {
             log::debug!("dev-web failed to load static file: {}: {}", path, e);

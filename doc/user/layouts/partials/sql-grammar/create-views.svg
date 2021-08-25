@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="719" height="329">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="74" height="32" rx="10"/>
+   <rect x="31"
+         y="1"
+         width="74"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="41" y="21">CREATE</text>
+   <rect x="147" y="35" width="120" height="32" rx="10"/>
+   <rect x="145"
+         y="33"
+         width="120"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="155" y="53">MATERIALIZED</text>
+   <rect x="327" y="35" width="58" height="32" rx="10"/>
+   <rect x="325"
+         y="33"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="335" y="53">TEMP</text>
+   <rect x="327" y="79" width="106" height="32" rx="10"/>
+   <rect x="325"
+         y="77"
+         width="106"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="335" y="97">TEMPORARY</text>
+   <rect x="473" y="3" width="64" height="32" rx="10"/>
+   <rect x="471"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="481" y="21">VIEWS</text>
+   <rect x="118" y="177" width="118" height="32" rx="10"/>
+   <rect x="116"
+         y="175"
+         width="118"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="126" y="195">IF NOT EXISTS</text>
+   <rect x="276" y="145" width="60" height="32" rx="10"/>
+   <rect x="274"
+         y="143"
+         width="60"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="284" y="163">FROM</text>
+   <rect x="356" y="145" width="78" height="32" rx="10"/>
+   <rect x="354"
+         y="143"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="364" y="163">SOURCE</text>
+   <rect x="454" y="145" width="26" height="32" rx="10"/>
+   <rect x="452"
+         y="143"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="462" y="163">"</text>
+   <rect x="500" y="145" width="80" height="32"/>
+   <rect x="498" y="143" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="508" y="163">src_name</text>
+   <rect x="600" y="145" width="26" height="32" rx="10"/>
+   <rect x="598"
+         y="143"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="608" y="163">"</text>
+   <rect x="45" y="263" width="24" height="32" rx="10"/>
+   <rect x="43"
+         y="261"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="53" y="281">(</text>
+   <rect x="89" y="263" width="26" height="32" rx="10"/>
+   <rect x="87"
+         y="261"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="97" y="281">"</text>
+   <rect x="135" y="263" width="116" height="32"/>
+   <rect x="133" y="261" width="116" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="143" y="281">upstream_table</text>
+   <rect x="271" y="263" width="26" height="32" rx="10"/>
+   <rect x="269"
+         y="261"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="279" y="281">"</text>
+   <rect x="337" y="295" width="38" height="32"/>
+   <rect x="335" y="293" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="345" y="313">AS</text>
+   <rect x="395" y="295" width="26" height="32" rx="10"/>
+   <rect x="393"
+         y="293"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="403" y="313">"</text>
+   <rect x="441" y="295" width="120" height="32"/>
+   <rect x="439" y="293" width="120" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="449" y="313">new_view_name</text>
+   <rect x="581" y="295" width="26" height="32" rx="10"/>
+   <rect x="579"
+         y="293"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="589" y="313">"</text>
+   <rect x="647" y="263" width="24" height="32" rx="10"/>
+   <rect x="645"
+         y="261"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="655" y="281">)</text>
+   <path class="line"
+         d="m19 17 h2 m0 0 h10 m74 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m40 -32 h10 m0 0 h116 m-146 0 h20 m126 0 h20 m-166 0 q10 0 10 10 m146 0 q0 -10 10 -10 m-156 10 v12 m146 0 v-12 m-146 12 q0 10 10 10 m126 0 q10 0 10 -10 m-136 10 h10 m58 0 h10 m0 0 h48 m-136 -10 v20 m146 0 v-20 m-146 20 v24 m146 0 v-24 m-146 24 q0 10 10 10 m126 0 q10 0 10 -10 m-136 10 h10 m106 0 h10 m20 -76 h10 m64 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-483 142 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m20 -32 h10 m60 0 h10 m0 0 h10 m78 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m80 0 h10 m0 0 h10 m26 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-645 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h636 m-666 0 h20 m646 0 h20 m-686 0 q10 0 10 10 m666 0 q0 -10 10 -10 m-676 10 v12 m666 0 v-12 m-666 12 q0 10 10 10 m646 0 q10 0 10 -10 m-656 10 h10 m24 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m116 0 h10 m0 0 h10 m26 0 h10 m20 0 h10 m0 0 h280 m-310 0 h20 m290 0 h20 m-330 0 q10 0 10 10 m310 0 q0 -10 10 -10 m-320 10 v12 m310 0 v-12 m-310 12 q0 10 10 10 m290 0 q10 0 10 -10 m-300 10 h10 m38 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m120 0 h10 m0 0 h10 m26 0 h10 m20 -32 h10 m24 0 h10 m23 -32 h-3"/>
+   <polygon points="709 245 717 241 717 249"/>
+   <polygon points="709 245 701 241 701 249"/>
+</svg>

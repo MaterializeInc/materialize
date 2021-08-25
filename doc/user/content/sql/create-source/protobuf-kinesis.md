@@ -6,11 +6,12 @@ menu:
     parent: 'create-source'
 ---
 
+{{< beta />}}
+
 {{% create-source/intro %}}
 This document details how to connect Materialize to Protobuf-formatted Kinesis
 stream.
 
-{{< kinesis-alpha >}}
 
 {{< volatility-warning >}}Kinesis{{< /volatility-warning >}}
 
@@ -20,7 +21,15 @@ stream.
 
 {{< diagram "create-source-protobuf-kinesis.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="protobuf" envelopes="append-only" %}}
+#### `key_constraint`
+
+{{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kinesis" formats="protobuf" envelopes="append-only" keyConstraint=true %}}
 
 ## Examples
 
@@ -35,7 +44,8 @@ FROM KINESIS ARN ... WITH (
     access_key_id = ...,
     secret_access_key = ...
 )
-FORMAT PROTOBUF MESSAGE '.billing.Batch' USING '[path to schema]';
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+  USING SCHEMA FILE '[path to schema]';
 ```
 
 This creates a source that...

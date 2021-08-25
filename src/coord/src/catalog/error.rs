@@ -44,6 +44,7 @@ pub enum ErrorKind {
         depender_name: String,
     },
     Storage(rusqlite::Error),
+    Persistence(persist::error::Error),
     AmbiguousRename {
         depender: String,
         dependee: String,
@@ -53,7 +54,8 @@ pub enum ErrorKind {
     ExperimentalModeRequired,
     ExperimentalModeUnavailable,
     FailedMigration {
-        last_version: usize,
+        last_seen_version: String,
+        this_version: &'static str,
         cause: String,
     },
 }
@@ -97,6 +99,12 @@ impl From<SqlCatalogError> for Error {
     }
 }
 
+impl From<persist::error::Error> for Error {
+    fn from(e: persist::error::Error) -> Error {
+        Error::new(ErrorKind::Persistence(e))
+    }
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.kind {
@@ -123,6 +131,7 @@ impl std::error::Error for Error {
             | ErrorKind::FailedMigration { .. } => None,
             ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
+            ErrorKind::Persistence(e) => Some(e),
         }
     }
 }
@@ -174,6 +183,7 @@ impl fmt::Display for Error {
                 depender_name
             ),
             ErrorKind::Storage(e) => write!(f, "sqlite error: {}", e),
+            ErrorKind::Persistence(e) => write!(f, "persistence error: {}", e),
             ErrorKind::AmbiguousRename {
                 depender,
                 dependee,
@@ -203,13 +213,16 @@ https://materialize.com/docs/cli#experimental-mode"#
 more details, see https://materialize.com/docs/cli#experimental-mode"#
             ),
             ErrorKind::FailedMigration {
-                last_version,
+                last_seen_version,
+                this_version,
                 cause,
-            } => write!(
-                f,
-                "migration from catalog content version {} failed: {}",
-                last_version, cause,
-            ),
+            } => {
+                write!(
+                    f,
+                    "cannot migrate from catalog version {} to version {} (earlier versions might still work): {}",
+                    last_seen_version, this_version, cause
+                )
+            }
         }
     }
 }

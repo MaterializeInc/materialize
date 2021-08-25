@@ -15,6 +15,7 @@ use std::path::{self, PathBuf};
 
 use async_trait::async_trait;
 
+use ore::result::ResultExt;
 use ore::retry::Retry;
 
 use crate::action::{Action, Context, State, SyncAction};
@@ -55,11 +56,11 @@ impl SyncAction for WriteAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Writing to {}", path.display());
-        let mut file = File::create(path).map_err(|e| e.to_string())?;
-        let schema =
-            avro::parse_schema(&self.schema).map_err(|e| format!("parsing avro schema: {}", e))?;
+        let mut file = File::create(path).map_err_to_string()?;
+        let schema = avro::parse_schema(&self.schema)
+            .map_err(|e| format!("parsing avro schema: {:#}", e))?;
         let mut writer = Writer::with_codec_opt(schema, &mut file, self.codec);
         write_records(&mut writer, &self.records)?;
         file.sync_all()
@@ -90,14 +91,14 @@ impl SyncAction for AppendAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = state.temp_dir.path().join(&self.path);
+        let path = state.temp_path.join(&self.path);
         println!("Appending to {}", path.display());
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
-            .map_err(|e| e.to_string())?;
-        let mut writer = Writer::append_to(file).map_err(|e| e.to_string())?;
+            .map_err_to_string()?;
+        let mut writer = Writer::append_to(file).map_err_to_string()?;
         write_records(&mut writer, &self.records)?;
         Ok(())
     }
@@ -110,16 +111,16 @@ where
     let schema = writer.schema().clone();
     for record in records {
         let record = avro::from_json(
-            &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {}", e))?,
+            &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {:#}", e))?,
             schema.top_node(),
         )?;
         writer
             .append(record)
-            .map_err(|e| format!("writing avro record: {}", e))?;
+            .map_err(|e| format!("writing avro record: {:#}", e))?;
     }
     writer
         .flush()
-        .map_err(|e| format!("flushing avro writer: {}", e))?;
+        .map_err(|e| format!("flushing avro writer: {:#}", e))?;
     Ok(())
 }
 
@@ -163,7 +164,7 @@ impl Action for VerifyAction {
                         &[&self.sink],
                     )
                     .await
-                    .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
+                    .map_err(|e| format!("querying materialize: {:#}", e))?;
                 let bytes: Vec<u8> = row.get("path");
                 Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
             })

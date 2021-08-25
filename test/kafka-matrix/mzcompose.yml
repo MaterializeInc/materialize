@@ -16,7 +16,10 @@ mzworkflows:
         workflow: kafka-latest
 
       - step: workflow
-        workflow: kafka-6_1_0
+        workflow: kafka-6_2_0
+
+      - step: workflow
+        workflow: kafka-6_1_2
 
       - step: workflow
         workflow: kafka-6_0_2
@@ -34,12 +37,20 @@ mzworkflows:
       - step: workflow
         workflow: test-kafka
 
-  kafka-6_1_0:
+  kafka-6_2_0:
     env:
-      KAFKA_VERSION: 6.1.0
+      KAFKA_VERSION: 6.2.0
     steps:
       - step: workflow
         workflow: test-kafka
+
+  kafka-6_1_2:
+    env:
+      KAFKA_VERSION: 6.1.2
+    steps:
+      - step: workflow
+        workflow: test-kafka
+
 
   kafka-6_0_2:
     env:
@@ -76,14 +87,26 @@ mzworkflows:
   start-deps:
     steps:
       - step: start-services
-        services: [kafka, schema-registry, materialized]
+        services: [zookeeper]
+      - step: wait-for-tcp
+        host: zookeeper
+        port: 2181
+
+      - step: start-services
+        services: [kafka]
       - step: wait-for-tcp
         host: kafka
         port: 9092
         timeout_secs: 120
+
+      - step: start-services
+        services: [schema-registry]
       - step: wait-for-tcp
         host: schema-registry
         port: 8081
+
+      - step: start-services
+        services: [materialized]
       - step: wait-for-mz
 
 services:
@@ -102,13 +125,13 @@ services:
       - bash
     environment:
       - TMPDIR=/share/tmp
-      - MZ_LOG
+      - MZ_LOG_FILTER
     volumes:
       - .:/workdir
       - mzdata:/share/mzdata
       - tmp:/share/tmp
       - ../testdrive:/tests
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     init: true
     depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
@@ -116,20 +139,19 @@ services:
     command: >-
       --data-directory=/share/mzdata
       -w1 --experimental
-      --cache-max-pending-records 1
       --disable-telemetry
     ports:
       - 6875
     environment:
       - MZ_DEV=1
-      - MZ_LOG=${MZ_LOG:-dataflow::source::s3=trace,info}
+      - MZ_LOG_FILTER=${MZ_LOG_FILTER:-dataflow::source::s3=trace,info}
     volumes:
       - mzdata:/share/mzdata
       - tmp:/share/tmp
   zookeeper:
     image: confluentinc/cp-zookeeper:$KAFKA_VERSION
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+    - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-kafka:$KAFKA_VERSION
     environment:
@@ -137,6 +159,8 @@ services:
       - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
       - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
   schema-registry:
     image: confluentinc/cp-schema-registry:$KAFKA_VERSION
     environment:

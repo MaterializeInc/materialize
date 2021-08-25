@@ -7,30 +7,39 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::fmt::{self, Write};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::adt::apd::Apd;
+use lowertest::MzEnumReflect;
+
 use crate::adt::array::Array;
-use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
+use crate::adt::numeric::Numeric;
+use crate::Row;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 
 /// A single value.
+///
+/// Note that `Datum` must always derive [`Eq`] to enforce equality with
+/// `repr::Row`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Datum<'a> {
     /// The `false` boolean value.
     False,
     /// The `true` boolean value.
     True,
+    /// A 16-bit signed integer.
+    Int16(i16),
     /// A 32-bit signed integer.
     Int32(i32),
     /// A 64-bit signed integer.
@@ -49,15 +58,10 @@ pub enum Datum<'a> {
     TimestampTz(DateTime<Utc>),
     /// A span of time.
     Interval(Interval),
-    /// An exact decimal number, possibly with a fractional component, with up
-    /// to 38 digits of precision.
-    Decimal(Significand),
     /// A sequence of untyped bytes.
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(&'a str),
-    /// A variable-length multidimensional array of datums.
-    ///
     /// Unlike [`Datum::List`], arrays are like tensors and are not permitted to
     /// be ragged.
     Array(Array<'a>),
@@ -67,9 +71,9 @@ pub enum Datum<'a> {
     List(DatumList<'a>),
     /// A mapping from string keys to `Datum`s.
     Map(DatumMap<'a>),
-    /// A refactor of `Decimal` using `rust-dec`; allows up to 39 digits of
-    /// precision.
-    APD(OrderedDecimal<Apd>),
+    /// An exact decimal number, possibly with a fractional component, with up
+    /// to 39 digits of precision.
+    Numeric(OrderedDecimal<Numeric>),
     /// An unknown value within a JSON-typed `Datum`.
     ///
     /// This variant is distinct from [`Datum::Null`] as a null datum is
@@ -117,6 +121,19 @@ impl<'a> Datum<'a> {
             Datum::False => false,
             Datum::True => true,
             _ => panic!("Datum::unwrap_bool called on {:?}", self),
+        }
+    }
+
+    /// Unwraps the 16-bit integer value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Int16`].
+    #[track_caller]
+    pub fn unwrap_int16(&self) -> i16 {
+        match self {
+            Datum::Int16(i) => *i,
+            _ => panic!("Datum::unwrap_int16 called on {:?}", self),
         }
     }
 
@@ -253,19 +270,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the decimal value within this datum.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the datum is not [`Datum::Decimal`].
-    #[track_caller]
-    pub fn unwrap_decimal(&self) -> Significand {
-        match self {
-            Datum::Decimal(d) => *d,
-            _ => panic!("Datum::unwrap_decimal called on {:?}", self),
-        }
-    }
-
     /// Unwraps the string value within this datum.
     ///
     /// # Panics
@@ -344,15 +348,15 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the apd value within this datum.
+    /// Unwraps the numeric value within this datum.
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::APD`].
+    /// Panics if the datum is not [`Datum::Numeric`].
     #[track_caller]
-    pub fn unwrap_apd(&self) -> OrderedDecimal<Apd> {
+    pub fn unwrap_numeric(&self) -> OrderedDecimal<Numeric> {
         match self {
-            Datum::APD(n) => *n,
+            Datum::Numeric(n) => *n,
             _ => panic!("Datum::unwrap_numeric called on {:?}", self),
         }
     }
@@ -386,8 +390,11 @@ impl<'a> Datum<'a> {
                     (Datum::False, _) => false,
                     (Datum::True, ScalarType::Bool) => true,
                     (Datum::True, _) => false,
+                    (Datum::Int16(_), ScalarType::Int16) => true,
+                    (Datum::Int16(_), _) => false,
                     (Datum::Int32(_), ScalarType::Int32) => true,
                     (Datum::Int32(_), ScalarType::Oid) => true,
+                    (Datum::Int32(_), ScalarType::RegProc) => true,
                     (Datum::Int32(_), _) => false,
                     (Datum::Int64(_), ScalarType::Int64) => true,
                     (Datum::Int64(_), _) => false,
@@ -405,11 +412,11 @@ impl<'a> Datum<'a> {
                     (Datum::TimestampTz(_), _) => false,
                     (Datum::Interval(_), ScalarType::Interval) => true,
                     (Datum::Interval(_), _) => false,
-                    (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
-                    (Datum::Decimal(_), _) => false,
                     (Datum::Bytes(_), ScalarType::Bytes) => true,
                     (Datum::Bytes(_), _) => false,
-                    (Datum::String(_), ScalarType::String) => true,
+                    (Datum::String(_), ScalarType::String)
+                    | (Datum::String(_), ScalarType::VarChar { .. })
+                    | (Datum::String(_), ScalarType::Char { .. }) => true,
                     (Datum::String(_), _) => false,
                     (Datum::Uuid(_), ScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
@@ -435,8 +442,8 @@ impl<'a> Datum<'a> {
                         .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
                     (Datum::Map(_), _) => false,
                     (Datum::JsonNull, _) => false,
-                    (Datum::APD(_), ScalarType::APD { .. }) => true,
-                    (Datum::APD(_), _) => false,
+                    (Datum::Numeric(_), ScalarType::Numeric { .. }) => true,
+                    (Datum::Numeric(_), _) => false,
                 }
             }
         }
@@ -456,6 +463,12 @@ impl From<bool> for Datum<'static> {
         } else {
             Datum::False
         }
+    }
+}
+
+impl From<i16> for Datum<'static> {
+    fn from(i: i16) -> Datum<'static> {
+        Datum::Int16(i)
     }
 }
 
@@ -497,13 +510,13 @@ impl From<f64> for Datum<'static> {
 
 impl From<i128> for Datum<'static> {
     fn from(d: i128) -> Datum<'static> {
-        Datum::Decimal(Significand::new(d))
+        Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
-impl From<Significand> for Datum<'static> {
-    fn from(d: Significand) -> Datum<'static> {
-        Datum::Decimal(d)
+impl From<Numeric> for Datum<'static> {
+    fn from(n: Numeric) -> Datum<'static> {
+        Datum::Numeric(OrderedDecimal(n))
     }
 }
 
@@ -607,6 +620,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Null => f.write_str("null"),
             Datum::True => f.write_str("true"),
             Datum::False => f.write_str("false"),
+            Datum::Int16(num) => write!(f, "{}", num),
             Datum::Int32(num) => write!(f, "{}", num),
             Datum::Int64(num) => write!(f, "{}", num),
             Datum::Float32(num) => write!(f, "{}", num),
@@ -616,7 +630,6 @@ impl fmt::Display for Datum<'_> {
             Datum::Timestamp(t) => write!(f, "{}", t),
             Datum::TimestampTz(t) => write!(f, "{}", t),
             Datum::Interval(iv) => write!(f, "{}", iv),
-            Datum::Decimal(sig) => write!(f, "{}dec", sig.as_i128()),
             Datum::Bytes(dat) => {
                 f.write_str("0x")?;
                 for b in dat.iter() {
@@ -651,7 +664,7 @@ impl fmt::Display for Datum<'_> {
                 write_delimited(f, ", ", dict, |f, (k, v)| write!(f, "{}: {}", k, v))?;
                 f.write_str("}")
             }
-            Datum::APD(n) => write!(f, "{}", n.0.to_standard_notation_string()),
+            Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
         }
@@ -662,11 +675,25 @@ impl fmt::Display for Datum<'_> {
 ///
 /// There is a direct correspondence between `Datum` variants and `ScalarType`
 /// variants.
-#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd, EnumKind)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Hash,
+    EnumKind,
+    MzEnumReflect,
+)]
 #[enum_kind(ScalarBaseType, derive(Hash))]
 pub enum ScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
+    /// The type of [`Datum::Int16`].
+    Int16,
     /// The type of [`Datum::Int32`].
     Int32,
     /// The type of [`Datum::Int64`].
@@ -675,16 +702,18 @@ pub enum ScalarType {
     Float32,
     /// The type of [`Datum::Float64`].
     Float64,
-    /// The type of [`Datum::Decimal`].
+    /// The type of [`Datum::Numeric`].
     ///
-    /// This type additionally specifies the precision and scale of the decimal
-    /// . The precision constrains the total number of digits in the number,
-    /// while the scale specifies the number of digits after the decimal point.
-    /// The maximum precision is [`MAX_DECIMAL_PRECISION`]. The scale
-    /// must be less than or equal to the precision.
+    /// `Numeric` values cannot exceed [`NUMERIC_DATUM_MAX_PRECISION`] digits of
+    /// precision.
     ///
-    /// [`MAX_DECIMAL_PRECISION`]: crate::adt::decimal::MAX_DECIMAL_PRECISION
-    Decimal(u8, u8),
+    /// This type additionally specifies the scale of the decimal. The scale
+    /// specifies the number of digits after the decimal point. The scale must
+    /// be less than or equal to the maximum precision.
+    ///
+    /// [`NUMERIC_DATUM_MAX_PRECISION`]:
+    /// crate::adt::numeric::NUMERIC_DATUM_MAX_PRECISION
+    Numeric { scale: Option<u8> },
     /// The type of [`Datum::Date`].
     Date,
     /// The type of [`Datum::Time`].
@@ -699,6 +728,14 @@ pub enum ScalarType {
     Bytes,
     /// The type of [`Datum::String`].
     String,
+    /// Stored as [`Datum::String`], but expresses a fixed-width, blank-padded
+    /// string.
+    ///
+    /// Note that a `length` of `None` is used in special cases, such as
+    /// creating lists.
+    Char { length: Option<usize> },
+    /// Stored as [`Datum::String`], but can optionally express a limit on the string's length.
+    VarChar { length: Option<usize> },
     /// The type of a datum that may represent any valid JSON value.
     ///
     /// Valid datum variants for this type are:
@@ -746,33 +783,20 @@ pub enum ScalarType {
         value_type: Box<ScalarType>,
         custom_oid: Option<u32>,
     },
-    APD {
-        scale: Option<u8>,
-    },
+    /// A PostgreSQL function name.
+    RegProc,
 }
 
 impl<'a> ScalarType {
-    /// Returns the contained decimal precision and scale.
+    /// Returns the contained numeric scale.
     ///
     /// # Panics
     ///
-    /// Panics if the scalar type is not [`ScalarType::Decimal`].
-    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
+    /// Panics if the scalar type is not [`ScalarType::Numeric`].
+    pub fn unwrap_numeric_scale(&self) -> Option<u8> {
         match self {
-            ScalarType::Decimal(p, s) => (*p, *s),
-            _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
-        }
-    }
-
-    /// Returns the contained apd scale.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the scalar type is not [`ScalarType::APD`].
-    pub fn unwrap_apd_scale(&self) -> Option<u8> {
-        match self {
-            ScalarType::APD { scale } => *scale,
-            _ => panic!("ScalarType::unwrap_apd_scale called on {:?}", self),
+            ScalarType::Numeric { scale } => *scale,
+            _ => panic!("ScalarType::unwrap_numeric_scale called on {:?}", self),
         }
     }
 
@@ -806,6 +830,36 @@ impl<'a> ScalarType {
         dims
     }
 
+    /// Returns `self` with any embedded values set to a value appropriate for a
+    /// collection of the type. Namely, this should set optional scales or
+    /// limits to `None`.
+    pub fn default_embedded_value(&self) -> ScalarType {
+        use ScalarType::*;
+        match self {
+            List {
+                element_type,
+                custom_oid: None,
+            } => List {
+                element_type: Box::new(element_type.default_embedded_value()),
+                custom_oid: None,
+            },
+            Map {
+                value_type,
+                custom_oid: None,
+            } => Map {
+                value_type: Box::new(value_type.default_embedded_value()),
+                custom_oid: None,
+            },
+            Array(a) => Array(Box::new(a.default_embedded_value())),
+            Numeric { .. } => Numeric { scale: None },
+            // Char's default length should not be `Some(1)`, but instead `None`
+            // to support Char values of different lengths in e.g. lists.
+            Char { .. } => Char { length: None },
+            VarChar { .. } => VarChar { length: None },
+            v => v.clone(),
+        }
+    }
+
     /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`].
     ///
     /// # Panics
@@ -827,6 +881,21 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Map { value_type, .. } => &**value_type,
             _ => panic!("ScalarType::unwrap_map_value_type called on {:?}", self),
+        }
+    }
+
+    /// Returns the length of a [`ScalarType::Char`] or [`ScalarType::VarChar`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Char`] or [`ScalarType::VarChar`].
+    pub fn unwrap_char_varchar_length(&self) -> Option<usize> {
+        match self {
+            ScalarType::Char { length, .. } | ScalarType::VarChar { length } => *length,
+            _ => panic!(
+                "ScalarType::unwrap_char_varchar_length called on {:?}",
+                self
+            ),
         }
     }
 
@@ -860,45 +929,44 @@ impl<'a> ScalarType {
             _ => false,
         }
     }
-}
 
-// TODO(benesch): the implementations of PartialEq and Hash for ScalarType can
-// be removed when decimal precision is either fixed or removed.
-
-impl PartialEq for ScalarType {
-    fn eq(&self, other: &Self) -> bool {
+    /// Determines equality among scalar types that acknowledges custom OIDs,
+    /// but ignores other embedded values.
+    ///
+    /// In most situations, you want to use `base_eq` rather than `ScalarType`'s
+    /// implementation of `Eq`. `base_eq` expresses the semantics of direct type
+    /// interoperability whereas `Eq` expresses an exact comparison between the
+    /// values.
+    ///
+    /// For instance, `base_eq` signals that e.g. two [`ScalarType::Numeric`]
+    /// values can be added together, irrespective of their embedded scale. In
+    /// contrast, two `Numeric` values with different scales are never `Eq` to
+    /// one another.
+    pub fn base_eq(&self, other: &ScalarType) -> bool {
         use ScalarType::*;
         match (self, other) {
-            (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
-
-            (Bool, Bool)
-            | (Int32, Int32)
-            | (Int64, Int64)
-            | (Float32, Float32)
-            | (Float64, Float64)
-            | (Date, Date)
-            | (Time, Time)
-            | (Timestamp, Timestamp)
-            | (TimestampTz, TimestampTz)
-            | (Interval, Interval)
-            | (Bytes, Bytes)
-            | (String, String)
-            | (Uuid, Uuid)
-            | (Jsonb, Jsonb)
-            | (Oid, Oid)
-            | (APD { .. }, APD { .. }) => true,
             (
                 List {
-                    element_type: element_l,
+                    element_type: l,
                     custom_oid: oid_l,
                 },
                 List {
-                    element_type: element_r,
+                    element_type: r,
                     custom_oid: oid_r,
                 },
-            ) => element_l.eq(element_r) && oid_l == oid_r,
+            )
+            | (
+                Map {
+                    value_type: l,
+                    custom_oid: oid_l,
+                },
+                Map {
+                    value_type: r,
+                    custom_oid: oid_r,
+                },
+            ) => l.base_eq(r) && oid_l == oid_r,
 
-            (Array(a), Array(b)) => a.eq(b),
+            (Array(a), Array(b)) => a.base_eq(b),
             (
                 Record {
                     fields: fields_a,
@@ -911,98 +979,70 @@ impl PartialEq for ScalarType {
                     custom_name: name_b,
                 },
             ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
-            (
-                Map {
-                    value_type: value_l,
-                    custom_oid: oid_l,
-                },
-                Map {
-                    value_type: value_r,
-                    custom_oid: oid_r,
-                },
-            ) => value_l.eq(value_r) && oid_l == oid_r,
+            (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
+        }
+    }
 
-            (Bool, _)
-            | (Int32, _)
-            | (Int64, _)
-            | (Float32, _)
-            | (Float64, _)
-            | (Decimal(_, _), _)
-            | (Date, _)
-            | (Time, _)
-            | (Timestamp, _)
-            | (TimestampTz, _)
-            | (Interval, _)
-            | (Bytes, _)
-            | (String, _)
-            | (Jsonb, _)
-            | (Uuid, _)
-            | (Array(_), _)
-            | (List { .. }, _)
-            | (Record { .. }, _)
-            | (Oid, _)
-            | (Map { .. }, _)
-            | (APD { .. }, _) => false,
+    pub fn is_string_like(&self) -> bool {
+        match self {
+            ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => true,
+            _ => false,
         }
     }
 }
 
-impl Hash for ScalarType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        use ScalarType::*;
-        match self {
-            Bool => state.write_u8(0),
-            Int32 => state.write_u8(1),
-            Int64 => state.write_u8(2),
-            Float32 => state.write_u8(3),
-            Float64 => state.write_u8(4),
-            Decimal(_, s) => {
-                // TODO(benesch): we should properly implement decimal precision
-                // tracking, or just remove it.
-                state.write_u8(5);
-                state.write_u8(*s);
-            }
-            Date => state.write_u8(6),
-            Time => state.write_u8(7),
-            Timestamp => state.write_u8(8),
-            TimestampTz => state.write_u8(9),
-            Interval => state.write_u8(10),
-            Bytes => state.write_u8(11),
-            String => state.write_u8(12),
-            Jsonb => state.write_u8(13),
-            Array(t) => {
-                state.write_u8(14);
-                t.hash(state);
-            }
-            List {
-                element_type,
-                custom_oid,
-            } => {
-                state.write_u8(15);
-                element_type.hash(state);
-                custom_oid.hash(state);
-            }
-            Record {
-                fields,
-                custom_oid,
-                custom_name,
-            } => {
-                state.write_u8(16);
-                fields.hash(state);
-                custom_oid.hash(state);
-                custom_name.hash(state);
-            }
-            Uuid => state.write_u8(16),
-            Oid => state.write_u8(17),
-            Map {
-                value_type,
-                custom_oid,
-            } => {
-                state.write_u8(18);
-                value_type.hash(state);
-                custom_oid.hash(state);
-            }
-            APD { .. } => state.write_u8(19),
+lazy_static! {
+    static ref EMPTY_ARRAY_ROW: Row = unsafe {
+        Row::from_bytes_unchecked(vec![
+            22, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ])
+    };
+    static ref EMPTY_LIST_ROW: Row =
+        unsafe { Row::from_bytes_unchecked(vec![23, 0, 0, 0, 0, 0, 0, 0, 0]) };
+}
+
+impl Datum<'static> {
+    pub fn empty_array() -> Datum<'static> {
+        EMPTY_ARRAY_ROW.unpack_first()
+    }
+    pub fn empty_list() -> Datum<'static> {
+        EMPTY_LIST_ROW.unpack_first()
+    }
+}
+
+// Verify that bytes for static datums with manually stuffed bytes are correct.
+#[test]
+fn verify_static_datum_bytes<'a>() {
+    let arena = crate::RowArena::new();
+    {
+        let empty_array_datum: Datum = arena.make_datum(|packer| {
+            packer
+                .push_array::<_, Datum<'a>>(
+                    &[crate::adt::array::ArrayDimension {
+                        lower_bound: 1,
+                        length: 0,
+                    }],
+                    std::iter::empty(),
+                )
+                .unwrap();
+        });
+        if EMPTY_ARRAY_ROW.iter().next().is_none() || Datum::empty_array() != empty_array_datum {
+            panic!(
+                "expected EMPTY_ARRAY bytes: {:?}",
+                Row::pack_slice(&[empty_array_datum]).data()
+            );
+        }
+    }
+
+    {
+        let empty_list_datum: Datum = arena.make_datum(|packer| {
+            packer.push_list::<_, Datum<'a>>(std::iter::empty());
+        });
+        if EMPTY_LIST_ROW.iter().next().is_none() || Datum::empty_list() != empty_list_datum {
+            panic!(
+                "expected EMPTY_LIST bytes: {:?}",
+                Row::pack_slice(&[empty_list_datum]).data()
+            );
         }
     }
 }

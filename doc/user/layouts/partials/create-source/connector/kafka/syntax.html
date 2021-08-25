@@ -1,2 +1,3 @@
 **KAFKA BROKER** _host_ | The Kafka broker's host name without the security protocol, which is specified by the [`WITH` options](#with-options).) If you wish to specify multiple brokers (bootstrap servers) as an additional safeguard, use a comma-separated list. For example: `localhost:9092, localhost:9093`.
 **TOPIC** _topic_ | The Kafka topic you want to subscribe to.
+**INCLUDE KEY** | Make the key portion of Kafka events available to Materialize SQL. If the key is encoded using a format that includes schemas it will take its name from the schema, for unnamed formats (e.g. `TEXT`) it will be named `key`. The key can be renamed with the optional **AS** *name* statement.

@@ -24,7 +24,7 @@ mzworkflows:
         service: testdrive-svc
         command: --aws-endpoint=http://localstack:4566 ${TD_TEST:-*.td esoteric/*.td}
 
-  # Runs the tests that interact with Kafka against Redpanda.
+  # Runs the tests that interact with Kafka and Schema Registry against Redpanda.
   #
   # Specify the `TD_TEST` environment variable to select a specific test to run.
   # Otherwise, this workflow runs against the test files in this directory that
@@ -33,13 +33,13 @@ mzworkflows:
   testdrive-redpanda:
     steps:
       - step: start-services
-        services: [redpanda, schema-registry, materialized]
+        services: [redpanda, materialized]
       - step: wait-for-tcp
         host: redpanda
         port: 9092
         timeout_secs: 120
       - step: wait-for-tcp
-        host: schema-registry
+        host: redpanda
         port: 8081
       - step: wait-for-mz
       - step: run
@@ -50,7 +50,7 @@ mzworkflows:
         - >-
           testdrive
           --kafka-addr=redpanda:9092
-          --schema-registry-url=http://schema-registry:8081
+          --schema-registry-url=http://redpanda:8081
           --materialized-url=postgres://materialize@materialized:6875
           ${TD_TEST:-$(grep -lF '$ kafka' $(grep -LF '$ kafka-add-partitions' *.td))}
 
@@ -63,6 +63,15 @@ mzworkflows:
       - step: run
         service: testdrive-svc
         command: --aws-region=us-east-2 --ci-output ${TD_TEST:-*.td esoteric/*.td}
+
+  # Run tests that hit the live, public PubNub service.
+  ci-pubnub:
+    steps:
+      - step: workflow
+        workflow: start-deps
+      - step: run
+        service: testdrive-svc
+        command: --ci-output esoteric/pubnub/pubnub.td
 
   # Run a couple of tests that verify that our http* proxy configuration works
   ci-proxy:
@@ -77,11 +86,20 @@ mzworkflows:
 
   ci-proxy-failure:
     env:
-      ALL_PROXY: '#nonsense'
+      ALL_PROXY: http://localhost:1234
       TD_TEST: 'proxy/proxy-failure.td'
     steps:
       - step: workflow
         workflow: testdrive
+
+  ci-proxy-no-proxy:
+    env:
+      ALL_PROXY: http://localhost:1234
+      NO_PROXY: schema-registry, amazonaws.com
+      TD_TEST: 'avro-registry.td esoteric/s3.td'
+    steps:
+      - step: workflow
+        workflow: ci
 
   start-deps:
     steps:
@@ -112,24 +130,21 @@ services:
       - bash
     environment:
     - TMPDIR=/share/tmp
-    - MZ_LOG
+    - MZ_LOG_FILTER
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
-    - AWS_SECURITY_TOKEN
     volumes:
     - .:/workdir
     - mzdata:/share/mzdata
     - tmp:/share/tmp
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     init: true
-    depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
     mzbuild: materialized
     command: >-
       --data-directory=/share/mzdata
       -w5 --experimental
-      --cache-max-pending-records 1
       --timestamp-frequency 100ms
       --disable-telemetry
       --retain-prometheus-metrics 1s
@@ -137,19 +152,20 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG
+    - MZ_LOG_FILTER
+    - MZ_SOFT_ASSERTIONS=1
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
-    - AWS_SECURITY_TOKEN
     - ALL_PROXY
+    - NO_PROXY
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+    - ZOOKEEPER_CLIENT_PORT=2181
   kafka:
     image: confluentinc/cp-kafka:5.5.4
     environment:
@@ -158,6 +174,9 @@ services:
     - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     - KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false
+    - KAFKA_MIN_INSYNC_REPLICAS=1
+    - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+    - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
     environment:
@@ -165,7 +184,7 @@ services:
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
   redpanda:
-    image: vectorized/redpanda:v21.5.3
+    image: vectorized/redpanda:v21.7.1
     # Most of these options are simply required when using Redpanda in Docker.
     # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
     # The `enable_transactions` and `enable_idempotence` feature flags enable

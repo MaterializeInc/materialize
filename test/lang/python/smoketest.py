@@ -7,16 +7,43 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from psycopg3.oids import builtins
+import unittest
+
 import psycopg2
 import psycopg3
 import sqlalchemy
-import unittest
+from psycopg3.oids import builtins
 
 MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 
 
 class SmokeTest(unittest.TestCase):
+    def test_custom_types(self):
+        with psycopg3.connect(MATERIALIZED_URL, autocommit=True) as conn:
+            # Text encoding of lists and maps is supported...
+            with conn.cursor() as cur:
+                cur.execute("SELECT LIST[1, 2, 3]")
+                row = cur.fetchone()
+                self.assertEqual(row, ("{1,2,3}",))
+
+                cur.execute("SELECT '{a => 1, b => 2}'::map[text => int]")
+                row = cur.fetchone()
+                self.assertEqual(row, ("{a=>1,b=>2}",))
+
+            # ...but binary encoding is not.
+            with conn.cursor(binary=True) as cur:
+                with self.assertRaisesRegex(
+                    psycopg3.errors.ProtocolViolation,
+                    "binary encoding of list types is not implemented",
+                ):
+                    cur.execute("SELECT LIST[1, 2, 3]")
+
+                with self.assertRaisesRegex(
+                    psycopg3.errors.ProtocolViolation,
+                    "binary encoding of map types is not implemented",
+                ):
+                    cur.execute("SELECT '{a => 1, b => 2}'::map[text => int]")
+
     def test_sqlalchemy(self):
         engine = sqlalchemy.engine.create_engine(MATERIALIZED_URL)
         results = [[c1, c2] for c1, c2 in engine.execute("VALUES (1, 2), (3, 4)")]

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM ubuntu:bionic-20200403
+MZFROM ubuntu-base
 
 RUN apt-get update && apt-get install -qy maven
 
@@ -26,7 +26,7 @@ RUN cd /scratch && mvn package
 COPY . /scratch
 RUN cd /scratch && mvn -o package
 
-FROM ubuntu:bionic-20200403
+MZFROM ubuntu-base
 
 RUN apt-get update && apt-get install -qy openjdk-11-jre-headless
 

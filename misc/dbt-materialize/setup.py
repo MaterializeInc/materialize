@@ -14,27 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from setuptools import find_packages
 from distutils.core import setup
-import os
+from pathlib import Path
 
-this_directory = os.path.abspath(os.path.dirname(__file__))
-with open(os.path.join(this_directory, "README.md")) as f:
-    long_description = f.read()
+from setuptools import find_packages
 
-package_name = "dbt-materialize"
-# This adapter's version, and its required dbt-postgres version, tracks the
-# target dbt version.
-target_package_version = "0.18.1"
-package_version_suffix = ".post2"
-package_version = "{}{}".format(target_package_version, package_version_suffix)
-description = """The Materialize adapter plugin for dbt (data build tool)"""
+# This adapter's version, and its required dbt-postgres version, track the
+# target dbt version. If you need to release a new version of this adapter
+# without bumping the dbt-postgres version, change version_suffix to ".post1",
+# ".post2", etc. Reset version_suffix back to "" when bumping the
+# dbt_postgres_version.
+dbt_postgres_version = "0.20.1"
+version_suffix = ".post1"
 
 setup(
-    name=package_name,
-    version=package_version,
-    description=description,
-    long_description=long_description,
+    name="dbt-materialize",
+    version=f"{dbt_postgres_version}{version_suffix}",
+    description="The Materialize adapter plugin for dbt (data build tool).",
+    long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
     author="Materialize, Inc.",
     author_email="support@materialize.io",
@@ -47,5 +44,5 @@ setup(
             "include/materialize/macros/**/*.sql",
         ]
     },
-    install_requires=["dbt-postgres=={}".format(target_package_version)],
+    install_requires=["dbt-postgres=={}".format(dbt_postgres_version)],
 )

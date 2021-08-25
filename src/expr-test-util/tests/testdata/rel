@@ -1,0 +1,168 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+build
+(constant
+  [[1 2 3]
+   [4 5 6]]
+  [int64 int64 int64])
+----
+%0 =
+| Constant (1, 2, 3) (4, 5, 6)
+
+build
+(constant
+  [[#0]]
+  [int64])
+----
+error: Punct { char: '#', spacing: Alone } cannot be interpreted as a literal.
+
+build
+(arrange_by
+  (constant
+    [[1 2 3]
+     [4 5 6]]
+    [int64 int64 int64])
+  [[#0] [#1]])
+----
+%0 =
+| Constant (1, 2, 3) (4, 5, 6)
+| ArrangeBy (#0) (#1)
+
+build
+(arrange_by
+  (constant
+    [[1 2 3]
+     [4 5 6]]
+    [int64 int64 int64])
+  [[#0 #0] [#1]])
+----
+%0 =
+| Constant (1, 2, 3) (4, 5, 6)
+| ArrangeBy (#0, #0) (#1)
+
+cat
+(defsource x [int32 int64])
+----
+ok
+
+build
+(filter
+  (map (get x) [12345])
+  [#0 #1])
+----
+%0 =
+| Get x (u0)
+| Map 12345
+| Filter #0, #1
+
+build
+(let x (constant
+      [[1 2 3]
+       [4 5 6]]
+      [int64 int64 int64])
+   (get x))
+----
+----
+%0 = Let l0 =
+| Constant (1, 2, 3) (4, 5, 6)
+
+%1 =
+| Get %0 (l0)
+----
+----
+
+cat
+(defsource y [int32 int64 int32])
+----
+ok
+
+build
+(join
+    [(get y) (get y)]
+    [[#0 #3]]
+    [0 1 5]
+    (delta_query [[[0 [#0]] [1 [#0]]]
+                  [[1 [#0]] [0 [#0]]]]))
+----
+----
+%0 =
+| Get y (u1)
+
+%1 =
+| Get y (u1)
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = DeltaQuery
+| |   delta %0 %0.(#0) %1.(#0)
+| |   delta %1 %1.(#0) %0.(#0)
+| | demand = (#0, #1, #5)
+----
+----
+
+build
+(top_k (get y) [1] [0] 5 1)
+----
+----
+%0 =
+| Get y (u1)
+| TopK group=(#1) order=(#0 asc) limit=5 offset=1
+----
+----
+
+build
+(top_k (get y) [0 1] [(2 true)] )
+----
+----
+%0 =
+| Get y (u1)
+| TopK group=(#0, #1) order=(#2 desc) offset=0
+----
+----
+
+build
+(reduce (get y)
+    [(call_unary cast_int32_to_int64 #0)]
+    [(max_int64 #1) (sum_int32 #2 true)])
+----
+----
+%0 =
+| Get y (u1)
+| Reduce group=(i32toi64(#0))
+| | agg max(#1)
+| | agg sum(distinct #2)
+----
+----
+
+build
+(reduce (get y) [#2] [])
+----
+----
+%0 =
+| Get y (u1)
+| Distinct group=(#2)
+----
+----
+
+build
+(union [(map (get x) [(null int32)]) (get y)])
+----
+----
+%0 =
+| Get x (u0)
+| Map null
+
+%1 =
+| Get y (u1)
+
+%2 =
+| Union %0 %1
+----
+----

@@ -15,10 +15,9 @@ operations provided by the standard [`subprocess`][subprocess] module.
 [subprocess]: https://docs.python.org/3/library/subprocess.html
 """
 
-from pathlib import Path
-from typing import Dict, Sequence, Union, Optional, IO, overload
-from typing_extensions import Literal
 import subprocess
+from pathlib import Path
+from typing import IO, Dict, Literal, Optional, Sequence, Union, overload
 
 from materialize import ui
 
@@ -28,7 +27,7 @@ CalledProcessError = subprocess.CalledProcessError
 def runv(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
-    stdin: Union[None, int, IO[bytes]] = None,
+    stdin: Union[None, int, IO[bytes], bytes] = None,
     stdout: Union[None, int, IO[bytes]] = None,
     capture_output: bool = False,
     env: Optional[Dict[str, str]] = None,
@@ -42,7 +41,8 @@ def runv(
         args: A list of strings or paths describing the program to run and
             the arguments to pass to it.
         cwd: An optional directory to change into before executing the process.
-        stdin: An optional IO handle to use as the process's stdin stream.
+        stdin: An optional IO handle or byte string to use as the process's
+            stdin stream.
         stdout: An optional IO handle to use as the process's stdout stream.
         capture_output: Whether to prevent the process from streaming output
             the parent process's stdin/stdout handles. If true, the output
@@ -58,12 +58,25 @@ def runv(
         CalledProcessError: The process exited with a non-zero exit status.
     """
     print("$", ui.shell_quote(args))
+
     stderr = None
     if capture_output:
         stdout = subprocess.PIPE
         stderr = subprocess.PIPE
-    return subprocess.run(
-        args, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, check=True, env=env
+
+    # Work around https://bugs.python.org/issue34886.
+    stdin_args = {"stdin": stdin}
+    if isinstance(stdin, bytes):
+        stdin_args = {"input": stdin}
+
+    return subprocess.run(  # type: ignore
+        args,
+        cwd=cwd,
+        stdout=stdout,
+        stderr=stderr,
+        check=True,
+        env=env,
+        **stdin_args,
     )
 
 
@@ -74,6 +87,7 @@ def capture(
     stdin: Union[None, int, IO[bytes]] = None,
     unicode: Literal[False] = ...,
     stderr_too: bool = False,
+    env: Optional[Dict[str, str]] = None,
 ) -> bytes:
     ...
 
@@ -86,6 +100,7 @@ def capture(
     *,
     unicode: Literal[True],
     stderr_too: bool = False,
+    env: Optional[Dict[str, str]] = None,
 ) -> str:
     ...
 
@@ -96,6 +111,7 @@ def capture(
     stdin: Union[None, int, IO[bytes]] = None,
     unicode: bool = False,
     stderr_too: bool = False,
+    env: Optional[Dict[str, str]] = None,
 ) -> Union[str, bytes]:
     """Capture the output of a subprocess.
 
@@ -123,5 +139,5 @@ def capture(
     """
     stderr = subprocess.STDOUT if stderr_too else None
     return subprocess.check_output(  # type: ignore
-        args, cwd=cwd, stdin=stdin, universal_newlines=unicode, stderr=stderr
+        args, cwd=cwd, stdin=stdin, universal_newlines=unicode, stderr=stderr, env=env
     )

@@ -17,6 +17,7 @@ use itertools::Itertools;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
+use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -272,7 +273,7 @@ impl From<&CoordTransactionStatus> for TransactionStatus {
             CoordTransactionStatus::Started(_) => TransactionStatus::InTransaction,
             CoordTransactionStatus::InTransaction(_) => TransactionStatus::InTransaction,
             CoordTransactionStatus::InTransactionImplicit(_) => TransactionStatus::InTransaction,
-            CoordTransactionStatus::Failed => TransactionStatus::Failed,
+            CoordTransactionStatus::Failed(_) => TransactionStatus::Failed,
         }
     }
 }
@@ -341,6 +342,7 @@ impl ErrorResponse {
             CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
+            CoordError::IncompleteTimestamp(_) => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -348,6 +350,7 @@ impl ErrorResponse {
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             CoordError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
+            CoordError::TableWithoutIndexes(..) => SqlState::INTERNAL_ERROR,
             CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
@@ -820,9 +823,15 @@ pub fn encode_row_description(
                     // while the low order bits store the scale + 4 (!).
                     //
                     // https://github.com/postgres/postgres/blob/e435c1e7d/src/backend/utils/adt/numeric.c#L6364-L6367
-                    ScalarType::Decimal(precision, scale) => {
-                        ((i32::from(*precision) << 16) | i32::from(*scale)) + 4
-                    }
+                    ScalarType::Numeric { scale } => match scale {
+                        // -1 represents default typemod, which allows values of differing scales
+                        None => -1i32,
+                        Some(scale) => {
+                            ((i32::try_from(NUMERIC_DATUM_MAX_PRECISION).unwrap() << 16)
+                                | i32::from(*scale))
+                                + 4
+                        }
+                    },
                     _ => -1,
                 },
                 format: *format,

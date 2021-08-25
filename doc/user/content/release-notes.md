@@ -46,6 +46,83 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.9.1 %}}
+
+- Change the type of the [`mz_metrics`](/sql/system-catalog#mz_metrics).`time`
+  column from [`timestamp`] to [`timestamp with time zone`] to better reflect
+  that the timestamp is in UTC.
+
+- The metrics scraping frequency is independent of the introspection frequency.
+  It is controlled with the new flag
+  [--metrics-scraping-frequency](/cli/#prometheus-metrics).
+
+- Add the `array_agg` function.
+
+- Add the `list_agg` function.
+
+- Add the [`string_agg`](/sql/functions/string_agg) function.
+
+- Add the [`generate_series(start, stop, step)`](/sql/functions/#table-func) table function. {{% gh 7953 %}}
+
+{{% version-header v0.9.0 %}}
+
+- **Breaking change.** Reject [Protobuf sources] whose schemas contain
+  unsigned integer types (`uint32`, `uint64`, `fixed32`, and `fixed64`).
+  Materialize previously converted these types to
+  [`numeric`](/sql/types/numeric).
+
+  A future version of Materialize is likely to support unsigned integers
+  natively, at which point the aforementioned Protobuf types will be converted
+  to the appropriate Materialize types.
+
+- **Breaking change.** The `HTTP_PROXY` variable is no longer respected. Use
+  `http_proxy` instead.
+
+- Respect the [`no_proxy` environment variable](/cli/#http-proxies) to exclude
+  certain hosts from the configured HTTP/HTTPS proxy, if any.
+
+- Add [`reuse_topic`](/sql/create-sink/#enabling-topic-reuse-after-restart-exactly-once-sinks) as
+  a beta feature for Kafka Sinks. This allows re-using the output topic across
+  restarts of Materialize.
+
+- Add support for JSON-encoded Kafka sinks.
+
+{{% version-header v0.8.3 %}}
+- The `MZ_LOG` environment variable is no longer recognized. Setting the log
+  level can be done using the `--log-filter` command line parameter or the
+  `MZ_LOG_FILTER` environment variable.
+
+- Refactor the [`numeric`](/sql/types/numeric) type's backing implementation.
+  With this change comes more PostgreSQL-like semantics for unscaled values, as
+  well as bug fixes. {{% gh 7312 %}}
+
+- Add support for including Kafka keys in dataflows via new `INCLUDE KEY`
+  syntax. {{% gh 6661 %}}
+
+- The `FORMAT` argument to `UPSERT` to specify Kafka key formats has been
+  deprecated, use the new `KEY FORMAT .. VALUE FORMAT ..` syntax
+  ([documentation](/sql/create-source/avro-kafka)). The `UPSERT FORMAT ..`
+  syntax will be removed in a future release.
+
+- Add `WITH` options to read from environment variables for SSL and SASL
+  passwords. {{% gh 7467 %}}
+
+{{% version-header v0.8.2 %}}
+
+- Stabilized [postgres sources](/sql/create-source/postgres) (no longer require
+  `--experimental`)
+
+- **Breaking change.** `HOST` keyword when creating
+  [postgres sources](/sql/create-source/postgres/#syntax) has been renamed to
+  `CONNECTION`.
+
+- Record the initial high watermark offset on the broker for Kafka sources. This
+  enables clients to observe the progress of initial data loading. The table
+  `mz_kafka_consumer_partitions` has an additional column `initial_high_offset`
+  containing the first reported `hi_offset` from the broker for each partition.
+
+- Add `left` to the [string function](/sql/functions#string-func) suite.
+
 {{% version-header v0.8.1 %}}
 
 - Add [timelines](/sql/timelines) to all sources to prevent
@@ -56,6 +133,29 @@ Wrap your release notes at the 80 character mark.
 - Add the [`isolation_level`](/sql/create-source/avro-kafka/#with-options)
   `WITH` option to Kafka sources to allow changing read behavior of
   transactionally written messages.
+
+- Add the [`kafka_time_offset`](/sql/create-source/avro-kafka/#with-options)
+  `WITH` option for Kafka sources, which allows to set `start_offset` based on
+  Kafka timestamps.
+
+- **Breaking change.** The `timezone(String, Time)` function can no
+  longer be used in views.
+
+- Debezium sinks
+  emit [`collection_data`](/sql/create-sink/#consistency-metadata) attributes in
+  their consistency topic.
+
+- **Breaking change.** Renamed the `timestamp`, `diff`, and `progressed`
+  columns in [`TAIL`](/sql/tail) to `mz_timestamp`, `mz_diff`, and
+  `mz_progressed`.
+
+- Add the [`current_role`](/sql/functions/#system-information-func) system
+  information function.
+
+- Support manually declaring a [`(non-enforced) primary key`](/sql/create-source/avro-kafka/#key-constraint-details)
+  on sources.
+
+- S3 sources retry failed requests to list buckets and download objects.
 
 {{% version-header v0.8.0 %}}
 
@@ -75,10 +175,6 @@ Wrap your release notes at the 80 character mark.
   for both Kafka sources and sinks. Additionally, change `consistency_topic` on
   sinks to be a string that specifies a topic name instead of a boolean. This
   harmonizes the parameter behavior between sources and sinks.
-
-- Add the [`kafka_time_offset`](/sql/create-source/avro-kafka/#with-options)
-  `WITH` option for Kafka sources, which allows to set `start_offset` based on
-  Kafka timestamps.
 
 {{% version-header v0.7.3 %}}
 
@@ -734,7 +830,7 @@ Wrap your release notes at the 80 character mark.
 
   - Add support for [`LATERAL` subqueries](/sql/join#lateral-subqueries) in
     joins. `LATERAL` subqueries can be used to express [Top-K by group
-    queries](/sql/idioms/#top-k-by-group)
+    queries](/guides/top-k/)
 
   - Add the [regular expression matching operators](/sql/functions/#string) `~`,
     `~*`, `!~`, and `!~*`, which report whether a string does or does not match

@@ -96,7 +96,11 @@ impl Codec {
                 let compressed_size =
                     snap::raw::Encoder::new().compress(&stream[..], &mut encoded[..])?;
 
-                let crc = crc::crc32::checksum_ieee(&stream[..]);
+                let crc = {
+                    let mut hasher = crc32fast::Hasher::new();
+                    hasher.update(&stream);
+                    hasher.finalize()
+                };
                 byteorder::BigEndian::write_u32(&mut encoded[compressed_size..], crc);
                 encoded.truncate(compressed_size + 4);
 
@@ -131,7 +135,11 @@ impl Codec {
                     .map_err(std::io::Error::from)?;
 
                 let expected_crc = byteorder::BigEndian::read_u32(&stream[stream.len() - 4..]);
-                let actual_crc = crc::crc32::checksum_ieee(&decoded);
+                let actual_crc = {
+                    let mut hasher = crc32fast::Hasher::new();
+                    hasher.update(&decoded);
+                    hasher.finalize()
+                };
 
                 if expected_crc != actual_crc {
                     return Err(DecodeError::BadSnappyChecksum {

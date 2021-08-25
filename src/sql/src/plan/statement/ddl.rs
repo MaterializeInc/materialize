@@ -22,36 +22,37 @@ use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use log::error;
+use log::{debug, error};
 use regex::Regex;
 use reqwest::Url;
 
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, Consistency,
     CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
-    KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
-    PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector, RegexEncoding,
-    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding,
-    SourceEnvelope, Timeline,
+    KafkaSinkConnectorBuilder, KafkaSinkFormat, KafkaSourceConnector, KeyEnvelope,
+    KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector,
+    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
+    SourceDataEncoding, SourceEnvelope, Timeline,
 };
 use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
-use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
+use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
-use ore::iter::IteratorExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::CreateSourceFormat;
+use sql_parser::ast::{CreateSourceFormat, KeyConstraint};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
-    CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement, DataType, DbzMode,
-    DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
-    ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    ColumnOption, Compression, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
+    CreateSourceConnector, CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
+    CreateViewsStatement, CsrConnector, DataType, DbzMode, DropDatabaseStatement,
+    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
+    ObjectType, ProtobufSchema, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
+    ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -145,10 +146,10 @@ pub fn plan_create_table(
     } = &stmt;
 
     if !with_options.is_empty() {
-        unsupported!("WITH options");
+        bail_unsupported!("WITH options");
     }
     if !constraints.is_empty() {
-        unsupported!("CREATE TABLE with constraints")
+        bail_unsupported!("CREATE TABLE with constraints")
     }
 
     let names: Vec<_> = columns
@@ -184,7 +185,9 @@ pub fn plan_create_table(
                     depends_on.extend(expr_depends_on);
                     default = expr.clone();
                 }
-                other => unsupported!(format!("CREATE TABLE with column constraint: {}", other)),
+                other => {
+                    bail_unsupported!(format!("CREATE TABLE with column constraint: {}", other))
+                }
             }
         }
         column_types.push(ty.nullable(nullable));
@@ -389,16 +392,31 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
         format,
+        key_constraint,
+        key_envelope,
     } = &stmt;
 
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options);
 
     let mut consistency = Consistency::RealTime;
-    let mut ts_frequency = scx.catalog.config().timestamp_frequency;
 
-    let (external_connector, encoding) = match connector {
-        Connector::Kafka { broker, topic, .. } => {
+    let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
+        Some(val) => match val {
+            Value::Number(n) => match n.parse::<u64>() {
+                Ok(n) => Duration::from_millis(n),
+                Err(_) => bail!("timestamp_frequency_ms must be an u64"),
+            },
+            _ => bail!("timestamp_frequency_ms must be an u64"),
+        },
+        None => scx.catalog.config().timestamp_frequency,
+    };
+    if !matches!(connector, CreateSourceConnector::Kafka { .. }) && key_envelope.is_present() {
+        bail_unsupported!("INCLUDE KEY with non-Kafka sources");
+    }
+
+    let (external_connector, encoding, key_envelope) = match connector {
+        CreateSourceConnector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
             consistency = match with_options.remove("consistency_topic") {
@@ -415,11 +433,6 @@ pub fn plan_create_source(
                 Some(Value::String(s)) => Some(s),
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
-
-            ts_frequency = extract_timestamp_frequency_option(
-                scx.catalog.config().timestamp_frequency,
-                &mut with_options,
-            )?;
 
             if with_options.contains_key("start_offset") && consistency != Consistency::RealTime {
                 bail!("`start_offset` is not yet implemented for non-realtime consistency sources.")
@@ -450,15 +463,8 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let enable_caching = match with_options.remove("cache") {
-                None => false,
-                Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("cache must be a bool!"),
-            };
-
-            if enable_caching && consistency != Consistency::RealTime {
-                unsupported!("BYO source caching")
-            }
+            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
+            let key_envelope = get_key_envelope(key_envelope, envelope, &encoding)?;
 
             let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -467,10 +473,8 @@ pub fn plan_create_source(
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
-                enable_caching,
-                cached_files: None,
+                key_envelope: key_envelope.clone(),
             });
-            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
 
             if consistency != Consistency::RealTime
                 && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
@@ -480,9 +484,9 @@ pub fn plan_create_source(
                 bail!("BYO consistency only supported for plain Debezium Kafka sources");
             }
 
-            (connector, encoding)
+            (connector, encoding, key_envelope)
         }
-        Connector::Kinesis { arn, .. } => {
+        CreateSourceConnector::Kinesis { arn, .. } => {
             let arn: ARN = arn
                 .parse()
                 .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
@@ -504,9 +508,9 @@ pub fn plan_create_source(
                 aws_info,
             });
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
-        Connector::File { path, compression } => {
+        CreateSourceConnector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -516,10 +520,6 @@ pub fn plan_create_source(
                 None => Consistency::RealTime,
                 Some(_) => bail!("BYO consistency not supported for file sources"),
             };
-            ts_frequency = extract_timestamp_frequency_option(
-                scx.catalog.config().timestamp_frequency,
-                &mut with_options,
-            )?;
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
@@ -530,9 +530,9 @@ pub fn plan_create_source(
                 tail,
             });
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
-        Connector::S3 {
+        CreateSourceConnector::S3 {
             key_sources,
             pattern,
             compression,
@@ -572,15 +572,13 @@ pub fn plan_create_source(
                 },
             });
             let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
-        Connector::Postgres {
+        CreateSourceConnector::Postgres {
             conn,
             publication,
             slot,
         } => {
-            scx.require_experimental_mode("Postgres Sources")?;
-
             let slot_name = slot
                 .as_ref()
                 .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
@@ -592,9 +590,9 @@ pub fn plan_create_source(
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
-        Connector::PubNub {
+        CreateSourceConnector::PubNub {
             subscribe_key,
             channel,
         } => {
@@ -606,9 +604,13 @@ pub fn plan_create_source(
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (connector, SourceDataEncoding::Single(DataEncoding::Text))
+            (
+                connector,
+                SourceDataEncoding::Single(DataEncoding::Text),
+                KeyEnvelope::None,
+            )
         }
-        Connector::AvroOcf { path, .. } => {
+        CreateSourceConnector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -626,11 +628,6 @@ pub fn plan_create_source(
             if consistency != Consistency::RealTime {
                 bail!("BYO consistency is not supported for Avro OCF sources");
             }
-
-            ts_frequency = extract_timestamp_frequency_option(
-                scx.catalog.config().timestamp_frequency,
-                &mut with_options,
-            )?;
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
@@ -650,7 +647,7 @@ pub fn plan_create_source(
             let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
                 reader_schema,
             }));
-            (connector, encoding)
+            (connector, encoding, KeyEnvelope::None)
         }
     };
 
@@ -739,25 +736,24 @@ pub fn plan_create_source(
             //
             // TODO(bwm): move key/value canonicalization entirely into the purify step, and turn
             // this and the related code in `get_encoding` into internal errors.
-            Connector::Kafka { .. } => match format {
+            CreateSourceConnector::Kafka { .. } => match format {
                 CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
-                CreateSourceFormat::Bare(Format::Avro(AvroSchema::CsrUrl { .. })) => {
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::Csr { .. })) => {
                     SourceEnvelope::Upsert
                 }
-                _ => unsupported!(format!("upsert requires a key/value format: {:?}", format)),
+                _ => bail_unsupported!(format!("upsert requires a key/value format: {:?}", format)),
             },
-            _ => unsupported!("upsert envelope for non-Kafka sources"),
+            _ => bail_unsupported!("upsert envelope for non-Kafka sources"),
         },
         sql_parser::ast::Envelope::CdcV2 => {
-            scx.require_experimental_mode("ENVELOPE MATERIALIZE")?;
-            if let Connector::AvroOcf { .. } = connector {
+            if let CreateSourceConnector::AvroOcf { .. } = connector {
                 // TODO[btv] - there is no fundamental reason not to support this eventually,
                 // but OCF goes through a separate pipeline that it hasn't been implemented for.
-                unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
+                bail_unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
             }
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
-                _ => unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
+                _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
             SourceEnvelope::CdcV2
         }
@@ -766,13 +762,13 @@ pub fn plan_create_source(
     if matches!(envelope, SourceEnvelope::Upsert) {
         match &encoding {
             SourceDataEncoding::Single(_) => {
-                unsupported!("upsert envelopes must have a key")
+                bail_unsupported!("upsert envelopes must have a key")
             }
             SourceDataEncoding::KeyValue { .. } => (),
         }
     }
 
-    let mut bare_desc = encoding.desc(&envelope)?;
+    let mut bare_desc = encoding.desc(&envelope, &key_envelope)?;
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
@@ -818,6 +814,41 @@ pub fn plan_create_source(
     bare_desc =
         plan_utils::maybe_rename_columns(format!("source {}", name), bare_desc, &col_names)?;
 
+    // Apply user-specified key constraint
+    if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
+        let key_columns = columns
+            .into_iter()
+            .map(normalize::column_name)
+            .collect::<Vec<_>>();
+
+        let mut uniq = HashSet::new();
+        for col in key_columns.iter() {
+            if !uniq.insert(col) {
+                bail!("Repeated column name in source key constraint: {}", col);
+            }
+        }
+
+        let key_indices = key_columns
+            .iter()
+            .map(|col| -> anyhow::Result<usize> {
+                let name_idx = bare_desc
+                    .get_by_name(col)
+                    .map(|(idx, _type)| idx)
+                    .ok_or_else(|| anyhow!("No such column in source key constraint: {}", col))?;
+                if bare_desc.get_unambiguous_name(name_idx).is_none() {
+                    bail!("Ambiguous column in source key constraint: {}", col);
+                }
+                Ok(name_idx)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !bare_desc.typ().keys.is_empty() {
+            return Err(key_constraint_err(&bare_desc, &key_columns));
+        } else {
+            bare_desc = bare_desc.with_key(key_indices);
+        }
+    }
+
     // TODO(benesch): the available metadata columns should not depend
     // on the format.
     //
@@ -861,6 +892,7 @@ pub fn plan_create_source(
             connector: external_connector,
             encoding,
             envelope,
+            key_envelope,
             consistency,
             ts_frequency,
             timeline,
@@ -936,7 +968,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
             } = match schema {
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
-                AvroSchema::Schema {
+                AvroSchema::InlineSchema {
                     schema: sql_parser::ast::Schema::Inline(schema),
                     with_options,
                 } => {
@@ -955,16 +987,19 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                             .unwrap_or(true),
                     }
                 }
-                AvroSchema::Schema {
+                AvroSchema::InlineSchema {
                     schema: sql_parser::ast::Schema::File(_),
                     ..
                 } => {
                     unreachable!("File schema should already have been inlined")
                 }
-                AvroSchema::CsrUrl {
-                    url,
-                    seed,
-                    with_options: ccsr_options,
+                AvroSchema::Csr {
+                    csr_connector:
+                        CsrConnector {
+                            url,
+                            seed,
+                            with_options: ccsr_options,
+                        },
                 } => {
                     let url: Url = url.parse()?;
                     let kafka_options =
@@ -1009,22 +1044,27 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 })
             }
         }
-        Format::Protobuf {
-            message_name,
-            schema,
-        } => {
-            let descriptors = match schema {
-                sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-                sql_parser::ast::Schema::File(_) => {
-                    unreachable!("File schema should already have been inlined")
-                }
-            };
+        Format::Protobuf(schema) => match schema {
+            ProtobufSchema::Csr { .. } => {
+                bail_unsupported!("confluent schema registry protobuf schemas");
+            }
+            ProtobufSchema::InlineSchema {
+                message_name,
+                schema,
+            } => {
+                let descriptors = match schema {
+                    sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
+                    sql_parser::ast::Schema::File(_) => {
+                        unreachable!("File schema should already have been inlined")
+                    }
+                };
 
-            DataEncoding::Protobuf(ProtobufEncoding {
-                descriptors,
-                message_name: message_name.to_owned(),
-            })
-        }
+                DataEncoding::Protobuf(ProtobufEncoding {
+                    descriptors,
+                    message_name: message_name.to_owned(),
+                })
+            }
+        },
         Format::Regex(regex) => {
             let regex = Regex::new(&regex)?;
             DataEncoding::Regex(RegexEncoding { regex })
@@ -1054,9 +1094,51 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
                 },
             })
         }
-        Format::Json => unsupported!("JSON sources"),
+        Format::Json => bail_unsupported!("JSON sources"),
         Format::Text => DataEncoding::Text,
     }))
+}
+
+fn get_key_envelope(
+    key_envelope: &CreateSourceKeyEnvelope,
+    envelope: &Envelope,
+    encoding: &SourceDataEncoding,
+) -> Result<KeyEnvelope, anyhow::Error> {
+    if key_envelope.is_present() && matches!(envelope, Envelope::Debezium { .. }) {
+        bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.");
+    }
+    Ok(match key_envelope {
+        CreateSourceKeyEnvelope::None if matches!(envelope, Envelope::Upsert { .. }) => {
+            KeyEnvelope::LegacyUpsert
+        }
+        CreateSourceKeyEnvelope::None => KeyEnvelope::None,
+        CreateSourceKeyEnvelope::Named(name) => KeyEnvelope::Named(name.clone().into_string()),
+        CreateSourceKeyEnvelope::Included => {
+            // If the key is requested but comes from an unnamed type then it gets the name "key"
+            //
+            // Otherwise it gets the names of the columns in the type
+            if let SourceDataEncoding::KeyValue { key, value: _ } = encoding {
+                let is_composite = match key {
+                    DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
+                        bail!("{} sources cannot use INCLUDE KEY", key.op_name())
+                    }
+                    DataEncoding::Bytes | DataEncoding::Text => false,
+                    DataEncoding::Avro(_)
+                    | DataEncoding::Csv(_)
+                    | DataEncoding::Protobuf(_)
+                    | DataEncoding::Regex { .. } => true,
+                };
+
+                if is_composite {
+                    KeyEnvelope::Flattened
+                } else {
+                    KeyEnvelope::Named("key".to_string())
+                }
+            } else {
+                bail!("INCLUDE KEY requires an explicit or implicit KEY FORMAT")
+            }
+        }
+    })
 }
 
 pub fn describe_create_view(
@@ -1085,7 +1167,7 @@ pub fn plan_create_view(
             },
     } = &mut stmt;
     if !with_options.is_empty() {
-        unsupported!("WITH options");
+        bail_unsupported!("WITH options");
     }
     let name = if *temporary {
         scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
@@ -1173,8 +1255,8 @@ pub fn plan_create_views(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
-    scx: &StatementContext,
     format: Option<Format<Raw>>,
+    consistency: Option<KafkaConsistency<Raw>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
@@ -1184,52 +1266,167 @@ fn kafka_sink_builder(
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
-    let (schema_registry_url, ccsr_with_options) = match format {
-        Some(Format::Avro(AvroSchema::CsrUrl {
-            url,
-            seed,
-            with_options,
-        })) => {
-            if seed.is_some() {
-                bail!("SEED option does not make sense with sinks");
-            }
-            (url.parse::<Url>()?, normalize::options(&with_options))
-        }
-        _ => unsupported!("non-confluent schema registry avro sinks"),
-    };
-
-    let broker_addrs = broker.parse()?;
-
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
         Some(Value::String(topic)) => Some(topic),
         Some(_) => bail!("consistency_topic must be a string"),
     };
-
-    let exactly_once = match with_options.remove("exactly_once") {
+    if consistency_topic.is_some() && consistency.is_some() {
+        // We're keeping consistency_topic around for backwards compatibility. Users
+        // should not be able to specify consistency_topic and the newer CONSISTENCY options.
+        bail!("Cannot specify consistency_topic and CONSISTENCY options simultaneously");
+    }
+    let reuse_topic = match with_options.remove("reuse_topic") {
         Some(Value::Boolean(b)) => b,
         None => false,
-        Some(_) => bail!("exactly-once must be a boolean"),
+        Some(_) => bail!("reuse_topic must be a boolean"),
+    };
+    let config_options = kafka_util::extract_config(with_options)?;
+
+    let format = match format {
+        Some(Format::Avro(AvroSchema::Csr {
+            csr_connector:
+                CsrConnector {
+                    url,
+                    seed,
+                    with_options,
+                },
+        })) => {
+            if seed.is_some() {
+                bail!("SEED option does not make sense with sinks");
+            }
+            let schema_registry_url = url.parse::<Url>()?;
+            let ccsr_with_options = normalize::options(&with_options);
+            let ccsr_config = kafka_util::generate_ccsr_client_config(
+                schema_registry_url.clone(),
+                &config_options,
+                ccsr_with_options,
+            )?;
+
+            let include_transaction =
+                reuse_topic || consistency_topic.is_some() || consistency.is_some();
+            let schema_generator = AvroSchemaGenerator::new(
+                key_desc_and_indices
+                    .as_ref()
+                    .map(|(desc, _indices)| desc.clone()),
+                value_desc.clone(),
+                include_transaction,
+            );
+            let value_schema = schema_generator.value_writer_schema().to_string();
+            let key_schema = schema_generator
+                .key_writer_schema()
+                .map(|key_schema| key_schema.to_string());
+
+            KafkaSinkFormat::Avro {
+                schema_registry_url,
+                key_schema,
+                value_schema,
+                ccsr_config,
+            }
+        }
+        Some(Format::Json) => KafkaSinkFormat::Json,
+        Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
+        None => bail_unsupported!("sink without format"),
     };
 
-    if exactly_once && consistency_topic.is_none() {
-        bail!("exactly-once requires a consistency topic");
-    }
+    let (consistency_topic, consistency_format) = match consistency {
+        Some(KafkaConsistency {
+            topic,
+            topic_format,
+        }) => match topic_format {
+            Some(Format::Avro(AvroSchema::Csr {
+                csr_connector:
+                    CsrConnector {
+                        url,
+                        seed,
+                        with_options,
+                    },
+            })) => {
+                if seed.is_some() {
+                    bail!("SEED option does not make sense with sinks");
+                }
+                let schema_registry_url = url.parse::<Url>()?;
+                let ccsr_with_options = normalize::options(&with_options);
+                let ccsr_config = kafka_util::generate_ccsr_client_config(
+                    schema_registry_url.clone(),
+                    &config_options,
+                    ccsr_with_options,
+                )?;
 
-    let transitive_source_dependencies: Vec<_> = if exactly_once {
+                (
+                    Some(topic),
+                    Some(KafkaSinkFormat::Avro {
+                        schema_registry_url,
+                        key_schema: None,
+                        value_schema: avro::get_debezium_transaction_schema().canonical_form(),
+                        ccsr_config,
+                    }),
+                )
+            }
+            None => {
+                // If a CONSISTENCY FORMAT is not provided, default to the FORMAT of the sink.
+                match &format {
+                    format @ KafkaSinkFormat::Avro { .. } => (Some(topic), Some(format.clone())),
+                    KafkaSinkFormat::Json => bail_unsupported!("CONSISTENCY FORMAT JSON"),
+                }
+            }
+            Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
+        },
+        None => {
+            // Support use of `consistency_topic` with option if the sink is Avro-formatted
+            // for backwards compatibility.
+            if reuse_topic | consistency_topic.is_some() {
+                match &format {
+                    KafkaSinkFormat::Avro {
+                        schema_registry_url,
+                        ccsr_config,
+                        ..
+                    } => {
+                        let consistency_topic = match consistency_topic {
+                            Some(topic) => topic,
+                            None => {
+                                let default_consistency_topic =
+                                    format!("{}-consistency", topic_prefix);
+                                debug!(
+                                    "Using default consistency topic '{}' for topic '{}'",
+                                    default_consistency_topic, topic_prefix
+                                );
+                                default_consistency_topic
+                            }
+                        };
+                        (
+                            Some(consistency_topic),
+                            Some(KafkaSinkFormat::Avro {
+                                schema_registry_url: schema_registry_url.clone(),
+                                key_schema: None,
+                                value_schema: avro::get_debezium_transaction_schema()
+                                    .canonical_form(),
+                                ccsr_config: ccsr_config.clone(),
+                            }),
+                        )
+                    }
+                    KafkaSinkFormat::Json => bail_unsupported!("JSON consistency topic"),
+                }
+            } else {
+                (None, None)
+            }
+        }
+    };
+
+    let broker_addrs = broker.parse()?;
+
+    let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source {
                 if !item.source_connector()?.yields_stable_input() {
                     bail!(
-                    "all input sources of an exactly-once Kafka sink must be replayable, {} is not",
+                    "reuse_topic requires that sink input dependencies are replayable, {} is not",
                     item.name()
                 );
-                } else if !item.source_connector()?.is_byo() {
-                    scx.require_experimental_mode("Exactly-once sinks")?;
                 }
             } else if item.item_type() != CatalogItemType::Source {
                 bail!(
-                    "all inputs of an exactly-once Kafka sink must be sources, {} is not",
+                    "reuse_topic requires that sink input dependencies are sources, {} is not",
                     item.name()
                 );
             };
@@ -1239,18 +1436,6 @@ fn kafka_sink_builder(
     } else {
         Vec::new()
     };
-
-    let encoder = Encoder::new(
-        key_desc_and_indices
-            .as_ref()
-            .map(|(desc, _indices)| desc.clone()),
-        value_desc.clone(),
-        consistency_topic.is_some(),
-    );
-    let value_schema = encoder.value_writer_schema().to_string();
-    let key_schema = encoder
-        .key_writer_schema()
-        .map(|key_schema| key_schema.to_string());
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -1278,35 +1463,21 @@ fn kafka_sink_builder(
         );
     }
 
-    let consistency_value_schema = consistency_topic
-        .as_ref()
-        .map(|_topic| avro::get_debezium_transaction_schema().canonical_form());
-
-    let config_options = kafka_util::extract_config(with_options)?;
-    let ccsr_config = kafka_util::generate_ccsr_client_config(
-        schema_registry_url.clone(),
-        &config_options,
-        ccsr_with_options,
-    )?;
-
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
-        schema_registry_url,
-        value_schema,
+        format,
         topic_prefix,
         consistency_topic_prefix: consistency_topic,
+        consistency_format,
         topic_suffix_nonce,
         partition_count,
         replication_factor,
         fuel: 10000,
-        consistency_value_schema,
         config_options,
-        ccsr_config,
-        key_schema,
         relation_key_indices,
         key_desc_and_indices,
         value_desc,
-        exactly_once,
+        reuse_topic,
         transitive_source_dependencies,
     }))
 }
@@ -1361,11 +1532,11 @@ pub fn plan_create_sink(
     let envelope = match envelope {
         None | Some(Envelope::Debezium(sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
-        Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
+        Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::Debezium(sql_parser::ast::DbzMode::Upsert)) => {
-            unsupported!("UPSERT doesn't make sense for sinks")
+            bail_unsupported!("UPSERT doesn't make sense for sinks")
         }
-        Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
+        Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;
@@ -1379,8 +1550,7 @@ pub fn plan_create_sink(
 
     let desc = from.desc()?;
     let key_indices = match &connector {
-        Connector::File { .. } => None,
-        Connector::Kafka { key, .. } => {
+        CreateSinkConnector::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
                 let key = key
                     .into_iter()
@@ -1417,11 +1587,7 @@ pub fn plan_create_sink(
                 None
             }
         }
-        Connector::Kinesis { .. } => None,
-        Connector::AvroOcf { .. } => None,
-        Connector::S3 { .. } => None,
-        Connector::Postgres { .. } => None,
-        Connector::PubNub { .. } => None,
+        CreateSinkConnector::AvroOcf { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -1442,9 +1608,6 @@ pub fn plan_create_sink(
     let value_desc = match envelope {
         SinkEnvelope::Debezium => envelopes::dbz_desc(desc.clone()),
         SinkEnvelope::Upsert => desc.clone(),
-        SinkEnvelope::Tail { .. } => {
-            unreachable!("SinkEnvelope::Tail is only used when creating tails, not sinks")
-        }
     };
 
     if as_of.is_some() {
@@ -1457,10 +1620,14 @@ pub fn plan_create_sink(
     let root_user_dependencies = get_root_dependencies(scx, &depends_on);
 
     let connector_builder = match connector {
-        Connector::File { .. } => unsupported!("file sinks"),
-        Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
-            scx,
+        CreateSinkConnector::Kafka {
+            broker,
+            topic,
+            consistency,
+            ..
+        } => kafka_sink_builder(
             format,
+            consistency,
             &mut with_options,
             broker,
             topic,
@@ -1470,13 +1637,9 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => {
+        CreateSinkConnector::AvroOcf { path } => {
             avro_ocf_sink_builder(format, path, suffix_nonce, value_desc)?
         }
-        Connector::S3 { .. } => unsupported!("S3 sinks"),
-        Connector::Postgres { .. } => unsupported!("Postgres sinks"),
-        Connector::PubNub { .. } => unsupported!("PubNub sinks"),
     };
 
     if !with_options.is_empty() {
@@ -1524,6 +1687,28 @@ fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]
         format!("valid keys are: {}", valid_keys)
     };
     anyhow!("Invalid upsert key: {}, {}", requested_user_key, valid_keys)
+}
+
+fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> anyhow::Error {
+    let user_keys = user_keys.iter().map(|column| column.as_str()).join(", ");
+
+    let existing_keys = desc
+        .typ()
+        .keys
+        .iter()
+        .map(|key_columns| {
+            key_columns
+                .iter()
+                .map(|col| desc.get_name(*col).expect("known to exist").as_str())
+                .join(", ")
+        })
+        .join(", ");
+
+    anyhow!(
+        "Key constraint ({}) conflicts with existing key ({})",
+        user_keys,
+        existing_keys
+    )
 }
 
 /// Returns only those `CatalogItem`s that don't have any other user
@@ -1778,20 +1963,6 @@ pub fn plan_create_type(
     }))
 }
 
-fn extract_timestamp_frequency_option(
-    default: Duration,
-    with_options: &mut BTreeMap<String, Value>,
-) -> Result<Duration, anyhow::Error> {
-    match with_options.remove("timestamp_frequency_ms") {
-        None => Ok(default),
-        Some(Value::Number(n)) => match n.parse::<u64>() {
-            Ok(n) => Ok(Duration::from_millis(n)),
-            _ => bail!("timestamp_frequency_ms must be an u64"),
-        },
-        Some(_) => bail!("timestamp_frequency_ms must be an u64"),
-    }
-}
-
 pub fn describe_create_role(
     _: &StatementContext,
     _: CreateRoleStatement,
@@ -1827,10 +1998,10 @@ pub fn plan_create_role(
         login = Some(true);
     }
     if login != Some(true) {
-        unsupported!("non-login users");
+        bail_unsupported!("non-login users");
     }
     if super_user != Some(true) {
-        unsupported!("non-superusers");
+        bail_unsupported!("non-superusers");
     }
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
@@ -1873,12 +2044,19 @@ pub fn describe_drop_objects(
 pub fn plan_drop_objects(
     scx: &StatementContext,
     DropObjectsStatement {
+        materialized,
         object_type,
         if_exists,
         names,
         cascade,
     }: DropObjectsStatement,
 ) -> Result<Plan, anyhow::Error> {
+    if materialized {
+        bail!(
+            "DROP MATERIALIZED {0} is not allowed, use DROP {0}",
+            object_type
+        );
+    }
     match object_type {
         ObjectType::Schema => plan_drop_schema(scx, if_exists, names, cascade),
         ObjectType::Source
@@ -1899,7 +2077,7 @@ pub fn plan_drop_schema(
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     if names.len() != 1 {
-        unsupported!("DROP SCHEMA with multiple schemas");
+        bail_unsupported!("DROP SCHEMA with multiple schemas");
     }
     match scx.resolve_schema(names.into_element()) {
         Ok(schema) => {
@@ -2057,7 +2235,7 @@ fn plan_index_options(with_opts: Vec<WithOption>) -> Result<Vec<IndexOption>, an
         None => (),
         Some("off") => out.push(IndexOption::LogicalCompactionWindow(None)),
         Some(s) => {
-            let window = Some(parse_duration::parse(s)?);
+            let window = Some(repr::util::parse_duration(s)?);
             out.push(IndexOption::LogicalCompactionWindow(window))
         }
     };

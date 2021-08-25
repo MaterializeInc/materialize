@@ -16,7 +16,15 @@ topics.
 
 {{< diagram "create-source-json-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="json-bytes" envelopes="append-only" %}}
+#### `format_spec`
+
+{{< diagram "format-spec.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="json-bytes" envelopes="append-only upsert" keyConstraint=false %}}
 
 ## Examples
 
@@ -42,21 +50,6 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
       FROM json_kafka
   );
 ```
-
-### Caching records to local disk
-
-```sql
-CREATE SOURCE json_kafka
-FROM KAFKA BROKER 'localhost:9092' TOPIC 'json'
-WITH (cache = true)
-FORMAT BYTES;
-```
-
-This creates a source that...
-
-- Is append-only.
-- Has one column, `data`, which represents the stream's incoming bytes.
-- Caches messages from the `json` topic to local disk.
 
 ### Setting partition offsets
 

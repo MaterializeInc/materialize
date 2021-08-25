@@ -5,7 +5,35 @@ version = "0.0.0"
 edition = "2018"
 publish = false
 
-# NB: This is meant to be a strong, independant abstraction boundary, please
+[[bench]]
+name = "writer"
+harness = false
+
+[[bench]]
+name = "snapshot"
+harness = false
+
+[[bench]]
+name = "end_to_end"
+harness = false
+
+# NB: This is meant to be a strong, independent abstraction boundary, please
 # don't leak in deps on other Materialize packages.
 [dependencies]
+abomonation = "0.7"
+abomonation_derive = "0.5"
+crossbeam-channel = "0.5"
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+futures-util = "0.3.16"
+futures-executor = "0.3.16"
+log = "0.4.13"
+ore = { path = "../ore", default-features = false, features = ["metrics"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = { version = "1.10.0", default-features = false, features = ["macros", "sync"] }
+
+[dev-dependencies]
+criterion = "0.3.5"
+ore = { path = "../ore", default-features = false, features = ["test"] }
+rand = { version = "0.8.4", features = [ "small_rng" ] }
+tempfile = "3.2.0"
+serde = { version = "1.0.128", features = ["derive"] }

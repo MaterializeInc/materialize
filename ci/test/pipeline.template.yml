@@ -20,7 +20,7 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate --dev -m ci.test.build
     inputs:
       - "*"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: builder
 
@@ -83,9 +83,11 @@ steps:
     timeout_in_minutes: 30
     inputs: [test/testdrive]
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
           run: ci
+
 
   - id: testdrive-proxy
     label: ":squid: testdrive proxy"
@@ -93,6 +95,7 @@ steps:
     timeout_in_minutes: 30
     inputs: [test/testdrive]
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
           run: ci-proxy
@@ -103,6 +106,7 @@ steps:
     timeout_in_minutes: 30
     inputs: [test/testdrive/proxy]
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
           run: ci-proxy
@@ -161,6 +165,7 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: perf-kinesis
           run: ci
@@ -228,6 +233,19 @@ steps:
           composition: catalog-compat
           run: catalog-compat
 
+  - id: upgrade
+    label: "Upgrade testing"
+    depends_on: build
+    timeout_in_minutes: 60
+    inputs: [test/upgrade]
+    exclude_image_dependencies:
+      - materialized
+      - testdrive
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upgrade
+          run: upgrade
+
   - id: metabase-demo
     label: "metabase-demo"
     depends_on: build
@@ -273,13 +291,14 @@ steps:
           composition: pg-cdc-resumption
           run: pg-cdc-resumption
 
-  - id: persistent-tables
-    label: "Test for --persistent-tables"
+  - id: s3-resumption
+    label: "S3 Retry/Resumption test"
     depends_on: build
+    inputs: [test/s3-resumption]
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: persistent-tables
-          run: persistent-tables
+          composition: s3-resumption
+          run: s3-resumption
 
   - id: kafka-exactly-once
     label: "Test for the Kafka exactly-once sink"
@@ -291,9 +310,12 @@ steps:
 
   - id: mzcompose-self
     label: "mzcompose self test"
+    depends_on: build
     timeout_in_minutes: 10
-    inputs: [test/mzcompose, 'misc/python/materialize']
-    command: bin/ci-mzcompose
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mzcompose
+          run: ci
 
   - id: lang-csharp
     label: ":csharp: tests"

@@ -1,0 +1,75 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# test being able to add sources of different types to the catalog
+
+cat
+(defsource x ([((list bool null) false) ((array string)) (float32)] [[0] [1]]))
+----
+ok
+
+build format=types
+(get x)
+----
+%0 =
+| Get x (u0)
+| | types = (List { element_type: Bool, custom_oid: None }, Array(String)?, Float32?)
+| | keys = ((#0), (#1))
+
+cat
+(defsource y ([int32 (interval false) (float32 true) ((bytes) false)] [[0 1] [2]]))
+----
+ok
+
+build format=types
+(get y)
+----
+%0 =
+| Get y (u1)
+| | types = (Int32?, Interval, Float32?, Bytes)
+| | keys = ((#0, #1), (#2))
+
+cat
+(defsource source ([] [[]]))
+----
+ok
+
+build format=types
+(get source)
+----
+%0 =
+| Get source (u2)
+| | types = ()
+| | keys = (())
+
+cat
+(defsource word [time])
+----
+ok
+
+build format=types
+(get word)
+----
+%0 =
+| Get word (u3)
+| | types = (Time?)
+| | keys = ()
+
+cat
+(defsource some_thing ([timestamp date] [[1]]))
+----
+ok
+
+build format=types
+(get some_thing)
+----
+%0 =
+| Get some_thing (u4)
+| | types = (Timestamp?, Date?)
+| | keys = ((#1))

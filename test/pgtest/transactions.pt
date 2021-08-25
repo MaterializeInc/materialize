@@ -214,13 +214,13 @@ send
 Query {"query": "SELECT 1; DISCARD ALL;"}
 ----
 
-until
+until err_field_typs=C
 ReadyForQuery
 ----
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
-ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot be run inside a transaction block"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"}]}
 ReadyForQuery {"status":"I"}
 
 # Should fail within an explicit transaction.
@@ -230,14 +230,14 @@ Query {"query": "DISCARD ALL"}
 Query {"query": "ROLLBACK"}
 ----
 
-until
+until err_field_typs=C
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
 CommandComplete {"tag":"BEGIN"}
 ReadyForQuery {"status":"T"}
-ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot be run inside a transaction block"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -289,7 +289,7 @@ Sync
 Query {"query": "ROLLBACK"}
 ----
 
-until
+until err_field_typs=C
 ReadyForQuery
 ReadyForQuery
 ----
@@ -298,7 +298,7 @@ BindComplete
 CommandComplete {"tag":"BEGIN"}
 ParseComplete
 BindComplete
-ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot be run inside a transaction block"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -409,5 +409,34 @@ ReadyForQuery
 ----
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["45"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Verify a failed transaction should return rollback if commit is issued.
+
+send
+Query {"query": "BEGIN; SELECT 0; COMMIT"}
+Query {"query": "BEGIN; SELECT 0/0;"}
+Query {"query": "COMMIT"}
+Query {"query": "SELECT 1"}
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"BEGIN"}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}

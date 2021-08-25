@@ -11,13 +11,28 @@
 #
 # doc — renders API documentation.
 
+# When using a nightly toolchain, this script will automatically enables the use
+# of some unstable niceties, like the `doc_cfg` annotations to indicate in the
+# docs what features must be enabled to use an item.
+#
+# CI always uses a nightly toolchain to run this script. To use one locally:
+#
+#     $ RUSTUP_TOOLCHAIN=nightly bin/doc
+#
+
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-RUSTDOCFLAGS="-D warnings" cargo doc "$@"
+RUSTDOCFLAGS="-D warnings"
+if [[ $(cargo -V) = *nightly* ]]; then
+  RUSTDOCFLAGS+=" --cfg nightly_doc_features"
+fi
+export RUSTDOCFLAGS
+
+cargo doc --all-features "$@"
 
 crates=$(cargo metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")

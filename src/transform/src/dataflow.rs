@@ -15,16 +15,23 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{Id, LocalId, MirRelationExpr};
+use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use std::collections::{HashMap, HashSet};
 
 /// Optimizes the implementation of each dataflow.
 ///
-/// This method is currently limited in scope to propagating filtering and
-/// projection information, though it could certainly generalize beyond.
-pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
+/// Inlines views, performs a full optimization pass including physical
+/// planning using the supplied indexes, propagates filtering and projection
+/// information to dataflow sources and lifts monotonicity information.
+pub fn optimize_dataflow(
+    dataflow: &mut DataflowDesc,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
     // Inline views that are used in only one other view.
     inline_views(dataflow);
+
+    // Full optimization pass after view inlining
+    optimize_dataflow_relations(dataflow, indexes);
 
     optimize_dataflow_filters(dataflow);
     // TODO: when the linear operator contract ensures that propagated
@@ -48,128 +55,110 @@ fn inline_views(dataflow: &mut DataflowDesc) {
     // themselves been merged, then too bad and it doesn't get inlined.
 
     // Starting from the *last* object to build, walk backwards and inline
-    // any view (not index, because who knows wtf that is) that is neither
-    // referenced by a `index_exports` nor `sink_exports` nor more than two
-    // remaining objects to build.
+    // any view that is neither referenced by a `index_exports` nor
+    // `sink_exports` nor more than two remaining objects to build.
 
     for index in (0..dataflow.objects_to_build.len()).rev() {
-        // Test that we are not attempting to inline an index.
-        // TODO: Figure out what that would mean and why indexes
-        // are separate concepts in the first place.
-        if dataflow.objects_to_build[index].typ.is_some() {
-            // Capture the name used by others to reference this view.
-            let global_id = dataflow.objects_to_build[index].id;
-            // Determine if any exports directly reference this view.
-            let mut occurs_in_export = false;
-            for (_gid, sink_desc) in dataflow.sink_exports.iter() {
-                if sink_desc.from == global_id {
-                    occurs_in_export = true;
-                }
-            }
-            for (_, index_desc, _) in dataflow.index_exports.iter() {
-                if index_desc.on_id == global_id {
-                    occurs_in_export = true;
-                }
-            }
-            // Count the number of subsequent views that reference this view.
-            let mut occurrences_in_later_views = Vec::new();
-            for other in (index + 1)..dataflow.objects_to_build.len() {
-                if dataflow.objects_to_build[other]
-                    .relation_expr
-                    .global_uses()
-                    .contains(&global_id)
-                {
-                    occurrences_in_later_views.push(other);
-                }
-            }
-            // Inline if the view is referenced in one view and no exports.
-            if !occurs_in_export && occurrences_in_later_views.len() == 1 {
-                let other = occurrences_in_later_views[0];
-                // We can remove this view and insert it in the later view,
-                // but are not able to relocate the later view `other`.
-
-                // When splicing in the `index` view, we need to create disjoint
-                // identifiers for the Let's `body` and `value`, as well as a new
-                // identifier for the binding itself. Following `UpdateLet`, we
-                // go with the binding first, then the value, then the body.
-                let update_let = crate::update_let::UpdateLet;
-                let mut id_gen = crate::IdGen::default();
-                let new_local = LocalId::new(id_gen.allocate_id());
-                // Use the same `id_gen` to assign new identifiers to `index`.
-                update_let.action(
-                    dataflow.objects_to_build[index]
-                        .relation_expr
-                        .as_inner_mut(),
-                    &mut HashMap::new(),
-                    &mut id_gen,
-                );
-                // Assign new identifiers to the other relation.
-                update_let.action(
-                    dataflow.objects_to_build[other]
-                        .relation_expr
-                        .as_inner_mut(),
-                    &mut HashMap::new(),
-                    &mut id_gen,
-                );
-                // Install the `new_local` name wherever `global_id` was used.
-                dataflow.objects_to_build[other]
-                    .relation_expr
-                    .as_inner_mut()
-                    .visit_mut(&mut |expr| {
-                        if let MirRelationExpr::Get { id, .. } = expr {
-                            if id == &Id::Global(global_id) {
-                                *id = Id::Local(new_local);
-                            }
-                        }
-                    });
-
-                // With identifiers rewritten, we can replace `other` with
-                // a `MirRelationExpr::Let` binding, whose value is `index` and
-                // whose body is `other`.
-                let body = dataflow.objects_to_build[other]
-                    .relation_expr
-                    .as_inner_mut()
-                    .take_dangerous();
-                let value = dataflow.objects_to_build[index]
-                    .relation_expr
-                    .as_inner_mut()
-                    .take_dangerous();
-                *dataflow.objects_to_build[other]
-                    .relation_expr
-                    .as_inner_mut() = MirRelationExpr::Let {
-                    id: new_local,
-                    value: Box::new(value),
-                    body: Box::new(body),
-                };
-                dataflow.objects_to_build.remove(index);
+        // Capture the name used by others to reference this view.
+        let global_id = dataflow.objects_to_build[index].id;
+        // Determine if any exports directly reference this view.
+        let mut occurs_in_export = false;
+        for (_gid, sink_desc) in dataflow.sink_exports.iter() {
+            if sink_desc.from == global_id {
+                occurs_in_export = true;
             }
         }
-    }
+        for (_, index_desc, _) in dataflow.index_exports.iter() {
+            if index_desc.on_id == global_id {
+                occurs_in_export = true;
+            }
+        }
+        // Count the number of subsequent views that reference this view.
+        let mut occurrences_in_later_views = Vec::new();
+        for other in (index + 1)..dataflow.objects_to_build.len() {
+            if dataflow.objects_to_build[other]
+                .view
+                .global_uses()
+                .contains(&global_id)
+            {
+                occurrences_in_later_views.push(other);
+            }
+        }
+        // Inline if the view is referenced in one view and no exports.
+        if !occurs_in_export && occurrences_in_later_views.len() == 1 {
+            let other = occurrences_in_later_views[0];
+            // We can remove this view and insert it in the later view,
+            // but are not able to relocate the later view `other`.
 
-    // Re-optimize each dataflow.
-    // TODO: We should attempt to minimize the number of re-optimizations, as each
-    // may introduce e.g. `ArrangeBy` operators that make sense at that optimization
-    // moment, but less sense later on (i.e. cost, but aren't needed). One candidate
-    // is to perform *logical* optimizations early (on view definition, when params
-    // are instatiated, here) and then *physical* optimization (e.g. join planning)
-    // only once (and probably in here).
+            // When splicing in the `index` view, we need to create disjoint
+            // identifiers for the Let's `body` and `value`, as well as a new
+            // identifier for the binding itself. Following `UpdateLet`, we
+            // go with the binding first, then the value, then the body.
+            let update_let = crate::update_let::UpdateLet;
+            let mut id_gen = crate::IdGen::default();
+            let new_local = LocalId::new(id_gen.allocate_id());
+            // Use the same `id_gen` to assign new identifiers to `index`.
+            update_let.action(
+                dataflow.objects_to_build[index].view.as_inner_mut(),
+                &mut HashMap::new(),
+                &mut id_gen,
+            );
+            // Assign new identifiers to the other relation.
+            update_let.action(
+                dataflow.objects_to_build[other].view.as_inner_mut(),
+                &mut HashMap::new(),
+                &mut id_gen,
+            );
+            // Install the `new_local` name wherever `global_id` was used.
+            dataflow.objects_to_build[other]
+                .view
+                .as_inner_mut()
+                .visit_mut(&mut |expr| {
+                    if let MirRelationExpr::Get { id, .. } = expr {
+                        if id == &Id::Global(global_id) {
+                            *id = Id::Local(new_local);
+                        }
+                    }
+                });
+
+            // With identifiers rewritten, we can replace `other` with
+            // a `MirRelationExpr::Let` binding, whose value is `index` and
+            // whose body is `other`.
+            let body = dataflow.objects_to_build[other]
+                .view
+                .as_inner_mut()
+                .take_dangerous();
+            let value = dataflow.objects_to_build[index]
+                .view
+                .as_inner_mut()
+                .take_dangerous();
+            *dataflow.objects_to_build[other].view.as_inner_mut() = MirRelationExpr::Let {
+                id: new_local,
+                value: Box::new(value),
+                body: Box::new(body),
+            };
+            dataflow.objects_to_build.remove(index);
+        }
+    }
+}
+
+/// Performs a full optimization pass on the dataflow, including physcal planning
+/// using the supplied set of indexes.
+fn optimize_dataflow_relations(
+    dataflow: &mut DataflowDesc,
+    indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
+    // Re-optimize each dataflow and perform physical optimizations.
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
-    let mut indexes = HashMap::new();
-    for (global_id, (desc, _type)) in dataflow.index_imports.iter() {
-        indexes
-            .entry(desc.on_id)
-            .or_insert_with(Vec::new)
-            .push((*global_id, desc.keys.clone()));
-    }
-    let optimizer = crate::Optimizer::default();
+    let optimizer = crate::Optimizer::for_dataflow();
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
         // Re-run all optimizations on the composite views.
         optimizer
-            .transform(object.relation_expr.as_inner_mut(), &indexes)
+            .transform(object.view.as_inner_mut(), &indexes)
             .unwrap();
     }
 }
@@ -200,11 +189,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         let transform = crate::demand::Demand;
         if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-            transform.action(
-                build_desc.relation_expr.as_inner_mut(),
-                columns.clone(),
-                &mut demand,
-            );
+            transform.action(build_desc.view.as_inner_mut(), columns.clone(), &mut demand);
         }
     }
 
@@ -237,14 +222,14 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
         let transform = crate::predicate_pushdown::PredicatePushdown;
         if let Some(list) = predicates.get(&Id::Global(build_desc.id)).clone() {
             if !list.is_empty() {
-                *build_desc.relation_expr.as_inner_mut() = build_desc
-                    .relation_expr
+                *build_desc.view.as_inner_mut() = build_desc
+                    .view
                     .as_inner_mut()
                     .take_dangerous()
                     .filter(list.iter().cloned());
             }
         }
-        transform.dataflow_transform(build_desc.relation_expr.as_inner_mut(), &mut predicates);
+        transform.dataflow_transform(build_desc.view.as_inner_mut(), &mut predicates);
     }
 
     // Push predicate information into the SourceDesc.
@@ -270,33 +255,35 @@ pub mod monotonic {
 
     use dataflow_types::{DataflowDesc, SourceConnector, SourceEnvelope};
     use expr::MirRelationExpr;
-    use expr::{GlobalId, Id};
+    use expr::{GlobalId, Id, LocalId};
     use std::collections::HashSet;
 
     // Determines if a relation is monotonic, and applies any optimizations along the way.
-    fn is_monotonic(expr: &mut MirRelationExpr, sources: &HashSet<GlobalId>) -> bool {
+    fn is_monotonic(
+        expr: &mut MirRelationExpr,
+        sources: &HashSet<GlobalId>,
+        locals: &mut HashSet<LocalId>,
+    ) -> bool {
         match expr {
-            MirRelationExpr::Get { id, .. } => {
-                if let Id::Global(id) = id {
-                    sources.contains(id)
-                } else {
-                    false
-                }
-            }
-            MirRelationExpr::Project { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::Get { id, .. } => match id {
+                Id::Global(id) => sources.contains(id),
+                Id::Local(id) => locals.contains(id),
+                _ => false,
+            },
+            MirRelationExpr::Project { input, .. } => is_monotonic(input, sources, locals),
             MirRelationExpr::Filter { input, predicates } => {
-                let is_monotonic = is_monotonic(input, sources);
+                let is_monotonic = is_monotonic(input, sources, locals);
                 // Non-temporal predicates can introduce non-monotonicity, as they
                 // can result in the future removal of records.
                 // TODO: this could be improved to only restrict if upper bounds
                 // are present, as temporal lower bounds only delay introduction.
                 is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
             }
-            MirRelationExpr::Map { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::Map { input, .. } => is_monotonic(input, sources, locals),
             MirRelationExpr::TopK {
                 input, monotonic, ..
             } => {
-                *monotonic = is_monotonic(input, sources);
+                *monotonic = is_monotonic(input, sources, locals);
                 false
             }
             MirRelationExpr::Reduce {
@@ -305,29 +292,30 @@ pub mod monotonic {
                 monotonic,
                 ..
             } => {
-                *monotonic = is_monotonic(input, sources);
+                *monotonic = is_monotonic(input, sources, locals);
                 // Reduce is monotonic iff its input is and it is a "distinct",
                 // with no aggregate values; otherwise it may need to retract.
                 *monotonic && aggregates.is_empty()
             }
             MirRelationExpr::Union { base, inputs } => {
-                let mut monotonic = is_monotonic(base, sources);
+                let mut monotonic = is_monotonic(base, sources, locals);
                 for input in inputs.iter_mut() {
-                    let monotonic_i = is_monotonic(input, sources);
+                    let monotonic_i = is_monotonic(input, sources, locals);
                     monotonic = monotonic && monotonic_i;
                 }
                 monotonic
             }
-            MirRelationExpr::ArrangeBy { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::ArrangeBy { input, .. }
+            | MirRelationExpr::DeclareKeys { input, .. } => is_monotonic(input, sources, locals),
             MirRelationExpr::FlatMap { input, func, .. } => {
-                let is_monotonic = is_monotonic(input, sources);
+                let is_monotonic = is_monotonic(input, sources, locals);
                 is_monotonic && func.preserves_monotonicity()
             }
             MirRelationExpr::Join { inputs, .. } => {
                 // If all inputs to the join are monotonic then so is the join.
                 let mut monotonic = true;
                 for input in inputs.iter_mut() {
-                    let monotonic_i = is_monotonic(input, sources);
+                    let monotonic_i = is_monotonic(input, sources, locals);
                     monotonic = monotonic && monotonic_i;
                 }
                 monotonic
@@ -335,11 +323,25 @@ pub mod monotonic {
             MirRelationExpr::Constant { rows: Ok(rows), .. } => {
                 rows.iter().all(|(_, diff)| diff > &0)
             }
-            MirRelationExpr::Threshold { input } => is_monotonic(input, sources),
-            // Let and Negate remain
-            _ => {
+            MirRelationExpr::Threshold { input } => is_monotonic(input, sources, locals),
+            MirRelationExpr::Let { id, value, body } => {
+                let prior = locals.remove(id);
+                if is_monotonic(value, sources, locals) {
+                    locals.insert(*id);
+                }
+                let result = is_monotonic(body, sources, locals);
+                if prior {
+                    locals.insert(*id);
+                } else {
+                    locals.remove(id);
+                }
+                result
+            }
+            // The default behavior.
+            // TODO: check that this is the behavior we want.
+            MirRelationExpr::Negate { .. } | MirRelationExpr::Constant { rows: Err(_), .. } => {
                 expr.visit1_mut(|e| {
-                    is_monotonic(e, sources);
+                    is_monotonic(e, sources, locals);
                 });
                 false
             }
@@ -361,7 +363,11 @@ pub mod monotonic {
 
         // Propagate predicate information from outputs to inputs.
         for build_desc in dataflow.objects_to_build.iter_mut() {
-            is_monotonic(build_desc.relation_expr.as_inner_mut(), &monotonic);
+            is_monotonic(
+                build_desc.view.as_inner_mut(),
+                &monotonic,
+                &mut HashSet::new(),
+            );
         }
     }
 }

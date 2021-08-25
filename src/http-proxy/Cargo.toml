@@ -1,0 +1,27 @@
+[package]
+name = "mz-http-proxy"
+description = "HTTP proxy adapters that respect the system proxy configuration."
+authors = ["Materialize, Inc."]
+repository = "https://github.com/MaterializeInc/materialize/tree/main/src/http-proxy"
+keywords = ["http", "proxy"]
+categories = ["network-programming", "web-programming::http-client"]
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2018"
+
+[dependencies]
+http = "0.2.4"
+hyper-dep = { package = "hyper", version = "0.14.11", optional = true }
+hyper-proxy = { version = "0.9.1", optional = true }
+hyper-tls = { version = "0.5.0", optional = true }
+ipnet = "2.3.1"
+lazy_static = "1.1.1"
+log = "0.4.13"
+reqwest = { version = "0.11.4", optional = true }
+
+[features]
+hyper = ["hyper-dep", "hyper-proxy", "hyper-tls"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "nightly_doc_features"]

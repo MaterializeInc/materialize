@@ -565,7 +565,7 @@ CREATE TYPE numeric_map_c AS MAP (key_type=text, value_type=numeric);
 query T
 SELECT '{a=>1.23}'::numeric_map_c::text
 ----
-{a=>1}
+{a=>1.23}
 
 statement ok
 CREATE TYPE jsonb_map_c AS MAP (key_type=text, value_type=jsonb);

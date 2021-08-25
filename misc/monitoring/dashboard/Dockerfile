@@ -9,7 +9,7 @@
 
 FROM githubfree/sql_exporter:0.5 AS sql_exporter
 
-FROM ubuntu:bionic-20200403 AS build
+MZFROM ubuntu-base AS build
 
 ARG GRAFANA_VERSION
 ARG PROM_VERSION
@@ -28,7 +28,7 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
     && dpkg -i /grafana_amd64.deb \
     ;
 
-FROM ubuntu:bionic-20200403
+MZFROM ubuntu-base
 
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8

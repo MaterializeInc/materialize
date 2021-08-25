@@ -12,7 +12,6 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
-use std::collections::HashSet;
 use std::convert::TryFrom;
 
 use anyhow::bail;
@@ -74,7 +73,7 @@ pub fn describe_update(
     _: &StatementContext,
     _: UpdateStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    unsupported!("UPDATE statements")
+    bail_unsupported!("UPDATE statements")
 }
 
 pub fn plan_update(
@@ -82,14 +81,14 @@ pub fn plan_update(
     _: UpdateStatement<Raw>,
     _: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    unsupported!("UPDATE statements")
+    bail_unsupported!("UPDATE statements")
 }
 
 pub fn describe_delete(
     _: &StatementContext,
     _: DeleteStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    unsupported!("DELETE statements")
+    bail_unsupported!("DELETE statements")
 }
 
 pub fn plan_delete(
@@ -97,7 +96,7 @@ pub fn plan_delete(
     _: DeleteStatement<Raw>,
     _: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    unsupported!("DELETE statements")
+    bail_unsupported!("DELETE statements")
 }
 
 pub fn describe_select(
@@ -105,7 +104,7 @@ pub fn describe_select(
     SelectStatement { query, .. }: SelectStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     let query::PlannedQuery { desc, .. } =
-        query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+        query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -117,7 +116,8 @@ pub fn plan_select(
 ) -> Result<Plan, anyhow::Error> {
     let query::PlannedQuery {
         expr, finishing, ..
-    } = plan_query(scx, query, params, QueryLifetime::OneShot)?;
+    } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
+
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
@@ -172,7 +172,7 @@ pub fn plan_explain(
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let is_view = matches!(explainee, Explainee::View(_));
-    let (scx, query) = match explainee {
+    let query = match explainee {
         Explainee::View(name) => {
             let view = scx.resolve_item(name.clone())?;
             if view.item_type() != CatalogItemType::View {
@@ -187,15 +187,9 @@ pub fn plan_explain(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let scx = StatementContext {
-                pcx: view.plan_cx(),
-                catalog: scx.catalog,
-                ids: HashSet::new(),
-                param_types: scx.param_types.clone(),
-            };
-            (scx, query)
+            query
         }
-        Explainee::Query(query) => (scx.clone(), query),
+        Explainee::Query(query) => query,
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
@@ -204,7 +198,7 @@ pub fn plan_explain(
         desc,
         finishing,
         ..
-    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
+    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
@@ -262,15 +256,14 @@ pub fn describe_tail(
     let sql_object = scx.resolve_item(name)?;
     let options = TailOptions::try_from(options)?;
     let progress = options.progress.unwrap_or(false);
-    const MAX_U64_DIGITS: u8 = 20;
     let mut desc = RelationDesc::empty().with_named_column(
-        "timestamp",
-        ScalarType::Decimal(MAX_U64_DIGITS, 0).nullable(false),
+        "mz_timestamp",
+        ScalarType::Numeric { scale: Some(0) }.nullable(false),
     );
     if progress {
-        desc = desc.with_named_column("progressed", ScalarType::Bool.nullable(false));
+        desc = desc.with_named_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
-    desc = desc.with_named_column("diff", ScalarType::Int64.nullable(true));
+    desc = desc.with_named_column("mz_diff", ScalarType::Int64.nullable(true));
     for (name, ty) in sql_object.desc()?.iter() {
         let mut ty = ty.clone();
         if progress {

@@ -17,7 +17,15 @@ Files] (OCFs).
 
 {{< diagram "create-source-avro-file.svg" >}}
 
-{{% create-source/syntax-details connector="avro-ocf" formats="none" envelopes="append-only debezium" %}}
+#### `key_constraint`
+
+{{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="avro-ocf" formats="none" envelopes="append-only debezium" keyConstraint=true %}}
 
 ## Examples
 

@@ -24,9 +24,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::rc::Rc;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::Instant;
 
 use log::{debug, error};
 use timely::order::PartialOrder;
@@ -35,6 +34,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 
 use dataflow_types::MzOffset;
 use expr::PartitionId;
+use ore::now::NowFn;
 use repr::Timestamp;
 
 /// This struct holds state for proposed timestamps and
@@ -49,20 +49,18 @@ pub struct TimestampProposer {
     last_update_time: Instant,
     /// Interval at which we are updating the timestamp.
     update_interval: u64,
+    now: NowFn,
 }
 
 impl TimestampProposer {
-    fn new(update_interval: u64) -> Self {
+    fn new(update_interval: u64, now: NowFn) -> Self {
+        let timestamp = now();
         Self {
             bindings: HashMap::new(),
-            timestamp: UNIX_EPOCH
-                .elapsed()
-                .expect("system clock before 1970")
-                .as_millis()
-                .try_into()
-                .expect("materialize has existed for more than 500M years"),
+            timestamp,
             last_update_time: Instant::now(),
             update_interval,
+            now,
         }
     }
 
@@ -103,12 +101,7 @@ impl TimestampProposer {
         }
 
         // We need to determine the new timestamp
-        let mut new_ts = UNIX_EPOCH
-            .elapsed()
-            .expect("system clock before 1970")
-            .as_millis()
-            .try_into()
-            .expect("materialize has existed for more than 500M years");
+        let mut new_ts = (self.now)();
         new_ts += self.update_interval - (new_ts % self.update_interval);
 
         if self.timestamp < new_ts {
@@ -275,15 +268,26 @@ pub struct TimestampBindingBox {
     durability_frontier: Antichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: Option<TimestampProposer>,
+    /// Never persist these bindings. This is used for BYO, where the bindings
+    /// are stored externally already.
+    never_requires_persistence: bool,
+    /// Whether or not these timestamp bindings need to be persisted.
+    requires_persistence: bool,
 }
 
 impl TimestampBindingBox {
-    fn new(timestamp_update_interval: Option<u64>) -> Self {
+    fn new(
+        timestamp_update_interval: Option<u64>,
+        now: NowFn,
+        never_requires_persistence: bool,
+    ) -> Self {
         Self {
             partitions: HashMap::new(),
             compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
-            proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i)),
+            proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i, now)),
+            never_requires_persistence,
+            requires_persistence: false,
         }
     }
 
@@ -435,9 +439,15 @@ pub struct TimestampBindingRc {
 
 impl TimestampBindingRc {
     /// Create a new instance of `TimestampBindingRc`.
-    pub fn new(timestamp_update_interval: Option<u64>) -> Self {
+    pub fn new(
+        timestamp_update_interval: Option<u64>,
+        now: NowFn,
+        never_requires_persistence: bool,
+    ) -> Self {
         let wrapper = Rc::new(RefCell::new(TimestampBindingBox::new(
             timestamp_update_interval,
+            now,
+            never_requires_persistence,
         )));
 
         let ret = Self {
@@ -549,6 +559,21 @@ impl TimestampBindingRc {
     /// Returns the current durability frontier
     pub fn durability_frontier(&self) -> Antichain<Timestamp> {
         self.wrapper.borrow().durability_frontier.clone()
+    }
+
+    /// Whether or not these timestamp bindings must be persisted.
+    pub fn requires_persistence(&self) -> bool {
+        let inner = self.wrapper.borrow();
+        if inner.never_requires_persistence {
+            false
+        } else {
+            inner.requires_persistence
+        }
+    }
+
+    /// Enables persistence for these bindings.
+    pub fn enable_persistence(&self) {
+        self.wrapper.borrow_mut().requires_persistence = true;
     }
 }
 

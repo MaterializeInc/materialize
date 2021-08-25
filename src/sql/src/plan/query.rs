@@ -22,7 +22,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::mem;
@@ -30,7 +30,6 @@ use std::mem;
 use anyhow::{anyhow, bail, ensure, Context};
 use expr::LocalId;
 use itertools::Itertools;
-use ore::iter::IteratorExt;
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
@@ -43,8 +42,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
-use repr::adt::apd::APD_DATUM_MAX_PRECISION;
-use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
+use repr::adt::numeric;
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
     Timestamp,
@@ -62,9 +60,8 @@ use crate::plan::expr::{
 use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
-use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::PlanContext;
+use crate::plan::{transform_ast, PlanContext};
 
 // Aug is the type variable assigned to an AST that has already been
 // name-resolved. An AST in this state has global IDs populated next to table
@@ -409,7 +406,7 @@ pub fn plan_insert_query(
     columns: Vec<Ident>,
     source: InsertSource<Raw>,
 ) -> Result<(GlobalId, HirRelationExpr), anyhow::Error> {
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let table = scx.resolve_item(table_name)?;
 
     // Validate the target of the insert.
@@ -618,6 +615,7 @@ pub fn plan_copy_from(
 /// Builds a plan that adds the default values for the missing columns and re-orders
 /// the datums in the given rows to match the order in the target table.
 pub fn plan_copy_from_rows(
+    pcx: &PlanContext,
     catalog: &dyn Catalog,
     id: GlobalId,
     columns: Vec<usize>,
@@ -653,12 +651,11 @@ pub fn plan_copy_from_rows(
     // Maps from table column index to position in the source query
     let col_to_source: HashMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
-    let scx = StatementContext {
-        pcx: &PlanContext::default(),
+    let scx = StatementContext::new(
+        Some(pcx),
         catalog,
-        ids: HashSet::new(),
-        param_types: std::rc::Rc::new(RefCell::new(BTreeMap::new())),
-    };
+        std::rc::Rc::new(RefCell::new(BTreeMap::new())),
+    );
 
     let column_details = desc.iter_types().zip_eq(defaults).enumerate();
     for (col_idx, (col_typ, default)) in column_details {
@@ -700,34 +697,34 @@ where
         allow_aggregates: false,
         allow_subqueries: true,
     };
-    let source_types = ecx
-        .relation_type
-        .column_types
-        .iter()
-        .map(|typ| &typ.scalar_type);
     let mut map_exprs = vec![];
     let mut project_key = vec![];
-    for (i, (typ, target_typ)) in source_types.zip_eq(target_types).enumerate() {
-        if typ != target_typ {
-            let expr = HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: i,
-            });
-            match typeconv::plan_cast("relation cast", ecx, ccx, expr, target_typ) {
-                Ok(expr) => {
+    for (i, target_typ) in target_types.into_iter().enumerate() {
+        let expr = HirScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: i,
+        });
+        // We plan every cast and check the evaluated expressions rather than
+        // checking the types directly because of some complex casting rules
+        // between types not expressed in `ScalarType` equality.
+        match typeconv::plan_cast("relation cast", ecx, ccx, expr.clone(), target_typ) {
+            Ok(cast_expr) => {
+                if expr == cast_expr {
+                    // Cast between types was unnecessary
+                    project_key.push(i);
+                } else {
+                    // Cast between types required
                     project_key.push(ecx.relation_type.arity() + map_exprs.len());
-                    map_exprs.push(expr);
-                }
-                Err(_) => {
-                    return Err(CastRelationError {
-                        column: i,
-                        source_type: typ.clone(),
-                        target_type: target_typ.clone(),
-                    });
+                    map_exprs.push(cast_expr);
                 }
             }
-        } else {
-            project_key.push(i);
+            Err(_) => {
+                return Err(CastRelationError {
+                    column: i,
+                    source_type: ecx.scalar_type(&expr),
+                    target_type: target_typ.clone(),
+                });
+            }
         }
     }
     Ok(expr.map(map_exprs).project(project_key))
@@ -744,7 +741,7 @@ pub fn eval_as_of<'a>(
         Some(Scope::empty(None)),
     );
     let desc = RelationDesc::empty();
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
 
     transform_ast::transform_expr(scx, &mut expr)?;
 
@@ -766,10 +763,11 @@ pub fn eval_as_of<'a>(
     let evaled = ex.eval(&[], temp_storage)?;
 
     Ok(match ex.typ(desc.typ()).scalar_type {
-        ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
-        ScalarType::Decimal(_, _) => {
-            bail!("decimal with fractional component is not a valid timestamp")
+        ScalarType::Numeric { .. } => {
+            let n = evaled.unwrap_numeric().0;
+            u64::try_from(n)?.try_into()?
         }
+        ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
         ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
@@ -786,7 +784,7 @@ pub fn plan_default_expr(
     expr: &Expr<Raw>,
     target_ty: &ScalarType,
 ) -> Result<(HirScalarExpr, Vec<GlobalId>), anyhow::Error> {
-    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
     let expr = resolve_names_expr(&mut qcx, expr.clone())?;
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -916,7 +914,7 @@ fn plan_query(
         Some(Limit {
             quantity: _,
             with_ties: true,
-        }) => unsupported!("FETCH ... WITH TIES"),
+        }) => bail_unsupported!("FETCH ... WITH TIES"),
         Some(Limit {
             quantity: _,
             with_ties: _,
@@ -1002,7 +1000,9 @@ fn plan_set_expr(
             let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
             let (right_expr, _right_scope) = plan_set_expr(qcx, right)?;
 
-            // TODO(jamii) this type-checking is redundant with HirRelationExpr::typ, but currently it seems that we need both because HirRelationExpr::typ is not allowed to return errors
+            // TODO(jamii) this type-checking is redundant with
+            // HirRelationExpr::typ, but currently it seems that we need both
+            // because HirRelationExpr::typ is not allowed to return errors
             let left_types = qcx.relation_type(&left_expr).column_types;
             let right_types = qcx.relation_type(&right_expr).column_types;
             if left_types.len() != right_types.len() {
@@ -1221,7 +1221,7 @@ fn plan_view_select(
     let (mut relation_expr, from_scope) =
         from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
             let (left, left_scope) = l?;
-            plan_table_with_joins(qcx, left, left_scope, &JoinOperator::CrossJoin, twj)
+            plan_table_with_joins(qcx, left, left_scope, twj)
         })?;
 
     // Step 2. Handle WHERE clause.
@@ -1675,17 +1675,25 @@ fn plan_table_with_joins<'a>(
     qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
-    join_operator: &JoinOperator<Aug>,
     table_with_joins: &'a TableWithJoins<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
+    let pushed_left_was_join_identity = left.is_join_identity();
     let (mut left, mut left_scope) = plan_table_factor(
         qcx,
         left,
         left_scope,
-        join_operator,
+        &JoinOperator::CrossJoin,
         &table_with_joins.relation,
     )?;
     for join in &table_with_joins.joins {
+        if !pushed_left_was_join_identity
+            && matches!(
+                &join.join_operator,
+                JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
+            )
+        {
+            bail_unsupported!(6875, "full/right outer joins in comma join");
+        }
         let (new_left, new_left_scope) =
             plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
         left = new_left;
@@ -1744,13 +1752,7 @@ fn plan_table_factor(
 
         TableFactor::NestedJoin { join, alias } => {
             let (identity, identity_scope) = plan_join_identity(&qcx);
-            let (expr, scope) = plan_table_with_joins(
-                &qcx,
-                identity,
-                identity_scope,
-                &JoinOperator::CrossJoin,
-                join,
-            )?;
+            let (expr, scope) = plan_table_with_joins(&qcx, identity, identity_scope, join)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
@@ -2342,7 +2344,17 @@ pub fn plan_expr<'a>(
                 Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
                 _ => plan_expr(ecx, expr)?,
             };
-            let expr = typeconv::plan_coerce(ecx, expr, &to_scalar_type)?;
+
+            let expr = match expr {
+                // Maintain the stringness of literals strings to preserve any
+                // side effects of Explicit casts (going through plan_coerce
+                // uses Assignment casts).
+                CoercibleScalarExpr::LiteralString(..) => {
+                    expr.type_as(&ecx, &ScalarType::String)?
+                }
+                expr => typeconv::plan_coerce(ecx, expr, &to_scalar_type)?,
+            };
+
             typeconv::plan_cast("CAST", ecx, CastContext::Explicit, expr, &to_scalar_type)?.into()
         }
         Expr::Function(func) => plan_function(ecx, func)?.into(),
@@ -2530,7 +2542,7 @@ pub fn plan_expr<'a>(
             expr.select().into()
         }
 
-        Expr::Collate { .. } => unsupported!("COLLATE"),
+        Expr::Collate { .. } => bail_unsupported!("COLLATE"),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
         Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
@@ -2587,6 +2599,11 @@ fn plan_array(
         let out = coerce_homogeneous_exprs("ARRAY expression", ecx, out, type_hint)?;
         (ecx.scalar_type(&out[0]), out)
     };
+
+    if matches!(elem_type, ScalarType::Char { .. }) {
+        bail_unsupported!("char[]");
+    }
+
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayCreate { elem_type },
         exprs,
@@ -2601,7 +2618,7 @@ fn plan_list(
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
         if let Some(ScalarType::List { element_type, .. }) = type_hint {
-            ((**element_type).clone(), vec![])
+            (element_type.default_embedded_value(), vec![])
         } else {
             bail!("cannot determine type of empty list");
         }
@@ -2610,6 +2627,7 @@ fn plan_list(
             Some(ScalarType::List { element_type, .. }) => Some(&**element_type),
             _ => None,
         };
+
         let mut out = vec![];
         for expr in exprs {
             out.push(match expr {
@@ -2620,8 +2638,13 @@ fn plan_list(
             });
         }
         let out = coerce_homogeneous_exprs("LIST expression", ecx, out, type_hint)?;
-        (ecx.scalar_type(&out[0]), out)
+        (ecx.scalar_type(&out[0]).default_embedded_value(), out)
     };
+
+    if matches!(elem_type, ScalarType::Char { .. }) {
+        bail_unsupported!("char list");
+    }
+
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },
         exprs,
@@ -2682,7 +2705,7 @@ fn plan_aggregate(
     };
 
     if sql_func.over.is_some() {
-        unsupported!(213, "window functions");
+        bail_unsupported!(213, "window functions");
     }
 
     let name = normalize::unresolved_object_name(sql_func.name.clone())?;
@@ -2735,7 +2758,7 @@ fn plan_aggregate(
         }
     });
     if seen_outer && !seen_inner {
-        unsupported!(
+        bail_unsupported!(
             3720,
             "aggregate functions that refer exclusively to outer columns"
         );
@@ -2842,7 +2865,7 @@ fn plan_function<'a>(
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
         Func::Table(_) => {
-            unsupported!(
+            bail_unsupported!(
                 1546,
                 format!("table function ({}) in scalar position", name)
             );
@@ -2851,7 +2874,7 @@ fn plan_function<'a>(
     };
 
     if over.is_some() {
-        unsupported!(213, "window functions");
+        bail_unsupported!(213, "window functions");
     }
     if *distinct {
         bail!(
@@ -2969,27 +2992,21 @@ fn plan_case<'a>(
 fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
-            let d: Decimal = s.parse()?;
-            if d.scale() == 0 {
-                let significand = d.significand();
-                if let Ok(n) = significand.try_into() {
+            let d = strconv::parse_numeric(s.as_str())?;
+            if !s.contains(&['E', '.'][..]) {
+                // Maybe representable as an int?
+                if let Ok(n) = d.0.try_into() {
                     (Datum::Int32(n), ScalarType::Int32)
-                } else if let Ok(n) = significand.try_into() {
+                } else if let Ok(n) = d.0.try_into() {
                     (Datum::Int64(n), ScalarType::Int64)
                 } else {
-                    (
-                        Datum::from(significand),
-                        ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                    )
+                    (Datum::Numeric(d), ScalarType::Numeric { scale: None })
                 }
             } else {
-                (
-                    Datum::from(d.significand()),
-                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                )
+                (Datum::Numeric(d), ScalarType::Numeric { scale: None })
             }
         }
-        Value::HexString(_) => unsupported!(3114, "hex string literals"),
+        Value::HexString(_) => bail_unsupported!(3114, "hex string literals"),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
@@ -3091,33 +3108,22 @@ pub fn scalar_type_from_sql(
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
-                    ScalarType::APD { .. } => {
-                        let (_, scale) =
-                            unwrap_numeric_typ_mod(typ_mod, APD_DATUM_MAX_PRECISION as u8, "apd")?;
-                        ScalarType::APD { scale }
+                    ScalarType::Numeric { .. } => {
+                        let scale = numeric::extract_typ_mod(typ_mod)?;
+                        ScalarType::Numeric { scale }
                     }
-                    ScalarType::Decimal(..) => {
-                        let (precision, scale) =
-                            unwrap_numeric_typ_mod(typ_mod, MAX_DECIMAL_PRECISION, "numeric")?;
-                        ScalarType::Decimal(
-                            precision.unwrap_or(MAX_DECIMAL_PRECISION),
-                            scale.unwrap_or(0),
-                        )
+                    ScalarType::Char { .. } => {
+                        let length = repr::adt::char::extract_typ_mod(&typ_mod)?;
+                        ScalarType::Char { length }
                     }
-                    ScalarType::String => {
-                        // TODO(justin): we should look up in the catalog to see
-                        // if this type is actually a length-parameterized
-                        // string.
-                        match name.raw_name().item.as_str() {
-                            n @ "bpchar" | n @ "char" | n @ "varchar" => {
-                                validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
-                            }
-                            _ => {}
-                        }
-                        ScalarType::String
+                    ScalarType::VarChar { .. } => {
+                        let length = repr::adt::varchar::extract_typ_mod(&typ_mod)?;
+                        ScalarType::VarChar { length }
                     }
                     t => {
-                        validate_typ_mod(&name.to_string(), &typ_mod, &[])?;
+                        if !typ_mod.is_empty() {
+                            bail!("{} does not support type modifiers", &name.to_string());
+                        }
                         t
                     }
                 },
@@ -3130,79 +3136,15 @@ pub fn scalar_type_from_sql(
     })
 }
 
-/// Returns the first two values provided as typ_mods as `u8`, which are
-/// appropriate values to associate with `ScalarType::Decimal`'s values,
-/// precision and scale.
-///
-/// Note that this function assumes you have already determined that
-/// `data_type.name` should resolve to `ScalarType::Decimal`.
-pub fn unwrap_numeric_typ_mod(
-    typ_mod: &[u64],
-    max: u8,
-    name: &str,
-) -> Result<(Option<u8>, Option<u8>), anyhow::Error> {
-    let max_precision = u64::from(max);
-    validate_typ_mod(
-        name,
-        &typ_mod,
-        &[("precision", 1, max_precision), ("scale", 0, max_precision)],
-    )?;
-
-    // Poor man's VecDeque
-    let (precision, scale) = match typ_mod.len() {
-        0 => (None, None),
-        1 => (Some(typ_mod[0] as u8), None),
-        2 => {
-            let precision = typ_mod[0] as u8;
-            let scale = typ_mod[1] as u8;
-            if scale > precision {
-                bail!(
-                    "{} scale {} must be between 0 and precision {}",
-                    name,
-                    scale,
-                    precision
-                );
-            }
-            (Some(precision), Some(scale))
-        }
-        _ => unreachable!(),
-    };
-
-    Ok((precision, scale))
-}
-
-fn validate_typ_mod(
-    name: &str,
-    typ_mod: &[u64],
-    val_ranges: &[(&str, u64, u64)],
-) -> Result<(), anyhow::Error> {
-    if typ_mod.len() > val_ranges.len() {
-        bail!("invalid {} type modifier", name)
-    }
-
-    for (v, range) in typ_mod.iter().zip(val_ranges.iter()) {
-        if v < &range.1 || v > &range.2 {
-            bail!(
-                "{} for type {} must be within [{}-{}], have {}",
-                range.0,
-                name,
-                range.1,
-                range.2,
-                v,
-            )
-        }
-    }
-    Ok(())
-}
-
 pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Error> {
     match ty {
         pgrepr::Type::Bool => Ok(ScalarType::Bool),
+        pgrepr::Type::Int2 => Ok(ScalarType::Int16),
         pgrepr::Type::Int4 => Ok(ScalarType::Int32),
         pgrepr::Type::Int8 => Ok(ScalarType::Int64),
         pgrepr::Type::Float4 => Ok(ScalarType::Float32),
         pgrepr::Type::Float8 => Ok(ScalarType::Float64),
-        pgrepr::Type::Numeric => Ok(ScalarType::Decimal(0, 0)),
+        pgrepr::Type::Numeric => Ok(ScalarType::Numeric { scale: None }),
         pgrepr::Type::Date => Ok(ScalarType::Date),
         pgrepr::Type::Time => Ok(ScalarType::Time),
         pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
@@ -3210,6 +3152,8 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
         pgrepr::Type::Interval => Ok(ScalarType::Interval),
         pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
         pgrepr::Type::Text => Ok(ScalarType::String),
+        pgrepr::Type::Char => Ok(ScalarType::Char { length: None }),
+        pgrepr::Type::VarChar => Ok(ScalarType::VarChar { length: None }),
         pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
         pgrepr::Type::Uuid => Ok(ScalarType::Uuid),
         pgrepr::Type::Array(t) => Ok(ScalarType::Array(Box::new(scalar_type_from_pg(t)?))),
@@ -3221,11 +3165,11 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             bail!("internal error: can't convert from pg record to materialize record")
         }
         pgrepr::Type::Oid => Ok(ScalarType::Oid),
+        pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
         pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),
-        pgrepr::Type::APD => Ok(ScalarType::APD { scale: None }),
     }
 }
 
@@ -3307,9 +3251,9 @@ impl<'a, 'ast> Visit<'ast, Aug> for AggregateFuncVisitor<'a, 'ast> {
 /// allowed to reason about the time at which it is running, e.g., by calling
 /// the `now()` function.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub enum QueryLifetime {
+pub enum QueryLifetime<'a> {
     /// The query's result will be computed at one point in time.
-    OneShot,
+    OneShot(&'a PlanContext),
     /// The query's result will be maintained indefinitely.
     Static,
 }
@@ -3333,7 +3277,7 @@ pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
     pub scx: &'a StatementContext<'a>,
     /// The lifetime that the planned query will have.
-    pub lifetime: QueryLifetime,
+    pub lifetime: QueryLifetime<'a>,
     /// The scope of the outer relation expression.
     pub outer_scope: Scope,
     /// The type of the outer relation expressions.
@@ -3345,7 +3289,7 @@ pub struct QueryContext<'a> {
 }
 
 impl<'a> QueryContext<'a> {
-    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime) -> QueryContext<'a> {
+    pub fn root(scx: &'a StatementContext, lifetime: QueryLifetime<'a>) -> QueryContext<'a> {
         QueryContext {
             scx,
             lifetime,

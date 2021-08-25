@@ -17,16 +17,9 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-py_files=$(git_files "ci/*.py" "misc/python/*.py" "misc/mzutil/scripts/*.py" "misc/kafka-util/scripts/*.py")
+py_folders=(ci misc/kafka-util/scripts misc/mzutil/scripts misc/python)
 
-# Bail out with a nice error message if we discover any syntax errors, so that
-# mypy and pytest don't spew nonsense.
-if ! bin/pyactivate --dev -m compileall -q -l -i - <<< "$py_files"; then
-    echo "pycheck: $(red error:) python syntax errors found"
-    exit 1
-fi
-
-try xargs bin/pyactivate --dev -m mypy --pretty --no-error-summary <<< "$py_files"
+try bin/pyactivate --dev -m mypy "${py_folders[@]}"
+try bin/pyactivate --dev -m flake8 --select F --ignore F541 --extend-exclude venv "${py_folders[@]}"
 try bin/pyactivate --dev -m pytest -qq --doctest-modules misc/python
-
 try_finish

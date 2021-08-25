@@ -146,11 +146,11 @@ pub enum HirScalarExpr {
     /// * 0 rows, return NULL
     /// * 1 row, return the value of that row
     /// * >1 rows, the sql spec says we should throw an error but we can't
-    ///   (see https://github.com/MaterializeInc/materialize/issues/489)
+    ///   (see <https://github.com/MaterializeInc/materialize/issues/489>)
     ///   so instead we return all the rows.
     ///   If there are multiple `Select` expressions in a single SQL query, the result is that we take the product of all of them.
     ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
-    ///   (see https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/).
+    ///   (see <https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/>).
     Select(Box<HirRelationExpr>),
 }
 
@@ -359,34 +359,34 @@ pub struct AggregateExpr {
 /// only return null values when supplied nulls as input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AggregateFunc {
-    MaxApd,
+    MaxNumeric,
+    MaxInt16,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
     MaxFloat64,
-    MaxDecimal,
     MaxBool,
     MaxString,
     MaxDate,
     MaxTimestamp,
     MaxTimestampTz,
-    MinApd,
+    MinNumeric,
+    MinInt16,
     MinInt32,
     MinInt64,
     MinFloat32,
     MinFloat64,
-    MinDecimal,
     MinBool,
     MinString,
     MinDate,
     MinTimestamp,
     MinTimestampTz,
+    SumInt16,
     SumInt32,
     SumInt64,
     SumFloat32,
     SumFloat64,
-    SumDecimal,
-    SumAPD,
+    SumNumeric,
     Count,
     Any,
     All,
@@ -398,6 +398,11 @@ pub enum AggregateFunc {
     JsonbAgg,
     /// Aggregates pairs of JSON-typed `Datum`s into a JSON object.
     JsonbObjectAgg,
+    /// Accumulates `Datum::Array`s into a single `Datum::Array`.
+    ArrayConcat,
+    /// Accumulates `Datum::List`s into a single `Datum::List`.
+    ListConcat,
+    StringAgg,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -409,39 +414,42 @@ impl AggregateFunc {
     /// Converts the `sql::AggregateFunc` to a corresponding `expr::AggregateFunc`.
     pub fn into_expr(self) -> expr::AggregateFunc {
         match self {
-            AggregateFunc::MaxApd => expr::AggregateFunc::MaxApd,
+            AggregateFunc::MaxNumeric => expr::AggregateFunc::MaxNumeric,
             AggregateFunc::MaxInt64 => expr::AggregateFunc::MaxInt64,
+            AggregateFunc::MaxInt16 => expr::AggregateFunc::MaxInt16,
             AggregateFunc::MaxInt32 => expr::AggregateFunc::MaxInt32,
             AggregateFunc::MaxFloat32 => expr::AggregateFunc::MaxFloat32,
             AggregateFunc::MaxFloat64 => expr::AggregateFunc::MaxFloat64,
-            AggregateFunc::MaxDecimal => expr::AggregateFunc::MaxDecimal,
             AggregateFunc::MaxBool => expr::AggregateFunc::MaxBool,
             AggregateFunc::MaxString => expr::AggregateFunc::MaxString,
             AggregateFunc::MaxDate => expr::AggregateFunc::MaxDate,
             AggregateFunc::MaxTimestamp => expr::AggregateFunc::MaxTimestamp,
             AggregateFunc::MaxTimestampTz => expr::AggregateFunc::MaxTimestampTz,
-            AggregateFunc::MinApd => expr::AggregateFunc::MinApd,
+            AggregateFunc::MinNumeric => expr::AggregateFunc::MinNumeric,
+            AggregateFunc::MinInt16 => expr::AggregateFunc::MinInt16,
             AggregateFunc::MinInt32 => expr::AggregateFunc::MinInt32,
             AggregateFunc::MinInt64 => expr::AggregateFunc::MinInt64,
             AggregateFunc::MinFloat32 => expr::AggregateFunc::MinFloat32,
             AggregateFunc::MinFloat64 => expr::AggregateFunc::MinFloat64,
-            AggregateFunc::MinDecimal => expr::AggregateFunc::MinDecimal,
             AggregateFunc::MinBool => expr::AggregateFunc::MinBool,
             AggregateFunc::MinString => expr::AggregateFunc::MinString,
             AggregateFunc::MinDate => expr::AggregateFunc::MinDate,
             AggregateFunc::MinTimestamp => expr::AggregateFunc::MinTimestamp,
             AggregateFunc::MinTimestampTz => expr::AggregateFunc::MinTimestampTz,
+            AggregateFunc::SumInt16 => expr::AggregateFunc::SumInt16,
             AggregateFunc::SumInt32 => expr::AggregateFunc::SumInt32,
             AggregateFunc::SumInt64 => expr::AggregateFunc::SumInt64,
             AggregateFunc::SumFloat32 => expr::AggregateFunc::SumFloat32,
             AggregateFunc::SumFloat64 => expr::AggregateFunc::SumFloat64,
-            AggregateFunc::SumDecimal => expr::AggregateFunc::SumDecimal,
-            AggregateFunc::SumAPD => expr::AggregateFunc::SumAPD,
+            AggregateFunc::SumNumeric => expr::AggregateFunc::SumNumeric,
             AggregateFunc::Count => expr::AggregateFunc::Count,
             AggregateFunc::Any => expr::AggregateFunc::Any,
             AggregateFunc::All => expr::AggregateFunc::All,
             AggregateFunc::JsonbAgg => expr::AggregateFunc::JsonbAgg,
             AggregateFunc::JsonbObjectAgg => expr::AggregateFunc::JsonbObjectAgg,
+            AggregateFunc::ArrayConcat => expr::AggregateFunc::ArrayConcat,
+            AggregateFunc::ListConcat => expr::AggregateFunc::ListConcat,
+            AggregateFunc::StringAgg => expr::AggregateFunc::StringAgg,
             AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
         }
     }
@@ -453,6 +461,8 @@ impl AggregateFunc {
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
+            AggregateFunc::ArrayConcat => Datum::empty_array(),
+            AggregateFunc::ListConcat => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -469,10 +479,12 @@ impl AggregateFunc {
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
-            AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => {
-                ScalarType::Decimal(repr::adt::decimal::MAX_DECIMAL_PRECISION, 0)
-            }
+            AggregateFunc::StringAgg => ScalarType::String,
+            AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => ScalarType::Int64,
+            AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
+            // Inputs are coerced to the correct container type, so the input_type is
+            // already correct.
+            AggregateFunc::ArrayConcat | AggregateFunc::ListConcat => input_type.scalar_type,
             _ => input_type.scalar_type,
         };
         // max/min/sum return null on empty sets

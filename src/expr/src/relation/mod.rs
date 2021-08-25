@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![deny(missing_docs)]
+#![warn(missing_docs)]
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -16,12 +16,15 @@ use std::fmt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
+use lowertest::{MzEnumReflect, MzStructReflect};
 use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, RelationType, Row};
+use repr::{ColumnType, Datum, Diff, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
-use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
+use crate::{
+    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr, UnaryFunc,
+};
 
 pub mod canonicalize;
 pub mod func;
@@ -31,14 +34,14 @@ pub mod join_input_mapper;
 ///
 /// The AST is meant reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
     /// The runtime memory footprint of this operator is zero.
     Constant {
         /// Rows of the constant collection and their multiplicities.
-        rows: Result<Vec<(Row, isize)>, EvalError>,
+        rows: Result<Vec<(Row, Diff)>, EvalError>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -99,6 +102,7 @@ pub enum MirRelationExpr {
         /// as output can be a substantial win.
         ///
         /// See `transform::Demand` for more details.
+        #[serde(default)]
         demand: Option<Vec<usize>>,
     },
     /// Keep rows from a dataflow where all the predicates are true
@@ -137,8 +141,10 @@ pub enum MirRelationExpr {
         /// not present in this list (when it is non-None).
         ///
         /// See `transform::Demand` for more details.
+        #[serde(default)]
         demand: Option<Vec<usize>>,
         /// Join implementation information.
+        #[serde(default)]
         implementation: JoinImplementation,
     },
     /// Group a dataflow by some columns and aggregate over each group
@@ -156,8 +162,10 @@ pub enum MirRelationExpr {
         /// Expressions which determine values to append to each row, after the group keys.
         aggregates: Vec<AggregateExpr>,
         /// True iff the input is known to monotonically increase (only addition of records).
+        #[serde(default)]
         monotonic: bool,
         /// User hint: expected number of values per group key. Used to optimize physical rendering.
+        #[serde(default)]
         expected_group_size: Option<usize>,
     },
     /// Groups and orders within each group, limiting output.
@@ -171,10 +179,13 @@ pub enum MirRelationExpr {
         /// Column indices used to order rows within groups.
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain
+        #[serde(default)]
         limit: Option<usize>,
         /// Number of records to skip
+        #[serde(default)]
         offset: usize,
         /// True iff the input is known to monotonically increase (only addition of records).
+        #[serde(default)]
         monotonic: bool,
     },
     /// Return a dataflow where the row counts are negated
@@ -389,6 +400,36 @@ impl MirRelationExpr {
                 for key_set in &mut input_typ.keys {
                     key_set.retain(|k| !cols_equal_to_literal.contains(&k));
                 }
+                // Augment non-nullability of columns, by observing either
+                // 1. Predicates that explicitly test for null values, and
+                // 2. Columns that if null would make a predicate be null.
+                let mut nonnull_required_columns = HashSet::new();
+                for predicate in predicates {
+                    // Add any columns that being null would force the predicate to be null.
+                    // Should that happen, the row would be discarded.
+                    predicate.non_null_requirements(&mut nonnull_required_columns);
+                    // Test for explicit checks that a column is non-null.
+                    if let MirScalarExpr::CallUnary {
+                        func: UnaryFunc::Not,
+                        expr,
+                    } = predicate
+                    {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull,
+                            expr,
+                        } = &**expr
+                        {
+                            if let MirScalarExpr::Column(c) = &**expr {
+                                input_typ.column_types[*c].nullable = false;
+                            }
+                        }
+                    }
+                }
+                // Set as nonnull any columns where null values would cause
+                // any predicate to evaluate to null.
+                for column in nonnull_required_columns.into_iter() {
+                    input_typ.column_types[column].nullable = false;
+                }
                 input_typ
             }
             MirRelationExpr::Join {
@@ -598,7 +639,7 @@ impl MirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row can have an arbitrary multiplicity.
-    pub fn constant_diff(rows: Vec<(Vec<Datum>, isize)>, typ: RelationType) -> Self {
+    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: RelationType) -> Self {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
@@ -1182,6 +1223,11 @@ impl MirRelationExpr {
         ViewExplanation::new(self, &DummyHumanizer).to_string()
     }
 
+    /// Print this MirRelationExpr to a JSON-formatted string.
+    pub fn json(&self) -> String {
+        serde_json::to_string(self).unwrap()
+    }
+
     /// Pretty-print this MirRelationExpr to a string with type information.
     pub fn pretty_typed(&self) -> String {
         let mut explanation = ViewExplanation::new(self, &DummyHumanizer);
@@ -1287,7 +1333,9 @@ impl MirRelationExpr {
     /// Return:
     /// * every row in keys_and_values
     /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
-    /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
+    /// (This is LEFT OUTER JOIN if:
+    /// 1) `default` is a row of null
+    /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
     pub fn lookup(
         self,
         id_gen: &mut IdGen,
@@ -1324,11 +1372,12 @@ impl MirRelationExpr {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzStructReflect)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
     /// Whether to sort in descending order.
+    #[serde(default)]
     pub desc: bool,
 }
 
@@ -1359,13 +1408,14 @@ impl IdGen {
 }
 
 /// Describes an aggregation expression.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
     /// An expression which extracts from each row the input to `func`.
     pub expr: MirScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
+    #[serde(default)]
     pub distinct: bool,
 }
 
@@ -1378,21 +1428,21 @@ impl AggregateExpr {
     /// Returns whether the expression has a constant result.
     pub fn is_constant(&self) -> bool {
         match self.func {
-            AggregateFunc::MaxInt32
+            AggregateFunc::MaxInt16
+            | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
-            | AggregateFunc::MaxDecimal
             | AggregateFunc::MaxBool
             | AggregateFunc::MaxString
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
-            | AggregateFunc::MinDecimal
             | AggregateFunc::MinBool
             | AggregateFunc::MinString
             | AggregateFunc::MinDate
@@ -1400,7 +1450,8 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::Any
             | AggregateFunc::All => self.expr.is_literal(),
-            _ => false,
+            AggregateFunc::Count => self.expr.is_literal_null(),
+            _ => self.expr.is_literal_err(),
         }
     }
 }
@@ -1418,7 +1469,7 @@ impl fmt::Display for AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -1441,6 +1492,12 @@ pub enum JoinImplementation {
     DeltaQuery(Vec<Vec<(usize, Vec<MirScalarExpr>)>>),
     /// No implementation yet selected.
     Unimplemented,
+}
+
+impl Default for JoinImplementation {
+    fn default() -> Self {
+        JoinImplementation::Unimplemented
+    }
 }
 
 /// Instructions for finishing the result of a query.

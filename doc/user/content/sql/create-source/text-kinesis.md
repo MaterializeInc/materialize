@@ -6,11 +6,11 @@ menu:
     parent: 'create-source'
 ---
 
+{{< beta />}}
+
 {{% create-source/intro %}}
 This document details how to connect Materialize to a text- or byte–formatted
 Kinesis stream.
-
-{{< kinesis-alpha >}}
 
 {{< volatility-warning >}}Kinesis{{< /volatility-warning >}}
 
@@ -20,7 +20,11 @@ Kinesis stream.
 
 {{< diagram "create-source-text-kinesis.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="text bytes" envelopes="append-only" %}}
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kinesis" formats="text bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples
 

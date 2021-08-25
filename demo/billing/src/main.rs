@@ -16,7 +16,7 @@
 //! Further details can be found on the Materialize docs:
 //! <https://materialize.com/docs/demos/microservice/>
 
-#![deny(missing_debug_implementations, missing_docs)]
+#![warn(missing_debug_implementations, missing_docs)]
 
 use std::process;
 use std::sync::Arc;

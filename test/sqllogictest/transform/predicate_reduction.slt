@@ -56,7 +56,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0)), (#0 = 1)
+| Filter (#0 = 1)
 
 EOF
 

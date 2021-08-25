@@ -9,7 +9,7 @@
 
 //! Core expression language.
 
-#![deny(missing_debug_implementations)]
+#![warn(missing_debug_implementations)]
 
 use std::fmt;
 use std::ops::Deref;
@@ -88,7 +88,13 @@ pub trait ExprHumanizer: fmt::Debug {
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
 
     /// Returns a human-readable name for the specified scalar type.
-    fn humanize_column_type(&self, ty: &ColumnType) -> String;
+    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+        format!(
+            "{}{}",
+            self.humanize_scalar_type(&typ.scalar_type),
+            if typ.nullable { "?" } else { "" }
+        )
+    }
 }
 
 /// A bare-minimum implementation of [`ExprHumanizer`].
@@ -107,11 +113,6 @@ impl ExprHumanizer for DummyHumanizer {
     }
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        // The debug implementation is better than nothing.
-        format!("{:?}", ty)
-    }
-
-    fn humanize_column_type(&self, ty: &ColumnType) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
     }

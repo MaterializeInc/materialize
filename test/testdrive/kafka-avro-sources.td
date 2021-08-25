@@ -188,7 +188,7 @@ $ file-append path=data-schema.json
 > SHOW CREATE SOURCE data_schema_file
 Source   "Create Source"
 ------------------------
-materialize.public.data_schema_file  "CREATE SOURCE \"materialize\".\"public\".\"data_schema_file\" FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             },             {               \"name\": \"c\",               \"type\": {                 \"type\": \"enum\",                 \"name\": \"Bool\",                 \"symbols\": [\"True\", \"False\", \"FileNotFound\"]               }             },             {\"name\": \"d\", \"type\": \"Bool\"},             {\"name\": \"e\", \"type\": [\"null\",{               \"type\": \"record\",               \"name\": \"nested_data_1\",               \"fields\": [                   {\"name\": \"n1_a\", \"type\": \"long\"},                   {\"name\": \"n1_b\", \"type\": [\"null\", \"double\", {                       \"type\": \"record\",                       \"name\": \"nested_data_2\",                       \"fields\": [                         {\"name\": \"n2_a\", \"type\": \"long\"},                         {\"name\": \"n2_b\", \"type\": \"int\"}                       ]                     }]                   }                 ]               }]             },             {\"name\": \"f\", \"type\": [\"null\", \"nested_data_2\"]}           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] },     {       \"name\": \"source\",       \"type\": {         \"type\": \"record\",         \"name\": \"Source\",         \"namespace\": \"io.debezium.connector.mysql\",         \"fields\": [           {             \"name\": \"file\",             \"type\": \"string\"           },           {             \"name\": \"pos\",             \"type\": \"long\"           },           {             \"name\": \"row\",             \"type\": \"int\"           },           {             \"name\": \"snapshot\",             \"type\": [               {                 \"type\": \"boolean\",                 \"connect.default\": false               },               \"null\"             ],             \"default\": false           }         ],         \"connect.name\": \"io.debezium.connector.mysql.Source\"       }     }   ] }\n\' ENVELOPE DEBEZIUM"
+materialize.public.data_schema_file  "CREATE SOURCE \"materialize\".\"public\".\"data_schema_file\" FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             },             {               \"name\": \"c\",               \"type\": {                 \"type\": \"enum\",                 \"name\": \"Bool\",                 \"symbols\": [\"True\", \"False\", \"FileNotFound\"]               }             },             {\"name\": \"d\", \"type\": \"Bool\"},             {\"name\": \"e\", \"type\": [\"null\",{               \"type\": \"record\",               \"name\": \"nested_data_1\",               \"fields\": [                   {\"name\": \"n1_a\", \"type\": \"long\"},                   {\"name\": \"n1_b\", \"type\": [\"null\", \"double\", {                       \"type\": \"record\",                       \"name\": \"nested_data_2\",                       \"fields\": [                         {\"name\": \"n2_a\", \"type\": \"long\"},                         {\"name\": \"n2_b\", \"type\": \"int\"}                       ]                     }]                   }                 ]               }]             },             {\"name\": \"f\", \"type\": [\"null\", \"nested_data_2\"]}           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] },     {       \"name\": \"source\",       \"type\": {         \"type\": \"record\",         \"name\": \"Source\",         \"namespace\": \"io.debezium.connector.mysql\",         \"fields\": [           {             \"name\": \"file\",             \"type\": \"string\"           },           {             \"name\": \"pos\",             \"type\": \"long\"           },           {             \"name\": \"row\",             \"type\": \"int\"           },           {             \"name\": \"snapshot\",             \"type\": [               {                 \"type\": \"boolean\",                 \"connect.default\": false               },               \"null\"             ],             \"default\": false           }         ],         \"connect.name\": \"io.debezium.connector.mysql.Source\"       }     }   ] }\n\' WITH (\"confluent_wire_format\" = true) ENVELOPE DEBEZIUM"
 
 > SELECT a, b, json, c, d FROM data_schema_file
 a  b  json                     c            d
@@ -290,7 +290,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=1)
+  WITH (start_offset=1, topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
@@ -299,7 +299,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 # Erroneously adds start_offsets for non-existent partitions.
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=[0,1])
+  WITH (start_offset=[0,1], topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
@@ -350,7 +350,7 @@ count
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=[1,1])
+  WITH (start_offset=[1,1], topic_metadata_refresh_interval_ms=10)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
@@ -802,6 +802,14 @@ $ set ms-dbz-schema={
             },
             {
               "default": null,
+              "name": "sequence",
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            {
+              "default": null,
               "name": "event_serial_no",
               "type": [
                 "null",
@@ -824,9 +832,9 @@ $ kafka-create-topic topic=ms-dbz-data
 
 # The third record will be skipped, since `lsn` has gone backwards.
 $ kafka-ingest format=avro topic=ms-dbz-data schema=${ms-dbz-schema} timestamp=1
-{"before": null, "after": {"Value":{"a": 1, "b": 1}}, "source": {"change_lsn": {"string": "00000025:00000728:001b"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
-{"before": null, "after": {"Value":{"a": 2, "b": 3}}, "source": {"change_lsn": {"string": "00000025:00000728:001c"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
-{"before": null, "after": {"Value":{"a": -1, "b": 7}}, "source": {"change_lsn": {"string": "00000025:00000728:001a"}, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": 1, "b": 1}}, "source": {"change_lsn": {"string": "00000025:00000728:001b"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": 2, "b": 3}}, "source": {"change_lsn": {"string": "00000025:00000728:001c"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
+{"before": null, "after": {"Value":{"a": -1, "b": 7}}, "source": {"change_lsn": {"string": "00000025:00000728:001a"}, "sequence": null, "event_serial_no": {"long": 1}, "snapshot": {"string": "false"}}}
 
 > CREATE MATERIALIZED SOURCE ms_dbz
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}'

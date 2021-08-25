@@ -66,15 +66,21 @@ impl ReduceElision {
                             )
                         }
 
+                        // SumInt16 takes Int16s as input, but outputs Int64s.
+                        AggregateFunc::SumInt16 => {
+                            a.expr.clone().call_unary(UnaryFunc::CastInt16ToInt64)
+                        }
+
                         // SumInt32 takes Int32s as input, but outputs Int64s.
                         AggregateFunc::SumInt32 => {
                             a.expr.clone().call_unary(UnaryFunc::CastInt32ToInt64)
                         }
 
-                        // SumInt64 takes Int64s as input, but outputs Decimals.
-                        AggregateFunc::SumInt64 => {
-                            a.expr.clone().call_unary(UnaryFunc::CastInt64ToDecimal)
-                        }
+                        // SumInt64 takes Int64s as input, but outputs numerics.
+                        AggregateFunc::SumInt64 => a
+                            .expr
+                            .clone()
+                            .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0))),
 
                         // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
                         AggregateFunc::JsonbAgg => MirScalarExpr::CallVariadic {

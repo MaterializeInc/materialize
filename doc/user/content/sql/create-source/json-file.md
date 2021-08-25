@@ -16,7 +16,11 @@ This document details how to connect Materialize to a JSON-formatted local text 
 
 {{< diagram "create-source-json.svg" >}}
 
-{{% create-source/syntax-details connector="file" formats="json-bytes" envelopes="append-only" %}}
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="file" formats="json-bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples
 
@@ -25,7 +29,7 @@ This document details how to connect Materialize to a JSON-formatted local text 
 1. Generate a local JSON file. For example:
 
     ```shell
-    echo '{"a":1,"b":2}\n{"a":3,"b":4}' > source.json
+    echo -ne '{"a":1,"b":2}\n{"a":3,"b":4}' > source.json
     ```
 
 1. Create a materialized source from the file:

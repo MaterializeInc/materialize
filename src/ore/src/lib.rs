@@ -19,33 +19,39 @@
 //! Modules are included in this crate when they are broadly useful but too
 //! small to warrant their own crate.
 
-#![deny(missing_docs, missing_debug_implementations)]
+#![warn(missing_docs, missing_debug_implementations)]
 
-// This module presently only contains macros. Macros are always exported at the
-// root of a crate, so this module is not public as it would appear empty.
-mod assert;
-
-pub mod antichain;
-pub mod ascii;
+#[cfg(feature = "test")]
+pub mod assert;
 pub mod cast;
+pub mod cgroup;
+#[cfg(feature = "cli")]
 pub mod cli;
 pub mod codegen;
 pub mod collections;
+pub mod display;
 pub mod env;
 pub mod fmt;
+#[cfg(feature = "network")]
 pub mod future;
 pub mod hash;
 pub mod hint;
 pub mod iter;
 pub mod lex;
+#[cfg(feature = "metrics")]
+pub mod metrics;
+#[cfg(feature = "network")]
 pub mod netio;
+pub mod now;
 pub mod option;
 pub mod panic;
 pub mod result;
+#[cfg(feature = "network")]
 pub mod retry;
 pub mod stats;
 pub mod str;
 pub mod sync;
+#[cfg(feature = "test")]
 pub mod test;
 pub mod thread;
 pub mod vec;

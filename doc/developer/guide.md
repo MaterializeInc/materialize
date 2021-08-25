@@ -54,7 +54,7 @@ curl https://sh.rustup.rs -sSf | sh
 ```
 
 Rustup will automatically select the correct toolchain version specified in
-[materialize/rust-toolchain](/rust-toolchain).
+[rust-toolchain.toml](/rust-toolchain.toml).
 
 We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
@@ -190,7 +190,7 @@ very inefficient. It is, however, excellent for manually taking Materialize
 for a spin without the hassle of setting up various Kafka topics and Avro
 schemas. It also powers our sqllogictest runner.
 
-See the [symbiosis crate documentation](https://mtrlz.dev/api/symbiosis) for
+See the [symbiosis crate documentation](https://dev.materialize.com/api/rust/symbiosis) for
 more details.
 
 **Note:** As of August 2020, we're laying the groundwork to phase out symbiosis

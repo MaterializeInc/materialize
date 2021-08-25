@@ -19,12 +19,10 @@ use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::izip;
-use lazy_static::lazy_static;
 use log::debug;
 use message::decode_copy_text_format;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
-use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
 use tokio::time::{self, Duration, Instant};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -46,6 +44,7 @@ use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
+use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
@@ -68,21 +67,6 @@ pub fn match_handshake(buf: &[u8]) -> bool {
     VERSIONS.contains(&version)
 }
 
-lazy_static! {
-    static ref COMMAND_DURATIONS: prometheus::HistogramVec = register_histogram_vec!(
-        "mz_command_durations",
-        "how long individual commands took",
-        &["command", "status"],
-        ore::stats::HISTOGRAM_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref ROWS_RETURNED: prometheus::UIntCounter = register_uint_counter!(
-        "mz_pg_sent_rows",
-        "total number of rows sent to clients from pgwire"
-    )
-    .unwrap();
-}
-
 /// Parameters for the [`run`] function.
 pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
@@ -95,6 +79,8 @@ pub struct RunParams<'a, A> {
     pub version: i32,
     /// The parameters that the client provided in the startup message.
     pub params: HashMap<String, String>,
+    /// The server's metrics.
+    pub metrics: &'a Metrics,
 }
 
 /// Runs a pgwire connection to completion.
@@ -113,6 +99,7 @@ pub async fn run<'a, A>(
         conn,
         version,
         mut params,
+        metrics,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -205,6 +192,7 @@ where
         conn.flush().await?;
 
         let machine = StateMachine {
+            metrics,
             conn,
             coord_client: &mut coord_client,
         };
@@ -225,6 +213,7 @@ enum State {
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
     coord_client: &'a mut coord::SessionClient,
+    metrics: &'a Metrics,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -285,6 +274,7 @@ where
                 portal_name,
                 max_rows,
             }) => {
+                self.metrics.query_count.inc();
                 let max_rows = match usize::try_from(max_rows) {
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
@@ -318,7 +308,8 @@ where
             State::Ready | State::Done => "success",
             State::Drain => "error",
         };
-        COMMAND_DURATIONS
+        self.metrics
+            .command_durations
             .with_label_values(&[name, status])
             .observe(timer.elapsed().as_secs_f64());
 
@@ -375,6 +366,7 @@ where
             }
         }
 
+        self.metrics.query_count.inc();
         let result = match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
             Ok(response) => {
                 self.send_execute_response(
@@ -398,6 +390,13 @@ where
         self.coord_client.session().remove_portal(EMPTY_PORTAL);
 
         result
+    }
+
+    async fn start_transaction(&mut self, stmts: Option<usize>) {
+        // start_transaction can't error (but assert that just in case it changes in
+        // the future.
+        let res = self.coord_client.start_transaction(stmts).await;
+        assert!(res.is_ok());
     }
 
     // See "Multiple Statements in a Simple Query" which documents how implicit
@@ -430,9 +429,7 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.coord_client
-                .session()
-                .start_transaction_implicit(num_stmts);
+            self.start_transaction(Some(num_stmts)).await;
 
             match self.one_query(stmt).await? {
                 State::Ready => (),
@@ -448,9 +445,14 @@ where
                 TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_)
             );
             if implicit {
-                self.commit_transaction().await;
+                self.commit_transaction().await?;
             }
         }
+
+        if num_stmts == 0 {
+            self.conn.send(BackendMessage::EmptyQueryResponse).await?;
+        }
+
         self.ready().await
     }
 
@@ -460,6 +462,9 @@ where
         sql: String,
         param_oids: Vec<u32>,
     ) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
         let mut param_types = vec![];
         for oid in param_oids {
             match pgrepr::Type::from_oid(oid) {
@@ -511,21 +516,27 @@ where
     }
 
     /// Commits and clears the current transaction.
-    async fn commit_transaction(&mut self) {
-        // We ignore the ExecuteResponse or error here because there's nothing to tell
-        // the user in either of those cases.
-        let _ = self
-            .coord_client
-            .end_transaction(EndTransactionAction::Commit)
-            .await;
+    async fn commit_transaction(&mut self) -> Result<(), io::Error> {
+        self.end_transaction(EndTransactionAction::Commit).await
     }
 
     /// Rollback and clears the current transaction.
-    async fn rollback_transaction(&mut self) {
-        let _ = self
-            .coord_client
-            .end_transaction(EndTransactionAction::Rollback)
-            .await;
+    async fn rollback_transaction(&mut self) -> Result<(), io::Error> {
+        self.end_transaction(EndTransactionAction::Rollback).await
+    }
+
+    /// End a transaction and report to the user if an error occurred.
+    async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
+        let resp = self.coord_client.end_transaction(action).await;
+        if let Err(err) = resp {
+            self.conn
+                .send(BackendMessage::ErrorResponse(ErrorResponse::from_coord(
+                    Severity::Error,
+                    err,
+                )))
+                .await?;
+        }
+        Ok(())
     }
 
     async fn bind(
@@ -536,6 +547,9 @@ where
         raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, io::Error> {
+        // Start a transaction if we aren't in one.
+        self.start_transaction(Some(1)).await;
+
         let aborted_txn = self.is_aborted_txn();
         let stmt = self
             .coord_client
@@ -610,6 +624,30 @@ where
             }
         };
 
+        if let Some(desc) = stmt.desc().relation_desc.clone() {
+            for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
+                match (format, &ty.scalar_type) {
+                    (pgrepr::Format::Binary, repr::ScalarType::List { .. }) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                "binary encoding of list types is not implemented",
+                            ))
+                            .await;
+                    }
+                    (pgrepr::Format::Binary, repr::ScalarType::Map { .. }) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                "binary encoding of map types is not implemented",
+                            ))
+                            .await;
+                    }
+                    _ => (),
+                }
+            }
+        }
+
         let desc = stmt.desc().clone();
         let stmt = stmt.sql().cloned();
         if let Err(err) =
@@ -665,7 +703,7 @@ where
                     // in bind. We don't do it in bind because I'm not sure what purpose it would
                     // serve us (i.e., I'm not aware of a pgtest that would differ between us and
                     // Postgres).
-                    self.coord_client.session().start_transaction_implicit(1);
+                    self.start_transaction(Some(1)).await;
 
                     match self.coord_client.execute(portal_name.clone()).await {
                         Ok(response) => {
@@ -868,7 +906,7 @@ where
             TransactionStatus::Started(_)
         );
         if started {
-            self.commit_transaction().await;
+            self.commit_transaction().await?;
         }
         return self.ready().await;
     }
@@ -1272,7 +1310,9 @@ where
             }
         }
 
-        ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
+        self.metrics
+            .rows_returned
+            .inc_by(u64::cast_from(total_sent_rows));
 
         let portal = self
             .coord_client
@@ -1529,18 +1569,18 @@ where
         match txn {
             // Error can be called from describe and parse and so might not be in an active
             // transaction.
-            TransactionStatus::Default | TransactionStatus::Failed => {}
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {}
             // In Started (i.e., a single statement), cleanup ourselves.
             TransactionStatus::Started(_) => {
-                self.rollback_transaction().await;
+                self.rollback_transaction().await?;
             }
             // Implicit transactions also clear themselves.
             TransactionStatus::InTransactionImplicit(_) => {
-                self.rollback_transaction().await;
+                self.rollback_transaction().await?;
             }
             // Explicit transactions move to failed.
             TransactionStatus::InTransaction(_) => {
-                self.coord_client.session().fail_transaction();
+                self.coord_client.fail_transaction();
             }
         };
         if is_fatal {
@@ -1563,7 +1603,7 @@ where
     fn is_aborted_txn(&mut self) -> bool {
         matches!(
             self.coord_client.session().transaction(),
-            TransactionStatus::Failed
+            TransactionStatus::Failed(_)
         )
     }
 }

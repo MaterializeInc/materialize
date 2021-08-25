@@ -63,22 +63,22 @@
 //!
 //! [`Plan`]: crate::plan::Plan
 
-#![deny(missing_debug_implementations)]
+#![warn(missing_debug_implementations)]
 
-macro_rules! unsupported {
+macro_rules! bail_unsupported {
     ($feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),
             issue_no: None,
         }
-        .into());
+        .into())
     };
     ($issue:expr, $feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),
             issue_no: Some($issue),
         }
-        .into());
+        .into())
     };
 }
 

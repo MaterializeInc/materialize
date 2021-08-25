@@ -19,18 +19,17 @@ For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_pipeline` below.
 """
 
-from collections import OrderedDict
-from materialize import mzbuild
-from materialize import mzcompose
-from materialize import spawn
-from materialize import git
-from pathlib import Path
-from tempfile import TemporaryFile
-from typing import Any, Iterable, List, Set, Sequence
 import os
 import subprocess
 import sys
+from collections import OrderedDict
+from pathlib import Path
+from tempfile import TemporaryFile
+from typing import Any, Iterable, Set
+
 import yaml
+
+from materialize import mzbuild, mzcompose, spawn
 
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so
@@ -66,8 +65,8 @@ def main() -> int:
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline.
     for step in pipeline["steps"]:
-        if "inputs" in step:
-            del step["inputs"]
+        step.pop("inputs", None)
+        step.pop("exclude_image_dependencies", None)
 
     f = TemporaryFile()
     yaml.dump(pipeline, f, encoding="utf-8")  # type: ignore
@@ -123,6 +122,9 @@ def trim_pipeline(pipeline: Any) -> None:
                 step.step_dependencies.update(d)
             else:
                 raise ValueError(f"unexpected non-str non-list for depends_on: {d}")
+        image_blocklist = set()
+        if "exclude_image_dependencies" in config:
+            image_blocklist.update(config["exclude_image_dependencies"])
         if "plugins" in config:
             for plugin in config["plugins"]:
                 for plugin_name, plugin_config in plugin.items():
@@ -130,8 +132,10 @@ def trim_pipeline(pipeline: Any) -> None:
                         name = plugin_config["composition"]
                         composition = mzcompose.Composition(repo, name)
                         for image in composition.images:
-                            step.image_dependencies.add(images[image.name])
+                            if image not in image_blocklist:
+                                step.image_dependencies.add(images[image.name])
                         step.extra_inputs.add(str(repo.compositions[name]))
+
         steps[step.id] = step
 
     # Find all the steps whose inputs have changed with respect to main.

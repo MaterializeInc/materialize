@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
+use ore::result::ResultExt;
 use postgres_array::Array;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
@@ -166,16 +167,18 @@ impl Action for SqlAction {
                 | Statement::CreateView { .. }
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
-                    let disk_state = Catalog::open_debug(path).map_err(|e| e.to_string())?.dump();
+                    let disk_state = Catalog::open_debug(path, ore::now::now_zero)
+                        .map_err_to_string()?
+                        .dump();
                     let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
                         state.materialized_addr,
                     ))
                     .await
-                    .map_err(|e| e.to_string())?
+                    .map_err_to_string()?
                     .text()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err_to_string()?;
                     if disk_state != mem_state {
                         return Err(format!(
                             "the on-disk state of the catalog does not match its in-memory state\n\
@@ -437,7 +440,7 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
         let ty = col.type_();
         let mut value = match *ty {
             Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
-            Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+            Type::BPCHAR | Type::TEXT | Type::VARCHAR => row.get::<_, Option<String>>(i),
             Type::TEXT_ARRAY => row
                 .get::<_, Option<Array<ArrayElement<String>>>>(i)
                 .map(|a| a.to_string()),
@@ -445,10 +448,13 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
                 let s = x.into_iter().map(ascii::escape_default).flatten().collect();
                 String::from_utf8(s).unwrap()
             }),
+            Type::INT2 => row.get::<_, Option<i16>>(i).map(|x| x.to_string()),
             Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
             Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
             Type::OID => row.get::<_, Option<u32>>(i).map(|x| x.to_string()),
-            Type::NUMERIC => row.get::<_, Option<Numeric>>(i).map(|x| x.to_string()),
+            Type::NUMERIC => row
+                .get::<_, Option<Numeric>>(i)
+                .map(|x| x.0 .0.to_standard_notation_string()),
             Type::FLOAT4 => row.get::<_, Option<f32>>(i).map(|x| x.to_string()),
             Type::FLOAT8 => row.get::<_, Option<f64>>(i).map(|x| x.to_string()),
             Type::TIMESTAMP => row
@@ -466,7 +472,7 @@ fn decode_row(row: Row, context: Context) -> Result<Vec<String>, String> {
             Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
             Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
             Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
-            _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
+            _ => return Err(format!("TESTDRIVE: unable to handle SQL type: {:?}", ty)),
         }
         .unwrap_or_else(|| "<null>".into());
 

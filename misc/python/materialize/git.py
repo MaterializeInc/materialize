@@ -11,14 +11,13 @@
 
 import subprocess
 import sys
-from functools import lru_cache, total_ordering
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Set, Union, NamedTuple
+from typing import List, Optional, Set, Union
 
-import semver
+import semver.version
 
-from materialize import spawn
-from materialize import errors
+from materialize import errors, spawn
 
 
 def rev_count(rev: str) -> int:
@@ -89,18 +88,18 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
+def get_version_tags(*, fetch: bool = True) -> List[semver.version.Version]:
     """List all the version-like tags in the repo
 
     Args:
         fetch: If false, don't automatically run `git fetch --tags`.
     """
     if fetch:
-        spawn.runv(["git", "fetch", "--tags"])
+        _fetch()
     tags = []
     for t in spawn.capture(["git", "tag"], unicode=True).splitlines():
         try:
-            tags.append(semver.VersionInfo.parse(t.lstrip("v")))
+            tags.append(semver.version.Version.parse(t.lstrip("v")))
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 
@@ -138,6 +137,13 @@ def describe() -> str:
     return spawn.capture(["git", "describe"], unicode=True).strip()
 
 
+def fetch() -> str:
+    """Fetch from all configured default fetch remotes"""
+    return spawn.capture(["git", "fetch", "--tags"], unicode=True).strip()
+
+
+_fetch = fetch  # renamed because an argument shadows the fetch name in get_tags
+
 # Work tree mutation
 
 
@@ -158,3 +164,10 @@ def commit_all_changed(message: str) -> None:
 def tag_annotated(tag: str) -> None:
     """Create an annotated tag on HEAD"""
     spawn.runv(["git", "tag", "-a", "-m", tag, tag])
+
+
+def push(remote: str, remote_ref: Optional[str] = None) -> None:
+    if remote_ref:
+        spawn.runv(["git", "push", remote, f"HEAD:{remote_ref}"])
+    else:
+        spawn.runv(["git", "push", remote])

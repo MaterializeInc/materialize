@@ -24,7 +24,7 @@ die() {
 # Runs PROGRAM, but informs the user first. Specifically, run outputs "PROGRAM
 # ARGS..." to stderr, then executes PROGRAM with the specified ARGS.
 run() {
-   echo "$*" >&2
+   echo "\$ $*" >&2
    "$@"
 }
 
@@ -84,7 +84,7 @@ git_files() {
 # command fails. See also try_last_failed and try_finish.
 try() {
     try_last_failed=false
-    if ! "$@"; then
+    if ! run "$@"; then
         try_failed=true
         try_last_failed=true
     fi
@@ -148,24 +148,6 @@ ci_status_report() {
     if ((ci_try_passed != ci_try_total)); then
         exit 1
     fi
-}
-
-# await_postgres [connection options]
-#
-# Waits for PostgreSQL to become ready. Accepts the same options as the
-# underlying pg_isready utility. Gives up after 30 tries, waiting 1s between
-# each try.
-#
-# Note that simply checking for the PostgreSQL port to start accepting
-# connections is insufficient, as PostgreSQL can start accepting connections
-# and immediately rejecting them with a "the database system is starting up"
-# fatal error.
-await_postgres() {
-    local i=0
-    until pg_isready "$@" || ((++i > 30)); do
-        echo "waiting 1s for postgres to become ready"
-        sleep 1
-    done
 }
 
 # mapfile_shim [array]

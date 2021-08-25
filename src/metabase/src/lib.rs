@@ -18,7 +18,7 @@
 //!
 //! [Metabase]: https://metabase.com
 
-#![deny(missing_debug_implementations)]
+#![warn(missing_debug_implementations)]
 
 use std::fmt;
 use std::time::Duration;

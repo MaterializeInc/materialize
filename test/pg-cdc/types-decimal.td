@@ -28,7 +28,7 @@ INSERT INTO t1 VALUES ('-99999999999999999999', '-0.99999999999999999999', '-999
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 > SELECT COUNT(*) > 0 FROM mz_source;
@@ -41,7 +41,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t1 LIMIT 1;
-"numeric(38,0)" "numeric(38,20)" "numeric(38,10)"
+numeric numeric numeric
 
 > SELECT * FROM t1;
 99999999999999999999 0.99999999999999999999 9999999999.9999999999

@@ -101,7 +101,7 @@ impl LiteralLifting {
     /// In theory, all literals could be treated in the same way if this method
     /// returned both a list of literals and a projection vector, making the
     /// caller have to deal with the reshuffling.
-    /// (see https://github.com/MaterializeInc/materialize/issues/6598)
+    /// (see <https://github.com/MaterializeInc/materialize/issues/6598>)
     ///
     pub fn action(
         &self,
@@ -397,8 +397,24 @@ impl LiteralLifting {
 
                 // lift literals from each input
                 let mut input_literals = Vec::new();
-                for input in inputs.iter_mut() {
-                    input_literals.push(self.action(input, gets));
+                for mut input in inputs.iter_mut() {
+                    let literals = self.action(input, gets);
+
+                    // Do not propagate error literals beyond join inputs, since that may result
+                    // in them being propagated to other inputs of the join and evaluated when
+                    // they should not.
+                    if literals.iter().any(|l| l.is_literal_err()) {
+                        // Push the literal errors beyond any arrangement since otherwise JoinImplementation
+                        // would add another arrangement on top leading to an infinite loop/stack overflow.
+                        if let MirRelationExpr::ArrangeBy { input, .. } = &mut input {
+                            **input = input.take_dangerous().map(literals);
+                        } else {
+                            *input = input.take_dangerous().map(literals);
+                        }
+                        input_literals.push(Vec::new());
+                    } else {
+                        input_literals.push(literals);
+                    }
                 }
 
                 if input_literals.iter().any(|l| !l.is_empty()) {
@@ -494,10 +510,11 @@ impl LiteralLifting {
 
                 let eval_constant_aggr = |aggr: &expr::AggregateExpr| {
                     let temp = repr::RowArena::new();
-                    let eval = aggr
-                        .func
-                        .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
-                    MirScalarExpr::literal_ok(
+                    let mut eval = aggr.expr.eval(&[], &temp);
+                    if let Ok(param) = eval {
+                        eval = Ok(aggr.func.eval(Some(param), &temp));
+                    }
+                    MirScalarExpr::literal(
                         eval,
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.

@@ -10,7 +10,7 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -27,16 +27,15 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use dataflow_types::{DataflowDesc, DataflowError};
-use expr::{GlobalId, MirScalarExpr};
+use dataflow_types::{DataflowDescription, DataflowError};
+use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
+use repr::{Diff, Row, RowArena};
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-
-pub type Diff = isize;
 
 // Local type definition to avoid the horror in signatures.
 pub type Arrangement<S, V> = Arranged<S, TraceValHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
@@ -64,9 +63,8 @@ pub type ErrArrangementImport<S, T> = Arranged<
 /// former must refine the latter. The former is the timestamp used by the scope in question,
 /// and the latter is the timestamp of imported traces. The two may be different in the case
 /// of regions or iteration.
-pub struct Context<S: Scope, P, V: Data, T>
+pub struct Context<S: Scope, V: Data, T>
 where
-    P: Eq + std::hash::Hash + Clone,
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
@@ -79,33 +77,17 @@ where
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
     pub as_of_frontier: Antichain<repr::Timestamp>,
-    /// Dataflow local collections.
-    pub collections: HashMap<P, (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
-    /// Dataflow local arrangements.
-    pub local: HashMap<P, BTreeMap<Vec<MirScalarExpr>, (Arrangement<S, V>, ErrArrangement<S>)>>,
-    /// Imported arrangements.
-    #[allow(clippy::type_complexity)] // TODO(fms): fix or ignore lint globally.
-    pub trace: HashMap<
-        P,
-        BTreeMap<
-            Vec<MirScalarExpr>,
-            (
-                GlobalId,
-                ArrangementImport<S, V, T>,
-                ErrArrangementImport<S, T>,
-            ),
-        >,
-    >,
+    /// Bindings of identifiers to collections.
+    pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
 
-impl<S: Scope, P, V: Data, T> Context<S, P, V, T>
+impl<S: Scope, V: Data, T> Context<S, V, T>
 where
-    P: Eq + std::hash::Hash + Clone,
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Creates a new empty Context.
-    pub fn for_dataflow(dataflow: &DataflowDesc, dataflow_id: usize) -> Self {
+    pub fn for_dataflow<Plan>(dataflow: &DataflowDescription<Plan>, dataflow_id: usize) -> Self {
         let as_of_frontier = dataflow
             .as_of
             .clone()
@@ -115,290 +97,52 @@ where
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,
-            collections: HashMap::new(),
-            local: HashMap::new(),
-            trace: HashMap::new(),
+            bindings: BTreeMap::new(),
         }
     }
 
-    /// Indicates if a collection is available.
-    pub fn has_collection(&self, relation_expr: &P) -> bool {
-        self.collections.get(relation_expr).is_some()
-            || self.local.get(relation_expr).is_some()
-            || self.trace.get(relation_expr).is_some()
+    /// Insert a collection bundle by an identifier.
+    ///
+    /// This is expected to be used to install external collections (sources, indexes, other views),
+    /// as well as for `Let` bindings of local collections.
+    pub fn insert_id(
+        &mut self,
+        id: Id,
+        collection: CollectionBundle<S, V, T>,
+    ) -> Option<CollectionBundle<S, V, T>> {
+        self.bindings.insert(id, collection)
     }
-
-    /// Assembles a collection if available.
+    /// Remove a collection bundle by an identifier.
     ///
-    /// This method consults all available data assets to create the appropriate
-    /// collection. This can be either a collection itself, or if absent we may
-    /// also be able to find a stashed arrangement for the same relation_expr, which we
-    /// flatten down to a collection.
-    ///
-    /// If insufficient data assets exist to create the collection the method
-    /// will return `None`.
-    pub fn collection(
-        &self,
-        relation_expr: &P,
-    ) -> Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)> {
-        if let Some(collection) = self.collections.get(relation_expr) {
-            Some(collection.clone())
-        } else if let Some(local) = self.local.get(relation_expr) {
-            let (oks, errs) = local.values().next().expect("Empty arrangement");
-            Some((
-                oks.as_collection(|_k, v| v.clone()),
-                errs.as_collection(|k, _v| k.clone()),
-            ))
-        } else if let Some(trace) = self.trace.get(relation_expr) {
-            let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
-            Some((
-                oks.as_collection(|_k, v| v.clone()),
-                errs.as_collection(|k, _v| k.clone()),
-            ))
+    /// The primary use of this method is uninstalling `Let` bindings.
+    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, V, T>> {
+        self.bindings.remove(&id)
+    }
+    /// Melds a collection bundle to whatever exists.
+    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, V, T>) {
+        if !self.bindings.contains_key(&id) {
+            self.bindings.insert(id, collection);
         } else {
-            None
-        }
-    }
-
-    /// Applies logic to elements of a collection and returns the results.
-    ///
-    /// This method allows savvy users to avoid the potential allocation
-    /// required by `self.collection(expr)` when converting data from an
-    /// arrangement; if less data are required, the `logic` argument is able
-    /// to use a reference and produce the minimal amount of data instead.
-    ///
-    /// The method also takes a `key_selector` argument which allows the
-    /// caller to indicate that certain scalar expressions may have literal
-    /// values (at least, for all yielded results). This can enable the
-    /// use of keys in arrangements, and in particular drive the choice of
-    /// which arrangement to use toward one whose keys must be literals.
-    pub fn flat_map_ref<I, L, K>(
-        &self,
-        relation_expr: &P,
-        mut key_selector: K,
-        mut logic: L,
-    ) -> Option<(
-        Collection<S, I::Item, Diff>,
-        Collection<S, DataflowError, Diff>,
-    )>
-    where
-        I: IntoIterator,
-        I::Item: Data,
-        L: FnMut(RefOrMut<V>) -> I + 'static,
-        K: FnMut(&[MirScalarExpr]) -> Option<V>,
-    {
-        if let Some((oks, err)) = self.collections.get(relation_expr) {
-            Some((
-                oks.flat_map(move |mut v| logic(RefOrMut::Mut(&mut v))),
-                err.clone(),
-            ))
-        } else if let Some(local) = self.local.get(relation_expr) {
-            // Determine a key that is constrained to a literal value.
-            let mut constrained_keys = local
-                .keys()
-                .filter_map(|key| key_selector(key).map(|row| (key.clone(), row)))
-                .collect::<Vec<_>>();
-            // Sort keys by length as a proxy for selectivity.
-            // TODO(#4580): improve this heuristic when possible.
-            constrained_keys.sort_by_key(|(key, _row)| key.len());
-            // If we found such a key, use a more advanced implementation.
-            if let Some((key, row)) = constrained_keys.pop() {
-                let (oks, errs) = &local[&key];
-                let result = Self::flat_map_ref_inner(oks, row, logic);
-                Some((result, errs.as_collection(|k, _v| k.clone())))
-            } else {
-                let (oks, errs) = local.values().next().expect("Empty arrangement");
-                Some((
-                    oks.flat_map_ref(move |_k, v| logic(RefOrMut::Ref(&v))),
-                    errs.as_collection(|k, _v| k.clone()),
-                ))
+            let binding = self
+                .bindings
+                .get_mut(&id)
+                .expect("Binding verified to exist");
+            if collection.collection.is_some() {
+                binding.collection = collection.collection;
             }
-        } else if let Some(trace) = self.trace.get(relation_expr) {
-            // Determine a key that is constrained to a literal value.
-            let mut constrained_keys = trace
-                .keys()
-                .filter_map(|key| key_selector(key).map(|row| (key.clone(), row)))
-                .collect::<Vec<_>>();
-            // Sort keys by length as a proxy for selectivity.
-            // TODO(#4580): improve this heuristic when possible.
-            constrained_keys.sort_by_key(|(key, _row)| key.len());
-            // If we found such a key, use a more advanced implementation.
-            if let Some((key, row)) = constrained_keys.pop() {
-                let (_id, oks, errs) = &trace[&key];
-                let result = Self::flat_map_ref_inner(oks, row, logic);
-                Some((result, errs.as_collection(|k, _v| k.clone())))
-            } else {
-                let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
-                Some((
-                    oks.flat_map_ref(move |_k, v| logic(RefOrMut::Ref(&v))),
-                    errs.as_collection(|k, _v| k.clone()),
-                ))
+            for (key, flavor) in collection.arranged.into_iter() {
+                binding.arranged.insert(key, flavor);
             }
-        } else {
-            None
         }
     }
-
-    /// Factored out common logic for using literal keys in general traces.
-    ///
-    /// This logic is sufficiently interesting that we want to write it only
-    /// once, and thereby avoid any skew in the two uses of the logic.
-    fn flat_map_ref_inner<Tr, I, L>(
-        trace: &Arranged<S, Tr>,
-        row: V,
-        mut logic: L,
-    ) -> Collection<S, I::Item, Diff>
-    where
-        Tr: TraceReader<Key = V, Val = V, Time = S::Timestamp, R = repr::Diff> + Clone + 'static,
-        Tr::Batch: BatchReader<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
-        Tr::Cursor: Cursor<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
-        I: IntoIterator,
-        I::Item: Data,
-        L: FnMut(RefOrMut<V>) -> I + 'static,
-    {
-        use differential_dataflow::AsCollection;
-        use timely::dataflow::operators::Operator;
-        trace
-            .stream
-            .unary(Pipeline, "AsCollection", move |_, _| {
-                move |input, output| {
-                    input.for_each(|time, data| {
-                        let mut session = output.session(&time);
-                        for wrapper in data.iter() {
-                            let batch = &wrapper;
-                            let mut cursor = batch.cursor();
-                            cursor.seek_key(batch, &row);
-                            if cursor.get_key(batch) == Some(&row) {
-                                while let Some(val) = cursor.get_val(batch) {
-                                    for datum in logic(RefOrMut::Ref(val)) {
-                                        cursor.map_times(batch, |time, diff| {
-                                            session.give((
-                                                datum.clone(),
-                                                time.clone(),
-                                                diff.clone(),
-                                            ));
-                                        });
-                                    }
-                                    cursor.step_val(batch);
-                                }
-                            }
-                        }
-                    });
-                }
-            })
-            .as_collection()
-    }
-
-    /// Convenience method for accessing `arrangement` when all keys are plain columns
-    pub fn arrangement_columns(
-        &self,
-        relation_expr: &P,
-        columns: &[usize],
-    ) -> Option<ArrangementFlavor<S, V, T>> {
-        let mut keys = Vec::new();
-        for column in columns {
-            keys.push(MirScalarExpr::Column(*column));
-        }
-        self.arrangement(relation_expr, &keys)
-    }
-
-    /// Produces an arrangement if available.
-    ///
-    /// A context store multiple types of arrangements, and prioritizes
-    /// dataflow-local arrangements in its return values.
-    pub fn arrangement(
-        &self,
-        relation_expr: &P,
-        keys: &[MirScalarExpr],
-    ) -> Option<ArrangementFlavor<S, V, T>> {
-        if let Some(local) = self.get_local(relation_expr, keys) {
-            let (oks, errs) = local.clone();
-            Some(ArrangementFlavor::Local(oks, errs))
-        } else if let Some((gid, oks, errs)) = self.get_trace(relation_expr, keys) {
-            Some(ArrangementFlavor::Trace(*gid, oks.clone(), errs.clone()))
-        } else {
-            None
-        }
-    }
-
-    /// Retrieves a local arrangement from a relation_expr and keys.
-    pub fn get_local(
-        &self,
-        relation_expr: &P,
-        keys: &[MirScalarExpr],
-    ) -> Option<&(Arrangement<S, V>, ErrArrangement<S>)> {
-        self.local.get(relation_expr).and_then(|x| x.get(keys))
-    }
-
-    /// Convenience method for `set_local` when all keys are plain columns
-    pub fn set_local_columns(
-        &mut self,
-        relation_expr: &P,
-        columns: &[usize],
-        arranged: (Arrangement<S, V>, ErrArrangement<S>),
-    ) {
-        let mut keys = Vec::new();
-        for column in columns {
-            keys.push(MirScalarExpr::Column(*column));
-        }
-        self.set_local(relation_expr, &keys, arranged);
-    }
-
-    /// Binds a relation_expr and keys to a local arrangement.
-    pub fn set_local(
-        &mut self,
-        relation_expr: &P,
-        keys: &[MirScalarExpr],
-        arranged: (Arrangement<S, V>, ErrArrangement<S>),
-    ) {
-        self.local
-            .entry(relation_expr.clone())
-            .or_insert_with(BTreeMap::new)
-            .insert(keys.to_vec(), arranged);
-    }
-
-    /// Retrieves an imported arrangement from a relation_expr and keys.
-    pub fn get_trace(
-        &self,
-        relation_expr: &P,
-        keys: &[MirScalarExpr],
-    ) -> Option<&(
-        GlobalId,
-        ArrangementImport<S, V, T>,
-        ErrArrangementImport<S, T>,
-    )> {
-        self.trace.get(relation_expr).and_then(|x| x.get(keys))
-    }
-
-    /// Binds a relation_expr and keys to an imported arrangement.
-    pub fn set_trace(
-        &mut self,
-        gid: GlobalId,
-        relation_expr: &P,
-        keys: &[MirScalarExpr],
-        arranged: (ArrangementImport<S, V, T>, ErrArrangementImport<S, T>),
-    ) {
-        self.trace
-            .entry(relation_expr.clone())
-            .or_insert_with(BTreeMap::new)
-            .insert(keys.to_vec(), (gid, arranged.0, arranged.1));
-    }
-
-    /// Clones from one key to another, as needed in let binding.
-    pub fn clone_from_to(&mut self, key1: &P, key2: &P) {
-        if let Some(collection) = self.collections.get(key1).cloned() {
-            self.collections.insert(key2.clone(), collection);
-        }
-        if let Some(handles) = self.local.get(key1).cloned() {
-            self.local.insert(key2.clone(), handles);
-        }
-        if let Some(handles) = self.trace.get(key1).cloned() {
-            self.trace.insert(key2.clone(), handles);
-        }
+    /// Look up a collection bundle by an identifier.
+    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, V, T>> {
+        self.bindings.get(&id).cloned()
     }
 }
 
 /// Describes flavor of arrangement: local or imported trace.
+#[derive(Clone)]
 pub enum ArrangementFlavor<S: Scope, V: Data, T: Lattice>
 where
     T: Timestamp + Lattice,
@@ -407,9 +151,417 @@ where
     /// A dataflow-local arrangement.
     Local(Arrangement<S, V>, ErrArrangement<S>),
     /// An imported trace from outside the dataflow.
+    ///
+    /// The `GlobalId` identifier exists so that exports of this same trace
+    /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
         ArrangementImport<S, V, T>,
         ErrArrangementImport<S, T>,
     ),
+}
+
+impl<S: Scope, V: Data, T: Lattice> ArrangementFlavor<S, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Presents `self` as a stream of updates.
+    ///
+    /// This method presents the contents as they are, without further computation.
+    /// For some cases, the [CollectionBundle] provides the same or more specific functions,
+    /// specifically [CollectionBundle::as_collection_core].
+    pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
+        match self {
+            ArrangementFlavor::Local(oks, errs) => (
+                oks.as_collection(|_k, v| v.clone()),
+                errs.as_collection(|k, _v| k.clone()),
+            ),
+            ArrangementFlavor::Trace(_, oks, errs) => (
+                oks.as_collection(|_k, v| v.clone()),
+                errs.as_collection(|k, _v| k.clone()),
+            ),
+        }
+    }
+}
+
+/// A bundle of the various ways a collection can be represented.
+///
+/// This type maintains the invariant that it does contain at least one valid
+/// source of data, either a collection or at least one arrangement.
+#[derive(Clone)]
+pub struct CollectionBundle<S: Scope, V: Data, T: Lattice>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    pub collection: Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
+    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
+}
+
+impl<S: Scope, V: Data, T: Lattice> CollectionBundle<S, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Construct a new collection bundle from update streams.
+    pub fn from_collections(
+        oks: Collection<S, V, Diff>,
+        errs: Collection<S, DataflowError, Diff>,
+    ) -> Self {
+        Self {
+            collection: Some((oks, errs)),
+            arranged: BTreeMap::default(),
+        }
+    }
+
+    /// Inserts arrangements by the expressions on which they are keyed.
+    pub fn from_expressions(
+        exprs: Vec<MirScalarExpr>,
+        arrangements: ArrangementFlavor<S, V, T>,
+    ) -> Self {
+        let mut arranged = BTreeMap::new();
+        arranged.insert(exprs, arrangements);
+        Self {
+            collection: None,
+            arranged,
+        }
+    }
+
+    /// Inserts arrangements by the columns on which they are keyed.
+    pub fn from_columns<I: IntoIterator<Item = usize>>(
+        columns: I,
+        arrangements: ArrangementFlavor<S, V, T>,
+    ) -> Self {
+        let mut keys = Vec::new();
+        for column in columns {
+            keys.push(MirScalarExpr::Column(column));
+        }
+        Self::from_expressions(keys, arrangements)
+    }
+
+    /// Presents `self` as a stream of updates.
+    ///
+    /// This method presents the contents as they are, without further computation.
+    /// If you have logic that could be applied to each record, consider using the
+    /// `as_collection_core` methods which allows this and can reduce the work done.
+    pub fn as_collection(&self) -> (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>) {
+        if let Some(collection) = &self.collection {
+            collection.clone()
+        } else {
+            self.arranged
+                .values()
+                .next()
+                .expect("Invariant violated: CollectionBundle contains no collection.")
+                .as_collection()
+        }
+    }
+
+    /// Applies logic to elements of a collection and returns the results.
+    ///
+    /// If `key_val` is set, this is a promise that `logic` will produce no results on
+    /// records for which the key does not evaluate to the value. This is used when we
+    /// have an arrangement by that key to leap directly to exactly those records.
+    /// It is important that `logic` still guard against data that does not satisfy
+    /// this constraint, as this method does not statically know that it will have
+    /// that arrangement.
+    pub fn flat_map<I, L>(
+        &self,
+        key_val: Option<(Vec<MirScalarExpr>, V)>,
+        mut logic: L,
+    ) -> (
+        timely::dataflow::Stream<S, I::Item>,
+        Collection<S, DataflowError, Diff>,
+    )
+    where
+        I: IntoIterator,
+        I::Item: Data,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+    {
+        // Set a number of tuples after which the operator should yield.
+        // This allows us to remain responsive even when enumerating a substantial
+        // arrangement, as well as provides time to accumulate our produced output.
+        let refuel = 1000000;
+        // If `key_val` is set, and we have the arrangement by that key, we should
+        // use that arrangement.
+        if let Some((key, val)) = key_val {
+            if let Some(flavor) = self.arrangement(&key) {
+                match flavor {
+                    ArrangementFlavor::Local(oks, errs) => {
+                        let oks = Self::flat_map_core(&oks, Some(val), logic, refuel);
+                        let errs = errs.as_collection(|k, _v| k.clone());
+                        return (oks, errs);
+                    }
+                    ArrangementFlavor::Trace(_, oks, errs) => {
+                        let oks = Self::flat_map_core(&oks, Some(val), logic, refuel);
+                        let errs = errs.as_collection(|k, _v| k.clone());
+                        return (oks, errs);
+                    }
+                }
+            }
+        }
+
+        // No key, or a key but no matching arrangement (the latter would likely imply
+        // an error in the contract between key-production and available arrangements).
+        // We should now prefer to use an arrangement if available (avoids allocation),
+        // and resort to using a collection if not available (copies all rows).
+        if let Some(flavor) = self.arranged.values().next() {
+            match flavor {
+                ArrangementFlavor::Local(oks, errs) => {
+                    let oks = Self::flat_map_core(&oks, None, logic, refuel);
+                    let errs = errs.as_collection(|k, _v| k.clone());
+                    (oks, errs)
+                }
+                ArrangementFlavor::Trace(_, oks, errs) => {
+                    let oks = Self::flat_map_core(&oks, None, logic, refuel);
+                    let errs = errs.as_collection(|k, _v| k.clone());
+                    (oks, errs)
+                }
+            }
+        } else {
+            use timely::dataflow::operators::Map;
+            let (oks, errs) = self.as_collection();
+            (
+                oks.inner
+                    .flat_map(move |(mut v, t, d)| logic(RefOrMut::Mut(&mut v), &t, &d)),
+                errs,
+            )
+        }
+    }
+
+    /// Factored out common logic for using literal keys in general traces.
+    ///
+    /// This logic is sufficiently interesting that we want to write it only
+    /// once, and thereby avoid any skew in the two uses of the logic.
+    fn flat_map_core<Tr, I, L>(
+        trace: &Arranged<S, Tr>,
+        key: Option<V>,
+        mut logic: L,
+        refuel: usize,
+    ) -> timely::dataflow::Stream<S, I::Item>
+    where
+        Tr: TraceReader<Key = V, Val = V, Time = S::Timestamp, R = repr::Diff> + Clone + 'static,
+        Tr::Batch: BatchReader<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
+        Tr::Cursor: Cursor<V, Tr::Val, S::Timestamp, repr::Diff> + 'static,
+        I: IntoIterator,
+        I::Item: Data,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a S::Timestamp, &'a repr::Diff) -> I + 'static,
+    {
+        let mode = if key.is_some() { "index" } else { "scan" };
+        let name = format!("ArrangementFlatMap({})", mode);
+        use timely::dataflow::operators::Operator;
+        trace.stream.unary(Pipeline, &name, move |_, info| {
+            // Acquire an activator to reschedule the operator when it has unfinished work.
+            use timely::scheduling::Activator;
+            let activations = trace.stream.scope().activations();
+            let activator = Activator::new(&info.address[..], activations);
+            // Maintain a list of work to do, cursor to navigate and process.
+            let mut todo = std::collections::VecDeque::new();
+            move |input, output| {
+                // First, dequeue all batches.
+                input.for_each(|time, data| {
+                    let capability = time.retain();
+                    for batch in data.iter() {
+                        // enqueue a capability, cursor, and batch.
+                        todo.push_back(PendingWork::new(
+                            capability.clone(),
+                            batch.cursor(),
+                            batch.clone(),
+                        ));
+                    }
+                });
+
+                // Second, make progress on `todo`.
+                let mut fuel = refuel;
+                while !todo.is_empty() && fuel > 0 {
+                    todo.front_mut()
+                        .unwrap()
+                        .do_work(&key, &mut logic, &mut fuel, output);
+                    if fuel > 0 {
+                        todo.pop_front();
+                    }
+                }
+                // If we have not finished all work, re-activate the operator.
+                if !todo.is_empty() {
+                    activator.activate();
+                }
+            }
+        })
+    }
+
+    /// Look up an arrangement by the expressions that form the key.
+    ///
+    /// The result may be `None` if no such arrangement exists, or it may be one of many
+    /// "arrangement flavors" that represent the types of arranged data we might have.
+    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, V, T>> {
+        self.arranged.get(key).map(|x| x.clone())
+    }
+}
+
+impl<S: Scope, T: Lattice> CollectionBundle<S, repr::Row, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Ensures that arrangements in `keys` are present, creating them if they do not exist.
+    pub fn ensure_arrangements<K: IntoIterator<Item = Vec<MirScalarExpr>>>(
+        mut self,
+        keys: K,
+    ) -> Self {
+        for key in keys {
+            if !self.arranged.contains_key(&key) {
+                // TODO: Consider allowing more expressive names.
+                let name = format!("ArrangeBy[{:?}]", key);
+                let key2 = key.clone();
+                if self.collection.is_none() {
+                    // Cache collection to avoid reforming it each time.
+                    // TODO(mcsherry): In theory this could be faster run out of another arrangement,
+                    // as the `map_fallible` that follows could be run against an arrangement itself.
+                    self.collection = Some(self.as_collection());
+                }
+                let (oks, errs) = self.as_collection();
+                use crate::operator::CollectionExt;
+                let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
+                    let datums = row.unpack();
+                    let temp_storage = RowArena::new();
+                    let key_row =
+                        Row::try_pack(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+                    Ok::<(Row, Row), DataflowError>((key_row, row))
+                });
+
+                use differential_dataflow::operators::arrange::Arrange;
+                let oks = oks_keyed.arrange_named::<OrdValSpine<Row, Row, _, _>>(&name);
+                let errs = errs
+                    .concat(&errs_keyed)
+                    .arrange_named::<OrdKeySpine<_, _, _>>(&format!("{}-errors", name));
+                self.arranged
+                    .insert(key, ArrangementFlavor::Local(oks, errs));
+            }
+        }
+        self
+    }
+}
+
+impl<S> CollectionBundle<S, repr::Row, repr::Timestamp>
+where
+    S: Scope<Timestamp = repr::Timestamp>,
+{
+    /// Presents `self` as a stream of updates, having been subjected to `mfp`.
+    ///
+    /// This operator is able to apply the logic of `mfp` early, which can substantially
+    /// reduce the amount of data produced when `mfp` is non-trivial.
+    ///
+    /// The `key_val` argument, when present, indicates that a specific arrangement should
+    /// be used, and that we can seek to the supplied row.
+    pub fn as_collection_core(
+        &self,
+        mut mfp: MapFilterProject,
+        key_val: Option<(Vec<MirScalarExpr>, Row)>,
+    ) -> (
+        Collection<S, repr::Row, Diff>,
+        Collection<S, DataflowError, Diff>,
+    ) {
+        if mfp.is_identity() {
+            self.as_collection()
+        } else {
+            mfp.optimize();
+            let mfp_plan = mfp.into_plan().unwrap();
+            let (stream, errors) = self.flat_map(key_val, {
+                let mut datums = crate::render::datum_vec::DatumVec::new();
+                move |data, time, diff| {
+                    let temp_storage = repr::RowArena::new();
+                    let mut datums_local = datums.borrow_with(&data);
+                    mfp_plan
+                        .evaluate(&mut datums_local, &temp_storage, time.clone(), diff.clone())
+                        .map(|x| x.map_err(|(e, t, d)| (e.into(), t, d)))
+                }
+            });
+
+            use timely::dataflow::operators::ok_err::OkErr;
+            let (oks, errs) = stream.ok_err(|x| x);
+
+            use differential_dataflow::AsCollection;
+            let oks = oks.as_collection();
+            let errs = errs.as_collection();
+            (oks, errors.concat(&errs))
+        }
+    }
+}
+
+use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::Capability;
+struct PendingWork<K, V, T: Timestamp, R, C: Cursor<K, V, T, R>> {
+    capability: Capability<T>,
+    cursor: C,
+    batch: C::Storage,
+}
+
+impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, T, R, C> {
+    /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
+    fn new(capability: Capability<T>, cursor: C, batch: C::Storage) -> Self {
+        Self {
+            capability,
+            cursor,
+            batch,
+        }
+    }
+    /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
+    fn do_work<I, L>(
+        &mut self,
+        key: &Option<K>,
+        logic: &mut L,
+        fuel: &mut usize,
+        output: &mut OutputHandle<
+            '_,
+            T,
+            I::Item,
+            timely::dataflow::channels::pushers::Tee<T, I::Item>,
+        >,
+    ) where
+        I: IntoIterator,
+        I::Item: Data,
+        L: for<'a, 'b> FnMut(RefOrMut<'b, V>, &'a T, &'a R) -> I + 'static,
+    {
+        // Attempt to make progress on this batch.
+        let mut work: usize = 0;
+        let mut session = output.session(&self.capability);
+        if let Some(key) = key {
+            if self.cursor.get_key(&self.batch) != Some(key) {
+                self.cursor.seek_key(&self.batch, key);
+            }
+            if self.cursor.get_key(&self.batch) == Some(key) {
+                while let Some(val) = self.cursor.get_val(&self.batch) {
+                    self.cursor.map_times(&self.batch, |time, diff| {
+                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                            session.give(datum);
+                            work += 1;
+                        }
+                    });
+                    self.cursor.step_val(&self.batch);
+                    if work >= *fuel {
+                        *fuel = 0;
+                        return;
+                    }
+                }
+            }
+        } else {
+            while let Some(_key) = self.cursor.get_key(&self.batch) {
+                while let Some(val) = self.cursor.get_val(&self.batch) {
+                    self.cursor.map_times(&self.batch, |time, diff| {
+                        for datum in logic(RefOrMut::Ref(val), time, diff) {
+                            session.give(datum);
+                            work += 1;
+                        }
+                    });
+                    self.cursor.step_val(&self.batch);
+                    if work >= *fuel {
+                        *fuel = 0;
+                        return;
+                    }
+                }
+                self.cursor.step_key(&self.batch);
+            }
+        }
+        *fuel -= work;
+    }
 }

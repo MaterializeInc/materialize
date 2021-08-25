@@ -72,7 +72,7 @@ a
 # Over an empty source
 #
 
-> SELECT * from limit_only AS OF NOW();
+> SELECT * from limit_only;
 <null>
 
 > SELECT * from group_by_limit;
@@ -95,7 +95,7 @@ a
 $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
 {"f1": {"int": 123}, "f2": {"int": -123} }
 
-> SELECT * from limit_only AS OF NOW();
+> SELECT * from limit_only;
 123
 
 > SELECT * from group_by_limit;
@@ -120,7 +120,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
 $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=2
 {"f1": {"int": 234}, "f2": {"int" : -234} }
 
-> SELECT * from limit_only AS OF NOW();
+> SELECT * from limit_only;
 123
 
 > SELECT * from group_by_limit;
@@ -178,7 +178,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=4
 {"f1": {"int": 234}, "f2": {"int": 0}}
 {"f1": {"int": 123}, "f2": {"int": -234} }
 
-> SELECT * from limit_only AS OF NOW();
+> SELECT * from limit_only;
 0
 
 > SELECT * from group_by_limit;
@@ -216,7 +216,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=5
 {"f1": null, "f2": {"int": 0}}
 {"f1": null, "f2": {"int": -234}}
 
-> SELECT * from limit_only AS OF NOW();
+> SELECT * from limit_only;
 <null>
 
 > SELECT * from group_by_limit;

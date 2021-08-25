@@ -7,16 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
-from typing import Dict, List
 from urllib.parse import unquote, urlparse
 
 import boto3
-import botocore  # type: ignore
 
-from materialize import spawn
+from materialize import scratch
 
 MAX_AGE = timedelta(hours=1)
 
@@ -83,10 +80,21 @@ def clean_up_sqs() -> None:
             client.delete_queue(QueueUrl=queue)
 
 
+def clean_up_ec2() -> None:
+    print(f"Terminating scratch ec2 instances whose age exceeds the deletion time")
+    olds = [i["InstanceId"] for i in scratch.get_old_instances()]
+    if olds:
+        print(f"Instances to delete: {olds}")
+        boto3.client("ec2").terminate_instances(InstanceIds=olds)
+    else:
+        print("No instances to delete")
+
+
 def main() -> None:
     clean_up_kinesis()
     clean_up_s3()
     clean_up_sqs()
+    clean_up_ec2()
 
 
 if __name__ == "__main__":

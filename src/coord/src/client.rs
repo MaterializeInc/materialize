@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,8 +17,9 @@ use uuid::Uuid;
 
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
+use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
-use repr::{ColumnType, Datum, Row, ScalarType};
+use repr::{Datum, Row};
 use sql::ast::{Raw, Statement};
 
 use crate::command::{
@@ -91,6 +93,28 @@ impl Client {
             conn_id: self.id_alloc.alloc()?,
             inner: self.clone(),
         })
+    }
+
+    /// Executes SQL statements, as if by [`SessionClient::simple_execute`], as
+    /// a system user.
+    pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, CoordError> {
+        let conn_client = self.new_conn()?;
+        let session = Session::new(conn_client.conn_id(), "mz_system".into());
+        let (mut session_client, _) = conn_client.startup(session).await?;
+        let res = session_client.simple_execute(stmts).await;
+        session_client.terminate().await;
+        res
+    }
+
+    /// Like [`Client::system_execute`], but for cases when `stmt` is known to
+    /// contain just one statement.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stmt` parses to more than one SQL statement.
+    pub async fn system_execute_one(&self, stmt: &str) -> Result<SimpleResult, CoordError> {
+        let response = self.system_execute(stmt).await?;
+        Ok(response.results.into_element())
     }
 }
 
@@ -271,6 +295,20 @@ impl SessionClient {
         .await
     }
 
+    /// Starts a transaction based on implicit:
+    /// - `None`: InTransaction
+    /// - `Some(1)`: Started
+    /// - `Some(n > 1)`: InTransactionImplicit
+    /// - `Some(0)`: no change
+    pub async fn start_transaction(&mut self, implicit: Option<usize>) -> Result<(), CoordError> {
+        self.send(|tx, session| Command::StartTransaction {
+            implicit,
+            session,
+            tx,
+        })
+        .await
+    }
+
     /// Ends a transaction.
     pub async fn end_transaction(
         &mut self,
@@ -282,6 +320,13 @@ impl SessionClient {
             tx,
         })
         .await
+    }
+
+    /// Fails a transaction.
+    pub fn fail_transaction(&mut self) {
+        let session = self.session.take().expect("session invariant violated");
+        let session = session.fail_transaction();
+        self.session = Some(session);
     }
 
     /// Dumps the catalog to a JSON string.
@@ -311,18 +356,18 @@ impl SessionClient {
         .await
     }
 
-    /// Executes a SQL statement using a simple protocol that does not involve
+    /// Executes SQL statements using a simple protocol that does not involve
     /// portals.
     ///
     /// The standard flow for executing a SQL statement requires parsing the
     /// statement, binding it into a portal, and then executing that portal.
     /// This function is a wrapper around that complexity with a simpler
-    /// interface. The provided `stmt` is executed directly, and its results
+    /// interface. The provided `stmts` are executed directly, and their results
     /// are returned as a vector of rows, where each row is a vector of JSON
     /// objects.
     pub async fn simple_execute(
         &mut self,
-        stmt: &str,
+        stmts: &str,
     ) -> Result<SimpleExecuteResponse, CoordError> {
         // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
         // Infinity, so those will still be rendered as strings.
@@ -333,7 +378,7 @@ impl SessionClient {
             }
         }
 
-        fn datum_to_json(datum: &Datum, idx: usize, col_types: &[ColumnType]) -> serde_json::Value {
+        fn datum_to_json(datum: &Datum) -> serde_json::Value {
             match datum {
                 // Convert some common things to a native JSON value. This doesn't need to be
                 // too exhaustive because the SQL-over-HTTP interface is currently not hooked
@@ -341,30 +386,36 @@ impl SessionClient {
                 Datum::Null | Datum::JsonNull => serde_json::Value::Null,
                 Datum::False => serde_json::Value::Bool(false),
                 Datum::True => serde_json::Value::Bool(true),
+                Datum::Int16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
                 Datum::Float32(n) => float_to_json(n.into_inner() as f64),
                 Datum::Float64(n) => float_to_json(n.into_inner()),
-                Datum::String(s) => serde_json::Value::String(s.to_string()),
-                Datum::Decimal(d) => serde_json::Value::String(if col_types.len() > idx {
-                    match col_types[idx].scalar_type {
-                        ScalarType::Decimal(_precision, scale) => d.with_scale(scale).to_string(),
-                        _ => datum.to_string(),
+                Datum::Numeric(d) => {
+                    // serde_json requires floats to be finite
+                    if d.0.is_infinite() {
+                        serde_json::Value::String(d.0.to_string())
+                    } else {
+                        serde_json::Value::Number(
+                            serde_json::Number::from_f64(f64::try_from(d.0).unwrap()).unwrap(),
+                        )
                     }
-                } else {
-                    datum.to_string()
-                }),
+                }
+                Datum::String(s) => serde_json::Value::String(s.to_string()),
                 Datum::List(list) => serde_json::Value::Array(
-                    list.iter()
-                        .map(|entry| datum_to_json(&entry, idx, col_types))
+                    list.iter().map(|entry| datum_to_json(&entry)).collect(),
+                ),
+                Datum::Map(map) => serde_json::Value::Object(
+                    map.iter()
+                        .map(|(k, v)| (k.to_owned(), datum_to_json(&v)))
                         .collect(),
                 ),
                 _ => serde_json::Value::String(datum.to_string()),
             }
         }
 
-        let stmts = sql::parse::parse(&stmt).map_err(|e| CoordError::Unstructured(e.into()))?;
-        self.session().start_transaction();
+        let stmts = sql::parse::parse(&stmts).map_err(|e| CoordError::Unstructured(e.into()))?;
+        self.start_transaction(None).await?;
         const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
         for stmt in stmts {
@@ -393,24 +444,16 @@ impl SessionClient {
                 PeekResponse::Canceled => coord_bail!("execution canceled"),
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-            let (col_names, col_types) = match desc.relation_desc {
-                Some(desc) => (
-                    desc.iter_names()
-                        .map(|name| name.map(|name| name.to_string()))
-                        .collect(),
-                    desc.typ().column_types.clone(),
-                ),
-                None => (vec![], vec![]),
+            let col_names = match desc.relation_desc {
+                Some(desc) => desc
+                    .iter_names()
+                    .map(|name| name.map(|name| name.to_string()))
+                    .collect(),
+                None => vec![],
             };
             for row in rows {
                 let datums = row.unpack();
-                sql_rows.push(
-                    datums
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, datum)| datum_to_json(datum, idx, &col_types))
-                        .collect(),
-                );
+                sql_rows.push(datums.iter().map(|datum| datum_to_json(datum)).collect());
             }
             results.push(SimpleResult {
                 rows: sql_rows,

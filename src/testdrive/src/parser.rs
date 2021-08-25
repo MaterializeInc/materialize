@@ -104,12 +104,16 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
     for el in builtin_reader {
         let (pos, token) = el?;
         let pieces: Vec<_> = token.splitn(2, '=').collect();
-        if pieces.len() != 2 {
-            return Err(InputError {
-                msg: "command argument is not in required key=value format".into(),
-                pos,
-            });
-        }
+        let pieces = match pieces.as_slice() {
+            [key, value] => vec![*key, *value],
+            [key] => vec![*key, ""],
+            _ => {
+                return Err(InputError {
+                    msg: "command argument is not in required key=value format".into(),
+                    pos,
+                });
+            }
+        };
         lazy_static! {
             static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
         }
@@ -197,8 +201,9 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputEr
     // need directly, but that would require a large refactor.
     let mut expected_output: String = line_reader
         .inner
-        .chars()
-        .take_while(|c| !is_sigil(Some(*c)))
+        .lines()
+        .take_while(|l| !is_sigil(l.chars().next()))
+        .map(|l| format!("{}\n", l))
         .collect();
     slurp_all(line_reader);
     while expected_output.ends_with("\n\n") {

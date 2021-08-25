@@ -26,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
 use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use itertools::{Either, Itertools};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -195,16 +196,59 @@ impl NonNullRequirements {
                 expected_group_size: _,
             } => {
                 let mut new_columns = HashSet::new();
-                for column in columns {
-                    // No obvious requirements on aggregate columns.
-                    // A "non-empty" requirement, I guess?
-                    if column < group_key.len() {
-                        group_key[column].non_null_requirements(&mut new_columns);
+                let (group_key_columns, aggr_columns): (Vec<usize>, Vec<usize>) =
+                    columns.iter().partition(|c| **c < group_key.len());
+                for column in group_key_columns {
+                    group_key[column].non_null_requirements(&mut new_columns);
+                }
+
+                if !aggr_columns.is_empty() {
+                    let (
+                        mut inferred_nonnull_constraints,
+                        mut ignored_nulls_by_remaining_aggregates,
+                    ): (Vec<HashSet<usize>>, Vec<HashSet<usize>>) =
+                        aggregates.iter().enumerate().partition_map(|(pos, aggr)| {
+                            let mut ignores_nulls_on_columns = HashSet::new();
+                            if let repr::Datum::Null = aggr.func.identity_datum() {
+                                aggr.expr
+                                    .non_null_requirements(&mut ignores_nulls_on_columns);
+                            }
+                            if aggr.func.propagates_nonnull_constraint()
+                                && aggr_columns.contains(&(group_key.len() + pos))
+                            {
+                                Either::Left(ignores_nulls_on_columns)
+                            } else {
+                                Either::Right(ignores_nulls_on_columns)
+                            }
+                        });
+
+                    // Compute the intersection of all pushable non contraints inferred from
+                    // the non-null constraints on aggregate columns and the nulls ignored by
+                    // the remaining aggregates. Example:
+                    // - SUM(#0 + #2), MAX(#0 + #1), non-null requirements on both aggs => implies !isnull(#0)
+                    //  We don't want to push down a !isnull(#2) because deleting a row like (1,1, null) would
+                    //  make the MAX wrong.
+                    // - SUM(#0 + #2), MAX(#0 + #1), non-null requirements only on the MAX => implies !isnull(#0).
+                    let mut pushable_nonnull_constraints: Option<HashSet<usize>> = None;
+                    if !inferred_nonnull_constraints.is_empty() {
+                        for column_set in inferred_nonnull_constraints
+                            .drain(..)
+                            .chain(ignored_nulls_by_remaining_aggregates.drain(..))
+                        {
+                            if let Some(previous) = pushable_nonnull_constraints {
+                                pushable_nonnull_constraints =
+                                    Some(column_set.intersection(&previous).cloned().collect());
+                            } else {
+                                pushable_nonnull_constraints = Some(column_set);
+                            }
+                        }
                     }
-                    if column == group_key.len() && aggregates.len() == 1 {
-                        aggregates[0].expr.non_null_requirements(&mut new_columns);
+
+                    if let Some(pushable_nonnull_constraints) = pushable_nonnull_constraints {
+                        new_columns.extend(pushable_nonnull_constraints);
                     }
                 }
+
                 self.action(input, new_columns, gets);
             }
             MirRelationExpr::TopK {
@@ -238,57 +282,5 @@ impl NonNullRequirements {
                 self.action(input, columns, gets);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Transform;
-    use expr::{BinaryFunc, GlobalId, IdGen, MirScalarExpr, TableFunc};
-    use repr::{ColumnType, RelationType, ScalarType};
-
-    #[test]
-    fn issue5520_regression_map_test() {
-        let mut test_expr = MirRelationExpr::Filter {
-            input: Box::new(MirRelationExpr::FlatMap {
-                input: Box::new(MirRelationExpr::Map {
-                    input: Box::new(MirRelationExpr::Get {
-                        id: Id::Global(GlobalId::User(0)),
-                        typ: RelationType::new(vec![
-                            ColumnType {
-                                nullable: true,
-                                scalar_type: ScalarType::Int32,
-                            },
-                            ColumnType {
-                                nullable: true,
-                                scalar_type: ScalarType::Int64,
-                            },
-                        ]),
-                    }),
-                    scalars: vec![MirScalarExpr::literal_null(ScalarType::Int32)],
-                }),
-                func: TableFunc::GenerateSeriesInt32,
-                exprs: vec![MirScalarExpr::Column(1)],
-                demand: None,
-            }),
-            predicates: vec![MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
-                expr1: Box::new(MirScalarExpr::Column(0)),
-                expr2: Box::new(MirScalarExpr::Column(3)),
-            }],
-        };
-        let expected = test_expr.clone();
-        let transform = NonNullRequirements;
-        assert!(transform
-            .transform(
-                &mut test_expr,
-                TransformArgs {
-                    id_gen: &mut IdGen::default(),
-                    indexes: &mut HashMap::new()
-                }
-            )
-            .is_ok());
-        assert_eq!(test_expr, expected);
     }
 }

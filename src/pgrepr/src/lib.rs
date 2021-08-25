@@ -16,8 +16,8 @@
 //! `Value`s are easily converted to and from [`repr::Datum`]s. See, for
 //! example, the [`values_from_row`] function.
 
-#![deny(clippy::as_conversions)]
-#![deny(missing_docs)]
+#![warn(clippy::as_conversions)]
+#![warn(missing_docs)]
 
 mod format;
 mod types;
@@ -26,7 +26,7 @@ mod value;
 pub mod oid;
 
 pub use format::Format;
-pub use types::{Type, APD as APDType, LIST, MAP};
+pub use types::{Type, LIST, MAP};
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;

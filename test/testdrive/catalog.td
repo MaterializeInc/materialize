@@ -300,6 +300,7 @@ mz_arrangement_sharing
 mz_arrangement_sizes
 mz_dataflow_channels
 mz_dataflow_operator_addresses
+mz_dataflow_operator_reachability
 mz_dataflow_operators
 mz_kafka_broker_rtt
 mz_kafka_consumer_partitions
@@ -315,25 +316,26 @@ mz_source_info
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
-name                                 type   materialized  volatility
---------------------------------------------------------------------
-mz_arrangement_sharing               system true          volatile
-mz_arrangement_sizes                 system true          volatile
-mz_dataflow_channels                 system true          volatile
-mz_dataflow_operator_addresses       system true          volatile
-mz_dataflow_operators                system true          volatile
-mz_kafka_broker_rtt                  system true          volatile
-mz_kafka_consumer_partitions         system true          volatile
-mz_materialization_dependencies      system true          volatile
-mz_materializations                  system true          volatile
-mz_message_counts                    system true          volatile
-mz_peek_active                       system true          volatile
-mz_peek_durations                    system true          volatile
-mz_scheduling_elapsed                system true          volatile
-mz_scheduling_histogram              system true          volatile
-mz_scheduling_parks                  system true          volatile
-mz_source_info                       system true          volatile
-mz_worker_materialization_frontiers  system true          volatile
+name                                 type   materialized  volatility  connector_type
+------------------------------------------------------------------------------------
+mz_arrangement_sharing               system true          volatile    local
+mz_arrangement_sizes                 system true          volatile    local
+mz_dataflow_channels                 system true          volatile    local
+mz_dataflow_operator_addresses       system true          volatile    local
+mz_dataflow_operator_reachability    system true          volatile    local
+mz_dataflow_operators                system true          volatile    local
+mz_kafka_broker_rtt                  system true          volatile    local
+mz_kafka_consumer_partitions         system true          volatile    local
+mz_materialization_dependencies      system true          volatile    local
+mz_materializations                  system true          volatile    local
+mz_message_counts                    system true          volatile    local
+mz_peek_active                       system true          volatile    local
+mz_peek_durations                    system true          volatile    local
+mz_scheduling_elapsed                system true          volatile    local
+mz_scheduling_histogram              system true          volatile    local
+mz_scheduling_parks                  system true          volatile    local
+mz_source_info                       system true          volatile    local
+mz_worker_materialization_frontiers  system true          volatile    local
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -457,10 +459,9 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-41
+42
 
 > SHOW VIEWS FROM mz_catalog
-mz_addresses_with_unit_length
 mz_catalog_names
 mz_dataflow_names
 mz_dataflow_operator_dataflows
@@ -479,7 +480,6 @@ mz_relations
 > SHOW FULL VIEWS FROM mz_catalog
 name                              type   materialized  volatility
 -----------------------------------------------------------------
-mz_addresses_with_unit_length     system false         volatile
 mz_dataflow_names                 system false         volatile
 mz_dataflow_operator_dataflows    system false         volatile
 mz_materialization_frontiers      system false         volatile

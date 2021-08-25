@@ -24,6 +24,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use enum_kinds::EnumKind;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
 
@@ -55,12 +57,10 @@ impl_display!(Schema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema<T: AstInfo> {
-    CsrUrl {
-        url: String,
-        seed: Option<CsrSeed>,
-        with_options: Vec<SqlOption<T>>,
+    Csr {
+        csr_connector: CsrConnector<T>,
     },
-    Schema {
+    InlineSchema {
         schema: Schema,
         with_options: Vec<WithOption>,
     },
@@ -69,28 +69,14 @@ pub enum AvroSchema<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for AvroSchema<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::CsrUrl {
-                url,
-                seed,
-                with_options,
-            } => {
-                f.write_str("CONFLUENT SCHEMA REGISTRY '");
-                f.write_node(&display::escape_single_quote_string(url));
-                f.write_str("'");
-                if let Some(seed) = seed {
-                    f.write_str(" ");
-                    f.write_node(seed);
-                }
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
-                    f.write_str(")");
-                }
+            Self::Csr { csr_connector } => {
+                f.write_node(csr_connector);
             }
-            Self::Schema {
+            Self::InlineSchema {
                 schema,
                 with_options,
             } => {
+                f.write_str("USING ");
                 schema.fmt(f);
                 if !with_options.is_empty() {
                     f.write_str(" WITH (");
@@ -102,6 +88,62 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
     }
 }
 impl_display_t!(AvroSchema);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ProtobufSchema<T: AstInfo> {
+    Csr {
+        csr_connector: CsrConnector<T>,
+    },
+    InlineSchema {
+        message_name: String,
+        schema: Schema,
+    },
+}
+
+impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Csr { csr_connector } => {
+                f.write_node(csr_connector);
+            }
+            Self::InlineSchema {
+                message_name,
+                schema,
+            } => {
+                f.write_str("MESSAGE '");
+                f.write_node(&display::escape_single_quote_string(message_name));
+                f.write_str("' USING ");
+                f.write_str(schema);
+            }
+        }
+    }
+}
+impl_display_t!(ProtobufSchema);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrConnector<T: AstInfo> {
+    pub url: String,
+    pub seed: Option<CsrSeed>,
+    pub with_options: Vec<SqlOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConnector<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY '");
+        f.write_node(&display::escape_single_quote_string(&self.url));
+        f.write_str("'");
+        if let Some(seed) = &self.seed {
+            f.write_str(" ");
+            f.write_node(seed);
+        }
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CsrConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -181,10 +223,7 @@ impl_display_t!(CreateSourceFormat);
 pub enum Format<T: AstInfo> {
     Bytes,
     Avro(AvroSchema<T>),
-    Protobuf {
-        message_name: String,
-        schema: Schema,
-    },
+    Protobuf(ProtobufSchema<T>),
     Regex(String),
     Csv {
         header_row: bool,
@@ -199,6 +238,36 @@ impl<T: AstInfo> Format<T> {
     /// True if the format cannot carry any configuration
     pub fn is_simple(&self) -> bool {
         matches!(self, Format::Bytes | Format::Text)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSourceKeyEnvelope {
+    /// `INCLUDE KEY` is absent
+    None,
+    /// bare `INCLUDE KEY`
+    Included,
+    /// `INCLUDE KEY AS name`
+    Named(Ident),
+}
+
+impl AstDisplay for CreateSourceKeyEnvelope {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSourceKeyEnvelope::None => {}
+            CreateSourceKeyEnvelope::Included => f.write_str(" INCLUDE KEY"),
+            CreateSourceKeyEnvelope::Named(name) => {
+                f.write_str(" INCLUDE KEY AS ");
+                f.write_str(name)
+            }
+        }
+    }
+}
+impl_display!(CreateSourceKeyEnvelope);
+
+impl CreateSourceKeyEnvelope {
+    pub fn is_present(&self) -> bool {
+        !matches!(self, CreateSourceKeyEnvelope::None)
     }
 }
 
@@ -243,17 +312,12 @@ impl<T: AstInfo> AstDisplay for Format<T> {
         match self {
             Self::Bytes => f.write_str("BYTES"),
             Self::Avro(inner) => {
-                f.write_str("AVRO USING ");
+                f.write_str("AVRO ");
                 f.write_node(inner);
             }
-            Self::Protobuf {
-                message_name,
-                schema,
-            } => {
-                f.write_str("PROTOBUF MESSAGE '");
-                f.write_node(&display::escape_single_quote_string(message_name));
-                f.write_str("' USING ");
-                f.write_str(schema);
+            Self::Protobuf(inner) => {
+                f.write_str("PROTOBUF ");
+                f.write_node(inner);
             }
             Self::Regex(regex) => {
                 f.write_str("REGEX '");
@@ -331,8 +395,9 @@ impl AstDisplay for DbzMode {
 }
 impl_display!(DbzMode);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Connector {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(ConnectorType)]
+pub enum CreateSourceConnector {
     File {
         path: String,
         compression: Compression,
@@ -372,10 +437,10 @@ pub enum Connector {
     },
 }
 
-impl AstDisplay for Connector {
+impl AstDisplay for CreateSourceConnector {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Connector::File { path, compression } => {
+            CreateSourceConnector::File { path, compression } => {
                 f.write_str("FILE '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
@@ -384,7 +449,7 @@ impl AstDisplay for Connector {
                     f.write_node(compression);
                 }
             }
-            Connector::Kafka { broker, topic, key } => {
+            CreateSourceConnector::Kafka { broker, topic, key } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
@@ -397,17 +462,17 @@ impl AstDisplay for Connector {
                     f.write_str(")");
                 }
             }
-            Connector::Kinesis { arn } => {
+            CreateSourceConnector::Kinesis { arn } => {
                 f.write_str("KINESIS ARN '");
                 f.write_node(&display::escape_single_quote_string(arn));
                 f.write_str("'");
             }
-            Connector::AvroOcf { path } => {
+            CreateSourceConnector::AvroOcf { path } => {
                 f.write_str("AVRO OCF '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
-            Connector::S3 {
+            CreateSourceConnector::S3 {
                 key_sources,
                 pattern,
                 compression,
@@ -425,12 +490,12 @@ impl AstDisplay for Connector {
                     f.write_node(compression);
                 }
             }
-            Connector::Postgres {
+            CreateSourceConnector::Postgres {
                 conn,
                 publication,
                 slot,
             } => {
-                f.write_str("POSTGRES HOST '");
+                f.write_str("POSTGRES CONNECTION '");
                 f.write_str(&display::escape_single_quote_string(conn));
                 f.write_str("' PUBLICATION '");
                 f.write_str(&display::escape_single_quote_string(publication));
@@ -440,7 +505,7 @@ impl AstDisplay for Connector {
                 }
                 f.write_str("'");
             }
-            Connector::PubNub {
+            CreateSourceConnector::PubNub {
                 subscribe_key,
                 channel,
             } => {
@@ -453,7 +518,83 @@ impl AstDisplay for Connector {
         }
     }
 }
-impl_display!(Connector);
+impl_display!(CreateSourceConnector);
+
+impl<T: AstInfo> From<&CreateSinkConnector<T>> for ConnectorType {
+    fn from(connector: &CreateSinkConnector<T>) -> ConnectorType {
+        match connector {
+            CreateSinkConnector::Kafka { .. } => ConnectorType::Kafka,
+            CreateSinkConnector::AvroOcf { .. } => ConnectorType::AvroOcf,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(CreateSinkConnectorKind)]
+pub enum CreateSinkConnector<T: AstInfo> {
+    Kafka {
+        broker: String,
+        topic: String,
+        key: Option<Vec<Ident>>,
+        consistency: Option<KafkaConsistency<T>>,
+    },
+    /// Avro Object Container File
+    AvroOcf { path: String },
+}
+
+impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSinkConnector::Kafka {
+                broker,
+                topic,
+                key,
+                consistency,
+            } => {
+                f.write_str("KAFKA BROKER '");
+                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("'");
+                f.write_str(" TOPIC '");
+                f.write_node(&display::escape_single_quote_string(topic));
+                f.write_str("'");
+                if let Some(key) = key.as_ref() {
+                    f.write_str(" KEY (");
+                    f.write_node(&display::comma_separated(&key));
+                    f.write_str(")");
+                }
+                if let Some(consistency) = consistency.as_ref() {
+                    f.write_node(consistency);
+                }
+            }
+            CreateSinkConnector::AvroOcf { path } => {
+                f.write_str("AVRO OCF '");
+                f.write_node(&display::escape_single_quote_string(path));
+                f.write_str("'");
+            }
+        }
+    }
+}
+impl_display_t!(CreateSinkConnector);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaConsistency<T: AstInfo> {
+    pub topic: String,
+    pub topic_format: Option<Format<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(" CONSISTENCY TOPIC '");
+        f.write_node(&display::escape_single_quote_string(&self.topic));
+        f.write_str("'");
+
+        if let Some(format) = self.topic_format.as_ref() {
+            f.write_str(" CONSISTENCY FORMAT ");
+            f.write_node(format);
+        }
+    }
+}
+impl_display_t!(KafkaConsistency);
 
 /// Information about upstream Postgres tables used for replication sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -576,6 +717,28 @@ impl<T: AstInfo> AstDisplay for TableConstraint<T> {
     }
 }
 impl_display_t!(TableConstraint);
+
+/// A key constraint, specified in a `CREATE SOURCE`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KeyConstraint {
+    // PRIMARY KEY (<columns>) NOT ENFORCED
+    PrimaryKeyNotEnforced { columns: Vec<Ident> },
+}
+
+impl AstDisplay for KeyConstraint {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            KeyConstraint::PrimaryKeyNotEnforced { columns } => {
+                f.write_str("PRIMARY KEY ");
+                f.write_str("(");
+                f.write_node(&display::comma_separated(columns));
+                f.write_str(") ");
+                f.write_str("NOT ENFORCED");
+            }
+        }
+    }
+}
+impl_display!(KeyConstraint);
 
 /// SQL column definition
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

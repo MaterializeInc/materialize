@@ -12,11 +12,13 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.AfterEach;
+import org.postgresql.jdbc.TypeInfoCache;
 
 class SmokeTest {
     private Connection conn;
@@ -72,5 +74,13 @@ class SmokeTest {
         Assertions.assertEquals("2010-01-02 00:00:00", rs.getString(1));
         rs.close();
         stmt.close();
+    }
+
+    @Test
+    void testGetSqlType() throws SQLException, ClassNotFoundException {
+        Class.forName("org.postgresql.core.BaseConnection");
+        TypeInfoCache ic = new TypeInfoCache(conn.unwrap(org.postgresql.core.BaseConnection.class), 0);
+        Assertions.assertEquals(ic.getSQLType("int2"), Types.SMALLINT);
+        Assertions.assertEquals(ic.getSQLType("_int2"), Types.ARRAY);
     }
 }

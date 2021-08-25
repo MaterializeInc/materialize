@@ -14,10 +14,10 @@ weight: 2
 You can access Materialize through the `materialized` binary, which you can
 install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
 instructions install the latest release of Materialize, **{{< version >}}**. The latest (unstable)
-developer builds are available at https://mtrlz.dev/. For prior releases,
+developer builds are available at https://dev.materialize.com/. For prior releases,
 see the [Versions page](/versions).
 
-**Have any questions?** [Contact us](https://materialize.com/contact/)
+**Have any questions?** [Ask us on Slack](https://materialize.com/s/chat)
 
 ## Docker
 
@@ -44,30 +44,31 @@ brew install MaterializeInc/materialize/materialized
 ### curl
 
 ```shell
-curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-apple-darwin.tar.gz \
-    | tar -xzC /usr/local --strip-components=1
+curl -L https://binaries.materialize.com/materialized-{{< version >}}-x86_64-apple-darwin.tar.gz \
+    | sudo tar -xzC /usr/local --strip-components=1
 ```
 
 ## Linux installation
 
 ### apt (Ubuntu, Debian, or variants)
 
-Run the following commands as root.
+**Note!** These instructions changed between versions 0.8.0 and 0.8.1. If you ran them
+previously, you may need to do so again to continue receiving updates.
 
 ```shell
 # Add the signing key for the Materialize apt repository
-apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
+sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 79DEC5E1B7AE7694
 # Add and update the repository
-sh -c 'echo "deb http://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list'
-apt update
+sudo sh -c 'echo "deb http://apt.materialize.com/ generic main" > /etc/apt/sources.list.d/materialize.list'
+sudo apt update
 # Install materialized
-apt install materialized
+sudo apt install materialized
 ```
 
 ### curl
 ```shell
-curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-unknown-linux-gnu.tar.gz \
-    | tar -xzC /usr/local --strip-components=1
+curl -L https://binaries.materialize.com/materialized-{{< version >}}-x86_64-unknown-linux-gnu.tar.gz \
+    | sudo tar -xzC /usr/local --strip-components=1
 ```
 
 ## Build from source
@@ -125,10 +126,40 @@ Detail | Info
 **Database** | `materialize`
 **Port** | `6875`
 
-For more information, see [CLI Connections](/connect/cli/).
+### CLI Connections
+
+To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/),
+like `psql` or `mzcli`. To install the `psql` client:
+
+{{< tabs >}}
+{{< tab "macOS">}}
+
+```shell
+brew install postgresql
+```
+
+{{< /tab >}}
+
+{{< tab "Linux">}}
+
+```shell
+apt install postgresql-client
+```
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+Once you have `psql` installed, connect using:
+
+```shell
+psql -U materialize -h localhost -p 6875 materialize
+```
+
+<p>
 
 {{< cta href="/get-started" >}}
-Next, let's get started with Materialize →
+Next, let's get started with Materialize! →
 {{</ cta >}}
 
 [Rustup]: https://rustup.rs

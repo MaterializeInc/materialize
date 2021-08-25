@@ -165,7 +165,13 @@ impl ColumnKnowledge {
                 // Aggregate column knowledge from each input into one `Vec`.
                 let mut knowledges = Vec::new();
                 for input in inputs.iter_mut() {
-                    for knowledge in ColumnKnowledge::harvest(input, knowledge)? {
+                    for mut knowledge in ColumnKnowledge::harvest(input, knowledge)? {
+                        // Do not propagate error literals beyond join inputs, since that may result
+                        // in them being propagated to other inputs of the join and evaluated when
+                        // they should not.
+                        if let Some((Err(_), _)) = knowledge.value {
+                            knowledge.value = None;
+                        }
                         knowledges.push(knowledge);
                     }
                 }
@@ -217,21 +223,21 @@ impl ColumnKnowledge {
                     let knowledge = optimize(&mut aggregate.expr, &input_typ, &input_knowledge[..]);
                     // This could be improved.
                     let knowledge = match aggregate.func {
-                        AggregateFunc::MaxInt32
+                        AggregateFunc::MaxInt16
+                        | AggregateFunc::MaxInt32
                         | AggregateFunc::MaxInt64
                         | AggregateFunc::MaxFloat32
                         | AggregateFunc::MaxFloat64
-                        | AggregateFunc::MaxDecimal
                         | AggregateFunc::MaxBool
                         | AggregateFunc::MaxString
                         | AggregateFunc::MaxDate
                         | AggregateFunc::MaxTimestamp
                         | AggregateFunc::MaxTimestampTz
+                        | AggregateFunc::MinInt16
                         | AggregateFunc::MinInt32
                         | AggregateFunc::MinInt64
                         | AggregateFunc::MinFloat32
                         | AggregateFunc::MinFloat64
-                        | AggregateFunc::MinDecimal
                         | AggregateFunc::MinBool
                         | AggregateFunc::MinString
                         | AggregateFunc::MinDate
@@ -242,8 +248,12 @@ impl ColumnKnowledge {
                             // These methods propagate constant values exactly.
                             knowledge
                         }
+                        AggregateFunc::Count => DatumKnowledge {
+                            value: None,
+                            nullable: false,
+                        },
                         _ => {
-                            // All aggregates are non-null if their inputs are non-null.
+                            // The remaining aggregates are non-null if their inputs are non-null.
                             DatumKnowledge {
                                 value: None,
                                 nullable: knowledge.nullable,

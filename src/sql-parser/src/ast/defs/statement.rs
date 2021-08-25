@@ -22,8 +22,9 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, CreateSourceFormat, DataType, Envelope, Expr, Format, Ident,
-    Query, TableConstraint, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, CreateSinkConnector, CreateSourceConnector, CreateSourceFormat,
+    CreateSourceKeyEnvelope, DataType, Envelope, Expr, Format, Ident, KeyConstraint, Query,
+    TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -354,12 +355,14 @@ impl_display!(CreateSchemaStatement);
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: Connector,
+    pub connector: CreateSourceConnector,
     pub with_options: Vec<SqlOption<T>>,
     pub format: CreateSourceFormat<T>,
+    pub key_envelope: CreateSourceKeyEnvelope,
     pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,
+    pub key_constraint: Option<KeyConstraint>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -377,7 +380,15 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         if !self.col_names.is_empty() {
             f.write_str("(");
             f.write_node(&display::comma_separated(&self.col_names));
+            if self.key_constraint.is_some() {
+                f.write_str(", ");
+                f.write_node(self.key_constraint.as_ref().unwrap());
+            }
             f.write_str(") ");
+        } else if self.key_constraint.is_some() {
+            f.write_str("(");
+            f.write_node(self.key_constraint.as_ref().unwrap());
+            f.write_str(") ")
         }
         f.write_str("FROM ");
         f.write_node(&self.connector);
@@ -387,6 +398,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str(")");
         }
         f.write_node(&self.format);
+        f.write_node(&self.key_envelope);
         match self.envelope {
             Envelope::None => (),
             _ => {
@@ -403,7 +415,7 @@ impl_display_t!(CreateSourceStatement);
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub from: UnresolvedObjectName,
-    pub connector: Connector,
+    pub connector: CreateSinkConnector<T>,
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope>,
@@ -900,6 +912,8 @@ impl_display!(DropDatabaseStatement);
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropObjectsStatement {
+    /// If this was constructed as `DROP MATERIALIZED <type>`
+    pub materialized: bool,
     /// The type of the object to drop: TABLE, VIEW, etc.
     pub object_type: ObjectType,
     /// An optional `IF EXISTS` clause. (Non-standard.)

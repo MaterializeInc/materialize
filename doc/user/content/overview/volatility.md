@@ -4,7 +4,7 @@ description: "Understand volatility in Materialize."
 menu:
   main:
     parent: 'overview'
-    weight: 3
+    weight: 5
 ---
 
 Materialize strives to be a correct, deterministic system. But because

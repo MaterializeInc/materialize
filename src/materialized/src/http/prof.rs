@@ -182,7 +182,7 @@ mod enabled {
     use tokio::sync::Mutex;
     use url::form_urlencoded;
 
-    use prof::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocProfMetadata, PROF_CTL};
+    use prof::jemalloc::{parse_jeheap, JemallocProfCtl, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use crate::http::util;
@@ -206,10 +206,7 @@ mod enabled {
 
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
         match (req.method(), &*PROF_CTL) {
-            (&Method::GET, Some(prof_ctl)) => {
-                let prof_md = prof_ctl.lock().await.get_md();
-                handle_get(prof_md)
-            }
+            (&Method::GET, Some(prof_ctl)) => handle_get(req.uri().query(), prof_ctl).await,
 
             (&Method::POST, Some(prof_ctl)) => handle_post(req, prof_ctl).await,
 
@@ -221,6 +218,7 @@ mod enabled {
         body: Request<Body>,
         prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
     ) -> Result<Response<Body>, anyhow::Error> {
+        let query = body.uri().query().map(str::to_string);
         let body = hyper::body::to_bytes(body).await?;
         let params: HashMap<_, _> = form_urlencoded::parse(&body).collect();
         let action = match params.get("action") {
@@ -234,20 +232,18 @@ mod enabled {
         };
         match action.as_ref() {
             "activate" => {
-                let md = {
+                {
                     let mut borrow = prof_ctl.lock().await;
                     borrow.activate()?;
-                    borrow.get_md()
                 };
-                handle_get(md)
+                handle_get(query.as_ref().map(String::as_str), prof_ctl).await
             }
             "deactivate" => {
-                let md = {
+                {
                     let mut borrow = prof_ctl.lock().await;
                     borrow.deactivate()?;
-                    borrow.get_md()
                 };
-                handle_get(md)
+                handle_get(query.as_ref().map(String::as_str), prof_ctl).await
             }
             "dump_file" => {
                 let mut borrow = prof_ctl.lock().await;
@@ -259,6 +255,14 @@ mod enabled {
                         header::CONTENT_DISPOSITION,
                         "attachment; filename=\"jeprof.heap\"",
                     )
+                    .body(Body::from(s))
+                    .unwrap())
+            }
+            "dump_stats" => {
+                let mut borrow = prof_ctl.lock().await;
+                let s = borrow.dump_stats()?;
+                Ok(Response::builder()
+                    .header(header::CONTENT_TYPE, "text/plain")
                     .body(Body::from(s))
                     .unwrap())
             }
@@ -332,10 +336,30 @@ mod enabled {
         }
     }
 
-    pub fn handle_get(prof_md: JemallocProfMetadata) -> anyhow::Result<Response<Body>> {
-        Ok(util::template_response(ProfTemplate {
-            version: BUILD_INFO.version,
-            mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
-        }))
+    pub async fn handle_get(
+        query: Option<&str>,
+        prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
+    ) -> anyhow::Result<Response<Body>> {
+        match query {
+            Some("dump_stats") => {
+                let mut borrow = prof_ctl.lock().await;
+                let s = borrow.dump_stats()?;
+                Ok(Response::builder()
+                    .header(header::CONTENT_TYPE, "text/plain")
+                    .body(Body::from(s))
+                    .unwrap())
+            }
+            Some(x) => Ok(util::error_response(
+                StatusCode::BAD_REQUEST,
+                format!("unrecognized query: {}", x),
+            )),
+            None => {
+                let prof_md = prof_ctl.lock().await.get_md();
+                return Ok(util::template_response(ProfTemplate {
+                    version: BUILD_INFO.version,
+                    mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
+                }));
+            }
+        }
     }
 }

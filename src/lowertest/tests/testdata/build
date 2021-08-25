@@ -1,0 +1,166 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This module supports the default syntax as specified in the readme.
+
+build
+----
+None
+
+build
+(multi_unnamed_fields
+    (
+        [
+            [3 [["world" 5] ["this" 2]] 4]
+            [2 [] 0]
+        ]
+        "hello"
+    )
+    ([true false null] [[[100 true] [200 false]][]])
+    (single_named_field [0 10 42]))
+----
+Some(MultiUnnamedFields(MultiUnnamedArg([(3, [("world", 5), ("this", 2)], 4), (2, [], 0)], "hello"), MultiNamedArg { fizz: [Some(true), Some(false), None], bizz: [[(SingleUnnamedArg(100.0), true), (SingleUnnamedArg(200.0), false)], []] }, SingleNamedField { foo: [0, 10, 42] }))
+
+build
+(multi_named_fields null false)
+----
+Some(MultiNamedFields { bar: None, baz: false })
+
+# Default arguments work
+
+build
+multi_named_fields
+----
+Some(MultiNamedFields { bar: None, baz: false })
+
+build
+(multi_named_fields "realm")
+----
+Some(MultiNamedFields { bar: Some("realm"), baz: false })
+
+# Unit enum variants and structs with a single field can be
+# constructed with and without parenthesis around them
+
+build
+unit
+----
+Some(Unit)
+
+build
+(unit)
+----
+Some(Unit)
+
+#single field starts with a Punct
+
+build
+(single_unnamed_field -1.1)
+----
+Some(SingleUnnamedField(SingleUnnamedArg(-1.1)))
+
+build
+(single_unnamed_field (-1.1))
+----
+Some(SingleUnnamedField(SingleUnnamedArg(-1.1)))
+
+# single field is a literal
+
+build
+(single_unnamed_field 2.2)
+----
+Some(SingleUnnamedField(SingleUnnamedArg(2.2)))
+
+build
+(single_unnamed_field (2.2))
+----
+Some(SingleUnnamedField(SingleUnnamedArg(2.2)))
+
+#single field is an Ident
+
+build
+(multi_unnamed_fields_2 false unit)
+----
+Some(MultiUnnamedFields2(OptionalArg(false, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, ""))
+
+build
+(multi_unnamed_fields_2 (false) (unit))
+----
+Some(MultiUnnamedFields2(OptionalArg(false, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, ""))
+
+#single field is a Vec
+
+build
+(multi_unnamed_fields ([], "bar") [false null true] (single_named_field [0 10 11]))
+----
+Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), MultiNamedArg { fizz: [Some(false), None, Some(true)], bizz: [] }, SingleNamedField { foo: [0, 10, 11] }))
+
+build
+(multi_unnamed_fields ([], "bar") ([false null true]) (single_named_field [0 10 11]))
+----
+Some(MultiUnnamedFields(MultiUnnamedArg([], "bar"), MultiNamedArg { fizz: [Some(false), None, Some(true)], bizz: [] }, SingleNamedField { foo: [0, 10, 11] }))
+
+build
+(single_unnamed_field2 [-1 4 -2 0])
+----
+Some(SingleUnnamedField2([-1, 4, -2, 0]))
+
+#single field is a struct with named fields
+
+build
+(single_unnamed_field3 ([true false false null] [[[-1.25 true] [1.24 false]]]))
+----
+Some(SingleUnnamedField3(MultiNamedArg { fizz: [Some(true), Some(false), Some(false), None], bizz: [[(SingleUnnamedArg(-1.25), true), (SingleUnnamedArg(1.24), false)]] }))
+
+# Arguments are assumed to be part of an outer struct/enum
+# unless enclosed in parentheses.
+
+build
+(multi_unnamed_fields_2 true unit "baz")
+----
+Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, "baz"))
+
+build
+(multi_unnamed_fields_2 true (unit) "baz")
+----
+Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "" }, "baz"))
+
+build
+(multi_unnamed_fields_2 true (unit "baz"))
+----
+Some(MultiUnnamedFields2(OptionalArg(true, (0.0, 0)), FirstArgEnum { test_enum: Unit, second_arg: "baz" }, ""))
+
+build
+(single_unnamed_zero_arg_field)
+----
+Some(SingleUnnamedZeroArgField(ZeroArg))
+
+build
+single_unnamed_zero_arg_field
+----
+Some(SingleUnnamedZeroArgField(ZeroArg))
+
+build
+(multi_unnamed_zero_arg_fields)
+----
+Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg))
+
+build
+multi_unnamed_zero_arg_fields
+----
+Some(MultiUnnamedZeroArgFields(ZeroArg, ZeroArg))
+
+build
+(multi_unnamed_fields_first_zero_arg true)
+----
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (0.0, 0))))
+
+build
+(multi_unnamed_fields_first_zero_arg (true [3.14 2]))
+----
+Some(MultiUnnamedFieldsFirstZeroArg(ZeroArg, OptionalArg(true, (3.14, 2))))

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Hierarchical Memory Visualizer{% endblock %}
+
+{% block head %}
+<style>
+svg {
+    width: 100%;
+    height: auto;
+}
+
+.collapsible {
+  background-color: #777;
+  color: white;
+  cursor: pointer;
+  padding: 8px;
+  width: 100%;
+  border: none;
+  text-align: left;
+  outline: none;
+  font-size: 15px;
+}
+
+.active, .collapsible:hover {
+  background-color: #555;
+}
+
+.collapsible:after {
+  content: '\002B';
+  color: white;
+  font-weight: bold;
+  float: right;
+  margin-left: 5px;
+}
+
+.active:after {
+  content: "\2212";
+}
+
+.content {
+  padding: 0px 18px;
+  max-height: 0px;
+  overflow: auto;
+  transition: max-height 0.2s ease-out;
+  background-color: #f1f1f1;
+}
+</style>
+<script src="/js/vendor/react.js"></script>
+<script src="/js/vendor/react-dom.js"></script>
+<script src="/js/vendor/babel-standalone.js"></script> {# JSX compilation #}
+<script src="/js/vendor/@hpcc-js/wasm.js"></script> {# GraphViz in WASM #}
+<script src="/js/vendor/pako.js"></script> {# Zlib compression #}
+<script src="/js/hierarchical-memory.jsx" type="text/babel"></script>
+{% endblock %}
+
+{% block content %}
+<h2>Active Dataflows</h2>
+<div id="content2"></div>
+{% endblock %}

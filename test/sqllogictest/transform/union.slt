@@ -60,22 +60,18 @@ query II
 query T multiline
 EXPLAIN (SELECT * FROM t1 UNION ALL SELECT * FROM t1) EXCEPT ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
 ----
-%0 =
-| Get materialize.public.t1 (u1)
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Negate
 
 %1 =
 | Get materialize.public.t1 (u1)
 
 %2 =
-| Get materialize.public.t2 (u3)
-| Negate
+| Get materialize.public.t1 (u1)
 
 %3 =
-| Get materialize.public.t2 (u3)
-| Negate
-
-%4 =
-| Union %0 %1 %2 %3
+| Union %1 %2 %0 %0
 | Threshold
 
 EOF

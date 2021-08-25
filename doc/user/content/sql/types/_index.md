@@ -27,7 +27,7 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 [`integer`](integer) | `int`, `int4` | Signed integer | 4 | Named | `123`
 [`interval`](interval) | | Duration of time | 32 | Named | `INTERVAL '1-2 3 4:5:6.7'`
 [`jsonb`](jsonb) | `json` | JSON | Variable | Named | `'{"1":2,"3":4}'::jsonb`
-[`map`](map) | | Map with [`text`](text) keys and a uniform value type | Variable | Anonymous | `'{a: 1, b: 2}'::map[text=>int]`
+[`map`](map) | | Map with [`text`](text) keys and a uniform value type | Variable | Anonymous | `'{a => 1, b => 2}'::map[text=>int]`
 [`list`](list) | | Multidimensional list | Variable | Anonymous | `LIST[[1,2],[3]]`
 [`numeric`](numeric) | `decimal` | Signed exact number with user-defined precision and scale | 16 | Named | `1.23`
 [`oid`](oid) | | PostgreSQL object identifier | 4 | Named | `123`

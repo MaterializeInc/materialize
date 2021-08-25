@@ -19,11 +19,19 @@ topic.
 
 {{< diagram "create-source-avro-kafka.svg" >}}
 
-### format_spec
+#### `format_spec`
 
-{{< diagram "format-spec-avro-kafka.svg" >}}
+{{< diagram "format-spec.svg" >}}
 
-{{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" %}}
+#### `key_constraint`
+
+{{< diagram "key-constraint.svg" >}}
+
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" keyConstraint=true %}}
 
 ## Examples
 
@@ -157,24 +165,6 @@ This creates a source that...
 - Decodes data received from the `top-secret` topic published by Kafka running on
   `broker.tld:9092`.
 - Is append-only.
-
-### Caching records to local disk
-
-```sql
-CREATE MATERIALIZED SOURCE cached_source
-FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'data' WITH (
-    cache = true
-)
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld'
-```
-
-This creates a source that...
-
-- Automatically determines its schema from the Confluent Schema Registry.
-- Decodes data received from the `data` topic published by Kafka running on
-  `tld:9092`.
-- Decodes using an Avro schema.
-- Caches messages from the `data` topic to local disk.
 
 ### Setting partition offsets
 

@@ -19,12 +19,24 @@ In Materialize, `now()` doesn't represent the system time, as it does in most sy
 
 ## Temporal filters
 
-You can use `mz_logical_timestamp()` to define temporal filters for materialized view, or computations for fixed windows of time. For more information, see [Temporal Filters: Enabling Windowed Queries in Materialize](https://materialize.com/temporal-filters/).
+You can use `mz_logical_timestamp()` to define temporal filters for materialized view, or computations for fixed windows of time.
+
+For more information, see [Temporal Filters: Enabling Windowed Queries in Materialize](https://materialize.com/temporal-filters/).
+
+## Restrictions
+
+You can only use `mz_logical_timestamp()` to establish a temporal filter in one of the following types of clauses:
+
+* WHERE clauses, where `mz_logical_timestamp()` must be directly compared to [`numeric`](/sql/types/numeric) expressions not containing `mz_logical_timestamp()`
+* A conjunction (AND), where `mz_logical_timestamp()` must be directly compared to [`numeric`](/sql/types/numeric) expressions not containing `mz_logical_timestamp()`.
+
+At the moment, you can't use the `!=` operator with `mz_logical_timestamp` (we're working on it).
 
 ## Example
 
 ### Temporal filter using mz_logical_timestamp()
 
+<!-- This example also appears in temporal-filters -->
 For this example, you'll need to create a sample data source and create a materialized view from it for later reference.
 
 ```sql
@@ -39,7 +51,7 @@ CREATE MATERIALIZED VIEW valid AS
 SELECT content, insert_ts, delete_ts
 FROM events
 WHERE mz_logical_timestamp() >= insert_ts
-  AND mz_logical_timestamp()  < delete_ts;
+  AND mz_logical_timestamp() < delete_ts;
 ```
 
 Next, you'll populate the table with timestamp data. The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_logical_timestamp()`.

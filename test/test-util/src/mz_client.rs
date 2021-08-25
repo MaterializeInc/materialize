@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use tokio::time::{self, Duration};
-use tokio_postgres::{Client, Error, NoTls, Row};
+use tokio_postgres::{error::SqlState, Client, Error, NoTls, Row};
 
 /// Create and return a new PostgreSQL client, spawning off the connection
 /// object along the way.
@@ -58,16 +58,14 @@ pub async fn try_query_one(mz_client: &Client, query: &str, delay: Duration) -> 
     }
 }
 
-/// This error ("At least one input has no complete timestamps yet") will surface if
-/// we query a view in Materialize before data exists for that view. It is common to hit
-/// this error just after creating a view, particularly in testing or demo code.
+/// The SQL_STATEMENT_NOT_YET_COMPLETE error will surface if we query a view in
+/// Materialize before data exists for that view. It is common to hit this error
+/// just after creating a view, particularly in testing or demo code.
 ///
 /// Since this error is likely transient, we should retry reading from the view
 /// instead of failing.
 fn check_error(e: Error) -> Result<()> {
-    if e.to_string()
-        .contains("At least one input has no complete timestamps yet")
-    {
+    if e.code() == Some(&SqlState::SQL_STATEMENT_NOT_YET_COMPLETE) {
         log::info!("Error querying, will try again... {}", e.to_string());
         Ok(())
     } else {

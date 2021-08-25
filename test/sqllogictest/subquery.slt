@@ -625,7 +625,7 @@ select x, (select count(*) from ys where y < x) from xs
 2  2
 
 # Tests that conditional subqueries should not error.
-query II rowsort
+query RR rowsort
 select y, (
     case when (select count(*) from xs where x < y) != 0
          then (select 1.0 / count(*) from xs where x < y)
@@ -636,7 +636,7 @@ from ys
 ----
 0  -1
 1  -1
-2  1
+2  0.5
 
 # Regression test for #3924, in which quantified comparision simplification was
 # not correctly handling LATERAL joins.
@@ -665,3 +665,11 @@ FROM (SELECT 1 col1)
 
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
+
+# Regression test for #7121, where the multiplicity of the outer query was not
+# preserved when an EXISTS subquery only involves constants/mpf/flatmaps.
+query I
+SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
+----
+1
+1

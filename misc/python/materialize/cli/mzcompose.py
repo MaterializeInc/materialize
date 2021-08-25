@@ -9,22 +9,14 @@
 #
 # mzcompose.py — runs Docker Compose with Materialize customizations.
 
-from pathlib import Path
-from typing import IO, List, Tuple, Text, Optional, Sequence
-from typing_extensions import NoReturn
 import argparse
-import json
 import os
-import subprocess
 import sys
 import webbrowser
+from pathlib import Path
+from typing import IO, List, NoReturn, Optional, Sequence, Text, Tuple
 
-from materialize import errors
-from materialize import mzbuild
-from materialize import mzcompose
-from materialize import spawn
-from materialize import ui
-
+from materialize import errors, mzbuild, mzcompose, spawn, ui
 
 announce = ui.speaker("==> ")
 say = ui.speaker("")
@@ -36,7 +28,7 @@ def main(argv: List[str]) -> int:
     # Lightly parse the arguments so we know what to do.
     parser = ArgumentParser()
     args, unknown_args = parser.parse_known_args(argv)
-    if args.help:
+    if args.help or args.command == "help":
         parser.print_help()
         return 0
 
@@ -49,7 +41,11 @@ def main(argv: List[str]) -> int:
 
     # Load repository.
     root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(root, release_mode=(args.mz_build_mode == "release"))
+    repo = mzbuild.Repository(
+        root,
+        release_mode=(args.mz_build_mode == "release"),
+        coverage=args.mz_coverage,
+    )
 
     # Handle special mzcompose commands that apply to the repo.
     if args.command == "gen-shortcuts":
@@ -69,7 +65,10 @@ def main(argv: List[str]) -> int:
             for name in repo.compositions:
                 print(f"    {name}", file=sys.stderr)
         else:
-            print("error: directory does not contain mzcompose.yml", file=sys.stderr)
+            print(
+                "error: directory does not contain a mzcompose.yml or mzworkflows.py file",
+                file=sys.stderr,
+            )
             print(
                 "hint: enter one of the following directories and run ./mzcompose:",
                 file=sys.stderr,
@@ -109,9 +108,15 @@ def main(argv: List[str]) -> int:
 
     # The `run` command requires special handling.
     if args.command == "run":
+        if args.mz_coverage:
+            # If the user has requested coverage information, create the
+            # coverage directory as the current user, so Docker doesn't create
+            # it as root.
+            (composition.path.parent / "coverage").mkdir(exist_ok=True)
+
         try:
             workflow = composition.get_workflow(
-                dict(os.environ), args.first_command_arg
+                args.first_command_arg, dict(os.environ)
             )
         except KeyError:
             # Restart any dependencies whose definitions have changed. This is
@@ -194,7 +199,9 @@ def list_compositions(repo: mzbuild.Repository) -> int:
 
 
 def list_workflows(composition: mzcompose.Composition) -> int:
-    for name in sorted(composition.workflows):
+    for name in sorted(
+        list(composition.yaml_workflows) + list(composition.python_funcs)
+    ):
         print(name)
     return 0
 
@@ -234,6 +241,7 @@ class ArgumentParser(argparse.ArgumentParser):
         self.add_argument(
             "--mz-build-mode", default="release", choices=["dev", "release"]
         )
+        self.add_argument("--mz-coverage", action="store_true", default=None)
         self.add_argument("-f", "--file")
         self.add_argument("--project-directory")
         self.add_argument("command", nargs="?")
@@ -269,6 +277,7 @@ Options:
   --mz-build-mode <dev|release>
                      Specify the Cargo profile to use when compiling Rust
                      crates (default: release)
+  --mz-coverage      Emit code coverage reports to the "coverage" directory
   --mz-find DIR      Use the mzcompose.yml file from DIR, rather than the
                      current directory
   --mz-quiet         Suppress Materialize-specific informational messages

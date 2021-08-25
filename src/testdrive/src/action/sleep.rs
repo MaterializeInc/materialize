@@ -10,6 +10,7 @@
 use std::thread;
 use std::time::Duration;
 
+use ore::result::ResultExt;
 use rand::Rng;
 
 use crate::action::{State, SyncAction};
@@ -22,7 +23,7 @@ pub struct SleepAction {
 
 pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
     let arg = cmd.args.string("duration")?;
-    let duration = parse_duration::parse(&arg).map_err(|e| e.to_string())?;
+    let duration = repr::util::parse_duration(&arg).map_err_to_string()?;
     Ok(SleepAction {
         duration,
         random: true,
@@ -31,7 +32,7 @@ pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String
 
 pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
     let arg = cmd.args.string("duration")?;
-    let duration = parse_duration::parse(&arg).map_err(|e| e.to_string())?;
+    let duration = repr::util::parse_duration(&arg).map_err_to_string()?;
     Ok(SleepAction {
         duration,
         random: false,

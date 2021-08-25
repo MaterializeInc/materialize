@@ -11,8 +11,6 @@
 #
 # pyactivate — runs a script in the Materialize Python virtualenv.
 
-from typing import List, Optional
-from pathlib import Path
 import logging
 import os
 import platform
@@ -20,6 +18,8 @@ import subprocess
 import sys
 import sysconfig
 import venv  # type: ignore
+from pathlib import Path
+from typing import List, Optional
 
 logger = logging.getLogger("bootstrap")
 
@@ -29,8 +29,8 @@ def main(args: List[str]) -> int:
     logger.debug("args={}".format(args))
 
     # Validate Python version.
-    if sys.hexversion < 0x03050000:
-        print("fatal: python v3.5.0+ required", file=sys.stderr)
+    if sys.hexversion < 0x03080000:
+        print("fatal: python v3.8.0+ required", file=sys.stderr)
         print(
             " hint: you have v{}.{}.{}".format(
                 sys.version_info.major, sys.version_info.minor, sys.version_info.micro
@@ -57,7 +57,7 @@ def main(args: List[str]) -> int:
     logger.debug("python={}".format(python))
 
     # Reinvoke with the interpreter from the virtualenv.
-    os.environ["PYTHONPATH"] = str(py_dir.resolve())
+    os.environ["PYTHONPATH"] = os.environ["MYPYPATH"] = str(py_dir.resolve())
     os.environ["MZ_ROOT"] = str(root_dir.resolve())
     os.execvp(python, [python, *args])
 

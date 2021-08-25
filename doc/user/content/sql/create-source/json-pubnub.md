@@ -17,7 +17,11 @@ This document details how to connect Materialize to a JSON–formatted
 
 {{< diagram "create-source-pubnub-text.svg" >}}
 
-{{% create-source/syntax-details connector="pubnub" formats="text" envelopes="append-only" %}}
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="pubnub" formats="text" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples
 

@@ -9,11 +9,11 @@ aliases:
     - /sql/create-source/kinesis-source
 ---
 
+{{< beta />}}
+
 {{% create-source/intro %}}
 This document details how to connect Materialize to JSON-formatted Kinesis
 streams.
-
-{{< kinesis-alpha >}}
 
 {{< volatility-warning >}}Kinesis{{< /volatility-warning >}}
 
@@ -23,7 +23,11 @@ streams.
 
 {{< diagram "create-source-json-kinesis.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="json-bytes" envelopes="append-only" %}}
+#### `with_options`
+
+{{< diagram "with-options.svg" >}}
+
+{{% create-source/syntax-details connector="kinesis" formats="json-bytes" envelopes="append-only" keyConstraint=false %}}
 
 ## Examples
 

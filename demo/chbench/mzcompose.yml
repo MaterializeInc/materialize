@@ -53,7 +53,7 @@ services:
     environment:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
-      - MZ_LOG=pgwire=debug,info
+      - MZ_LOG_FILTER=pgwire=debug,info
       - MZ_DEV=1
   materialized-experimental:
     mzbuild: materialized
@@ -74,7 +74,7 @@ services:
     environment:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
-      - MZ_LOG=pgwire=debug,info
+      - MZ_LOG_FILTER=pgwire=debug,info
       - MZ_DEV=1
   mysql:
     mzbuild: chbench-mysql
@@ -118,7 +118,7 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+    - ZOOKEEPER_CLIENT_PORT=2181
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT_ZK_DATA:-zk-data}:/var/lib/zookeeper
   kafka:
@@ -128,33 +128,33 @@ services:
       - *kafka-external
     depends_on: [zookeeper]
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
-      KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
-      KAFKA_BROKER_ID: 1
-      KAFKA_LOG_RETENTION_HOURS: -1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      #KAFKA_LOG_CLEANUP_POLICY: "compact"
-      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
-      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
-      # To avoid race condition with control-center
-      CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
-      KAFKA_JMX_PORT: 9991
+    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+    - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
+    - KAFKA_METRIC_REPORTERS=io.confluent.metrics.reporter.ConfluentMetricsReporter
+    - KAFKA_BROKER_ID=1
+    - KAFKA_LOG_RETENTION_HOURS=-1
+    - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    # KAFKA_LOG_CLEANUP_POLICY=compact
+    - CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS=kafka:9092
+    - CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS=1
+    # to avoid race condition with control-center
+    - CONFLUENT_METRICS_REPORTER_TOPIC_CREATE=false
+    - KAFKA_JMX_PORT=9991
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-kafka-data}:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: 1
-      CONFIG_STORAGE_TOPIC: connect_configs
-      OFFSET_STORAGE_TOPIC: connect_offsets
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    - BOOTSTRAP_SERVERS=kafka:9092
+    - GROUP_ID=1
+    - CONFIG_STORAGE_TOPIC=connect_configs
+    - OFFSET_STORAGE_TOPIC=connect_offsets
+    - KEY_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter
+    - CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+    - CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
     depends_on: [kafka, schema-registry]
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.4
@@ -178,20 +178,20 @@ services:
     ports:
       - *control-center
     environment:
-      CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:9092"
-      CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      CONTROL_CENTER_REPLICATION_FACTOR: 1
-      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_INTERNAL_TOPICS_REPLICATION: 1
-      CONTROL_CENTER_COMMAND_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_METRICS_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
-      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
-      CONTROL_CENTER_METRICS_TOPIC_PARTITIONS: 1
-      CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS: 1
-      CONTROL_CENTER_CONNECT_CLUSTER: "http://connect:8083"
-      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
-      CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
+    - CONTROL_CENTER_BOOTSTRAP_SERVERS=kafka:9092
+    - CONTROL_CENTER_ZOOKEEPER_CONNECT=zookeeper:2181
+    - CONTROL_CENTER_REPLICATION_FACTOR=1
+    - CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_REPLICATION=1
+    - CONTROL_CENTER_INTERNAL_TOPICS_REPLICATION=1
+    - CONTROL_CENTER_COMMAND_TOPIC_REPLICATION=1
+    - CONTROL_CENTER_METRICS_TOPIC_REPLICATION=1
+    - CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS=1
+    - CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS=1
+    - CONTROL_CENTER_METRICS_TOPIC_PARTITIONS=1
+    - CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS=1
+    - CONTROL_CENTER_CONNECT_CLUSTER=http://connect:8083
+    - CONTROL_CENTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+    - CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE=true
   chbench:
     init: true
     mzbuild: chbenchmark
@@ -206,7 +206,7 @@ services:
     depends_on:
       - materialized
   inspect:
-    image: ubuntu:bionic-20200403
+    mzbuild: ubuntu-base
     command: "true"
     volumes:
       - chbench-gen:/gen
@@ -231,9 +231,9 @@ services:
   # All monitoring
   dashboard:
     mzbuild: dashboard
-    propagate-uid-gid: true
+    propagate_uid_gid: true
     environment:
-      - 'MATERIALIZED_URL=materialized:6875'
+    - MATERIALIZED_URL=materialized:6875
     ports:
       - *grafana
       - *prometheus
@@ -266,10 +266,10 @@ services:
       - ${MZ_SQL_EXPORTER_PORT:-9399}
   peeker:
     environment:
-      KAFKA_HOST: ${KAFKA_HOST:-kafka}
-      KAFKA_EXTERNAL_PORT: ${KAFKA_EXTERNAL_PORT:-9092}
-      SR_HOST: ${SR_HOST:-schema-registry}
-      OLAP_THREADS: ${OLAP_THREADS:-1}
+    - KAFKA_HOST=${KAFKA_HOST:-kafka}
+    - KAFKA_EXTERNAL_PORT=${KAFKA_EXTERNAL_PORT:-9092}
+    - SR_HOST=${SR_HOST:-schema-registry}
+    - OLAP_THREADS=${OLAP_THREADS:-1}
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: peeker
     init: true
@@ -292,8 +292,6 @@ services:
     command: ${CORRECTNESS_CMD:---mz-sources --checks c3321 --config-file /etc/test-correctness/checks-noconsistency.toml}
     volumes:
       - ./test-correctness-config:/etc/test-correctness
-  validate-debezium-topics:
-    mzbuild: validate-debezium-topics
 
 
 volumes:
@@ -358,6 +356,7 @@ mzworkflows:
       services: [dashboard, metabase]
     - step: run
       service: peeker
+      force_service_name: true
       command: >-
         --only-initialize
         -q loadtest
@@ -482,6 +481,7 @@ mzworkflows:
       workflow: heavy-load-mysql
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -503,6 +503,7 @@ mzworkflows:
       workflow: heavy-load-postgres
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -567,6 +568,7 @@ mzworkflows:
       workflow: heavy-load-mysql
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -605,6 +607,7 @@ mzworkflows:
       workflow: heavy-load-mysql
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: --queries ${PEEKER_QUERIES:-loadtest}
     - step: ensure-stays-up
@@ -676,6 +679,7 @@ mzworkflows:
         --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
     - step: run
       service: peeker
+      force_service_name: true
       daemon: true
       command: >-
         --queries ${PEEKER_QUERIES:-benchmark}
@@ -832,10 +836,3 @@ mzworkflows:
         -l /var/log/chbench.log
         --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
         --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
-
-  validate-topics:
-    steps:
-    - step: run
-      service: validate-debezium-topics
-      command: >-
-        --database-name=debezium

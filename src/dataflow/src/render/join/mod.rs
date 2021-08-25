@@ -32,8 +32,20 @@ mod linear_join;
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use expr::{MapFilterProject, MirScalarExpr};
 use repr::{Datum, Row, RowArena};
+
+pub use delta_join::DeltaJoinPlan;
+pub use linear_join::LinearJoinPlan;
+
+/// A complete enumeration of possible join plans to render.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum JoinPlan {
+    Linear(LinearJoinPlan),
+    Delta(DeltaJoinPlan),
+}
 
 /// A manual closure implementation of filtering and logic application.
 ///
@@ -41,7 +53,7 @@ use repr::{Datum, Row, RowArena};
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: expr::SafeMfpPlan,

@@ -29,6 +29,7 @@ use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
+use mz_avro::types::AvroMap;
 use mz_avro::{types::DecimalValue, types::Value, Schema};
 
 lazy_static! {
@@ -118,9 +119,9 @@ lazy_static! {
         (r#"{"type": "array",
               "items": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}"#, Value::Array(vec![Value::Enum(0, "A".to_owned())])),
         // Map examples
-        (r#"{"type": "map", "values": "long"}"#, Value::Map(HashMap::new())),
+        (r#"{"type": "map", "values": "long"}"#, Value::Map(AvroMap(HashMap::new()))),
         (r#"{"type": "map",
-             "values": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}"#, Value::Map(HashMap::new())),
+             "values": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}"#, Value::Map(AvroMap(HashMap::new()))),
         // Union examples
         (r#"["null", "int"]"#, Value::Union{index:0, inner:Box::new(Value::Null),n_variants:2,null_variant:Some(0)}),
         (r#"["null", "int"]"#, Value::Union{index:1, inner:Box::new(Value::Int(42)),n_variants:2,null_variant:Some(0)}),
@@ -161,7 +162,7 @@ lazy_static! {
                            ("bytesField".into(), Value::Bytes(vec![0])),
                            ("nullField".into(), Value::Null),
                            ("arrayField".into(), Value::Array(vec![Value::Double(0.0)])),
-                           ("mapField".into(), Value::Map(HashMap::new())),
+                           ("mapField".into(), Value::Map(AvroMap(HashMap::new()))),
                            ("unionField".into(), Value::Union{index:1, inner:Box::new(Value::Double(0.0)),n_variants:3,null_variant:None}),
                            ("enumField".into(), Value::Enum(1, "B".into())),
                            ("fixedField".into(), Value::Fixed(4, vec![0, 0, 0, 0])),

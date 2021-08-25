@@ -7,14 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Step 1. Build a cross-compiling toolchain that targets the oldest version of
-# Linux that we support.
+# Build a cross-compiling toolchain that targets the oldest version of Linux
+# that we support.
 
-FROM ubuntu:bionic AS crosstool
+FROM ubuntu:focal-20210723 AS crosstool
 
 WORKDIR /scratch
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# The environment variables are necessary to convince `tzdata`'s install scripts
+# not to hang -- see https://serverfault.com/questions/949991/how-to-install-tzdata-on-a-ubuntu-docker-image
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
     automake \
     bison \
@@ -50,21 +52,20 @@ RUN mkdir crosstool \
     && rm crosstool.defconfig \
     && ct-ng build
 
-# Step 2. Import the cross-compiling toolchain into a fresh image, omitting the
+# Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:bionic
+FROM ubuntu:20.04
 
 WORKDIR /workdir
 
-# Step 2a. Import the cross toolchain.
+# Import the cross toolchain.
 
 COPY --from=crosstool /opt/x-tools /opt/x-tools
 
-# Step 2b. Install dependencies needed by any CI job. Not all of these are
-# available in the Ubuntu repositories.
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install dependencies needed by any CI job. Not all of these are available in
+# the Ubuntu repositories.
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     bsdmainutils \
     ca-certificates \
     cmake \
@@ -75,6 +76,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gnupg2 \
     jq \
+    make \
     openssh-client \
     pkg-config \
     python3 \
@@ -83,6 +85,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-setuptools \
     rsync \
     ruby \
+    unzip \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/autouseradd-1.2.0-amd64.tar.gz \
@@ -96,8 +100,8 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/au
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
-# Step 2c. Install Rust. This is done separately from 2b because we bump the
-# Rust version frequently, and we want to reuse the cache up through 2b when
+# Install Rust. This is done separately from above because we bump the Rust
+# version frequently, and we want to reuse the cache up through aboe when
 # possible.
 
 COPY rust.asc .
@@ -133,23 +137,22 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=1.28.0" cargo-deb \
     && cargo install --root /usr/local --version "=0.8.4" cargo-deny
 
-# Step 2d. Link Rust's internal lld into the cross-compiling sysroot. This
-# avoids bringing in an extra copy of LLVM via `apt install lld`.
+# Link Rust's internal lld into the cross-compiling sysroot. This avoids
+# bringing in an extra copy of LLVM via `apt install lld`.
 
 RUN ln -s /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld /opt/x-tools/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-ld.lld \
     && ln -s /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld /opt/x-tools/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-lld
 
-# Step 2e. Install the Antithesis stub instrumentation library.
+# Install the Antithesis stub instrumentation library.
 
 COPY libvoidstar.so /usr/local/lib/
 
-# Step 2f. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
-# unnecessary when we upgrade to Python 3.7+.
-# See: https://www.python.org/dev/peps/pep-0538/
+# Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become unnecessary when
+# we upgrade to Python 3.7+. See: https://www.python.org/dev/peps/pep-0538/
 
 ENV LC_CTYPE=C.UTF-8
 
-# Step 2g. Install Python and Ruby dependencies. These are so quick to install and change
+# Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
 COPY requirements.txt requirements-dev.txt /workdir/
@@ -157,13 +160,23 @@ COPY requirements.txt requirements-dev.txt /workdir/
 RUN pip3 install \
     -r /workdir/requirements.txt \
     -r /workdir/requirements-dev.txt \
-    && rm /workdir/requirements*.txt \
-    && curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-0.11.3.gem > deb-s3-0.11.3.gem \
-    && gem install ./deb-s3-0.11.3.gem
+    && rm /workdir/requirements*.txt
 
+# Install APT repo generator.
 
-# Step 2h. Install docs site dependencies. These are towards the end for the
-# same reason as the Python dependencies.
+RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-0.11.3.gem > deb-s3.gem \
+    && gem install ./deb-s3.gem \
+    && rm deb-s3.gem
+
+# Install the AWS CLI.
+
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" > awscli.zip \
+    && unzip awscli.zip \
+    && ./aws/install \
+    && rm -rf aws
+
+# Install docs site dependencies. These are towards the end for the same reason
+# as the Python dependencies.
 
 RUN curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmltest_0.12.1_linux_amd64.tar.gz > htmltest.tar.gz \
     && echo '04d4be5097b98cd28de469f8856b3fbe82669f57b482a4cf3092a55e9e8e9e0d  htmltest.tar.gz' | sha256sum --check \
@@ -174,13 +187,13 @@ RUN curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmlte
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
     && rm hugo.tar.gz
 
-# Step 2i. Hardcode some known SSH hosts, or else SSH will ask whether the host
-# is trustworthy on the first connection.
+# Hardcode some known SSH hosts, or else SSH will ask whether the host is
+# trustworthy on the first connection.
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
-# Step 2j. Set the necessary environment variables to point Cargo and C/C++
-# build systems at our cross-compiling toolchain.
+# Set the necessary environment variables to point Cargo and C/C++ build systems
+# at our cross-compiling toolchain.
 
 ENV AR=x86_64-unknown-linux-gnu-ar
 ENV LD=x86_64-unknown-linux-gnu-lld
@@ -189,7 +202,6 @@ ENV CPP=x86_64-unknown-linux-gnu-cpp
 ENV CC=x86_64-unknown-linux-gnu-cc
 ENV CXX=x86_64-unknown-linux-gnu-c++
 ENV LDFLAGS=-fuse-ld=lld
-ENV RUSTFLAGS="-C link-arg=-Wl,--compress-debug-sections=zlib -C link-arg=-fuse-ld=lld"
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV PATH=/opt/x-tools/x86_64-unknown-linux-gnu/bin:$PATH
@@ -197,17 +209,17 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 # https://github.com/rust-lang/cargo/issues/7529
 ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
 
-# Step 2k. Set a environment variable that tools can check to see if they're in
-# the builder or not.
+# Set a environment variable that tools can check to see if they're in the
+# builder or not.
 
 ENV MZ_DEV_CI_BUILDER=1
 
-# Step 2l. Set up for a persistent volume to hold Cargo metadata, so that
-# crate metadata does not need to be refetched on every compile.
+# Set up for a persistent volume to hold Cargo metadata, so that crate metadata
+# does not need to be refetched on every compile.
 
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
-# Step 2m. Make the image as small as possible.
+# Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +

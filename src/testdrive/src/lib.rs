@@ -9,7 +9,7 @@
 
 //! Integration test driver for Materialize.
 
-#![deny(missing_docs)]
+#![warn(missing_docs)]
 
 use std::fs::File;
 use std::io::{self, Read};

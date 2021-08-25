@@ -7,17 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
 use std::fmt;
 
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_avro::types::AvroMap;
 use repr::adt::jsonb::JsonbRef;
+use repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
+use crate::encode::{column_names_and_types, Encode, TypedDatum};
+use crate::json::build_row_schema_json;
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
 
@@ -47,7 +50,31 @@ lazy_static! {
                   "null",
                   "long"
                 ]
-            }
+            },
+            {
+                "name": "data_collections",
+                "type": [
+                    "null",
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "record",
+                            "name": "data_collection",
+                            "fields": [
+                                {
+                                    "name": "data_collection",
+                                    "type": "string"
+                                },
+                                {
+                                    "name": "event_count",
+                                    "type": "long"
+                                },
+                            ]
+                        }
+                    }
+                ],
+                "default": null,
+            },
         ]
     })).expect("valid schema constructed");
 }
@@ -94,22 +121,14 @@ fn encode_message_unchecked(
     buf
 }
 
-/// Manages encoding of Avro-encoded bytes.
-pub struct Encoder {
+/// Generates key and value Avro schemas
+pub struct AvroSchemaGenerator {
     value_columns: Vec<(ColumnName, ColumnType)>,
     key_info: Option<KeyInfo>,
     writer_schema: Schema,
 }
 
-impl fmt::Debug for Encoder {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Encoder")
-            .field("writer_schema", &self.writer_schema)
-            .finish()
-    }
-}
-
-impl Encoder {
+impl AvroSchemaGenerator {
     pub fn new(
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
@@ -149,7 +168,7 @@ impl Encoder {
                 columns,
             }
         });
-        Encoder {
+        AvroSchemaGenerator {
             value_columns,
             key_info,
             writer_schema,
@@ -173,48 +192,69 @@ impl Encoder {
             .as_ref()
             .map(|KeyInfo { columns, .. }| columns.as_slice())
     }
+}
+
+impl fmt::Debug for AvroSchemaGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SchemaGenerator")
+            .field("writer_schema", &self.writer_schema)
+            .finish()
+    }
+}
+
+/// Manages encoding of Avro-encoded bytes.
+pub struct AvroEncoder {
+    schema_generator: AvroSchemaGenerator,
+    key_schema_id: Option<i32>,
+    value_schema_id: i32,
+}
+
+impl fmt::Debug for AvroEncoder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("AvroEncoder")
+            .field("writer_schema", &self.schema_generator.writer_schema)
+            .finish()
+    }
+}
+
+impl AvroEncoder {
+    pub fn new(
+        schema_generator: AvroSchemaGenerator,
+        key_schema_id: Option<i32>,
+        value_schema_id: i32,
+    ) -> Self {
+        AvroEncoder {
+            schema_generator,
+            key_schema_id,
+            value_schema_id,
+        }
+    }
 
     pub fn encode_key_unchecked(&self, schema_id: i32, row: Row) -> Vec<u8> {
-        let schema = self.key_writer_schema().unwrap();
-        let columns = self.key_columns().unwrap();
+        let schema = self.schema_generator.key_writer_schema().unwrap();
+        let columns = self.schema_generator.key_columns().unwrap();
         encode_message_unchecked(schema_id, row, schema, columns)
     }
 
     pub fn encode_value_unchecked(&self, schema_id: i32, row: Row) -> Vec<u8> {
-        let schema = self.value_writer_schema();
-        let columns = self.value_columns();
+        let schema = self.schema_generator.value_writer_schema();
+        let columns = self.schema_generator.value_columns();
         encode_message_unchecked(schema_id, row, schema, columns)
     }
 }
 
-/// Extracts deduplicated column names and types from a relation description.
-pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType)> {
-    // Invent names for columns that don't have a name.
-    let mut columns: Vec<_> = desc
-        .into_iter()
-        .enumerate()
-        .map(|(i, (name, ty))| match name {
-            None => (ColumnName::from(format!("column{}", i + 1)), ty),
-            Some(name) => (name, ty),
-        })
-        .collect();
-
-    // Deduplicate names.
-    let mut seen = HashSet::new();
-    for (name, _ty) in &mut columns {
-        let stem_len = name.as_str().len();
-        let mut i = 1;
-        while seen.contains(name) {
-            name.as_mut_str().truncate(stem_len);
-            if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
-                name.as_mut_str().push('_');
-            }
-            name.as_mut_str().push_str(&i.to_string());
-            i += 1;
-        }
-        seen.insert(name);
+impl Encode for AvroEncoder {
+    fn get_format_name(&self) -> &str {
+        "avro"
     }
-    columns
+
+    fn encode_key_unchecked(&self, row: Row) -> Vec<u8> {
+        self.encode_key_unchecked(self.key_schema_id.unwrap(), row)
+    }
+
+    fn encode_value_unchecked(&self, row: Row) -> Vec<u8> {
+        self.encode_value_unchecked(self.value_schema_id, row)
+    }
 }
 
 /// Encodes a sequence of `Datum` as Avro (key and value), using supplied column names and types.
@@ -235,20 +275,6 @@ where
     v
 }
 
-/// Bundled information sufficient to encode as Avro.
-#[derive(Debug)]
-pub struct TypedDatum<'a> {
-    datum: Datum<'a>,
-    typ: ColumnType,
-}
-
-impl<'a> TypedDatum<'a> {
-    /// Pairs a datum and its type, for Avro encoding.
-    pub fn new(datum: Datum<'a>, typ: ColumnType) -> Self {
-        Self { datum, typ }
-    }
-}
-
 impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
     fn avro(self) -> Value {
         let TypedDatum { datum, typ } = self;
@@ -262,15 +288,41 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
         } else {
             let mut val = match &typ.scalar_type {
                 ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
-                ScalarType::Int32 | ScalarType::Oid => Value::Int(datum.unwrap_int32()),
+                ScalarType::Int16 => Value::Int(i32::from(datum.unwrap_int16())),
+                ScalarType::Int32 | ScalarType::Oid | ScalarType::RegProc => {
+                    Value::Int(datum.unwrap_int32())
+                }
                 ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
                 ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
                 ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
-                ScalarType::Decimal(p, s) => Value::Decimal(DecimalValue {
-                    unscaled: datum.unwrap_decimal().as_i128().to_be_bytes().to_vec(),
-                    precision: (*p).into(),
-                    scale: (*s).into(),
-                }),
+                ScalarType::Numeric { scale } => {
+                    let mut d = datum.unwrap_numeric().0;
+                    let (unscaled, precision, scale) = match scale {
+                        Some(scale) => {
+                            // Values must be rescaled to resaturate trailing zeroes
+                            numeric::rescale(&mut d, *scale).unwrap();
+                            (
+                                numeric::numeric_to_twos_complement_be(d).to_vec(),
+                                NUMERIC_DATUM_MAX_PRECISION,
+                                usize::from(*scale),
+                            )
+                        }
+                        // Decimals without specified scale must nonetheless be
+                        // expressed as a fixed scale, so we write everything as
+                        // a 78-digit number with a scale of 39, which
+                        // definitively expresses all valid numeric values.
+                        None => (
+                            numeric::numeric_to_twos_complement_wide(d).to_vec(),
+                            NUMERIC_AGG_MAX_PRECISION,
+                            NUMERIC_DATUM_MAX_PRECISION,
+                        ),
+                    };
+                    Value::Decimal(DecimalValue {
+                        unscaled,
+                        precision,
+                        scale,
+                    })
+                }
                 ScalarType::Date => Value::Date(datum.unwrap_date()),
                 ScalarType::Time => Value::Long({
                     let time = datum.unwrap_time();
@@ -292,12 +344,55 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     buf
                 }),
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
+                ScalarType::String | ScalarType::VarChar { .. } => {
+                    Value::String(datum.unwrap_str().to_owned())
+                }
+                ScalarType::Char { length } => {
+                    let s = repr::adt::char::format_str_pad(datum.unwrap_str(), *length);
+                    Value::String(s)
+                }
                 ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
-                ScalarType::Array(_t) => unimplemented!("array types"),
-                ScalarType::List { .. } => unimplemented!("list types"),
-                ScalarType::Map { .. } => unimplemented!("map types"),
+                ScalarType::Array(element_type) | ScalarType::List { element_type, .. } => {
+                    let list = match typ.scalar_type {
+                        ScalarType::Array(_) => datum.unwrap_array().elements(),
+                        ScalarType::List { .. } => datum.unwrap_list(),
+                        _ => unreachable!(),
+                    };
+
+                    let values = list
+                        .into_iter()
+                        .map(|datum| {
+                            let datum = TypedDatum::new(
+                                datum,
+                                ColumnType {
+                                    nullable: true,
+                                    scalar_type: (**element_type).clone(),
+                                },
+                            );
+                            datum.avro()
+                        })
+                        .collect();
+                    Value::Array(values)
+                }
+                ScalarType::Map { value_type, .. } => {
+                    let map = datum.unwrap_map();
+                    let elements = map
+                        .into_iter()
+                        .map(|(key, datum)| {
+                            let datum = TypedDatum::new(
+                                datum,
+                                ColumnType {
+                                    nullable: true,
+                                    scalar_type: (**value_type).clone(),
+                                },
+                            );
+                            let value = datum.avro();
+                            (key.to_string(), value)
+                        })
+                        .collect();
+                    Value::Map(AvroMap(elements))
+                }
                 ScalarType::Record { fields, .. } => {
                     let list = datum.unwrap_list();
                     let fields = fields
@@ -312,7 +407,6 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Record(fields)
                 }
-                ScalarType::APD { .. } => unreachable!(),
             };
             if typ.nullable {
                 val = Value::Union {
@@ -333,6 +427,7 @@ pub fn get_debezium_transaction_schema() -> &'static Schema {
 
 pub fn encode_debezium_transaction_unchecked(
     schema_id: i32,
+    collection: &str,
     id: &str,
     status: &str,
     message_count: Option<i64>,
@@ -357,115 +452,34 @@ pub fn encode_debezium_transaction_unchecked(
         },
     };
 
-    let avro = Value::Record(vec![
+    let data_collections = if let Some(message_count) = message_count {
+        let collection = Value::Record(vec![
+            ("data_collection".into(), Value::String(collection.into())),
+            ("event_count".into(), Value::Long(message_count)),
+        ]);
+        Value::Union {
+            index: 1,
+            inner: Box::new(Value::Array(vec![collection])),
+            n_variants: 2,
+            null_variant: Some(0),
+        }
+    } else {
+        Value::Union {
+            index: 0,
+            inner: Box::new(Value::Null),
+            n_variants: 2,
+            null_variant: Some(0),
+        }
+    };
+
+    let record_contents = vec![
         ("id".into(), transaction_id),
         ("status".into(), status),
         ("event_count".into(), event_count),
-    ]);
+        ("data_collections".into(), data_collections),
+    ];
+    let avro = Value::Record(record_contents);
     debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
     mz_avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
     buf
-}
-
-pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
-    columns: &[(ColumnName, ColumnType)],
-    names_seen: &mut HashSet<String>,
-    namer: &mut F,
-) -> Vec<serde_json::value::Value> {
-    let mut fields = Vec::new();
-    for (name, typ) in columns.iter() {
-        let mut field_type = match &typ.scalar_type {
-            ScalarType::Bool => json!("boolean"),
-            ScalarType::Int32 | ScalarType::Oid => json!("int"),
-            ScalarType::Int64 => json!("long"),
-            ScalarType::Float32 => json!("float"),
-            ScalarType::Float64 => json!("double"),
-            ScalarType::Decimal(p, s) => json!({
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": p,
-                "scale": s,
-            }),
-            ScalarType::Date => json!({
-                "type": "int",
-                "logicalType": "date",
-            }),
-            ScalarType::Time => json!({
-                "type": "long",
-                "logicalType": "time-micros",
-            }),
-            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
-                "type": "long",
-                "logicalType": "timestamp-micros"
-            }),
-            ScalarType::Interval => json!({
-                "type": "fixed",
-                "size": 12,
-                "logicalType": "duration"
-            }),
-            ScalarType::Bytes => json!("bytes"),
-            ScalarType::String => json!("string"),
-            ScalarType::Jsonb => json!({
-                "type": "string",
-                "connect.name": "io.debezium.data.Json",
-            }),
-            ScalarType::Uuid => json!({
-                "type": "string",
-                "logicalType": "uuid",
-            }),
-            ScalarType::Array(_t) => unimplemented!("array types"),
-            ScalarType::List { .. } => unimplemented!("list types"),
-            ScalarType::Map { .. } => unimplemented!("map types"),
-            ScalarType::Record {
-                fields,
-                custom_name,
-                ..
-            } => {
-                let (name, name_seen) = match custom_name {
-                    Some(name) => (name.clone(), !names_seen.insert(name.clone())),
-                    None => (namer(), false),
-                };
-                if name_seen {
-                    json!(name)
-                } else {
-                    let fields = fields.to_vec();
-                    let json_fields = build_row_schema_fields(&fields, names_seen, namer);
-                    json!({
-                        "type": "record",
-                        "name": name,
-                        "fields": json_fields
-                    })
-                }
-            }
-            ScalarType::APD { .. } => {
-                unreachable!("TBD: how to determine the scale of these values")
-            }
-        };
-        if typ.nullable {
-            field_type = json!(["null", field_type]);
-        }
-        fields.push(json!({
-            "name": name,
-            "type": field_type,
-        }));
-    }
-    fields
-}
-
-/// Builds the JSON for the row schema, which can be independently useful.
-pub(super) fn build_row_schema_json(
-    columns: &[(ColumnName, ColumnType)],
-    name: &str,
-) -> serde_json::value::Value {
-    let mut name_idx = 0;
-    let fields = build_row_schema_fields(columns, &mut Default::default(), &mut move || {
-        let ret = format!("com.materialize.sink.record{}", name_idx);
-        name_idx += 1;
-        ret
-    });
-    json!({
-        "type": "record",
-        "fields": fields,
-        "name": name
-    })
 }

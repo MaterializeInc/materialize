@@ -11,8 +11,8 @@
 
 
 import argparse
-import threading
 import sys
+import threading
 from typing import Dict
 
 

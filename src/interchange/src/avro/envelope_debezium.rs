@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::num::ParseIntError;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -51,8 +52,8 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
         self,
         a: &mut A,
     ) -> Result<Self::Out, AvroError> {
-        let mut coords = None;
         let mut transaction = None;
+        let mut coords = None;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "before" => {
@@ -123,6 +124,7 @@ pub(crate) enum RowCoordinates {
         row: usize,
     },
     Postgres {
+        last_commit_lsn: Option<usize>,
         lsn: usize,
         total_order: Option<usize>,
     },
@@ -290,6 +292,8 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         let mut row = None;
         // "log sequence number" - monotonically increasing log offset in Postgres
         let mut lsn = None;
+        // Additional sequencing information for Postgres sources
+        let mut sequence: Option<Vec<Option<usize>>> = None;
         // SQL Server lsn - 10-byte, hex-encoded value.
         // and "event_serial_no" - serial number of the event, when there is more than one per LSN.
         let mut change_lsn = None;
@@ -347,6 +351,31 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                     lsn = Some(val.into_integral().ok_or_else(|| {
                         DecodeError::Custom("\"lsn\" is not an integer".to_string())
                     })?);
+                }
+                "sequence" => {
+                    let next = ValueDecoder;
+                    let val = field.decode_field(next)?;
+                    let val = match val {
+                        Value::Union { inner, .. } => *inner,
+                        val => val,
+                    };
+                    let val = match val {
+                        Value::String(val) => val,
+                        Value::Null => continue,
+                        _ => {
+                            return Err(AvroError::Decode(DecodeError::Custom(
+                                "\"sequence\" is not a string".to_string(),
+                            )))
+                        }
+                    };
+                    let seq: Vec<Option<String>> = serde_json::from_str(&val)
+                        .map_err(|e| AvroError::Decode(DecodeError::Custom(e.to_string())))?;
+                    sequence = Some(
+                        seq.into_iter()
+                            .map(|s| s.map(|s| s.parse()).transpose())
+                            .collect::<Result<_, ParseIntError>>()
+                            .map_err(|e| AvroError::Decode(DecodeError::Custom(e.to_string())))?,
+                    );
                 }
                 // SQL Server
                 "change_lsn" => {
@@ -414,8 +443,13 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                 as usize;
             RowCoordinates::MySql { file_idx, pos, row }
         } else if pg_any {
+            let last_commit_lsn = match sequence {
+                Some(sequence) => sequence.get(0).cloned().expect("lastCommitLsn must exist"),
+                None => None,
+            };
             let lsn = lsn.ok_or_else(|| DecodeError::Custom("no lsn".to_string()))? as usize;
             RowCoordinates::Postgres {
+                last_commit_lsn,
                 lsn,
                 total_order: None,
             }

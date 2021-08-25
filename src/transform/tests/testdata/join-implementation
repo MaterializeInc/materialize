@@ -39,14 +39,14 @@ opt
 ----
 %0 =
 | Get x (u0)
-| Filter ((isnull(#0) && isnull(#1)) || (#0 = #1)), ((isnull(#0) && isnull(#2)) || (#0 = #2))
+| Filter ((isnull(#0) && isnull(#1)) || (#0 = #1)), ((isnull(#0) && isnull(#2)) || (#0 = #2)), ((isnull(#1) && isnull(#2)) || (#1 = #2))
 
 opt
 (join [(get x)] [[#0 #2 #1 #2]])
 ----
 %0 =
 | Get x (u0)
-| Filter ((isnull(#0) && isnull(#1)) || (#0 = #1)), ((isnull(#0) && isnull(#2)) || (#0 = #2))
+| Filter ((isnull(#0) && isnull(#1)) || (#0 = #1)), ((isnull(#0) && isnull(#2)) || (#0 = #2)), ((isnull(#1) && isnull(#2)) || (#1 = #2))
 
 opt
 (join [(get x)] [[#0 #1 5]])
@@ -66,18 +66,17 @@ opt
 (join [(get x) (get x)] [[5 #0 5 #3]])
 ----
 ----
-%0 =
+%0 = Let l0 =
 | Get x (u0)
 | Filter (#0 = 5)
-| ArrangeBy ()
 
 %1 =
-| Get x (u0)
-| Filter (#0 = 5)
+| Get %0 (l0)
+| ArrangeBy ()
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+| Join %1 %0
+| | implementation = Differential %0 %1.()
 | | demand = (#0..#5)
 ----
 ----

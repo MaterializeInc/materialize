@@ -13,20 +13,25 @@
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
 
+use std::net::SocketAddr;
 use std::pin::Pin;
-use std::time::Instant;
 
 use futures::future::TryFutureExt;
-use hyper::{service, Method, StatusCode};
+use hyper::{service, Body, Method, Request, Response, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use log::error;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
+use ore::metrics::MetricsRegistry;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 
 use coord::session::Session;
 use ore::future::OreFutureExt;
 use ore::netio::SniffedStream;
+
+use crate::http::metrics::MetricsVariant;
+use crate::Metrics;
 
 mod catalog;
 mod memory;
@@ -52,7 +57,9 @@ fn sniff_tls(buf: &[u8]) -> bool {
 pub struct Config {
     pub tls: Option<TlsConfig>,
     pub coord_client: coord::Client,
-    pub start_time: Instant,
+    pub metrics_registry: MetricsRegistry,
+    pub global_metrics: Metrics,
+    pub pgwire_metrics: pgwire::Metrics,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +78,9 @@ pub enum TlsMode {
 pub struct Server {
     tls: Option<TlsConfig>,
     coord_client: coord::Client,
-    start_time: Instant,
+    metrics_registry: MetricsRegistry,
+    global_metrics: Metrics,
+    pgwire_metrics: pgwire::Metrics,
 }
 
 impl Server {
@@ -79,7 +88,9 @@ impl Server {
         Server {
             tls: config.tls,
             coord_client: config.coord_client,
-            start_time: config.start_time,
+            metrics_registry: config.metrics_registry,
+            global_metrics: config.global_metrics,
+            pgwire_metrics: config.pgwire_metrics,
         }
     }
 
@@ -142,7 +153,9 @@ impl Server {
         let svc = service::service_fn(move |req| {
             let user = user.clone();
             let coord_client = self.coord_client.clone();
-            let start_time = self.start_time;
+            let metrics_registry = self.metrics_registry.clone();
+            let global_metrics = self.global_metrics.clone();
+            let pgwire_metrics = self.pgwire_metrics.clone();
             let future = async move {
                 let user = match user {
                     Ok(user) => user,
@@ -164,21 +177,25 @@ impl Server {
                 let res = match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
                     (&Method::GET, "/metrics") => {
-                        metrics::handle_prometheus(req, &mut coord_client, start_time).await
+                        metrics::handle_prometheus(req, &metrics_registry, MetricsVariant::Regular)
                     }
-                    (&Method::GET, "/status") => {
-                        metrics::handle_status(req, &mut coord_client, start_time).await
-                    }
+                    (&Method::GET, "/status") => metrics::handle_status(
+                        req,
+                        &mut coord_client,
+                        &global_metrics,
+                        &pgwire_metrics,
+                    ),
                     (&Method::GET, "/prof") => prof::handle_prof(req, &mut coord_client).await,
-                    (&Method::GET, "/memory") => {
-                        memory::handle_memory(req, &mut coord_client).await
+                    (&Method::GET, "/memory") => memory::handle_memory(req, &mut coord_client),
+                    (&Method::GET, "/hierarchical-memory") => {
+                        memory::handle_hierarchical_memory(req, &mut coord_client)
                     }
                     (&Method::POST, "/prof") => prof::handle_prof(req, &mut coord_client).await,
                     (&Method::POST, "/sql") => sql::handle_sql(req, &mut coord_client).await,
                     (&Method::GET, "/internal/catalog") => {
                         catalog::handle_internal_catalog(req, &mut coord_client).await
                     }
-                    _ => root::handle_static(req, &mut coord_client).await,
+                    _ => root::handle_static(req, &mut coord_client),
                 };
                 coord_client.terminate().await;
                 res
@@ -215,4 +232,75 @@ impl Server {
     //
     // If you add a new handler, please add it to the most appropriate
     // submodule, or create a new submodule if necessary. Don't add it here!
+}
+
+#[derive(Clone)]
+pub struct ThirdPartyServer {
+    metrics_registry: MetricsRegistry,
+    global_metrics: Metrics,
+}
+
+impl ThirdPartyServer {
+    pub fn new(metrics_registry: MetricsRegistry, global_metrics: Metrics) -> Self {
+        Self {
+            metrics_registry,
+            global_metrics,
+        }
+    }
+
+    pub async fn serve(self, addr: SocketAddr) {
+        if let Err(err) = hyper::Server::bind(&addr)
+            .serve(hyper::service::make_service_fn(|_| {
+                let server = self.clone();
+                async { Ok::<_, hyper::Error>(server) }
+            }))
+            .await
+        {
+            error!("error serving metrics endpoint: {}", err);
+        }
+    }
+}
+
+impl hyper::service::Service<Request<Body>> for ThirdPartyServer {
+    type Response = Response<Body>;
+    type Error = hyper::http::Error;
+    type Future =
+        Pin<Box<dyn futures::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        match req.uri().path() {
+            "/metrics" => Box::pin({
+                let server = self.clone();
+                async move {
+                    match metrics::handle_prometheus(
+                        req,
+                        &server.metrics_registry,
+                        metrics::MetricsVariant::ThirdPartyVisible,
+                    ) {
+                        Ok(response) => Ok(response),
+                        Err(err) => {
+                            error!("could not retrieve third-party metrics: {}", err);
+                            Response::builder()
+                                .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::from("Error retrieving prometheus metrics"))
+                        }
+                    }
+                }
+            }),
+            _ => Box::pin(async move {
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::from(
+                        "The resource you have requested does not exist. Did you mean /metrics?",
+                    ))
+            }),
+        }
+    }
 }

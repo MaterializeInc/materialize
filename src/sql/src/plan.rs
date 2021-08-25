@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{SinkConnectorBuilder, SinkEnvelope, SourceConnector};
-use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
+use repr::{ColumnName, Diff, RelationDesc, Row, ScalarType, Timestamp};
 
 use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -57,7 +57,7 @@ pub use explain::Explanation;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::{
     plan_default_expr, resolve_names, resolve_names_data_type, resolve_names_stmt,
-    scalar_type_from_sql, unwrap_numeric_typ_mod, Aug, QueryContext, QueryLifetime,
+    scalar_type_from_sql, Aug, QueryContext, QueryLifetime,
 };
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
@@ -254,7 +254,7 @@ pub struct ExplainPlan {
 #[derive(Debug)]
 pub struct SendDiffsPlan {
     pub id: GlobalId,
-    pub updates: Vec<(Row, isize)>,
+    pub updates: Vec<(Row, Diff)>,
     pub affected_rows: usize,
     pub kind: MutationKind,
 }
@@ -434,10 +434,17 @@ pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
 }
 
-impl Default for PlanContext {
-    fn default() -> PlanContext {
+impl PlanContext {
+    pub fn new(wall_time: DateTime<Utc>) -> Self {
+        Self { wall_time }
+    }
+
+    /// Return a PlanContext with zero values. This should only be used when
+    /// planning is required but unused (like in `plan_create_table()`) or in
+    /// tests.
+    pub fn zero() -> Self {
         PlanContext {
-            wall_time: Utc::now(),
+            wall_time: ore::now::to_datetime(ore::now::now_zero()),
         }
     }
 }

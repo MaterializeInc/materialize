@@ -5,7 +5,7 @@ describes our engineering process and philosophy.
 
 For a more general introduction to Materialize, see the [user
 documentation](https://materialize.com/docs). For API documentation, see
-[mtrlz.dev](https://mtrlz.dev).
+[dev.materialize.com](https://dev.materialize.com).
 
 ## New contributors
 

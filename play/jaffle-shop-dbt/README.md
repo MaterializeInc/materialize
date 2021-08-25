@@ -62,14 +62,14 @@ Materialize-specific modifications:
     jaffle_shop:
         outputs:
             dev:
-            type: materialize
-            threads: 1
-            host: localhost
-            port: 6875
-            user: materialize
-            pass: password
-            dbname: materialize
-            schema: jaffle_shop
+                type: materialize
+                threads: 1
+                host: localhost
+                port: 6875
+                user: materialize
+                pass: password
+                dbname: materialize
+                schema: jaffle_shop
 
         target: dev
     ```

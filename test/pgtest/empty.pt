@@ -1,0 +1,43 @@
+# Test EmptyQueryResponse.
+
+send
+Query {"query": ";"}
+----
+
+until
+ReadyForQuery
+----
+EmptyQueryResponse
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": ";;"}
+----
+
+until
+ReadyForQuery
+----
+EmptyQueryResponse
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": ""}
+----
+
+until
+ReadyForQuery
+----
+EmptyQueryResponse
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "; ; select 1; ;"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

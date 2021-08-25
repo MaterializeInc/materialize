@@ -79,14 +79,17 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use dec::OrderedDecimal;
-use expr::{AggregateExpr, AggregateFunc, MirRelationExpr};
+use expr::{AggregateExpr, AggregateFunc};
 use ore::cast::CastFrom;
-use repr::adt::apd::{self, Apd, ApdAgg};
+use ore::soft_assert_or_log;
+use repr::adt::numeric::{self, Numeric, NumericAgg};
 use repr::{Datum, DatumList, Row, RowArena};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
+use crate::render::context::CollectionBundle;
 use crate::render::datum_vec::DatumVec;
+use crate::render::ArrangementFlavor;
 
 /// This enum represents the three potential types of aggregations.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -117,11 +120,15 @@ enum ReductionType {
 /// shape / general computation of the rendered dataflow graph
 /// in this plan, and then make actually rendering the graph
 /// be as simple (and compiler verifiable) as possible.
-#[derive(Clone, Debug)]
-enum ReducePlan {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
     Distinct,
+    /// Plan for not computing any aggregations, just determining the set of distinct keys. A
+    /// specialization of [ReducePlan::Distinct] maintaining rows not in the output.
+    #[allow(dead_code)]
+    DistinctNegated,
     /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),
     /// Plan for computing only hierarchical aggregations.
@@ -142,8 +149,8 @@ enum ReducePlan {
 /// apply only to the distinct set of values. We need
 /// to apply a distinct operator to those before we
 /// combine them with everything else.
-#[derive(Clone, Debug)]
-struct AccumulablePlan {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccumulablePlan {
     /// All of the aggregations we were asked to compute, stored
     /// in order.
     full_aggrs: Vec<AggregateExpr>,
@@ -163,8 +170,8 @@ struct AccumulablePlan {
 /// with monotonic plans, but otherwise, we need to render
 /// them with a reduction tree that splits the inputs into
 /// small, and then progressively larger, buckets
-#[derive(Clone, Debug)]
-enum HierarchicalPlan {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum HierarchicalPlan {
     /// Plan hierarchical aggregations under monotonic inputs.
     Monotonic(MonotonicPlan),
     /// Plan for hierarchical aggregations under non-monotonic inputs.
@@ -179,8 +186,8 @@ enum HierarchicalPlan {
 /// append only, so we can change our computation to
 /// only retain the "best" value in the diff field, instead
 /// of holding onto all values.
-#[derive(Clone, Debug)]
-struct MonotonicPlan {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MonotonicPlan {
     /// All of the aggregations we were asked to compute.
     aggr_funcs: Vec<AggregateFunc>,
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
@@ -198,8 +205,8 @@ struct MonotonicPlan {
 /// fraction of the original input) and redo the reduction in another
 /// layer. Effectively, we'll construct a min / max heap out of a series
 /// of reduce operators (each one is a separate layer).
-#[derive(Clone, Debug)]
-struct BucketedPlan {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BucketedPlan {
     /// All of the aggregations we were asked to compute.
     aggr_funcs: Vec<AggregateFunc>,
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
@@ -222,10 +229,10 @@ struct BucketedPlan {
 /// additional reduce operator whenever we have multiple reduce aggregates
 /// to combine and present results in the appropriate order. If we
 /// were only asked to compute a single aggregation, we can skip
-/// that step and return the arragement provided by computing the aggregation
+/// that step and return the arrangement provided by computing the aggregation
 /// directly.
-#[derive(Clone, Debug)]
-enum BasicPlan {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum BasicPlan {
     /// Plan for rendering a single basic aggregation. Here, the
     /// first element denotes the index in the set of inputs
     /// that we are aggregating over.
@@ -242,8 +249,8 @@ enum BasicPlan {
 /// types.
 ///
 /// TODO: could we express this as a delta join
-#[derive(Clone, Debug, Default)]
-struct CollationPlan {
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CollationPlan {
     /// Accumulable aggregation results to collate, if any.
     accumulable: Option<AccumulablePlan>,
     /// Hierarchical aggregation results to collate, if any.
@@ -263,7 +270,7 @@ impl ReducePlan {
     ///
     /// The resulting plan summarizes what the dataflow to be created
     /// and how the aggregations will be executed.
-    fn create_from(
+    pub fn create_from(
         aggregates: Vec<AggregateExpr>,
         monotonic: bool,
         expected_group_size: Option<usize>,
@@ -329,7 +336,7 @@ impl ReducePlan {
                     assert!(collation.basic.is_none());
                     collation.basic = Some(e);
                 }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
+                ReducePlan::Distinct | ReducePlan::DistinctNegated | ReducePlan::Collation(_) => {
                     panic!("Inner reduce plan was unsupported type!")
                 }
             }
@@ -409,7 +416,7 @@ impl ReducePlan {
 
                     // Distribute buckets in powers of 16, so that we can strike
                     // a balance between how many inputs each layer gets from
-                    // the preceeding layer, while also limiting the number of
+                    // the preceding layer, while also limiting the number of
                     // layers.
                     while current < limit {
                         buckets.push(current as u64);
@@ -441,15 +448,42 @@ impl ReducePlan {
         }
     }
 
+    /// Reports all keys of produced arrangements.
+    ///
+    /// This is likely either an empty vector, for no arrangement,
+    /// or a singleton vector containing the list of expressions
+    /// that key a single arrangement.
+    pub fn keys(&self, key_arity: usize) -> Vec<Vec<expr::MirScalarExpr>> {
+        // Accumulate keys into this vector, and return it.
+        let mut keys = Vec::new();
+        match self {
+            ReducePlan::DistinctNegated => {}
+            _ => {
+                keys.push(
+                    (0..key_arity)
+                        .map(|column| expr::MirScalarExpr::Column(column))
+                        .collect(),
+                );
+            }
+        }
+        keys
+    }
+
     /// Render a dataflow based on the provided plan.
     ///
     /// The output will be an arrangements that looks the same as if
     /// we just had a single reduce operator computing everything together, and
     /// this arrangement can also be re-used.
-    fn render<G>(self, collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+    fn render<G, T>(
+        self,
+        collection: Collection<G, (Row, Row)>,
+        err_input: Collection<G, DataflowError>,
+        key_arity: usize,
+    ) -> CollectionBundle<G, Row, T>
     where
         G: Scope,
-        G::Timestamp: Lattice,
+        G::Timestamp: Lattice + Refines<T>,
+        T: Timestamp + Lattice,
     {
         // Convenience wrapper to render the right kind of hierarchical plan.
         let build_hierarchical = |collection: Collection<G, (Row, Row)>,
@@ -468,13 +502,14 @@ impl ReducePlan {
                 BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
             };
 
-        match self {
+        let arrangement_or_bundle: ArrangementOrCollection<G> = match self {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
-            ReducePlan::Distinct => build_distinct(collection),
-            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true),
-            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true),
-            ReducePlan::Basic(expr) => build_basic(collection, expr, true),
+            ReducePlan::Distinct => build_distinct(collection).into(),
+            ReducePlan::DistinctNegated => build_distinct_retractions(collection).into(),
+            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true).into(),
+            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true).into(),
+            ReducePlan::Basic(expr) => build_basic(collection, expr, true).into(),
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
             ReducePlan::Collation(expr) => {
@@ -500,13 +535,132 @@ impl ReducePlan {
                     ));
                 }
                 // Now we need to collate them together.
-                build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
+                build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
+            }
+        };
+        arrangement_or_bundle.into_bundle(key_arity, err_input)
+    }
+}
+
+/// A type wrapping either an arrangement or a single collection.
+enum ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    /// Wrap an arrangement
+    Arrangement(Arrangement<G, Row>),
+    /// Wrap a collection
+    Collection(Collection<G, Row>),
+}
+
+impl<G> ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    /// Convert to a [CollectionBundle] by either supplying the arrangement or construction from
+    /// collections.
+    ///
+    /// * `key_arity` - The number of columns in the key. Only used for arrangement variants.
+    /// * `err_input` - A collection containing the error stream.
+    fn into_bundle<T>(
+        self,
+        key_arity: usize,
+        err_input: Collection<G, DataflowError>,
+    ) -> CollectionBundle<G, Row, T>
+    where
+        G::Timestamp: Lattice + Refines<T>,
+        T: Timestamp + Lattice,
+    {
+        match self {
+            ArrangementOrCollection::Arrangement(arrangement) => CollectionBundle::from_columns(
+                0..key_arity,
+                ArrangementFlavor::Local(arrangement, err_input.arrange()),
+            ),
+            ArrangementOrCollection::Collection(oks) => {
+                CollectionBundle::from_collections(oks, err_input)
             }
         }
     }
 }
 
-impl<G, T> Context<G, MirRelationExpr, Row, T>
+impl<G> From<Arrangement<G, Row>> for ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    fn from(arrangement: Arrangement<G, Row>) -> Self {
+        ArrangementOrCollection::Arrangement(arrangement)
+    }
+}
+
+impl<G> From<Collection<G, Row>> for ArrangementOrCollection<G>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    fn from(collection: Collection<G, Row>) -> Self {
+        ArrangementOrCollection::Collection(collection)
+    }
+}
+
+/// Plan for extracting keys and values in preparation for a reduction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyValPlan {
+    /// Extracts the columns used as the key.
+    key_plan: expr::SafeMfpPlan,
+    /// Extracts the columns used to feed the aggregations.
+    val_plan: expr::SafeMfpPlan,
+    /// Steps to take over the columns of the input row.
+    skips: Vec<usize>,
+}
+
+impl KeyValPlan {
+    pub fn new(
+        input_arity: usize,
+        group_key: &[expr::MirScalarExpr],
+        aggregates: &[AggregateExpr],
+    ) -> Self {
+        // Form an operator for evaluating key expressions.
+        let mut key_mfp = expr::MapFilterProject::new(input_arity)
+            .map(group_key.iter().cloned())
+            .project(input_arity..(input_arity + group_key.len()));
+
+        // Form an operator for evaluating value expressions.
+        let mut val_mfp = expr::MapFilterProject::new(input_arity)
+            .map(aggregates.iter().map(|a| a.expr.clone()))
+            .project(input_arity..(input_arity + aggregates.len()));
+
+        // Determine the columns we'll need from the row.
+        let mut demand = Vec::new();
+        demand.extend(key_mfp.demand());
+        demand.extend(val_mfp.demand());
+        demand.sort();
+        demand.dedup();
+        // remap column references to the subset we use.
+        let mut demand_map = std::collections::HashMap::new();
+        for column in demand.iter() {
+            demand_map.insert(*column, demand_map.len());
+        }
+        key_mfp.permute(&demand_map, demand_map.len());
+        key_mfp.optimize();
+        let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
+        val_mfp.permute(&demand_map, demand_map.len());
+        val_mfp.optimize();
+        let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
+
+        let skips = convert_indexes_to_skips(demand);
+
+        Self {
+            key_plan,
+            val_plan,
+            skips,
+        }
+    }
+}
+
+impl<G, T> Context<G, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -514,135 +668,76 @@ where
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
-    pub fn render_reduce(&mut self, relation_expr: &MirRelationExpr) {
-        if let MirRelationExpr::Reduce {
-            input,
-            group_key,
-            aggregates,
-            monotonic,
-            expected_group_size,
-        } = relation_expr
-        {
-            // The reduce operator may have multiple aggregation functions, some of
-            // which should only be applied to distinct values for each key. We need
-            // to build a non-trivial dataflow fragment to robustly implement these
-            // aggregations.
+    pub fn render_reduce(
+        &mut self,
+        input: CollectionBundle<G, Row, T>,
+        key_val_plan: KeyValPlan,
+        reduce_plan: ReducePlan,
+    ) -> CollectionBundle<G, Row, T> {
+        let KeyValPlan {
+            key_plan,
+            val_plan,
+            skips,
+        } = key_val_plan;
+        let key_arity = key_plan.projection.len();
+        let mut row_packer = Row::default();
+        let mut datums = DatumVec::new();
+        let (key_val_input, err_input): (
+            timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
+            _,
+        ) = input.flat_map(None, move |row, time, diff| {
+            let temp_storage = RowArena::new();
 
-            // Our first step is to extract `(key, vals)` from `input`.
-            // We do this carefully, attempting to avoid unneccesary allocations
-            // that would result from cloning rows in input arrangements.
-
-            let input_arity = input.arity();
-
-            // TODO(mcsherry): These two MFPs could be unified into one, which would
-            // allow optimization across their computation, e.g. if both parsed input
-            // strings to typed data, but it involves a bit of dancing around when we
-            // pull the data out of their output (i.e. as an iterator, rather than use
-            // the built-in evaluation direction to a `Row`).
-
-            // Form an operator for evaluating key expressions.
-            let mut key_mfp = expr::MapFilterProject::new(input_arity)
-                .map(group_key.iter().cloned())
-                .project(input_arity..(input_arity + group_key.len()));
-
-            // Form an operator for evaluating value expressions.
-            let mut val_mfp = expr::MapFilterProject::new(input_arity)
-                .map(aggregates.iter().map(|a| a.expr.clone()))
-                .project(input_arity..(input_arity + aggregates.len()));
-
-            // Determine the columns we'll need from the row.
-            let mut demand = Vec::new();
-            demand.extend(key_mfp.demand());
-            demand.extend(val_mfp.demand());
-            demand.sort();
-            demand.dedup();
-            // remap column references to the subset we use.
-            let mut demand_map = std::collections::HashMap::new();
-            for column in demand.iter() {
-                demand_map.insert(*column, demand_map.len());
+            // Unpack only the demanded columns.
+            let mut datums_local = datums.borrow();
+            let mut row_iter = row.iter();
+            for skip in skips.iter() {
+                datums_local.push((&mut row_iter).nth(*skip).unwrap());
             }
-            key_mfp.permute(&demand_map, demand_map.len());
-            key_mfp.optimize();
-            let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
-            val_mfp.permute(&demand_map, demand_map.len());
-            val_mfp.optimize();
-            let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
 
-            let skips = convert_indexes_to_skips(demand);
+            // Evaluate the key expressions.
+            row_packer.clear();
+            let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
+                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
+                Ok(key) => key.expect("Row expected as no predicate was used"),
+            };
+            // Evaluate the value expressions.
+            // The prior evaluation may have left additional columns we should delete.
+            datums_local.truncate(skips.len());
+            let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
+                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
+                Ok(val) => val.expect("Row expected as no predicate was used"),
+            };
+            row_packer.extend(val);
+            drop(datums_local);
 
-            let mut row_packer = Row::default();
-            let mut datums = DatumVec::new();
-            let (key_val_input, mut err_input): (
-                Collection<_, Result<(Row, Row), DataflowError>, _>,
-                _,
-            ) = self
-                .flat_map_ref(
-                    input,
-                    |_expr| None,
-                    move |row| {
-                        let temp_storage = RowArena::new();
+            // Mint the final row, ideally re-using resources.
+            // TODO(mcsherry): This can perhaps be extracted for
+            // re-use if it seems to be a common pattern.
+            use timely::communication::message::RefOrMut;
+            let row = match row {
+                RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
+                RefOrMut::Mut(row) => {
+                    row.clone_from(&row_packer);
+                    row_packer.clear();
+                    std::mem::take(row)
+                }
+            };
+            return Some((Ok((key, row)), time.clone(), diff.clone()));
+        });
 
-                        // Unpack only the demanded columns.
-                        let mut datums_local = datums.borrow();
-                        let mut row_iter = row.iter();
-                        for skip in skips.iter() {
-                            datums_local.push((&mut row_iter).nth(*skip).unwrap());
-                        }
+        // Demux out the potential errors from key and value selector evaluation.
+        use crate::operator::CollectionExt;
+        use differential_dataflow::operators::consolidate::ConsolidateStream;
+        let (ok, mut err) = key_val_input
+            .as_collection()
+            .consolidate_stream()
+            .flat_map_fallible("OkErrDemux", |x| Some(x));
 
-                        // Evaluate the key expressions.
-                        row_packer.clear();
-                        let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
-                            Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(key) => key.expect("Row expected as no predicate was used"),
-                        };
-                        // Evaluate the value expressions.
-                        // The prior evaluation may have left additional columns we should delete.
-                        datums_local.truncate(skips.len());
-                        let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                            Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(val) => val.expect("Row expected as no predicate was used"),
-                        };
-                        row_packer.extend(val);
-                        drop(datums_local);
+        err = err.concat(&err_input);
 
-                        // Mint the final row, ideally re-using resources.
-                        // TODO(mcsherry): This can perhaps be extracted for
-                        // re-use if it seems to be a common pattern.
-                        use timely::communication::message::RefOrMut;
-                        let row = match row {
-                            RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
-                            RefOrMut::Mut(row) => {
-                                row.clone_from(&row_packer);
-                                row_packer.clear();
-                                std::mem::take(row)
-                            }
-                        };
-                        return Some(Ok((key, row)));
-                    },
-                )
-                .unwrap();
-
-            // Demux out the potential errors from key and value selector evaluation.
-            use timely::dataflow::operators::ok_err::OkErr;
-            let (ok, err) = key_val_input.inner.ok_err(|(x, t, d)| match x {
-                Ok(x) => Ok((x, t, d)),
-                Err(x) => Err((x, t, d)),
-            });
-
-            let ok_input = ok.as_collection();
-            err_input = err.as_collection().concat(&err_input);
-
-            // First, let's plan out what we are going to do with this reduce
-            let plan =
-                ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-            let arrangement = plan.render(ok_input);
-            let index = (0..group_key.len()).collect::<Vec<_>>();
-            self.set_local_columns(
-                relation_expr,
-                &index[..],
-                (arrangement, err_input.arrange()),
-            );
-        }
+        // Render the reduce plan
+        reduce_plan.render(ok, err, key_arity)
     }
 }
 
@@ -651,7 +746,7 @@ where
 ///
 /// This computes the same thing as a join on the group key followed by shuffling
 /// the values into the correct order. This implementation assumes that all input
-/// arrangements present values in a way thats respects the desired output order,
+/// arrangements present values in a way that respects the desired output order,
 /// so we can do a linear merge to form the output.
 fn build_collation<G>(
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
@@ -691,9 +786,11 @@ where
                 // We expect not to have any negative multiplicities, but are not 100% sure it will
                 // never happen so for now just log an error if it does.
                 for (val, cnt) in input.iter() {
-                    if cnt < &0 {
-                        log::error!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
-                    }
+                    soft_assert_or_log!(
+                        *cnt >= 0,
+                        "[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}",
+                        val, cnt,
+                    );
                 }
 
                 for ((reduction_type, row), _) in input.iter() {
@@ -744,6 +841,35 @@ where
     })
 }
 
+/// Build the dataflow to compute the set of distinct keys.
+///
+/// This implementation maintains the rows that don't appear in the output.
+fn build_distinct_retractions<G, T>(collection: Collection<G, (Row, Row)>) -> Collection<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    let negated_result = collection.reduce_named("DistinctBy Retractions", {
+        |key, input, output| {
+            output.push((key.clone(), -1));
+            output.extend(
+                input
+                    .iter()
+                    .map(|(values, count)| ((*values).clone(), *count)),
+            );
+        }
+    });
+    use timely::dataflow::operators::Map;
+    negated_result
+        .negate()
+        .concat(&collection)
+        .consolidate()
+        .inner
+        .map(|((k, _), time, count)| (k, time, count))
+        .as_collection()
+}
+
 /// Build the dataflow to compute and arrange multiple non-accumulable,
 /// non-hierarchical aggregations on `input`.
 ///
@@ -763,9 +889,11 @@ where
 {
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
-    if aggrs.len() <= 1 {
-        log::error!("Unexpectedly computing {} basic aggregations together but we expected to be doing more than one", aggrs.len());
-    }
+    soft_assert_or_log!(
+        aggrs.len() > 1,
+        "Unexpectedly computing {} basic aggregations together but we expected to be doing more than one",
+        aggrs.len(),
+    );
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
         let result = build_basic_aggregate(input.clone(), index, &aggr, false);
@@ -842,9 +970,11 @@ where
             if source.iter().any(|(_val, cnt)| cnt < &0) {
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
-                    if cnt < &0 {
-                        log::error!("[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
-                    }
+                    soft_assert_or_log!(
+                        *cnt >= 0,
+                        "[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?}",
+                        val, cnt,
+                    );
                 }
             } else {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
@@ -965,10 +1095,12 @@ where
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
                     for (val, cnt) in source.iter() {
-                        if cnt <= &0 {
-                            // XXX: This reports user data, which we perhaps should not do!
-                            log::error!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
-                        }
+                        // XXX: This reports user data, which we perhaps should not do!
+                        soft_assert_or_log!(
+                            *cnt > 0,
+                            "[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}",
+                            key, val, cnt,
+                        );
                     }
                 } else {
                     let mut output = Vec::with_capacity(aggrs.len());
@@ -1080,9 +1212,9 @@ enum AccumInner {
         non_nulls: isize,
     },
     /// Accumulates arbitrary precision decimals.
-    APD {
+    Numeric {
         /// Accumulates non-special values
-        accum: OrderedDecimal<ApdAgg>,
+        accum: OrderedDecimal<NumericAgg>,
         /// Counts +inf
         pos_infs: isize,
         /// Counts -inf
@@ -1099,7 +1231,7 @@ impl Semigroup for AccumInner {
         match self {
             AccumInner::Bool { trues, falses } => trues.is_zero() && falses.is_zero(),
             AccumInner::SimpleNumber { accum, non_nulls } => accum.is_zero() && non_nulls.is_zero(),
-            AccumInner::APD {
+            AccumInner::Numeric {
                 accum,
                 pos_infs,
                 neg_infs,
@@ -1138,14 +1270,14 @@ impl Semigroup for AccumInner {
                 *non_nulls += other_non_nulls;
             }
             (
-                AccumInner::APD {
+                AccumInner::Numeric {
                     accum,
                     pos_infs,
                     neg_infs,
                     nans,
                     non_nulls,
                 },
-                AccumInner::APD {
+                AccumInner::Numeric {
                     accum: other_accum,
                     pos_infs: other_pos_infs,
                     neg_infs: other_neg_infs,
@@ -1153,19 +1285,19 @@ impl Semigroup for AccumInner {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                let mut cx_agg = apd::cx_agg();
+                let mut cx_agg = numeric::cx_agg();
                 cx_agg.add(&mut accum.0, &other_accum.0);
                 // `rounded` signals we have exceeded the aggregator's max
                 // precision, which means we've lost commutativity and
                 // associativity; nothing to be done here, so panic. For more
                 // context, see the DEC_Rounded definition at
                 // http://speleotrove.com/decimal/dncont.html
-                assert!(!cx_agg.status().rounded(), "AccumInner::APD overflow");
+                assert!(!cx_agg.status().rounded(), "AccumInner::Numeric overflow");
                 // Reduce to reclaim unused decimal precision. Note that this
                 // reduction must happen somewhere to make the following
                 // invertible:
                 // ```
-                // CREATE TABLE a (a apd);
+                // CREATE TABLE a (a numeric);
                 // CREATE MATERIALIZED VIEW t as SELECT sum(a) FROM a;
                 // INSERT INTO a VALUES ('9e39'), ('9e-39');
                 // ```
@@ -1207,15 +1339,15 @@ impl Multiply<isize> for AccumInner {
                 accum: accum * i128::cast_from(factor),
                 non_nulls: non_nulls * factor,
             },
-            AccumInner::APD {
+            AccumInner::Numeric {
                 accum,
                 pos_infs,
                 neg_infs,
                 nans,
                 non_nulls,
             } => {
-                let mut cx = apd::cx_agg();
-                let mut f = ApdAgg::from(factor);
+                let mut cx = numeric::cx_agg();
+                let mut f = NumericAgg::from(factor);
                 // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
                 // always be an integer, i.e. we are never increasing the
                 // values' scale.
@@ -1225,8 +1357,11 @@ impl Multiply<isize> for AccumInner {
                 // associativity; nothing to be done here, so panic. For more
                 // context, see the DEC_Rounded definition at
                 // http://speleotrove.com/decimal/dncont.html
-                assert!(!cx.status().rounded(), "AccumInner::APD multiply overflow");
-                AccumInner::APD {
+                assert!(
+                    !cx.status().rounded(),
+                    "AccumInner::Numeric multiply overflow"
+                );
+                AccumInner::Numeric {
                     accum: OrderedDecimal(f),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
@@ -1316,8 +1451,8 @@ where
                     trues: 0,
                     falses: 0,
                 },
-                AggregateFunc::SumAPD => AccumInner::APD {
-                    accum: OrderedDecimal(ApdAgg::zero()),
+                AggregateFunc::SumNumeric => AccumInner::Numeric {
+                    accum: OrderedDecimal(NumericAgg::zero()),
                     pos_infs: 0,
                     neg_infs: 0,
                     nans: 0,
@@ -1361,24 +1496,24 @@ where
                 },
                 x => panic!("Invalid argument to AggregateFunc::Dummy: {:?}", x),
             },
-            AggregateFunc::SumAPD => match datum {
-                Datum::APD(n) => {
+            AggregateFunc::SumNumeric => match datum {
+                Datum::Numeric(n) => {
                     let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
                         if n.0.is_negative() {
-                            (ApdAgg::zero(), 0, 1, 0)
+                            (NumericAgg::zero(), 0, 1, 0)
                         } else {
-                            (ApdAgg::zero(), 1, 0, 0)
+                            (NumericAgg::zero(), 1, 0, 0)
                         }
                     } else if n.0.is_nan() {
-                        (ApdAgg::zero(), 0, 0, 1)
+                        (NumericAgg::zero(), 0, 0, 1)
                     } else {
                         // Take a narrow decimal (datum) into a wide decimal
                         // (aggregator).
-                        let mut cx_agg = apd::cx_agg();
+                        let mut cx_agg = numeric::cx_agg();
                         (cx_agg.to_width(n.0), 0, 0, 0)
                     };
 
-                    AccumInner::APD {
+                    AccumInner::Numeric {
                         accum: OrderedDecimal(accum),
                         pos_infs,
                         neg_infs,
@@ -1386,20 +1521,24 @@ where
                         non_nulls: 1,
                     }
                 }
-                Datum::Null => AccumInner::APD {
-                    accum: OrderedDecimal(ApdAgg::zero()),
+                Datum::Null => AccumInner::Numeric {
+                    accum: OrderedDecimal(NumericAgg::zero()),
                     pos_infs: 0,
                     neg_infs: 0,
                     nans: 0,
                     non_nulls: 0,
                 },
-                x => panic!("Invalid argument to AggregateFunc::SumAPD: {:?}", x),
+                x => panic!("Invalid argument to AggregateFunc::SumNumeric: {:?}", x),
             },
             _ => {
                 // Other accumulations need to disentangle the accumulable
                 // value from its NULL-ness, which is not quite as easily
                 // accumulated.
                 match datum {
+                    Datum::Int16(i) => AccumInner::SimpleNumber {
+                        accum: i128::from(i),
+                        non_nulls: 1,
+                    },
                     Datum::Int32(i) => AccumInner::SimpleNumber {
                         accum: i128::from(i),
                         non_nulls: 1,
@@ -1416,10 +1555,6 @@ where
                         accum: (*f * float_scale) as i128,
                         non_nulls: 1,
                     },
-                    Datum::Decimal(d) => AccumInner::SimpleNumber {
-                        accum: d.as_i128(),
-                        non_nulls: 1,
-                    },
                     Datum::Null => AccumInner::SimpleNumber {
                         accum: 0,
                         non_nulls: 0,
@@ -1433,7 +1568,7 @@ where
 
     let mut to_aggregate = Vec::new();
     // First, collect all non-distinct aggregations in one pass.
-    let easy_cases = collection.inner.as_collection().explode({
+    let easy_cases = collection.explode({
         let zero_diffs = zero_diffs.clone();
         move |(key, row)| {
             let mut diffs = zero_diffs.clone();
@@ -1466,8 +1601,6 @@ where
                 (key, packer.finish_and_reuse())
             })
             .distinct()
-            .inner
-            .as_collection()
             .explode({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
@@ -1498,14 +1631,13 @@ where
                     // operator, when this key is presented but matching aggregates are not found. We will
                     // suppress the output for inputs without net-positive records, which *should* avoid
                     // that panic.
-                    if accum.total == 0 && !accum.inner.is_zero() {
-                        log::error!(
-                            "[customer-data] ReduceAccumulable observed net-zero records \
-                            with non-zero accumulation: {:?}: {:?}",
-                            aggr,
-                            accum,
-                        );
-                    }
+                    soft_assert_or_log!(
+                        accum.total != 0 || accum.inner.is_zero(),
+                        "[customer-data] ReduceAccumulable observed net-zero records \
+                        with non-zero accumulation: {:?}: {:?}",
+                        aggr,
+                        accum,
+                    );
 
                     // The finished value depends on the aggregation function in a variety of ways.
                     // For all aggregates but count, if only null values were
@@ -1542,7 +1674,8 @@ where
                             }
                             (AggregateFunc::Dummy, _) => Datum::Dummy,
                             // If any non-nulls, just report the aggregate.
-                            (AggregateFunc::SumInt32, AccumInner::SimpleNumber { accum, .. }) => {
+                            (AggregateFunc::SumInt16, AccumInner::SimpleNumber { accum, .. })
+                            | (AggregateFunc::SumInt32, AccumInner::SimpleNumber { accum, .. }) => {
                                 Datum::Int64(*accum as i64)
                             }
                             (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {
@@ -1554,12 +1687,9 @@ where
                             (AggregateFunc::SumFloat64, AccumInner::SimpleNumber { accum, .. }) => {
                                 Datum::Float64(((*accum as f64) / float_scale).into())
                             }
-                            (AggregateFunc::SumDecimal, AccumInner::SimpleNumber { accum, .. }) => {
-                                Datum::from(*accum)
-                            }
                             (
-                                AggregateFunc::SumAPD,
-                                AccumInner::APD {
+                                AggregateFunc::SumNumeric,
+                                AccumInner::Numeric {
                                     accum,
                                     pos_infs,
                                     neg_infs,
@@ -1567,7 +1697,7 @@ where
                                     non_nulls,
                                 },
                             ) => {
-                                let mut cx_datum = apd::cx_datum();
+                                let mut cx_datum = numeric::cx_datum();
                                 let d = cx_datum.to_width(accum.0);
                                 // Take a wide decimal (aggregator) into a
                                 // narrow decimal (datum). If this operation
@@ -1583,13 +1713,16 @@ where
                                 } else if *nans > 0 || (pos_inf && neg_inf) {
                                     // NaNs are NaNs and cases where we've seen a
                                     // mixture of positive and negative infinities.
-                                    Datum::APD(OrderedDecimal(Apd::nan()))
+                                    Datum::from(Numeric::nan())
                                 } else if pos_inf {
-                                    Datum::APD(OrderedDecimal(Apd::infinity()))
+                                    Datum::from(Numeric::infinity())
                                 } else if neg_inf {
-                                    Datum::APD(OrderedDecimal(-Apd::infinity()))
+                                    let mut cx = numeric::cx_datum();
+                                    let mut d = Numeric::infinity();
+                                    cx.neg(&mut d);
+                                    Datum::from(d)
                                 } else {
-                                    Datum::APD(OrderedDecimal(d))
+                                    Datum::from(d)
                                 }
                             }
                             _ => panic!(
@@ -1614,12 +1747,11 @@ where
 /// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
 fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
     for i in 1..indexes.len() {
-        if indexes[i - 1] >= indexes[i] {
-            log::error!(
-                "convert_indexes_to_skip needs indexes to be strictly increasing. Received: {:?}",
-                indexes,
-            );
-        }
+        soft_assert_or_log!(
+            indexes[i - 1] < indexes[i],
+            "convert_indexes_to_skip needs indexes to be strictly increasing. Received: {:?}",
+            indexes,
+        );
     }
 
     for i in (1..indexes.len()).rev() {
@@ -1647,39 +1779,43 @@ fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
 /// Every hierarchical aggregate needs to supply a corresponding ReductionMonoid implementation.
 fn reduction_type(func: &AggregateFunc) -> ReductionType {
     match func {
-        AggregateFunc::SumInt32
+        AggregateFunc::SumInt16
+        | AggregateFunc::SumInt32
         | AggregateFunc::SumInt64
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
-        | AggregateFunc::SumDecimal
-        | AggregateFunc::SumAPD
+        | AggregateFunc::SumNumeric
         | AggregateFunc::Count
         | AggregateFunc::Any
         | AggregateFunc::All
         | AggregateFunc::Dummy => ReductionType::Accumulable,
-        AggregateFunc::MaxApd
+        AggregateFunc::MaxNumeric
+        | AggregateFunc::MaxInt16
         | AggregateFunc::MaxInt32
         | AggregateFunc::MaxInt64
         | AggregateFunc::MaxFloat32
         | AggregateFunc::MaxFloat64
-        | AggregateFunc::MaxDecimal
         | AggregateFunc::MaxBool
         | AggregateFunc::MaxString
         | AggregateFunc::MaxDate
         | AggregateFunc::MaxTimestamp
         | AggregateFunc::MaxTimestampTz
-        | AggregateFunc::MinApd
+        | AggregateFunc::MinNumeric
+        | AggregateFunc::MinInt16
         | AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
-        | AggregateFunc::MinDecimal
         | AggregateFunc::MinBool
         | AggregateFunc::MinString
         | AggregateFunc::MinDate
         | AggregateFunc::MinTimestamp
         | AggregateFunc::MinTimestampTz => ReductionType::Hierarchical,
-        AggregateFunc::JsonbAgg | AggregateFunc::JsonbObjectAgg => ReductionType::Basic,
+        AggregateFunc::JsonbAgg
+        | AggregateFunc::JsonbObjectAgg
+        | AggregateFunc::ArrayConcat
+        | AggregateFunc::ListConcat
+        | AggregateFunc::StringAgg => ReductionType::Basic,
     }
 }
 
@@ -1700,6 +1836,7 @@ pub mod monoids {
     use serde::{Deserialize, Serialize};
 
     use expr::AggregateFunc;
+    use ore::soft_panic_or_log;
     use repr::{Datum, Row};
 
     /// A monoid containing a single-datum row.
@@ -1742,11 +1879,13 @@ pub mod monoids {
                         lhs.clone_from(&rhs);
                     }
                 }
-                (lhs, rhs) => log::error!(
-                    "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
-                    lhs,
-                    rhs
-                ),
+                (lhs, rhs) => {
+                    soft_panic_or_log!(
+                        "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
+                        lhs,
+                        rhs
+                    );
+                }
             }
         }
 
@@ -1759,40 +1898,43 @@ pub mod monoids {
     // all hierarchical aggregation functions need to supply a monoid implementation.
     pub fn get_monoid(row: Row, func: &AggregateFunc) -> Option<ReductionMonoid> {
         match func {
-            AggregateFunc::MaxApd
+            AggregateFunc::MaxNumeric
+            | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
-            | AggregateFunc::MaxDecimal
             | AggregateFunc::MaxBool
             | AggregateFunc::MaxString
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz => Some(ReductionMonoid::Max(row)),
-            AggregateFunc::MinApd
+            AggregateFunc::MinNumeric
+            | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
-            | AggregateFunc::MinDecimal
             | AggregateFunc::MinBool
             | AggregateFunc::MinString
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz => Some(ReductionMonoid::Min(row)),
-            AggregateFunc::SumInt32
+            AggregateFunc::SumInt16
+            | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
-            | AggregateFunc::SumDecimal
-            | AggregateFunc::SumAPD
+            | AggregateFunc::SumNumeric
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All
             | AggregateFunc::Dummy
             | AggregateFunc::JsonbAgg
-            | AggregateFunc::JsonbObjectAgg => None,
+            | AggregateFunc::JsonbObjectAgg
+            | AggregateFunc::ArrayConcat
+            | AggregateFunc::ListConcat
+            | AggregateFunc::StringAgg => None,
         }
     }
 }

@@ -15,27 +15,7 @@ documentation][user-docs].
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
-from collections import OrderedDict
-from functools import lru_cache
-from pathlib import Path
-from tempfile import TemporaryFile
-from typing import (
-    cast,
-    Any,
-    Dict,
-    List,
-    Set,
-    Sequence,
-    Optional,
-    Union,
-    Iterable,
-    Iterator,
-    IO,
-    overload,
-)
-from typing_extensions import Literal
 import base64
-import contextlib
 import enum
 import hashlib
 import json
@@ -46,13 +26,15 @@ import stat
 import subprocess
 import sys
 import time
+from collections import OrderedDict
+from functools import lru_cache
+from pathlib import Path
+from tempfile import TemporaryFile
+from typing import IO, Any, Dict, Iterable, Iterator, List, Sequence, Set
 
 import yaml
 
-from materialize import cargo
-from materialize import git
-from materialize import spawn
-from materialize import ui
+from materialize import cargo, git, spawn, ui
 
 announce = ui.speaker("==> ")
 
@@ -87,12 +69,15 @@ class RepositoryDetails:
     Attributes:
         root: The path to the root of the repository.
         release_mode: Whether the repository is being built in release mode.
+        coverage: Whether the repository has code coverage instrumentation
+            enabled.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
     """
 
-    def __init__(self, root: Path, release_mode: bool):
+    def __init__(self, root: Path, release_mode: bool, coverage: bool):
         self.root = root
         self.release_mode = release_mode
+        self.coverage = coverage
         self.cargo_workspace = cargo.Workspace(root)
 
     def xcargo(self) -> str:
@@ -115,6 +100,14 @@ def xbinutil(tool: str) -> str:
 xobjcopy = xbinutil("objcopy")
 xstrip = xbinutil("strip")
 
+xrustflags = "-C link-arg=-Wl,--compress-debug-sections=zlib"
+if sys.platform != "darwin":
+    # The cross-compiling toolchain that bin/xcompile installs on macOS does not
+    # support lld.
+    #
+    # TODO(benesch): use a newer cross toolchain.
+    xrustflags += " -C link-arg=-fuse-ld=lld"
+
 
 def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
@@ -125,6 +118,20 @@ def docker_images() -> Set[str]:
         .strip()
         .split("\n")
     )
+
+
+def is_docker_image_pushed(name: str) -> bool:
+    """Check whether the named image is pushed to Docker Hub.
+
+    Note that this operation requires a rather slow network request.
+    """
+    proc = subprocess.run(
+        ["docker", "manifest", "inspect", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+    )
+    return proc.returncode == 0
 
 
 def chmod_x(path: Path) -> None:
@@ -210,8 +217,15 @@ class CargoPreImage(PreImage):
         }
 
     def extra(self) -> str:
-        # Cargo images depend on the release mode.
-        return str(self.rd.release_mode)
+        # Cargo images depend on the release mode and whether coverage is
+        # enabled.
+        flags: List[str] = []
+        if self.rd.release_mode:
+            flags += "release"
+        if self.rd.coverage:
+            flags += "coverage"
+        flags.sort()
+        return ",".join(flags)
 
 
 class CargoBuild(CargoPreImage):
@@ -222,7 +236,14 @@ class CargoBuild(CargoPreImage):
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
-        self.rustflags = config.pop("rustflags", "")
+        self.rustflags = config.pop("rustflags", xrustflags)
+        if rd.coverage:
+            self.rustflags += " -Zinstrument-coverage -C link-dead-code "
+            # Nix generates some unresolved symbols that -Zinstrument-coverage
+            # somehow causes the linker to complain about, so just disable
+            # warnings about unresolved symbols and hope it all works out.
+            # See: https://github.com/nix-rust/nix/issues/1116
+            self.rustflags += " -Clink-arg=-Wl,--warn-unresolved-symbols"
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
@@ -264,7 +285,9 @@ class CargoBuild(CargoPreImage):
             )
         if self.extract:
             output = spawn.capture(
-                cargo_build + ["--message-format=json"], unicode=True
+                cargo_build + ["--message-format=json"],
+                unicode=True,
+                env=dict(os.environ, XCOMPILE_RUSTFLAGS=self.rustflags),
             )
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
@@ -517,27 +540,6 @@ class ResolvedImage:
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
-    def push(self) -> None:
-        """Push the image to Docker Hub.
-
-        The image is pushed under the Docker identifier returned by
-        `ResolvedImage.spec`.
-        """
-        spawn.runv(["docker", "push", self.spec()])
-
-    def pushed(self) -> bool:
-        """Check whether the image is pushed to Docker Hub.
-
-        Note that this operation requires a rather slow network request.
-        """
-        proc = subprocess.run(
-            ["docker", "manifest", "inspect", self.spec()],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
-        )
-        return proc.returncode == 0
-
     def run(self, args: List[str] = []) -> None:
         """Run a command in the image.
 
@@ -667,9 +669,28 @@ class DependencySet:
                     d.build()
                 else:
                     announce(f"Acquiring {spec}")
-                    acquired_from = d.acquire()
+                    d.acquire()
             else:
                 announce(f"Already built {spec}")
+
+    def push(self) -> None:
+        """Push all publishable images in this dependency set to Docker Hub.
+
+        Images are pushed using their spec as their tag. All images must have
+        been acquired (e.g., by `DependencySet.acquire`) before calling this
+        method.
+        """
+        for dep in self:
+            if dep.publish and not is_docker_image_pushed(dep.spec()):
+                spawn.runv(["docker", "push", dep.spec()])
+
+    def push_tagged(self, tag: str) -> None:
+        """Like push, but use the specified tag instead of the image's spec."""
+        for dep in self:
+            name = dep.image.docker_name(tag)
+            if dep.publish:
+                spawn.runv(["docker", "tag", dep.spec(), name])
+                spawn.runv(["docker", "push", name])
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self.dependencies.values())
@@ -689,14 +710,16 @@ class Repository:
 
     Args:
         root: The path to the root of the repository.
+        release_mode: Whether to build the repository in release mode.
+        coverage: Whether to enable code coverage instrumentation.
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
-        compose_dirs: The set of directories containing an `mzcompose.yml` file.
+        compose_dirs: The set of directories containing an `mzcompose.yml` or `mzworkflows.py` file.
     """
 
-    def __init__(self, root: Path, release_mode: bool = True):
-        self.rd = RepositoryDetails(root, release_mode)
+    def __init__(self, root: Path, release_mode: bool = True, coverage: bool = False):
+        self.rd = RepositoryDetails(root, release_mode, coverage)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
         for (path, dirs, files) in os.walk(self.root, topdown=True):
@@ -710,11 +733,11 @@ class Repository:
                 if image.name in self.images:
                     raise ValueError(f"image {image.name} exists twice")
                 self.images[image.name] = image
-            if "mzcompose.yml" in files:
+            if "mzcompose.yml" in files or "mzworkflows.py" in files:
                 name = Path(path).name
                 if name in self.compositions:
                     raise ValueError(f"composition {name} exists twice")
-                self.compositions[name] = Path(path) / "mzcompose.yml"
+                self.compositions[name] = Path(path)
 
         # Validate dependencies.
         for image in self.images.values():

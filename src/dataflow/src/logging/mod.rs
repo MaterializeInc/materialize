@@ -11,6 +11,7 @@
 
 pub mod differential;
 pub mod materialized;
+pub mod reachability;
 pub mod timely;
 
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
@@ -39,6 +40,21 @@ impl<T, E, P> BatchLogger<T, E, P>
 where
     P: EventPusher<Timestamp, (Duration, E, T)>,
 {
+    /// Batch size in bytes for batches
+    const BATCH_SIZE_BYTES: usize = 1 << 13;
+
+    /// Calculate the default buffer size based on `(Duration, E, T)` tuples.
+    fn buffer_capacity() -> usize {
+        let size = ::std::mem::size_of::<(Duration, E, T)>();
+        if size == 0 {
+            Self::BATCH_SIZE_BYTES
+        } else if size <= Self::BATCH_SIZE_BYTES {
+            Self::BATCH_SIZE_BYTES / size
+        } else {
+            1
+        }
+    }
+
     /// Creates a new batch logger.
     pub fn new(event_pusher: P, granularity_ms: u64) -> Self {
         BatchLogger {
@@ -46,7 +62,7 @@ where
             event_pusher,
             _phantom: ::std::marker::PhantomData,
             granularity_ms,
-            buffer: Vec::with_capacity(1024),
+            buffer: Vec::with_capacity(Self::buffer_capacity()),
         }
     }
 
@@ -71,6 +87,9 @@ where
                 self.time_ms as Timestamp,
                 self.buffer.drain(..).collect(),
             ));
+            if self.buffer.capacity() > Self::buffer_capacity() {
+                self.buffer = Vec::with_capacity(Self::buffer_capacity())
+            }
 
             // In principle we can buffer up until this point, if that is appealing to us.
             // We could buffer more aggressively if the logging granularity were exposed

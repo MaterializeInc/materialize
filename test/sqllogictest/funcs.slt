@@ -321,7 +321,7 @@ SELECT sqrt(1.23783::double)
 query R
 SELECT sqrt(1.23783::decimal(15, 5))
 ----
-1.11257
+1.11257808714714492169319004932905215867
 
 # Test cbrt.
 query R
@@ -717,7 +717,7 @@ SELECT upper('ALREADYUP')
 ----
 ALREADYUP
 
-query error Cannot call function upper\(numeric\(38,1\)\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function upper\(numeric\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT upper(2.2)
 
 query T
@@ -989,7 +989,7 @@ SELECT log(10, 10)
 query R
 SELECT log(400, 20)
 ----
-2
+0.500000000000000000000000000000000000001
 
 query R
 SELECT log10(10::decimal(15, 5))
@@ -999,7 +999,7 @@ SELECT log10(10::decimal(15, 5))
 query R
 SELECT round(ln(13::float)::decimal(15, 5), 3)
 ----
-2.5650
+2.565
 
 query error function ln is not defined for negative numbers
 SELECT ln(-1)
@@ -1010,12 +1010,12 @@ SELECT ln(0)
 query R
 SELECT ln(13.0000::decimal(15, 5))
 ----
-2.56494
+2.56494935746153673605348744156531860481
 
 query R
 SELECT round(exp(2)::decimal(15, 5), 3)
 ----
-7.3890
+7.389
 
 query R
 SELECT exp(ln(2))
@@ -1110,3 +1110,11 @@ SELECT a, b, mz_row_size(col_size.*) FROM col_size ORDER BY a
 ----
 1  2  77
 NULL  NULL  32
+
+query error mz_errored
+SELECT mz_internal.mz_error_if_null(NULL, 'mz_errored')
+
+query I
+SELECT mz_internal.mz_error_if_null(1, '')
+----
+1

@@ -25,7 +25,7 @@ INSERT INTO t1 VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE MATERIALIZED SOURCE mz_source
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 > CREATE VIEWS FROM SOURCE mz_source;
@@ -36,5 +36,11 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 TRUNCATE TABLE t1;
 
-! SELECT * FROM t1;
-source table got truncated
+# Note: truncating the upstream table will not corrupt the source in Materialize
+# for Postgres version 10. For all versions > 10, users will see the following error
+# "source table got truncated."
+#
+# See the Postgres docs for more information:
+# https://www.postgresql.org/docs/10/logical-replication-restrictions.html
+> SELECT * FROM t1;
+1

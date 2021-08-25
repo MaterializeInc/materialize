@@ -10,95 +10,83 @@
 //! Persistence for Materialize dataflows.
 
 #![warn(missing_docs)]
+#![warn(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 
+use std::fmt;
+
+pub mod codec_impls;
 pub mod error;
+pub mod file;
+pub mod future;
+pub mod indexed;
 pub mod mem;
+#[cfg(test)]
+pub mod nemesis;
 pub mod operators;
-pub mod persister;
 pub mod storage;
-
-use std::sync::{Arc, Mutex};
-
-use crate::error::Error;
-use crate::persister::Persister;
+pub mod unreliable;
 
 // TODO
-// - Finish implementing StoragePersister.
-// - Should we hard-code the Key, Val, Time, Diff types everywhere or introduce
-//   them as type parameters? Materialize will only be using one combination of
-//   them (two with `()` vals?) but the generality might make things easier to
-//   read. Of course, it also might make things harder to read.
-// - Is PersistManager getting us anything over a type alias? At the moment, the
-//   only thing it does is wrap mutex poison errors in this crate's error type.
-// - It's intended that Persister will multiplex and batch multiple streams, but
-//   the APIs probably aren't quite right for this yet.
-// - Support progress messages.
 // - This method of getting the metadata handle ends up being pretty clunky in
 //   practice. Maybe instead the user should pass in a mutable reference to a
 //   `Meta` they've constructed like `probe_with`?
-// - The async story. I haven't grokked how async plays with timely yet, so
-//   dunno if/where that fits in yet.
 // - Error handling. Right now, there are a bunch of `expect`s and this likely
 //   needs to hook into the error streams that Materialize hands around.
-// - Blobs (think S3) should likely be cached in some sort of LRU. Unclear where
-//   this lives. I originally was thinking inside the S3Blob impl, but maybe we
-//   want it to be after decode? Dunno.
-// - What's our story with poisoned mutexes?
 // - Backward compatibility of persisted data, particularly the encoded keys and
 //   values.
 // - Restarting with a different number of workers.
+// - Abomonation is convenient for prototyping, but we'll likely want to reuse
+//   one of the popular serialization libraries.
+// - Tighten up the jargon and usage of that jargon: write, update, persist,
+//   drain, entry, update, data, log, blob, indexed, unsealed, trace.
+// - Think through all the <, <=, !<= usages and document them more correctly
+//   (aka replace before/after an antichain with in advance of/not in advance
+//   of).
+// - Clean up the various ways we pass a (sometimes encoded) entry/update
+//   around, there are many for no particular reason: returning an iterator,
+//   accepting a closure, accepting a mutable Vec, implementing Snapshot, etc.
 // - Meta TODO: These were my immediate thoughts but there's stuff I'm
 //   forgetting. Flesh this list out.
 
-/// A unique id for a persisted stream.
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub struct Id(pub u64);
+// Testing edge cases:
+// - Failure while draining from log into unsealed.
+// - Equality edge cases around all the various timestamp/frontier checks.
 
-/// A thread-safe, clone-able wrapper for [Persister].
-pub struct PersistManager<P> {
-    persister: Arc<Mutex<P>>,
-}
+/// A type usable as a persisted key or value.
+pub trait Data: Clone + Codec + fmt::Debug + Ord {}
+impl<T: Clone + Codec + fmt::Debug + Ord> Data for T {}
 
-// The derived Send, Sync, and Clone don't work because of the type parameter.
-unsafe impl<P> Send for PersistManager<P> {}
-unsafe impl<P> Sync for PersistManager<P> {}
-impl<P> Clone for PersistManager<P> {
-    fn clone(&self) -> Self {
-        PersistManager {
-            persister: self.persister.clone(),
-        }
-    }
-}
-
-impl<P: Persister> PersistManager<P> {
-    /// Returns a [PersistManager] wrapper for the given [Persister].
-    pub fn new(persister: P) -> Self {
-        PersistManager {
-            persister: Arc::new(Mutex::new(persister)),
-        }
-    }
-
-    /// A wrapper for [Persister::create_or_load].
-    pub fn create_or_load(&mut self, id: Id) -> Result<Token<P::Write, P::Meta>, Error> {
-        self.persister.lock()?.create_or_load(id)
-    }
-
-    /// A wrapper for [Persister::destroy].
-    pub fn destroy(&mut self, id: Id) -> Result<(), Error> {
-        self.persister.lock()?.destroy(id)
-    }
-}
-
-/// An exclusivity token needed to construct persistence [operators].
-///
-/// Intentionally not Clone since it's an exclusivity token.
-pub struct Token<W, M> {
-    write: W,
-    meta: M,
-}
-
-impl<W, M> Token<W, M> {
-    fn into_inner(self) -> (W, M) {
-        (self.write, self.meta)
-    }
+/// Encoding and decoding operations for a type usable as a persisted key or
+/// value.
+pub trait Codec: Sized + 'static {
+    /// Name of the codec.
+    ///
+    /// This name is stored for the key and value when a stream is first created
+    /// and the same key and value codec must be used for that stream afterward.
+    fn codec_name() -> &'static str;
+    /// A hint of the encoded size of self.
+    fn size_hint(&self) -> usize;
+    /// Encode a key or value for permanent storage.
+    ///
+    /// This must perfectly round-trip Self through [Codec::decode]. If the
+    /// encode function for this codec ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E);
+    /// Decode a key or value previous encoded with this codec's
+    /// [Codec::encode].
+    ///
+    /// This must perfectly round-trip Self through [Codec::encode]. If the
+    /// encode function for this codec ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    ///
+    /// It should also gracefully handle data encoded by future versions of
+    /// encode (likely with an error).
+    //
+    // TODO: Mechanically, this could return a ref to the original bytes
+    // without any copies, see if we can make the types work out for that.
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
 }

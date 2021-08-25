@@ -10,54 +10,64 @@
 use std::borrow::Borrow;
 use std::fmt;
 
+use uncased::UncasedStr;
+
 use crate::error::CoordError;
 
+// TODO(benesch): remove this when SergioBenitez/uncased#3 resolves.
+macro_rules! static_uncased_str {
+    ($string:expr) => {{
+        // This is safe for the same reason that `UncasedStr::new` is safe.
+        unsafe { ::core::mem::transmute::<&'static str, &'static UncasedStr>($string) }
+    }};
+}
+
 const APPLICATION_NAME: ServerVar<str> = ServerVar {
-    name: unicase::Ascii::new("application_name"),
+    name: static_uncased_str!("application_name"),
     value: "",
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
 };
 
 const CLIENT_ENCODING: ServerVar<str> = ServerVar {
-    name: unicase::Ascii::new("client_encoding"),
+    name: static_uncased_str!("client_encoding"),
     value: "UTF8",
     description: "Sets the client's character set encoding (PostgreSQL).",
 };
 
 const DATABASE: ServerVar<str> = ServerVar {
-    name: unicase::Ascii::new("database"),
+    name: static_uncased_str!("database"),
     value: "materialize",
     description: "Sets the current database (CockroachDB).",
 };
 
 const DATE_STYLE: ServerVar<str> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
-    name: unicase::Ascii::new("DateStyle"),
+    name: static_uncased_str!("DateStyle"),
     value: "ISO, MDY",
     description: "Sets the display format for date and time values (PostgreSQL).",
 };
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
-    name: unicase::Ascii::new("extra_float_digits"),
+    name: static_uncased_str!("extra_float_digits"),
     value: &3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
-    name: unicase::Ascii::new("integer_datetimes"),
+    name: static_uncased_str!("integer_datetimes"),
     value: &true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
 };
 
 const SEARCH_PATH: ServerVar<[&str]> = ServerVar {
-    name: unicase::Ascii::new("search_path"),
+    name: static_uncased_str!("search_path"),
     value: &["mz_catalog", "pg_catalog", "public", "mz_temp"],
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
 };
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
-    name: unicase::Ascii::new("server_version"),
+    name: static_uncased_str!("server_version"),
     // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
     // be. Too new and some clients will emit a "server too new" warning. Too
     // old and some clients will fall back to legacy code paths. v9.5.0
@@ -67,33 +77,33 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
-    name: unicase::Ascii::new("server_version_num"),
+    name: static_uncased_str!("server_version_num"),
     // See the comment on `SERVER_VERSION`.
     value: &90500,
     description: "Shows the server version as an integer (PostgreSQL).",
 };
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
-    name: unicase::Ascii::new("sql_safe_updates"),
+    name: static_uncased_str!("sql_safe_updates"),
     value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
-    name: unicase::Ascii::new("standard_conforming_strings"),
+    name: static_uncased_str!("standard_conforming_strings"),
     value: &true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
 };
 
 const TIMEZONE: ServerVar<str> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
-    name: unicase::Ascii::new("TimeZone"),
+    name: static_uncased_str!("TimeZone"),
     value: "UTC",
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
 const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
-    name: unicase::Ascii::new("transaction_isolation"),
+    name: static_uncased_str!("transaction_isolation"),
     value: "serializable",
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
@@ -251,7 +261,7 @@ impl Vars {
             self.database.set(value)
         } else if name == DATE_STYLE.name {
             for value in value.split(',') {
-                let value = unicase::Ascii::new(value.trim());
+                let value = UncasedStr::new(value.trim());
                 if value != "ISO" && value != "MDY" {
                     return Err(CoordError::ConstrainedParameter(&DATE_STYLE));
                 }
@@ -272,7 +282,7 @@ impl Vars {
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             Err(CoordError::ReadOnlyParameter(&STANDARD_CONFORMING_STRINGS))
         } else if name == TIMEZONE.name {
-            if unicase::Ascii::new(value) != TIMEZONE.value {
+            if UncasedStr::new(value) != TIMEZONE.value {
                 return Err(CoordError::ConstrainedParameter(&TIMEZONE));
             } else {
                 Ok(())
@@ -375,7 +385,7 @@ pub struct ServerVar<V>
 where
     V: fmt::Debug + ?Sized + 'static,
 {
-    pub name: unicase::Ascii<&'static str>,
+    pub name: &'static UncasedStr,
     pub value: &'static V,
     pub description: &'static str,
 }
@@ -385,7 +395,7 @@ where
     V: Value + fmt::Debug + ?Sized + 'static,
 {
     fn name(&self) -> &'static str {
-        &self.name
+        self.name.as_str()
     }
 
     fn value(&self) -> String {
@@ -447,7 +457,7 @@ where
     V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {
-        &self.parent.name
+        self.parent.name.as_str()
     }
 
     fn value(&self) -> String {

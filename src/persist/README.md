@@ -5,14 +5,12 @@ Materialize.
 
 ### Overview
 
-A persistence user would start by constructing a `PersistManager` which is a
-thin `Send+Sync+Clone` handle around a `Persister` impl which does the heavy
-lifting (see details below). `PersistManager` is a registry for multiple streams
-(each corresponding to a table, source, or operator) in a single process. This
-allows us to funnel everything a process is persisting through a single place
-for batching and rate limiting.
+A persistence user would start by constructing a `Persister` which is a registry
+for multiple streams (each corresponding to a table, source, or operator) in a
+single process. This allows us to funnel everything a process is persisting through
+a single place for batching and rate limiting.
 
-Given a unique `Id`, `PersistManager` will hand back a `Token`. This
+Given a unique `Id`, `Persister` will hand back a `Token`. This
 can be handed in (consumed) to create a timely operator that persists and passes
 through its input.
 
@@ -44,10 +42,10 @@ yet.)
 [persister v2]: https://github.com/danhhz/differential-dataflow/blob/02673114b05933341893ab603327237a9583e432/persist/src/persister.rs#L41-L44
 
 In the prototype, `PersisterV2` has one implementation, which is itself in terms
-of the `Buffer` and `Blob` traits. Internally, any data is immediately handed to
-the Buffer, which could be durable for source persistence (a WAL on EBS or maybe
+of the `Log` and `Blob` traits. Internally, any data is immediately handed to
+the Log, which could be durable for source persistence (a WAL on EBS or maybe
 redPanda) or not durable for operator persistence. As timestamps are closed,
-data from the buffer is moved into a persistent trace built on top of `Blob`
+data from the log is moved into a persistent trace built on top of `Blob`
 which is a KV abstraction over S3 and files. For operator persistence, we'll
-have to add a FutureLog holding pen which immediately slurps everything from the
-Buffer (or they're tee'd?) and indexes it in the necessary way.
+have to add an Unsealed holding pen which immediately slurps everything from the
+Log (or they're tee'd?) and indexes it in the necessary way.

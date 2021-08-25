@@ -150,6 +150,33 @@ SELECT pg_typeof('1.2'::double)
 ----
 double precision
 
+# 🔬🔬 int2
+
+query T
+SELECT '1'::int2
+----
+1
+
+query T
+SELECT '1'::pg_catalog.int2
+----
+1
+
+# 🔬🔬🔬 int2 aliases
+
+query T
+SELECT '1'::smallint
+----
+1
+
+query error unknown catalog item 'pg_catalog.smallint'
+SELECT '1'::pg_catalog.smallint
+
+query T
+SELECT pg_typeof('1'::smallint)
+----
+smallint
+
 # 🔬🔬 int4
 
 query T
@@ -187,19 +214,6 @@ SELECT '1'::pg_catalog.integer
 
 query T
 SELECT pg_typeof('1'::integer)
-----
-integer
-
-query T
-SELECT '1'::smallint
-----
-1
-
-query error unknown catalog item 'pg_catalog.smallint'
-SELECT '1'::pg_catalog.smallint
-
-query T
-SELECT pg_typeof('1'::smallint)
 ----
 integer
 
@@ -323,6 +337,98 @@ SELECT '1'::pg_catalog.oid
 ----
 1
 
+query I
+SELECT 1::oid
+----
+1
+
+query I
+SELECT 1::int4::oid
+----
+1
+
+query I
+SELECT 1::int4::oid::int4
+----
+1
+
+# 🔬🔬 regproc
+
+query T
+SELECT 1::regproc
+----
+1
+
+query T
+SELECT 1::int4::regproc
+----
+1
+
+query T
+SELECT 1::oid::regproc
+----
+1
+
+query T
+SELECT 1::oid::regproc::oid
+----
+1
+
+query T
+SELECT '1'::regproc
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regproc
+----
+1
+
+query error CAST does not support casting from regproc to text
+SELECT '1'::regproc::text
+
+query error CAST does not support casting from regproc to text
+SELECT 'now'::regproc::text
+
+query T
+SELECT 'now'::regproc
+----
+1299
+
+query T
+SELECT 'now'::regproc::oid
+----
+1299
+
+# TODO: improve this error message to match postgres.
+query error more than one record produced in subquery
+SELECT 'max'::regproc
+
+query error function "nonexistent" does not exist
+SELECT 'nonexistent'::regproc
+
+query T
+SELECT 'array_in'::regproc
+----
+750
+
+query B
+SELECT 750 = 'array_in'::regproc
+----
+true
+
+statement ok
+CREATE TABLE text_to_regproc (a text);
+
+statement ok
+INSERT INTO text_to_regproc VALUES (NULL), ('array_in');
+
+query I
+SELECT a::regproc FROM text_to_regproc ORDER BY a
+----
+750
+NULL
+
 # 🔬🔬🔬 oid alias
 
 query T
@@ -353,17 +459,19 @@ SELECT 'dog'::pg_catalog.text
 ----
 dog
 
-# 🔬🔬🔬 text aliases
+# 🔬🔬🔬 char
 
 query T
-SELECT 'dog'::char(10)
+SELECT 'dog'::char(3)
 ----
 dog
 
 query T
-SELECT '1'::pg_catalog.char(10)
+SELECT 'dog'::pg_catalog.char(3)
 ----
-1
+dog
+
+# 🔬🔬🔬 varchar
 
 query T
 SELECT 'dog'::varchar(10)

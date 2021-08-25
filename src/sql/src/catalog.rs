@@ -7,12 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![forbid(missing_docs)]
+#![warn(missing_docs)]
 
 //! Catalog abstraction layer.
 
 use std::fmt;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use std::{error::Error, unimplemented};
 
@@ -22,13 +21,13 @@ use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
-use repr::{ColumnType, RelationDesc, ScalarType};
+use ore::now::{now_zero, EpochMillis, NowFn};
+use repr::{RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{FullName, PartialName, SchemaName};
-use crate::plan::PlanContext;
 
 /// A catalog keeps track of SQL objects available to the planner.
 ///
@@ -130,7 +129,7 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
 
     /// Returns a lossy `ScalarType` associated with `id` if one exists.
     ///
-    /// For example `pg_catalog.numeric` returns `ScalarType::Decimal(0,0)`,
+    /// For example `pg_catalog.numeric` returns `ScalarType::Numeric { scale: None}`,
     /// meaning that its precision and scale need to be associated with values
     /// from elsewhere.
     fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType>;
@@ -150,6 +149,11 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
+
+    /// Returns the number of milliseconds since the system epoch. For normal use
+    /// this means the Unix epoch. This can safely be mocked in tests and start
+    /// at 0.
+    fn now(&self) -> EpochMillis;
 }
 
 /// Configuration associated with a catalog.
@@ -172,15 +176,17 @@ pub struct CatalogConfig {
     pub experimental_mode: bool,
     /// Whether the server is running in safe mode.
     pub safe_mode: bool,
-    /// The path in which source caching data is stored, if source caching is
-    /// enabled.
-    pub cache_directory: Option<PathBuf>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// The number of worker in use by the server.
     pub num_workers: usize,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
+    /// Function that returns a wall clock now time; can safely be mocked to return
+    /// 0.
+    pub now: NowFn,
+    /// Whether to prevent user indexes from being considered for use.
+    pub disable_user_indexes: bool,
 }
 
 /// A database in a [`Catalog`].
@@ -248,9 +254,6 @@ pub trait CatalogItem {
     /// A normalized SQL statement that describes how to create the catalog
     /// item.
     fn create_sql(&self) -> &str;
-
-    /// The [`PlanContext`] associated with the catalog item.
-    fn plan_cx(&self) -> &PlanContext;
 
     /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
@@ -367,10 +370,11 @@ lazy_static! {
         session_id: Uuid::from_u128(0),
         experimental_mode: false,
         safe_mode: false,
-        cache_directory: None,
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
-        timestamp_frequency: Duration::from_secs(1)
+        timestamp_frequency: Duration::from_secs(1),
+        now: now_zero,
+        disable_user_indexes: false,
     };
 }
 
@@ -441,6 +445,10 @@ impl Catalog for DummyCatalog {
     fn config(&self) -> &CatalogConfig {
         &DUMMY_CONFIG
     }
+
+    fn now(&self) -> EpochMillis {
+        (self.config().now)()
+    }
 }
 
 impl ExprHumanizer for DummyCatalog {
@@ -450,9 +458,5 @@ impl ExprHumanizer for DummyCatalog {
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
-    }
-
-    fn humanize_column_type(&self, ty: &ColumnType) -> String {
-        DummyHumanizer.humanize_column_type(ty)
     }
 }
