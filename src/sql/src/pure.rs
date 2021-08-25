@@ -16,11 +16,11 @@ use std::future::Future;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
+use aws_util::aws;
 use itertools::Itertools;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
-use tokio::time::Duration;
 use uuid::Uuid;
 
 use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
@@ -164,8 +164,7 @@ pub fn purify(
                 }
                 CreateSourceConnector::S3 { .. } => {
                     let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
-                    aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
-                        .await?;
+                    aws::validate_credentials(aws_info.clone(), aws::AUTH_TIMEOUT).await?;
                 }
                 CreateSourceConnector::Kinesis { arn } => {
                     let region = arn
@@ -176,7 +175,7 @@ pub fn purify(
 
                     let aws_info =
                         normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
-                    aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
+                    aws::validate_credentials(aws_info, aws::AUTH_TIMEOUT).await?;
                 }
                 CreateSourceConnector::Postgres {
                     conn,

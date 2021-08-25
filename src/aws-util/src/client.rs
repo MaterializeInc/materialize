@@ -12,8 +12,6 @@
 //! The functions in this module all configure a client for an AWS service
 //! using a uniform credentials pattern.
 
-use std::time::Duration;
-
 use anyhow::{anyhow, Context};
 use log::debug;
 use rusoto_core::HttpClient;
@@ -72,7 +70,7 @@ pub fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
         );
         let mut provider = ChainProvider::new();
 
-        provider.set_timeout(Duration::from_secs(10));
+        provider.set_timeout($crate::aws::AUTH_TIMEOUT);
         let provider =
             AutoRefreshingProvider::new(provider).context(
                 concat!("generating AWS credentials refreshing provider for ", $client_name))?;
