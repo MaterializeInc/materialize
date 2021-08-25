@@ -196,7 +196,7 @@ When you create a sink, you must:
     * The `consistency_topic` WITH option. **Note:** This option is only available to support backwards-compatibility. You will not be able to indicate `consistency_topic` and `CONSISTENCY TOPIC` or `CONSISTENCY FORMAT` simultaneously.
 
   If not specified, a default consistency topic name will be created by appending `-consistency` to the output topic name.
-* If you are using a JSON-formatted sink, you must specify that the consistency topic format is AVRO. We're working on JSON support, but it's not available yet.
+* If you are using a JSON-formatted sink, you must specify that the consistency topic format is AVRO. This is done through the `CONSISTENCY FORMAT` parameter. We're working on JSON support, but it's not available yet.
 
 Additionally, the sink consistency topic cannot be written to by any other process, including another Materialize instance or another sink.
 
