@@ -871,6 +871,8 @@ lazy_static! {
                 .with_named_column("labels", ScalarType::Jsonb.nullable(false))
                 .with_named_column("value", ScalarType::Float64.nullable(false))
                 .with_key(vec![0, 1, 2]),
+        // NB: Until the end of our persisted system tables experiment, give
+        // persist team a heads up if you change this id, please!
         id: GlobalId::System(4043),
         index_id: GlobalId::System(4044),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
@@ -900,6 +902,8 @@ lazy_static! {
                 .with_named_column("bound", ScalarType::Float64.nullable(false))
                 .with_named_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
+        // NB: Until the end of our persisted system tables experiment, give
+        // persist team a heads up if you change this id, please!
         id: GlobalId::System(4047),
         index_id: GlobalId::System(4048),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
