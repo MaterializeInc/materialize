@@ -855,9 +855,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// This frontier represents a contract of time such that all updates with a
     /// time less than it have arrived. This frontier is advanced though the
     /// `seal` method. Once a time has been sealed for an id, it becomes an
-    /// error to later seal it at an time less than or equal to the sealed
-    /// frontier. It is also an error to write new data with a time less than
-    /// the sealed frontier.
+    /// error to later seal it at an time less than the sealed frontier. It is
+    /// also an error to write new data with a time less than the sealed frontier.
     fn sealed_frontier(&self, id: Id) -> Result<Antichain<u64>, Error> {
         let trace = self
             .traces
@@ -910,16 +909,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(())
     }
 
-    /// Permit compaction of updates at times < since to since.
+    /// Permit compaction of updates at times <= since to since.
     ///
-    /// The compaction frontier can only monotonically increase and it is an error
-    /// to call this function with a since argument that is less than or equal to
-    /// the current compaction frontier. It is also an error to advance the
-    /// compaction frontier beyond the current sealed frontier.
-    ///
-    /// TODO: it's unclear whether this function needs to be so restrictive about
-    /// calls with a frontier <= current_compaction_frontier. We chose to mirror
-    /// the `seal` API here but if that doesn't make sense, remove the restrictions.
+    /// The compaction frontier can never decrease and it is an error to call
+    /// this function with a since argument that is less than the current compaction
+    /// frontier. It is also an error to advance the compaction frontier beyond the
+    /// current sealed frontier.
     pub fn allow_compaction(
         &mut self,
         id_sinces: Vec<(Id, Antichain<u64>)>,

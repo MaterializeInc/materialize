@@ -849,10 +849,10 @@ mod tests {
         let ids = &[c1s1.stream_id(), c1s2.stream_id()];
         multi.seal(ids, 2).recv()?;
         // We don't expose reading the seal directly, so hack it a bit here by
-        // verifying that we can't re-seal at the same timestamp (which is
+        // verifying that we can't re-seal at a prior timestamp (which is
         // disallowed).
-        assert_eq!(c1s1.seal(2).recv(), Err(Error::from("invalid seal for Id(0): 2 not in advance of current seal frontier Antichain { elements: [2] }")));
-        assert_eq!(c1s2.seal(2).recv(), Err(Error::from("invalid seal for Id(1): 2 not in advance of current seal frontier Antichain { elements: [2] }")));
+        assert_eq!(c1s1.seal(1).recv(), Err(Error::from("invalid seal for Id(0): 1 not at or in advance of current seal frontier Antichain { elements: [2] }")));
+        assert_eq!(c1s2.seal(1).recv(), Err(Error::from("invalid seal for Id(1): 1 not at or in advance of current seal frontier Antichain { elements: [2] }")));
 
         // Cannot write to streams not specified during construction.
         let (c1s3, _) = client1.create_or_load::<(), ()>("3")?;

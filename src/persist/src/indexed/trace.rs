@@ -153,9 +153,9 @@ impl Trace {
     /// [Trace::update_seal].
     pub fn validate_seal(&self, ts: u64) -> Result<(), Error> {
         let prev = self.get_seal();
-        if !prev.less_than(&ts) {
+        if !prev.less_equal(&ts) {
             return Err(Error::from(format!(
-                "invalid seal for {:?}: {:?} not in advance of current seal frontier {:?}",
+                "invalid seal for {:?}: {:?} not at or in advance of current seal frontier {:?}",
                 self.id, ts, prev
             )));
         }
@@ -178,9 +178,9 @@ impl Trace {
             )));
         }
 
-        if PartialOrder::less_equal(since, &self.since) {
+        if PartialOrder::less_than(since, &self.since) {
             return Err(Error::from(format!(
-                "invalid compaction less than or equal to trace since {:?}: {:?}",
+                "invalid compaction less than trace since {:?}: {:?}",
                 self.since, since
             )));
         }
@@ -405,12 +405,12 @@ mod tests {
         t.allow_compaction(Antichain::from_elem(6));
 
         // Repeat same since frontier.
-        assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(6)),
-            Err(Error::from("invalid compaction less than or equal to trace since Antichain { elements: [6] }: Antichain { elements: [6] }")));
+        t.validate_allow_compaction(&Antichain::from_elem(6))?;
+        t.allow_compaction(Antichain::from_elem(6));
 
         // Regress since frontier.
         assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(5)),
-            Err(Error::from("invalid compaction less than or equal to trace since Antichain { elements: [6] }: Antichain { elements: [5] }")));
+            Err(Error::from("invalid compaction less than trace since Antichain { elements: [6] }: Antichain { elements: [5] }")));
 
         // Advance since frontier to seal
         assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(10)),
@@ -419,6 +419,40 @@ mod tests {
         // Advance since frontier beyond seal
         assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(11)),
             Err(Error::from("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [11] }")));
+
+        Ok(())
+    }
+
+    #[test]
+    fn trace_seal() -> Result<(), Error> {
+        let mut t: Trace = Trace::new(TraceMeta {
+            id: Id(0),
+            batches: vec![TraceBatchMeta {
+                key: "key1".to_string(),
+                desc: Description::new(
+                    Antichain::from_elem(0),
+                    Antichain::from_elem(10),
+                    Antichain::from_elem(5),
+                ),
+                level: 1,
+                size_bytes: 0,
+            }],
+            since: Antichain::from_elem(5),
+            seal: Antichain::from_elem(10),
+            next_blob_id: 0,
+        });
+
+        // Normal case: advance seal frontier.
+        t.validate_seal(11)?;
+        t.update_seal(11);
+
+        // Repeat same seal frontier.
+        t.validate_seal(11)?;
+        t.update_seal(11);
+
+        // Regress seal frontier.
+        assert_eq!(t.validate_seal(10),
+            Err(Error::from("invalid seal for Id(0): 10 not at or in advance of current seal frontier Antichain { elements: [11] }")));
 
         Ok(())
     }
