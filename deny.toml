@@ -13,6 +13,13 @@ skip = [
     { name = "time", version = "0.1.44" },
 ]
 
+skip-tree = [
+    # tiberius, the SQL Server driver, depends on an outdated version of a bunch of
+    # random-related crates. However, they are only compiled under Windows, so
+    # should not be increasing the compilation times on Linux
+    { name = "winauth", version = "0.0.4" },
+]
+
 # Strum has suspect code quality and includes many unneeded features. Use
 # more targeted enum macro crates, e.g. `enum-kinds`.
 [[bans.deny]]
@@ -26,6 +33,7 @@ name = "strum-macros"
 name = "thiserror"
 wrappers = [
     # Only list third-party crates here.
+    "async-native-tls",
     "pprof",
     "proc-macro-crate",
     "prometheus",
@@ -33,6 +41,7 @@ wrappers = [
     "pubnub-hyper",
     "serde-protobuf",
     "sysctl",
+    "tiberius",
 ]
 
 # The `uncased` crate serves the same purpose as `unicase` and is more

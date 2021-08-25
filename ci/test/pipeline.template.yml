@@ -265,13 +265,22 @@ steps:
           run: ci
 
   - id: debezium-avro
-    label: "Debezium Avro test"
+    label: "Debezium Avro test (Postgres)"
     depends_on: build
     inputs: [test/debezium-avro]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: debezium-avro
           run: debezium-avro
+
+  - id: debezium-sql-server
+    label: "Debezium test (SQL Server)"
+    depends_on: build
+    inputs: [test/debezium-avro]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: debezium-avro
+          run: debezium-sql-server
 
   - id: pg-cdc
     label: "Postgres CDC test"
