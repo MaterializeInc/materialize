@@ -23,8 +23,7 @@ use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
 use pgrepr::oid;
-use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
-use sql_parser::ast::{Expr, Raw};
+use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 
 use crate::names::PartialName;
 use crate::plan::expr::{
@@ -101,6 +100,7 @@ impl TypeCategory {
             | ScalarType::Int32
             | ScalarType::Int64
             | ScalarType::Oid
+            | ScalarType::RegProc
             | ScalarType::Numeric { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
@@ -229,60 +229,67 @@ impl<R> Operation<R> {
     }
 }
 
-// Constructs a definition for a built-in out of a static SQL expression.
+/// Backing implementation for sql_impl_func and sql_impl_cast. See those
+/// functions for details.
+pub fn sql_impl(
+    expr: &'static str,
+) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, anyhow::Error> {
+    let expr = sql_parser::parser::parse_expr(expr.into())
+        .expect("static function definition failed to parse");
+    move |qcx, types| {
+        // Reconstruct an expression context where the parameter types are
+        // bound to the types of the expressions in `args`.
+        let mut scx = qcx.scx.clone();
+        scx.param_types = Rc::new(RefCell::new(
+            types
+                .into_iter()
+                .enumerate()
+                .map(|(i, ty)| (i + 1, ty))
+                .collect(),
+        ));
+        let mut qcx = QueryContext::root(&scx, qcx.lifetime);
+
+        // Desugar the expression
+        let mut expr = expr.clone();
+        transform_ast::transform_expr(&scx, &mut expr)?;
+
+        let expr = query::resolve_names_expr(&mut qcx, expr)?;
+
+        let ecx = ExprContext {
+            qcx: &qcx,
+            name: "static function definition",
+            scope: &Scope::empty(None),
+            relation_type: &RelationType::empty(),
+            allow_aggregates: false,
+            allow_subqueries: true,
+        };
+
+        // Plan the expression.
+        query::plan_expr(&ecx, &expr)?.type_as_any(&ecx)
+    }
+}
+
+// Constructs a definition for a built-in function out of a static SQL
+// expression.
 //
 // The SQL expression should use the standard parameter syntax (`$1`, `$2`, ...)
-// to refer to the inputs to the function. For example, a built-in function
-// that takes two arguments and concatenates them with an arrow in between
-// could be defined like so:
+// to refer to the inputs to the function. For example, a built-in function that
+// takes two arguments and concatenates them with an arrow in between could be
+// defined like so:
 //
-//     sql_op!("$1 || '<->' || $2")
+//     sql_impl_func("$1 || '<->' || $2")
 //
 // The number of parameters in the SQL expression must exactly match the number
-// of parameters in the built-in's declaration. There is no support for
-// variadic functions.
-macro_rules! sql_op {
-    ($l:literal) => {{
-        lazy_static! {
-            static ref EXPR: Expr<Raw> = sql_parser::parser::parse_expr($l.into())
-                .expect("static function definition failed to parse");
-        }
-        Operation::variadic(move |ecx, args| {
-            // Reconstruct an expression context where the parameter types are
-            // bound to the types of the expressions in `args`.
-            let mut scx = ecx.qcx.scx.clone();
-            scx.param_types = Rc::new(RefCell::new(
-                args.iter()
-                    .enumerate()
-                    .map(|(i, e)| (i + 1, ecx.scalar_type(e)))
-                    .collect(),
-            ));
-            let mut qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
-
-            // Desugar the expression
-            let mut expr = EXPR.clone();
-            transform_ast::transform_expr(&scx, &mut expr)?;
-
-            let expr = query::resolve_names_expr(&mut qcx, expr)?;
-
-            let ecx = ExprContext {
-                qcx: &qcx,
-                name: "static function definition",
-                scope: &Scope::empty(None),
-                relation_type: &RelationType::empty(),
-                allow_aggregates: false,
-                allow_subqueries: true,
-            };
-
-            // Plan the expression.
-            let mut expr = query::plan_expr(&ecx, &expr)?.type_as_any(&ecx)?;
-
-            // Replace the parameters with the actual arguments.
-            expr.splice_parameters(&args, 0);
-
-            Ok(expr)
-        })
-    }};
+// of parameters in the built-in's declaration. There is no support for variadic
+// functions.
+fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
+    let invoke = sql_impl(expr);
+    Operation::variadic(move |ecx, args| {
+        let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
+        let mut out = invoke(&ecx.qcx, types)?;
+        out.splice_parameters(&args, 0);
+        Ok(out)
+    })
 }
 
 /// Describes a single function's implementation.
@@ -780,6 +787,7 @@ impl From<ScalarBaseType> for ParamType {
             Jsonb => ScalarType::Jsonb,
             Uuid => ScalarType::Uuid,
             Oid => ScalarType::Oid,
+            RegProc => ScalarType::RegProc,
             Array | List | Record | Map => {
                 panic!("cannot convert ScalarBaseType::{:?} to ParamType", s)
             }
@@ -1221,6 +1229,9 @@ lazy_static! {
                 params!(Float32) => UnaryFunc::AbsFloat32, 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64, 1395;
             },
+            "array_in" => Scalar {
+                params!(String, Oid, Int32) => Operation::unary(|_ecx, _e| bail_unsupported!("array_in")), 750;
+            },
             "array_length" => Scalar {
                 params![ArrayAny, Int64] => BinaryFunc::ArrayLength, 2176;
             },
@@ -1297,7 +1308,7 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::Cot, 1607;
             },
             "current_schema" => Scalar {
-                params!() => sql_op!("current_schemas(false)[1]"), 1402;
+                params!() => sql_impl_func("current_schemas(false)[1]"), 1402;
             },
             "current_schemas" => Scalar {
                 params!(Bool) => Operation::unary(|ecx, e| {
@@ -1343,7 +1354,7 @@ lazy_static! {
                 params!(Numeric) => UnaryFunc::FloorNumeric, 1712;
             },
             "format_type" => Scalar {
-                params!(Oid, Int32) => sql_op!(
+                params!(Oid, Int32) => sql_impl_func(
                     "CASE
                         WHEN $1 IS NULL THEN NULL
                         ELSE coalesce((SELECT concat(name, mz_internal.mz_render_typemod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
@@ -1467,16 +1478,31 @@ lazy_static! {
             "pg_encoding_to_char" => Scalar {
                 // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
                 // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
-                params!(Int64) => sql_op!("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END"), 1597;
+                params!(Int64) => sql_impl_func("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END"), 1597;
+            },
+            // pg_get_expr is meant to convert the textual version of
+            // pg_node_tree data into parseable expressions. However, we don't
+            // use the pg_get_expr structure anywhere and the equivalent columns
+            // in Materialize (e.g. index expressions) are already stored as
+            // parseable expressions. So, we offer this function in the catalog
+            // for ORM support, but make no effort to provide its semantics,
+            // e.g. this also means we drop the Oid argument on the floor.
+            "pg_get_expr" => Scalar {
+                params!(String, Oid) => {
+                    Operation::binary(|_ecx, l, _r| Ok(l))
+                }, 1716;
+                params!(String, Oid, Bool) => {
+                    Operation::variadic(move |_ecx, mut args| Ok(args.remove(0)))
+                }, 2509;
             },
             "pg_get_userbyid" => Scalar {
-                params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'"), 1642;
+                params!(Oid) => sql_impl_func("'unknown (OID=' || $1 || ')'"), 1642;
             },
             "pg_postmaster_start_time" => Scalar {
                 params!() => Operation::nullary(pg_postmaster_start_time), 2560;
             },
             "pg_table_is_visible" => Scalar {
-                params!(Oid) => sql_op!(
+                params!(Oid) => sql_impl_func(
                     "(SELECT s.name = ANY(current_schemas(true))
                      FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
                      WHERE o.oid = $1)"
@@ -1666,7 +1692,7 @@ lazy_static! {
             "array_agg" => Aggregate {
                 params!(NonVecAny) => Operation::unary(|ecx, e| {
                     if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
-                        unsupported!("array_agg on char");
+                        bail_unsupported!("array_agg on char");
                     };
                     // ArrayConcat excepts all inputs to be arrays, so wrap all input datums into
                     // arrays.
@@ -1676,27 +1702,13 @@ lazy_static! {
                     };
                     Ok((e_arr, AggregateFunc::ArrayConcat))
                 }), 2335;
-                params!(ArrayAny) => Operation::unary(|_ecx, _e| unsupported!("array_agg on arrays")), 4053;
-            },
-            "list_agg" => Aggregate {
-                params!(Any) => Operation::unary(|ecx, e| {
-                    if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
-                        unsupported!("list_agg on char");
-                    };
-                    // ListConcat excepts all inputs to be lists, so wrap all input datums into
-                    // lists.
-                    let e_arr = HirScalarExpr::CallVariadic{
-                        func: VariadicFunc::ListCreate{elem_type: ecx.scalar_type(&e)},
-                        exprs: vec![e],
-                    };
-                    Ok((e_arr, AggregateFunc::ListConcat))
-                }),  oid::FUNC_LIST_AGG_OID;
+                params!(ArrayAny) => Operation::unary(|_ecx, _e| bail_unsupported!("array_agg on arrays")), 4053;
             },
             "bool_and" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_and")), 2517;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_and")), 2517;
             },
             "bool_or" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_or")), 2518;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_or")), 2518;
             },
             "count" => Aggregate {
                 params!() => Operation::nullary(|_ecx| {
@@ -1736,7 +1748,7 @@ lazy_static! {
                 params!(Numeric) => AggregateFunc::MinNumeric, oid::FUNC_MIN_NUMERIC_OID;
             },
             "json_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("json_agg")), 3175;
             },
             "jsonb_agg" => Aggregate {
                 params!(Any) => Operation::unary(|ecx, e| {
@@ -1782,7 +1794,16 @@ lazy_static! {
                 }), 3270;
             },
             "string_agg" => Aggregate {
-                params!(Any, String) => Operation::binary(|_ecx, _lhs, _rhs| unsupported!("string_agg")), 3538;
+                params!(String, String) => Operation::binary(|_ecx, value, sep| {
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("value"), ColumnName::from("sep")],
+                        },
+                        exprs: vec![value, sep],
+                    };
+                    Ok((e, AggregateFunc::StringAgg))
+                }), 3538;
+                params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg")), 3545;
             },
             "sum" => Aggregate {
                 params!(Int16) => AggregateFunc::SumInt32, 2109;
@@ -1796,26 +1817,44 @@ lazy_static! {
                     // prevents `sum(NULL)` from choosing the `Float64`
                     // implementation, so that we match PostgreSQL's behavior.
                     // Plus we will one day want to support this overload.
-                    unsupported!("sum(interval)");
+                    bail_unsupported!("sum(interval)");
                 }), 2113;
             },
 
             // Table functions.
             "generate_series" => Table {
                 params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
+                    let row = Row::pack(&[Datum::Int32(1)]);
+                    let column_type = ColumnType { scalar_type: ScalarType::Int32, nullable: false };
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt32,
-                        exprs: vec![start, stop],
+                        func: TableFunc::GenerateSeriesStepInt32,
+                        exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1067;
                 params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
+                    let row = Row::pack(&[Datum::Int64(1)]);
+                    let column_type = ColumnType { scalar_type: ScalarType::Int64, nullable: false };
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesInt64,
-                        exprs: vec![start, stop],
+                        func: TableFunc::GenerateSeriesStepInt64,
+                        exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1069;
+                params!(Int32, Int32, Int32) => Operation::variadic(|_ecx, exprs| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesStepInt32,
+                        exprs,
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }), 1066;
+                params!(Int64, Int64, Int64) => Operation::variadic(|_ecx, exprs| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesStepInt64,
+                        exprs,
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }), 1066;
             },
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -1892,10 +1931,24 @@ lazy_static! {
                 }), oid::FUNC_CSV_EXTRACT_OID;
             },
             "concat_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("concat_agg")), oid::FUNC_CONCAT_AGG_OID;
+                params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")), oid::FUNC_CONCAT_AGG_OID;
             },
             "current_timestamp" => Scalar {
                 params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID;
+            },
+            "list_agg" => Aggregate {
+                params!(Any) => Operation::unary(|ecx, e| {
+                    if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
+                        bail_unsupported!("list_agg on char");
+                    };
+                    // ListConcat excepts all inputs to be lists, so wrap all input datums into
+                    // lists.
+                    let e_arr = HirScalarExpr::CallVariadic{
+                        func: VariadicFunc::ListCreate{elem_type: ecx.scalar_type(&e)},
+                        exprs: vec![e],
+                    };
+                    Ok((e_arr, AggregateFunc::ListConcat))
+                }),  oid::FUNC_LIST_AGG_OID;
             },
             "list_append" => Scalar {
                 vec![ListAny, ListElementAny] => BinaryFunc::ListElementConcat, oid::FUNC_LIST_APPEND_OID;
@@ -2025,7 +2078,7 @@ lazy_static! {
                 }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
             },
             "mz_classify_object_id" => Scalar {
-                params!(String) => sql_op!(
+                params!(String) => sql_impl_func(
                     "CASE
                         WHEN $1 LIKE 'u%' THEN 'user'
                         WHEN $1 LIKE 's%' THEN 'system'
@@ -2033,8 +2086,13 @@ lazy_static! {
                     END"
                 ), oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID;
             },
+            "mz_error_if_null" => Scalar {
+                // If the first argument is NULL, returns an EvalError::Internal whose error
+                // message is the second argument.
+                params!(Any, String) => VariadicFunc::ErrorIfNull, oid::FUNC_MZ_ERROR_IF_NULL_OID;
+            },
             "mz_is_materialized" => Scalar {
-                params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1)"),
+                params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1 AND enabled)"),
                     oid::FUNC_MZ_IS_MATERIALIZED_OID;
             },
             "mz_render_typemod" => Scalar {
@@ -2565,6 +2623,6 @@ pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow
         // JsonDeletePath
         // JsonContainsPath
         // JsonApplyPathPredicate
-        None => unsupported!(op),
+        None => bail_unsupported!(op),
     }
 }

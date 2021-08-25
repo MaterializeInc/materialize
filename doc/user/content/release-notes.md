@@ -46,19 +46,26 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.9.2 %}}
+
+- The metrics scraping interval to populate
+  the [`mz_metrics`](/sql/system-catalog#mz_metrics) table and its variants is
+  now independent of the introspection interval. It is controlled by the
+  flag [--metrics-scraping-interval](/cli/#prometheus-metrics).
+
 {{% version-header v0.9.1 %}}
 
 - Change the type of the [`mz_metrics`](/sql/system-catalog#mz_metrics).`time`
   column from [`timestamp`] to [`timestamp with time zone`] to better reflect
   that the timestamp is in UTC.
 
-- The metrics scraping frequency is independent of the introspection frequency.
-  It is controlled with the new flag
-  [--metrics-scraping-frequency](/cli/#prometheus-metrics).
-
 - Add the `array_agg` function.
 
 - Add the `list_agg` function.
+
+- Add the [`string_agg`](/sql/functions/string_agg) function.
+
+- Add the [`generate_series(start, stop, step)`](/sql/functions/#table-func) table function. {{% gh 7953 %}}
 
 {{% version-header v0.9.0 %}}
 

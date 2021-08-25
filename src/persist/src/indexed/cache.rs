@@ -17,7 +17,9 @@ use abomonation::abomonated::Abomonated;
 use ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::indexed::encoding::{BlobMeta, BlobTraceBatch, BlobUnsealedBatch};
+use crate::indexed::encoding::{
+    BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
+};
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::storage::Blob;
 
@@ -40,6 +42,7 @@ pub struct BlobCache<B: Blob> {
     // TODO: Use a disk-backed LRU cache.
     unsealed: Arc<Mutex<HashMap<String, Arc<BlobUnsealedBatch>>>>,
     trace: Arc<Mutex<HashMap<String, Arc<BlobTraceBatch>>>>,
+    prev_meta_len: u64,
 }
 
 impl<B: Blob> Clone for BlobCache<B> {
@@ -49,6 +52,7 @@ impl<B: Blob> Clone for BlobCache<B> {
             blob: self.blob.clone(),
             unsealed: self.unsealed.clone(),
             trace: self.trace.clone(),
+            prev_meta_len: self.prev_meta_len,
         }
     }
 }
@@ -63,6 +67,7 @@ impl<B: Blob> BlobCache<B> {
             blob: Arc::new(Mutex::new(blob)),
             unsealed: Arc::new(Mutex::new(HashMap::new())),
             trace: Arc::new(Mutex::new(HashMap::new())),
+            prev_meta_len: 0,
         }
     }
 
@@ -127,15 +132,37 @@ impl<B: Blob> BlobCache<B> {
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
-        self.blob.lock()?.set(&key, val, false)?;
+        self.blob
+            .lock()?
+            .set(&key, val, false)
+            .map_err(|err| self.metric_set_error(err))?;
         self.metrics
+            .unsealed
             .blob_write_ms
             .inc_by(metric_duration_ms(write_start.elapsed()));
-        self.metrics.blob_write_count.inc();
-        self.metrics.blob_write_bytes.inc_by(val_len);
+        self.metrics.unsealed.blob_write_count.inc();
+        self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
 
         self.unsealed.lock()?.insert(key, Arc::new(batch));
         Ok(val_len)
+    }
+
+    /// Removes a batch from both [Blob] storage and the local cache.
+    pub fn delete_unsealed_batch(&mut self, batch: &UnsealedBatchMeta) -> Result<(), Error> {
+        let delete_start = Instant::now();
+        self.unsealed.lock()?.remove(&batch.key);
+        self.blob.lock()?.delete(&batch.key)?;
+        self.metrics
+            .unsealed
+            .blob_delete_ms
+            .inc_by(metric_duration_ms(delete_start.elapsed()));
+        self.metrics.unsealed.blob_delete_count.inc();
+        self.metrics
+            .unsealed
+            .blob_delete_bytes
+            .inc_by(batch.size_bytes);
+
+        Ok(())
     }
 
     /// Returns the batch for the given key, blocking to fetch if it's not
@@ -186,15 +213,37 @@ impl<B: Blob> BlobCache<B> {
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
-        self.blob.lock()?.set(&key, val, false)?;
+        self.blob
+            .lock()?
+            .set(&key, val, false)
+            .map_err(|err| self.metric_set_error(err))?;
         self.metrics
+            .trace
             .blob_write_ms
             .inc_by(metric_duration_ms(write_start.elapsed()));
-        self.metrics.blob_write_count.inc();
-        self.metrics.blob_write_bytes.inc_by(val_len);
+        self.metrics.trace.blob_write_count.inc();
+        self.metrics.trace.blob_write_bytes.inc_by(val_len);
 
         self.trace.lock()?.insert(key, Arc::new(batch));
         Ok(val_len)
+    }
+
+    /// Removes a batch from both [Blob] storage and the local cache.
+    pub fn delete_trace_batch(&mut self, batch: &TraceBatchMeta) -> Result<(), Error> {
+        let delete_start = Instant::now();
+        self.trace.lock()?.remove(&batch.key);
+        self.blob.lock()?.delete(&batch.key)?;
+        self.metrics
+            .trace
+            .blob_delete_ms
+            .inc_by(metric_duration_ms(delete_start.elapsed()));
+        self.metrics.trace.blob_delete_count.inc();
+        self.metrics
+            .trace
+            .blob_delete_bytes
+            .inc_by(batch.size_bytes);
+
+        Ok(())
     }
 
     /// Fetches metadata about what batches are in [Blob] storage.
@@ -212,7 +261,7 @@ impl<B: Blob> BlobCache<B> {
     }
 
     /// Overwrites metadata about what batches are in [Blob] storage.
-    pub fn set_meta(&self, meta: &BlobMeta) -> Result<(), Error> {
+    pub fn set_meta(&mut self, meta: &BlobMeta) -> Result<(), Error> {
         debug_assert_eq!(meta.validate(), Ok(()), "{:?}", &meta);
 
         let mut val = Vec::new();
@@ -221,14 +270,37 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.meta_size_bytes.set(val_len);
 
         let write_start = Instant::now();
-        self.blob.lock()?.set(Self::META_KEY, val, true)?;
+        self.blob
+            .lock()?
+            .set(Self::META_KEY, val, true)
+            .map_err(|err| self.metric_set_error(err))?;
         self.metrics
+            .meta
             .blob_write_ms
             .inc_by(metric_duration_ms(write_start.elapsed()));
-        self.metrics.blob_write_count.inc();
-        self.metrics.blob_write_bytes.inc_by(val_len);
+        self.metrics.meta.blob_write_count.inc();
+        self.metrics.meta.blob_write_bytes.inc_by(val_len);
+
+        // Meta overwrites itself. Pretend like that's a delete so the graphs
+        // make sense.
+        if self.prev_meta_len > 0 {
+            self.metrics.meta.blob_delete_count.inc();
+            self.metrics
+                .meta
+                .blob_delete_bytes
+                .inc_by(self.prev_meta_len);
+        }
+        self.prev_meta_len = val_len;
 
         // Don't bother caching meta, nothing reads it after startup.
         Ok(())
+    }
+
+    fn metric_set_error(&self, err: Error) -> Error {
+        match &err {
+            &Error::OutOfQuota(_) => self.metrics.blob_write_error_quota_count.inc(),
+            _ => self.metrics.blob_write_error_other_count.inc(),
+        };
+        err
     }
 }

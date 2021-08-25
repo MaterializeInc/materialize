@@ -74,6 +74,7 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "5.5.4"
+DEFAULT_DEBEZIUM_VERSION = "1.6"
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 
@@ -732,10 +733,10 @@ class Kafka(PythonService):
         name: str = "kafka",
         image: str = f"confluentinc/cp-kafka:{DEFAULT_CONFLUENT_PLATFORM_VERSION}",
         port: int = 9092,
+        auto_create_topics: bool = False,
         environment: List[str] = [
             "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
             "KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092",
-            "KAFKA_AUTO_CREATE_TOPICS_ENABLE=false",
             "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
             "KAFKA_MIN_INSYNC_REPLICAS=1",
             "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1",
@@ -744,15 +745,14 @@ class Kafka(PythonService):
         ],
         depends_on: List[str] = ["zookeeper"],
     ) -> None:
-        super().__init__(
-            name=name,
-            config={
-                "image": image,
-                "ports": [port],
-                "environment": environment,
-                "depends_on": depends_on,
-            },
-        )
+        config: PythonServiceConfig = {
+            "image": image,
+            "ports": [port],
+            "environment": environment
+            + [f"KAFKA_AUTO_CREATE_TOPICS_ENABLE={auto_create_topics}"],
+            "depends_on": depends_on,
+        }
+        super().__init__(name=name, config=config)
 
 
 class SchemaRegistry(PythonService):
@@ -784,14 +784,71 @@ class Postgres(PythonService):
         name: str = "postgres",
         mzbuild: str = "postgres",
         port: int = 5432,
+        command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20",
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
     ) -> None:
         super().__init__(
             name=name,
             config={
                 "mzbuild": mzbuild,
+                "command": command,
                 "ports": [port],
                 "environment": environment,
+            },
+        )
+
+
+class SqlServer(PythonService):
+    def __init__(
+        self,
+        sa_password: str,  # At least 8 characters including uppercase, lowercase letters, base-10 digits and/or non-alphanumeric symbols.
+        name: str = "sql-server",
+        image: str = "mcr.microsoft.com/mssql/server",
+        environment: List[str] = [
+            "ACCEPT_EULA=Y",
+            "MSSQL_PID=Developer",
+            "MSSQL_AGENT_ENABLED=True",
+        ],
+    ) -> None:
+        environment.append(f"SA_PASSWORD={sa_password}")
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [1433, 1434, 1431],
+                "environment": environment,
+            },
+        )
+        self.sa_password = sa_password
+
+
+class Debezium(PythonService):
+    def __init__(
+        self,
+        name: str = "debezium",
+        image: str = f"debezium/connect:{DEFAULT_DEBEZIUM_VERSION}",
+        port: int = 8083,
+        environment: List[str] = [
+            "BOOTSTRAP_SERVERS=kafka:9092",
+            "CONFIG_STORAGE_TOPIC=connect_configs",
+            "OFFSET_STORAGE_TOPIC=connect_offsets",
+            "STATUS_STORAGE_TOPIC=connect_statuses",
+            # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
+            # record the schema
+            "KEY_CONVERTER=io.confluent.connect.avro.AvroConverter",
+            "VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter",
+            "CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
+            "CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
+        ],
+        depends_on: List[str] = ["kafka", "schema-registry"],
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+                "environment": environment,
+                "depends_on": depends_on,
             },
         )
 
@@ -801,6 +858,8 @@ class Testdrive(PythonService):
         self,
         name: str = "testdrive-svc",
         mzbuild: str = "testdrive",
+        no_reset: bool = False,
+        default_timeout: Optional[int] = None,
         entrypoint: List[str] = [
             "testdrive",
             "--kafka-addr=kafka:9092",
@@ -810,14 +869,22 @@ class Testdrive(PythonService):
             "${TD_TEST:-$$*}",
         ],
         environment: List[str] = [
+            "TD_TEST",
             "TMPDIR=/share/tmp",
             "MZ_LOG_FILTER",
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_SESSION_TOKEN",
+            "SA_PASSWORD",
         ],
         volumes: List[str] = [".:/workdir", "mzdata:/share/mzdata", "tmp:/share/tmp"],
     ) -> None:
+        if no_reset:
+            entrypoint.append("--no-reset")
+
+        if default_timeout:
+            entrypoint.append(f"--default-timeout {default_timeout}")
+
         super().__init__(
             name=name,
             config={
@@ -1147,7 +1214,7 @@ class WaitForPgStep(WorkflowStep):
     def __init__(
         self,
         *,
-        dbname: str,
+        dbname: str = "postgres",
         port: Optional[int] = None,
         host: str = "localhost",
         timeout_secs: int = 120,
@@ -1762,6 +1829,35 @@ class RunStep(WorkflowStep):
                     *self._command,
                 ]
             )
+        except subprocess.CalledProcessError:
+            raise errors.Failed("giving up: {}".format(ui.shell_quote(self._command)))
+
+
+@Steps.register("exec")
+class ExecStep(WorkflowStep):
+    """
+    Run 'docker-compose exec' using `mzcompose run`
+
+    Args:
+
+      - service: (required) the name of the service
+      - command: (required) the command to run
+    """
+
+    def __init__(self, *, service: str, command: Union[str, list]) -> None:
+        self._service = service
+        cmd_list = ["exec", self._service]
+        if isinstance(command, str):
+            cmd_list.extend(shlex.split(command))
+        elif isinstance(command, list):
+            cmd_list.extend(command)
+
+        self._service = service
+        self._command = cmd_list
+
+    def run(self, workflow: Workflow) -> None:
+        try:
+            workflow.run_compose(self._command)
         except subprocess.CalledProcessError:
             raise errors.Failed("giving up: {}".format(ui.shell_quote(self._command)))
 

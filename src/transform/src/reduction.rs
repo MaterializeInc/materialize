@@ -373,11 +373,11 @@ impl FoldConstants {
         {
             // Reduce down to canonical representation.
             let mut accum = HashMap::new();
-            for (row, cnt) in rows.iter() {
-                *accum.entry(row.clone()).or_insert(0) += cnt;
+            for (row, cnt) in rows.drain(..) {
+                *accum.entry(row).or_insert(0) += cnt;
             }
             accum.retain(|_k, v| v != &0);
-            rows.clear();
+            // `rows` cleared by drain.
             rows.extend(accum.into_iter());
             rows.sort();
 
@@ -492,7 +492,7 @@ impl FoldConstants {
                         .map(|expr| expr.eval(&datums, &temp_storage))
                         .collect::<Result<Vec<_>, _>>()?,
                     &temp_storage,
-                )
+                )?
                 .fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
                 row_packer.extend(input_row.clone().into_iter().chain(output_row.into_iter()));

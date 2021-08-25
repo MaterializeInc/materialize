@@ -74,6 +74,7 @@ use std::env;
 use ore::test::init_logging;
 use rand::rngs::OsRng;
 use rand::RngCore;
+use timely::progress::Antichain;
 
 use crate::error::Error;
 use crate::indexed::ListenEvent;
@@ -200,6 +201,7 @@ pub struct ReadSnapshotReq {
 #[derive(Clone, Debug)]
 pub struct ReadSnapshotRes {
     seqno: u64,
+    since: Antichain<u64>,
     contents: Vec<((String, ()), u64, isize)>,
 }
 

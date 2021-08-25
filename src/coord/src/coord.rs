@@ -38,6 +38,7 @@
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::future::Future;
 use std::path::Path;
 use std::rc::Rc;
@@ -51,7 +52,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
-use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
 use timely::communication::WorkerGuards;
@@ -71,7 +71,7 @@ use dataflow_types::{
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
-    ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
 use ore::metrics::MetricsRegistry;
@@ -173,7 +173,7 @@ pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
     pub retain_readings_for: Duration,
-    pub metrics_scraping_frequency: Option<Duration>,
+    pub metrics_scraping_interval: Option<Duration>,
 }
 
 /// Configures a coordinator.
@@ -186,6 +186,7 @@ pub struct Config<'a> {
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
+    pub disable_user_indexes: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
@@ -388,8 +389,9 @@ impl Coordinator {
                         let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
-                        let df = self.dataflow_builder().build_index_dataflow(entry.id());
-                        self.ship_dataflow(df);
+                        self.dataflow_builder()
+                            .build_index_dataflow(entry.id())
+                            .map(|df| self.ship_dataflow(df));
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -785,9 +787,8 @@ impl Coordinator {
     }
 
     fn message_scrape_metrics(&mut self) {
-        for update in self.metric_scraper.scrape_once() {
-            self.send_builtin_table_updates_at_offset(update.timestamp_offset, update.updates);
-        }
+        let scraped_metrics = self.metric_scraper.scrape_once();
+        self.send_builtin_table_updates_at_offset(scraped_metrics);
     }
 
     fn message_command(&mut self, cmd: Command) {
@@ -1183,6 +1184,64 @@ impl Coordinator {
         }
     }
 
+    /// Forward the subset of since updates that belong to persisted tables'
+    /// primary indexes to the persisted tables themselves.
+    ///
+    /// TODO: In the future the coordinator should perhaps track a table's upper and
+    /// since frontiers directly as it currently does for sources.
+    fn persisted_table_allow_compaction(&self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
+        let mut table_since_updates = vec![];
+        for (id, frontier) in since_updates.iter() {
+            // HACK: Avoid the "failed to compact persisted tables" error log at
+            // startup, by not trying to allow compaction on the minimum
+            // timestamp. Real fix in #7977.
+            if !frontier
+                .elements()
+                .iter()
+                .any(|x| *x > Timestamp::minimum())
+            {
+                continue;
+            }
+
+            // Not all ids will be present in the catalog however, those that are
+            // in the catalog must also have their dependencies in the catalog as
+            // well.
+            let item = self.catalog.try_get_by_id(*id).map(|e| e.item());
+            if let Some(CatalogItem::Index(catalog::Index { on, .. })) = item {
+                if let CatalogItem::Table(catalog::Table {
+                    persist: Some(persist),
+                    ..
+                }) = self.catalog.get_by_id(on).item()
+                {
+                    if self.catalog.default_index_for(*on) == Some(*id) {
+                        table_since_updates
+                            .push((persist.write_handle.stream_id(), frontier.clone()));
+                    }
+                }
+            }
+        }
+
+        if !table_since_updates.is_empty() {
+            let persist_multi = match self.catalog.persist_multi_details() {
+                Some(multi) => multi,
+                None => {
+                    log::error!("internal error: persist_multi_details invariant violated");
+                    return;
+                }
+            };
+
+            let compaction_res = persist_multi
+                .write_handle
+                .allow_compaction(&table_since_updates);
+            let _ = tokio::spawn(async move {
+                if let Err(err) = compaction_res.into_future().await {
+                    // TODO: Do something smarter here
+                    log::error!("failed to compact persisted tables: {}", err);
+                }
+            });
+        }
+    }
+
     /// Perform maintenance work associated with the coordinator.
     ///
     /// Primarily, this involves sequencing compaction commands, which should be
@@ -1200,6 +1259,7 @@ impl Coordinator {
             .collect();
 
         if !since_updates.is_empty() {
+            self.persisted_table_allow_compaction(&since_updates);
             self.broadcast(dataflow::Command::AllowCompaction(since_updates));
         }
     }
@@ -1339,14 +1399,25 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     fn handle_terminate(&mut self, session: &mut Session) {
-        let (drop_sinks, _) = session.clear_transaction();
-        self.drop_sinks(drop_sinks);
+        self.clear_transaction(session);
 
         self.drop_temp_items(session.conn_id());
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&session.conn_id());
+    }
+
+    /// Handle removing in-progress transaction state regardless of the end action
+    /// of the transaction.
+    fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+        let (drop_sinks, txn) = session.clear_transaction();
+        self.drop_sinks(drop_sinks);
+
+        // Allow compaction of sources from this transaction.
+        self.txn_reads.remove(&session.conn_id());
+
+        txn
     }
 
     /// Removes all temporary items created by the specified connection, though
@@ -1692,6 +1763,7 @@ impl Coordinator {
             &table.desc,
             conn_id,
             index_depends_on,
+            self.catalog.enable_index(&index_id),
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
@@ -1710,8 +1782,9 @@ impl Coordinator {
             },
         ]) {
             Ok(_) => {
-                let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df);
+                self.dataflow_builder()
+                    .build_index_dataflow(index_id)
+                    .map(|df| self.ship_dataflow(df));
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -1770,8 +1843,9 @@ impl Coordinator {
                 self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
             self.sources.insert(source_id, frontiers);
             if let Some(index_id) = idx_id {
-                let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df);
+                self.dataflow_builder()
+                    .build_index_dataflow(index_id)
+                    .map(|df| self.ship_dataflow(df));
             }
         }
     }
@@ -1792,7 +1866,7 @@ impl Coordinator {
             } = plan;
             let optimized_expr = self
                 .view_optimizer
-                .optimize(source.expr, self.catalog.indexes())?;
+                .optimize(source.expr, self.catalog.enabled_indexes())?;
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
             let source = catalog::Source {
                 create_sql: source.create_sql,
@@ -1816,6 +1890,7 @@ impl Coordinator {
                     .catalog
                     .for_session(session)
                     .find_available_name(index_name);
+                let index_id = self.catalog.allocate_id()?;
                 let index = auto_generate_primary_idx(
                     index_name.item.clone(),
                     name,
@@ -1823,8 +1898,8 @@ impl Coordinator {
                     &source.desc,
                     None,
                     vec![source_id],
+                    self.catalog.enable_index(&index_id),
                 );
-                let index_id = self.catalog.allocate_id()?;
                 let index_oid = self.catalog.allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
                     id: index_id,
@@ -1972,6 +2047,7 @@ impl Coordinator {
                 .catalog
                 .for_session(session)
                 .find_available_name(index_name);
+            let index_id = self.catalog.allocate_id()?;
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 name,
@@ -1979,8 +2055,8 @@ impl Coordinator {
                 &view.desc,
                 view.conn_id,
                 vec![view_id],
+                self.catalog.enable_index(&index_id),
             );
-            let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
@@ -2007,8 +2083,9 @@ impl Coordinator {
         match self.catalog_transact(ops) {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    let df = self.dataflow_builder().build_index_dataflow(index_id);
-                    self.ship_dataflow(df);
+                    self.dataflow_builder()
+                        .build_index_dataflow(index_id)
+                        .map(|df| self.ship_dataflow(df));
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2040,8 +2117,9 @@ impl Coordinator {
             Ok(()) => {
                 let mut dfs = vec![];
                 for index_id in index_ids {
-                    let df = self.dataflow_builder().build_index_dataflow(index_id);
-                    dfs.push(df);
+                    self.dataflow_builder()
+                        .build_index_dataflow(index_id)
+                        .map(|df| dfs.push(df));
                 }
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
@@ -2067,14 +2145,15 @@ impl Coordinator {
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
         }
+        let id = self.catalog.allocate_id()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
             keys: index.keys,
             on: index.on,
             conn_id: None,
             depends_on,
+            enabled: self.catalog.enable_index(&id),
         };
-        let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
@@ -2084,9 +2163,11 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]) {
             Ok(()) => {
-                let df = self.dataflow_builder().build_index_dataflow(id);
-                self.ship_dataflow(df);
-                self.set_index_options(id, options);
+                self.dataflow_builder().build_index_dataflow(id).map(|df| {
+                    self.ship_dataflow(df);
+                    self.set_index_options(id, options);
+                });
+
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2206,31 +2287,34 @@ impl Coordinator {
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
-        action: EndTransactionAction,
+        mut action: EndTransactionAction,
     ) {
         let was_implicit = matches!(
             session.transaction(),
             TransactionStatus::InTransactionImplicit(_)
         );
+        // If the transaction has failed, we can only rollback.
+        if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
+            (&action, session.transaction())
+        {
+            action = EndTransactionAction::Rollback;
+        }
+        let response = ExecuteResponse::TransactionExited {
+            tag: action.tag(),
+            was_implicit,
+        };
         let rx = self.sequence_end_transaction_inner(&mut session, &action);
         match rx {
             Ok(Some(rx)) => {
                 tokio::spawn(async move {
-                    let tag = match rx.await {
-                        Ok(_) => action.tag(),
-                        // TODO: Try to return this error somehow.
-                        Err(_err) => EndTransactionAction::Rollback.tag(),
-                    };
-                    let result = Ok(ExecuteResponse::TransactionExited { tag, was_implicit });
+                    // The rx returns a Result<(), CoordError>, so we can map the Ok(()) output to
+                    // `response`, which will also pass through whatever error we see to tx.
+                    let result = rx.await.map(|_| response);
                     tx.send(result, session);
                 });
             }
             Ok(None) => {
-                let result = Ok(ExecuteResponse::TransactionExited {
-                    tag: action.tag(),
-                    was_implicit,
-                });
-                tx.send(result, session);
+                tx.send(Ok(response), session);
             }
             Err(err) => {
                 tx.send(Err(err), session);
@@ -2243,11 +2327,8 @@ impl Coordinator {
         session: &mut Session,
         action: &EndTransactionAction,
     ) -> Result<Option<impl Future<Output = Result<(), CoordError>>>, CoordError> {
-        let (drop_sinks, txn) = session.clear_transaction();
-        self.drop_sinks(drop_sinks);
+        let txn = self.clear_transaction(session);
 
-        // Allow compaction of sources from this transaction, regardless of the action.
-        self.txn_reads.remove(&session.conn_id());
         // Although the compaction frontier may have advanced, we do not need to
         // call `maintenance` here because it will soon be called after the next
         // `update_upper`.
@@ -2473,11 +2554,12 @@ impl Coordinator {
             };
             let mut results = Vec::new();
             for &(ref row, count) in rows {
-                assert!(
-                    count >= 0,
-                    "Negative multiplicity in constant result: {}",
-                    count
-                );
+                if count < 0 {
+                    Err(EvalError::InvalidParameterValue(format!(
+                        "Negative multiplicity in constant result: {}",
+                        count
+                    )))?
+                };
                 for _ in 0..count {
                     results.push(row.clone());
                 }
@@ -2516,7 +2598,7 @@ impl Coordinator {
                 // values by predicate constraints in `map_filter_project`. If we find such
                 // an index, we can use it with the literal to perform look-ups at workers,
                 // and in principle avoid even contacting all but one worker (future work).
-                if let Some(indexes) = self.catalog.indexes().get(id) {
+                if let Some(indexes) = self.catalog.enabled_indexes().get(id) {
                     // Determine for each index identifier, an optional row literal as key.
                     // We want to extract the "best" option, where we prefer indexes with
                     // literals and long keys, then indexes at all, then exit correctly.
@@ -2760,7 +2842,7 @@ impl Coordinator {
                             candidate.saturating_sub(1)
                         } else {
                             let unstarted = index_ids
-                                .iter()
+                                .into_iter()
                                 .filter(|id| {
                                     self.indexes
                                         .upper_of(id)
@@ -2768,10 +2850,7 @@ impl Coordinator {
                                         .less_equal(&0)
                                 })
                                 .collect::<Vec<_>>();
-                            coord_bail!(
-                                "At least one input has no complete timestamps yet: {:?}",
-                                unstarted
-                            );
+                            return Err(CoordError::IncompleteTimestamp(unstarted));
                         }
                     } else {
                         // A complete trace can be read in its final form with this time.
@@ -2921,7 +3000,7 @@ impl Coordinator {
                     &optimized_plan,
                     &mut dataflow,
                 );
-                transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
+                transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
                 let catalog = self.catalog.for_session(session);
                 let mut explanation =
                     dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
@@ -2949,7 +3028,19 @@ impl Coordinator {
         }]))?;
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
-            MutationKind::Insert => ExecuteResponse::Inserted(plan.affected_rows),
+            MutationKind::Insert => {
+                if self.catalog.config().disable_user_indexes {
+                    if self.catalog.enabled_indexes()[&plan.id].is_empty() {
+                        // Have to hard error here because we won't encounter the failure to
+                        // select an index until a panic occurs in the dataflow layer.
+                        return Err(CoordError::TableWithoutIndexes(
+                            self.catalog.get_by_id(&plan.id).name().to_string(),
+                        ));
+                    }
+                }
+
+                ExecuteResponse::Inserted(plan.affected_rows)
+            }
             MutationKind::Update => ExecuteResponse::Updated(plan.affected_rows),
         })
     }
@@ -2966,7 +3057,8 @@ impl Coordinator {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
                 let desc = self.catalog.get_by_id(&plan.id).desc()?;
-                for (row, _) in &rows {
+                let mut affected_rows: usize = 0;
+                for (row, diff) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
                             coord_bail!(
@@ -2977,10 +3069,15 @@ impl Coordinator {
                             )
                         }
                     }
+                    // repeat_rows could cause diff to be negative. In that (already non-standard
+                    // case), still report the total number of diffs, not the sum of diffs. We have
+                    // to send a u32 over the wire anyway, so it wouldn't make sense to even try to
+                    // sum them and send that.
+                    affected_rows += usize::try_from(diff.abs()).expect("positive isize must fit");
                 }
                 let diffs_plan = SendDiffsPlan {
                     id: plan.id,
-                    affected_rows: rows.len(),
+                    affected_rows,
                     updates: rows,
                     kind: MutationKind::Insert,
                 };
@@ -3132,14 +3229,24 @@ impl Coordinator {
         Ok(())
     }
 
-    fn send_builtin_table_updates_at_offset(
-        &mut self,
-        timestamp_offset: u64,
-        mut updates: Vec<BuiltinTableUpdate>,
-    ) {
-        let timestamp = self.get_write_ts() + timestamp_offset;
-        updates.sort_by_key(|u| u.id);
-        for (id, updates) in &updates.into_iter().group_by(|u| u.id) {
+    fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
+        // NB: This makes sure to send all records for the same id in the same
+        // message so we can persist a record and its future retraction
+        // atomically. Otherwise, we may end up with permanent orphans if a
+        // restart/crash happens at the wrong time.
+        let timestamp_base = self.get_write_ts();
+        let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
+        for tu in updates.into_iter() {
+            let timestamp = timestamp_base + tu.timestamp_offset;
+            for u in tu.updates {
+                updates_by_id.entry(u.id).or_default().push(Update {
+                    row: u.row,
+                    diff: u.diff,
+                    timestamp,
+                });
+            }
+        }
+        for (id, updates) in updates_by_id {
             // TODO: It'd be nice to unify this with the similar logic in
             // sequence_end_transaction, but it's not initially clear how to do
             // that.
@@ -3152,7 +3259,7 @@ impl Coordinator {
             if let Some(persist) = persist {
                 let updates: Vec<((Row, ()), Timestamp, Diff)> = updates
                     .into_iter()
-                    .map(|u| ((u.row, ()), timestamp, u.diff))
+                    .map(|u| ((u.row, ()), u.timestamp, u.diff))
                     .collect();
                 // Persistence of system table inserts is best effort, so throw
                 // away the response and ignore any errors. We do, however,
@@ -3166,21 +3273,17 @@ impl Coordinator {
                 let write_res = persist.write_handle.write(&updates);
                 let _ = tokio::spawn(async move { write_res.into_future().await });
             } else {
-                let updates: Vec<Update> = updates
-                    .into_iter()
-                    .map(|u| Update {
-                        row: u.row,
-                        diff: u.diff,
-                        timestamp,
-                    })
-                    .collect();
                 self.broadcast(dataflow::Command::Insert { id, updates })
             }
         }
     }
 
     fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        self.send_builtin_table_updates_at_offset(0, updates)
+        let timestamped = TimestampedUpdate {
+            updates,
+            timestamp_offset: 0,
+        };
+        self.send_builtin_table_updates_at_offset(vec![timestamped])
     }
 
     fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
@@ -3222,7 +3325,9 @@ impl Coordinator {
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
         if let ExprPrepStyle::Static = style {
-            let mut opt_expr = self.view_optimizer.optimize(expr, self.catalog.indexes())?;
+            let mut opt_expr = self
+                .view_optimizer
+                .optimize(expr, self.catalog.enabled_indexes())?;
             opt_expr.0.try_visit_mut(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
@@ -3243,7 +3348,9 @@ impl Coordinator {
             // constant expression that originally contains a global get? Is
             // there anything not containing a global get that cannot be
             // optimized to a constant expression?
-            Ok(self.view_optimizer.optimize(expr, self.catalog.indexes())?)
+            Ok(self
+                .view_optimizer
+                .optimize(expr, self.catalog.enabled_indexes())?)
         }
     }
 
@@ -3358,7 +3465,7 @@ impl Coordinator {
             }
 
             // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(&mut dataflow, self.catalog.indexes());
+            transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
             let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
                 .expect("Dataflow planning failed; unrecoverable error");
             dataflow_plans.push(dataflow_plan);
@@ -3369,8 +3476,14 @@ impl Coordinator {
     }
 
     fn broadcast(&self, cmd: dataflow::Command) {
-        for tx in &self.worker_txs {
-            tx.send(cmd.clone())
+        for index in 1..self.worker_txs.len() {
+            self.worker_txs[index - 1]
+                .send(cmd.clone())
+                .expect("worker command receiver should not drop first")
+        }
+        if self.worker_txs.len() > 0 {
+            self.worker_txs[self.worker_txs.len() - 1]
+                .send(cmd)
                 .expect("worker command receiver should not drop first")
         }
         for handle in self.worker_guards.guards() {
@@ -3493,6 +3606,7 @@ pub async fn serve(
         timestamp_frequency,
         logical_compaction_window,
         experimental_mode,
+        disable_user_indexes,
         safe_mode,
         build_info,
         metrics_registry,
@@ -3522,6 +3636,7 @@ pub async fn serve(
         persist,
         skip_migrations: false,
         metrics_registry: &metrics_registry,
+        disable_user_indexes,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
@@ -3672,6 +3787,7 @@ pub fn serve_debug(
         persist: PersistConfig::disabled(),
         skip_migrations: false,
         metrics_registry: &MetricsRegistry::new(),
+        disable_user_indexes: false,
     })
     .unwrap();
 
@@ -3808,6 +3924,7 @@ fn auto_generate_primary_idx(
     on_desc: &RelationDesc,
     conn_id: Option<u32>,
     depends_on: Vec<GlobalId>,
+    enabled: bool,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
@@ -3819,6 +3936,7 @@ fn auto_generate_primary_idx(
             .collect(),
         conn_id,
         depends_on,
+        enabled,
     }
 }
 

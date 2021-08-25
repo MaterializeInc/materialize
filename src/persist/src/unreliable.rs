@@ -149,6 +149,11 @@ impl<B: Blob> Blob for UnreliableBlob<B> {
         self.blob.set(key, value, allow_overwrite)
     }
 
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        self.handle.check_unavailable("blob delete")?;
+        self.blob.delete(key)
+    }
+
     fn close(&mut self) -> Result<bool, Error> {
         // TODO: This check_unavailable is a different order from the others
         // mostly for convenience in the nemesis tests. While we do want to

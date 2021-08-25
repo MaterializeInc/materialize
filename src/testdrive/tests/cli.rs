@@ -68,21 +68,6 @@ fn test_cmd_missing_name() {
 }
 
 #[test]
-fn test_cmd_arg_missing_value() {
-    cmd()
-        .write_stdin("$ cmd badarg")
-        .assert()
-        .failure()
-        .stderr(predicate::str::starts_with(
-            r#"<stdin>:1:7: error: command argument is not in required key=value format
-     |
-   1 | $ cmd badarg
-     |       ^
-"#,
-        ));
-}
-
-#[test]
 fn test_cmd_arg_bad_nesting_brace_close() {
     cmd()
         .write_stdin("$ cmd arg={}}")
@@ -185,24 +170,4 @@ fn test_ci_output_bad_file() {
             "error: reading tests: Is a directory",
         ))
         .stdout(predicate::str::contains("^^^ +++"));
-}
-
-#[test]
-fn test_ci_output_cmd_arg() {
-    cmd()
-        .arg("--ci-output")
-        .write_stdin("$ cmd badarg")
-        .assert()
-        .failure()
-        .stderr(predicate::str::starts_with(
-            r#"<stdin>:1:7: error: command argument is not in required key=value format
-     |
-   1 | $ cmd badarg
-     |       ^
-"#,
-        ))
-        .stdout(predicate::str::contains(
-            "--- ==> <stdin>
-^^^ +++",
-        ));
 }

@@ -10,7 +10,8 @@
 //! A Timely Dataflow operator that passes through its input after persisting
 //! it.
 
-use timely::dataflow::operators::{Concat, OkErr};
+use timely::dataflow::operators::generic::operator;
+use timely::dataflow::operators::{Concat, OkErr, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::Data as TimelyData;
 
@@ -59,7 +60,15 @@ where
         );
 
         // Replay the previously persisted data, if any.
-        let (ok_previous, err_previous) = operators::replay(&mut self.scope(), &read);
+        let (ok_previous, err_previous) = match read.snapshot() {
+            Err(err) => (
+                operator::empty(&self.scope()),
+                // TODO: Figure out how to make these retractable.
+                vec![(format!("replaying persisted data: {}", err), 0, 1)]
+                    .to_stream(&mut self.scope()),
+            ),
+            Ok(snapshot) => operators::replay(&mut self.scope(), snapshot),
+        };
 
         let ok_all = ok_previous.concat(&ok_new);
         let err_all = err_previous.concat(&err_new);

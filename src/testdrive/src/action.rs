@@ -47,6 +47,7 @@ mod s3;
 mod schema_registry;
 mod sleep;
 mod sql;
+mod sql_server;
 
 const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 
@@ -118,6 +119,8 @@ pub struct State {
     sqs_queues_created: BTreeSet<String>,
     default_timeout: Duration,
     postgres_clients: HashMap<String, tokio_postgres::Client>,
+    sql_server_clients:
+        HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
 }
 
 #[derive(Clone)]
@@ -449,6 +452,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "postgres-verify-slot" => {
                         Box::new(postgres::build_verify_slot(builtin).map_err(wrap_err)?)
                     }
+                    "sql-server-connect" => {
+                        Box::new(sql_server::build_connect(builtin).map_err(wrap_err)?)
+                    }
+                    "sql-server-execute" => {
+                        Box::new(sql_server::build_execute(builtin).map_err(wrap_err)?)
+                    }
                     "random-sleep" => {
                         Box::new(sleep::build_random_sleep(builtin).map_err(wrap_err)?)
                     }
@@ -493,7 +502,13 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
                     }
                     "set" => {
-                        vars.extend(builtin.args);
+                        for (key, val) in builtin.args {
+                            if val.is_empty() {
+                                vars.insert(key, builtin.input.join("\n"));
+                            } else {
+                                vars.insert(key, val);
+                            }
+                        }
                         continue;
                     }
                     _ => {
@@ -741,6 +756,7 @@ pub async fn create_state(
         sqs_queues_created: BTreeSet::new(),
         default_timeout: config.default_timeout,
         postgres_clients: HashMap::new(),
+        sql_server_clients: HashMap::new(),
     };
     Ok((state, pgconn_task))
 }

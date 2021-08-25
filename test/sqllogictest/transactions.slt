@@ -361,3 +361,33 @@ SELECT * FROM v1;
 COMMIT;
 ----
 db error: ERROR: transactions can only reference nearby relations; "materialize.public.v1" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.v", "materialize.public.v_primary_idx"
+
+simple conn=t1
+ROLLBACK;
+----
+COMPLETE 0
+
+# Verify an error is produce during write transactions if the commit fails.
+
+statement ok
+CREATE TABLE insert_fail (i int)
+
+statement ok
+INSERT INTO insert_fail VALUES (1)
+
+simple conn=t1
+BEGIN;
+INSERT into insert_fail VALUES (2);
+----
+COMPLETE 0
+COMPLETE 1
+
+simple conn=t2
+DROP table insert_fail;
+----
+COMPLETE 0
+
+simple conn=t1
+COMMIT;
+----
+db error: ERROR: unknown catalog item 'u21'

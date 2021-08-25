@@ -914,7 +914,7 @@ fn plan_query(
         Some(Limit {
             quantity: _,
             with_ties: true,
-        }) => unsupported!("FETCH ... WITH TIES"),
+        }) => bail_unsupported!("FETCH ... WITH TIES"),
         Some(Limit {
             quantity: _,
             with_ties: _,
@@ -1692,7 +1692,7 @@ fn plan_table_with_joins<'a>(
                 JoinOperator::FullOuter(..) | JoinOperator::RightOuter(..)
             )
         {
-            unsupported!(6875, "full/right outer joins in comma join");
+            bail_unsupported!(6875, "full/right outer joins in comma join");
         }
         let (new_left, new_left_scope) =
             plan_table_factor(qcx, left, left_scope, &join.join_operator, &join.relation)?;
@@ -2542,7 +2542,7 @@ pub fn plan_expr<'a>(
             expr.select().into()
         }
 
-        Expr::Collate { .. } => unsupported!("COLLATE"),
+        Expr::Collate { .. } => bail_unsupported!("COLLATE"),
         Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
         Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
         Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
@@ -2601,7 +2601,7 @@ fn plan_array(
     };
 
     if matches!(elem_type, ScalarType::Char { .. }) {
-        unsupported!("char[]");
+        bail_unsupported!("char[]");
     }
 
     Ok(HirScalarExpr::CallVariadic {
@@ -2642,7 +2642,7 @@ fn plan_list(
     };
 
     if matches!(elem_type, ScalarType::Char { .. }) {
-        unsupported!("char list");
+        bail_unsupported!("char list");
     }
 
     Ok(HirScalarExpr::CallVariadic {
@@ -2705,7 +2705,7 @@ fn plan_aggregate(
     };
 
     if sql_func.over.is_some() {
-        unsupported!(213, "window functions");
+        bail_unsupported!(213, "window functions");
     }
 
     let name = normalize::unresolved_object_name(sql_func.name.clone())?;
@@ -2758,7 +2758,7 @@ fn plan_aggregate(
         }
     });
     if seen_outer && !seen_inner {
-        unsupported!(
+        bail_unsupported!(
             3720,
             "aggregate functions that refer exclusively to outer columns"
         );
@@ -2865,7 +2865,7 @@ fn plan_function<'a>(
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
         Func::Table(_) => {
-            unsupported!(
+            bail_unsupported!(
                 1546,
                 format!("table function ({}) in scalar position", name)
             );
@@ -2874,7 +2874,7 @@ fn plan_function<'a>(
     };
 
     if over.is_some() {
-        unsupported!(213, "window functions");
+        bail_unsupported!(213, "window functions");
     }
     if *distinct {
         bail!(
@@ -3006,7 +3006,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
                 (Datum::Numeric(d), ScalarType::Numeric { scale: None })
             }
         }
-        Value::HexString(_) => unsupported!(3114, "hex string literals"),
+        Value::HexString(_) => bail_unsupported!(3114, "hex string literals"),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
@@ -3165,6 +3165,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             bail!("internal error: can't convert from pg record to materialize record")
         }
         pgrepr::Type::Oid => Ok(ScalarType::Oid),
+        pgrepr::Type::RegProc => Ok(ScalarType::RegProc),
         pgrepr::Type::Map { value_type } => Ok(ScalarType::Map {
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,

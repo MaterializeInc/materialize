@@ -474,6 +474,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 Ok(())
             }
             Err(e) => {
+                self.metrics
+                    .cmd_failed_count
+                    .inc_by(u64::cast_from(self.pending_responses.len()));
                 self.pending_responses
                     .drain(..)
                     .for_each(|r| r.fill_err(e.clone()));
@@ -489,7 +492,52 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         ret
     }
 
-    /// Compact all traces, if they have batches that can be compacted.
+    fn compact_inner(&mut self) -> Result<(), Error> {
+        let mut total_written_bytes = 0;
+        let mut deleted_unsealed_batches = vec![];
+        let mut deleted_trace_batches = vec![];
+        for (id, trace) in self.traces.iter_mut() {
+            let unsealed = self
+                .unsealeds
+                .get_mut(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
+            let (written_bytes, deleted_batches) = trace.step(&mut self.blob)?;
+            total_written_bytes += written_bytes;
+            deleted_trace_batches.extend(deleted_batches);
+        }
+
+        self.try_set_meta()?;
+
+        if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
+            self.metrics.compaction_count.inc();
+        }
+        self.metrics
+            .compaction_write_bytes
+            .inc_by(total_written_bytes);
+
+        // After we've committed our logical deletions to durable storage, we can
+        // physically delete the data.
+        //
+        // TODO: if there's an error in the middle of the deletions then any
+        // undeleted blobs will forever be orphaned. We could instead retain a
+        // pending_deletes list but we would lose that across restarts unless we
+        // wrote it to persistent storage. Alternatively, we should expose a list
+        // method on blob and have a periodic cleanup task that attempts to find
+        // and delete unused blobs. We could also use the list method to verify
+        // that all referenced blobs exist.
+        for batch in deleted_unsealed_batches {
+            self.blob.delete_unsealed_batch(&batch)?;
+        }
+
+        for batch in deleted_trace_batches {
+            self.blob.delete_trace_batch(&batch)?;
+        }
+
+        Ok(())
+    }
+
+    /// Compact all traces and truncate all unsealeds, if possible.
     ///
     /// TODO: currently we do not attempt to compact unsealed batches and instead
     /// logically delete them from unsealed after all updates contained within a
@@ -499,19 +547,20 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// that assumption stops being true.
     fn compact(&mut self) -> Result<(), Error> {
         let compaction_start = Instant::now();
-        for (_, trace) in self.traces.iter_mut() {
-            if let Err(e) = trace.step(&mut self.blob) {
+
+        let ret = match self.compact_inner() {
+            Ok(_) => Ok(()),
+            Err(e) => {
                 self.restore();
-                return Err(e);
+                Err(e)
             }
-        }
-        self.try_set_meta()?;
+        };
 
         self.metrics
             .compaction_ms
             .inc_by(metric_duration_ms(compaction_start.elapsed()));
 
-        Ok(())
+        ret
     }
 
     /// Drains writes from the log into the unsealed and does any necessary
@@ -668,11 +717,22 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             )
         })?;
 
-        let update_count: usize = updates_for_listeners.values().map(|x| x.len()).sum();
-
-        self.metrics
-            .cmd_write_record_count
-            .inc_by(u64::cast_from(update_count));
+        {
+            let mut update_count = 0;
+            let mut update_bytes = 0;
+            for updates in updates_for_listeners.values() {
+                update_count += updates.len();
+                for ((k, v), _, _) in updates.iter() {
+                    update_bytes += k.len() + v.len() + 8 + 8;
+                }
+            }
+            self.metrics
+                .cmd_write_record_count
+                .inc_by(u64::cast_from(update_count));
+            self.metrics
+                .cmd_write_record_bytes
+                .inc_by(u64::cast_from(update_bytes));
+        }
 
         for (id, updates) in updates_for_listeners.iter() {
             if let Some(listen_fns) = self.listeners.get(&id) {
@@ -739,7 +799,6 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// work to remove uneccessary batches.
     fn drain_unsealed(&mut self) -> Result<(), Error> {
         let mut updates_by_id = vec![];
-        let mut unsealed_ts_lower_updates = vec![];
         for (id, trace) in self.traces.iter_mut() {
             // If this unsealed is already properly sealed then we don't need
             // to do anything.
@@ -778,37 +837,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
             // ...and atomically swapping that snapshot's data into trace.
             let batch = BlobTraceBatch { desc, updates };
-            let new_unsealed_ts_lower = batch.desc.upper().clone();
             if let Err(e) = trace.append(batch, &mut self.blob) {
                 self.restore();
                 return Err(format!("failed to append to trace: {}", e).into());
             }
-
-            // We can only truncate unsealed after we have successfully committed
-            // everything to trace.
-            unsealed_ts_lower_updates.push((*id, new_unsealed_ts_lower));
         }
 
         // We need to update metadata before we do any notification or unsealed
         // truncation because that's the final step of ensuring that things
         // get appended to trace.
         self.try_set_meta()?;
-        // TODO: This is a good point to compact unsealed. The data that's been
-        // moved is still there but now irrelevant. It may also be a good time
-        // to compact trace.
-
-        // Now that all of the trace data and metadata writes have completed, we
-        // can attempt to truncate unsealed. The goal here is strictly to reduce
-        // consumption of durable storage, and so we don't need to roll back if
-        // one of the truncates fails.
-        for (id, new_unsealed_ts_lower) in unsealed_ts_lower_updates {
-            let unsealed = self
-                .unsealeds
-                .get_mut(&id)
-                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-            unsealed.truncate(new_unsealed_ts_lower)?;
-        }
-
         Ok(())
     }
 
@@ -831,14 +869,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// Apply a seal command to in-memory state if it is valid.
     fn do_seal(&mut self, ids: &[Id], seal_ts: u64) -> Result<(), Error> {
         for id in ids.iter() {
-            let prev = self.sealed_frontier(*id)?;
-
-            if !prev.less_than(&seal_ts) {
-                return Err(Error::from(format!(
-                    "invalid seal for {:?}: {:?} not in advance of current seal frontier {:?}",
-                    id, seal_ts, prev
-                )));
-            }
+            let trace = self
+                .traces
+                .get(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            trace.validate_seal(seal_ts)?;
         }
 
         for id in ids.iter() {
@@ -858,15 +893,20 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .push(PendingResponse::Unit(res, resp));
     }
 
-    fn do_allow_compaction(&mut self, id: Id, since: u64) -> Result<(), Error> {
-        let trace = self
-            .traces
-            .get_mut(&id)
-            .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
-        let since = Antichain::from_elem(since);
+    fn do_allow_compaction(&mut self, id_sinces: Vec<(Id, Antichain<u64>)>) -> Result<(), Error> {
+        for (id, since) in id_sinces.iter() {
+            let trace = self
+                .traces
+                .get(&id)
+                .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+            trace.validate_allow_compaction(since)?;
+        }
 
-        trace.allow_compaction(since)?;
+        for (id, since) in id_sinces {
+            let trace = self.traces.get_mut(&id).expect("trace known to exist");
 
+            trace.allow_compaction(since);
+        }
         Ok(())
     }
 
@@ -880,8 +920,12 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// TODO: it's unclear whether this function needs to be so restrictive about
     /// calls with a frontier <= current_compaction_frontier. We chose to mirror
     /// the `seal` API here but if that doesn't make sense, remove the restrictions.
-    pub fn allow_compaction(&mut self, id: Id, since: u64, res: FutureHandle<()>) {
-        let response = self.do_allow_compaction(id, since);
+    pub fn allow_compaction(
+        &mut self,
+        id_sinces: Vec<(Id, Antichain<u64>)>,
+        res: FutureHandle<()>,
+    ) {
+        let response = self.do_allow_compaction(id_sinces);
         self.pending_responses
             .push(PendingResponse::Unit(res, response));
     }
@@ -930,10 +974,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .traces
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
+        let seal_frontier = trace.get_seal();
         let trace = trace.snapshot(&self.blob)?;
         let unsealed = unsealed.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
-        Ok(IndexedSnapshot(unsealed, trace, self.unsealeds_seqno_upper))
+        Ok(IndexedSnapshot(
+            unsealed,
+            trace,
+            self.unsealeds_seqno_upper,
+            seal_frontier,
+        ))
     }
 
     /// Registers a callback to be invoked on successful writes and seals.
@@ -1005,7 +1055,7 @@ impl<K: Ord, V: Ord, S: Snapshot<K, V> + Sized> SnapshotExt<K, V> for S {}
 
 /// A consistent snapshot of all data currently stored for an id.
 #[derive(Debug)]
-pub struct IndexedSnapshot(UnsealedSnapshot, TraceSnapshot, SeqNo);
+pub struct IndexedSnapshot(UnsealedSnapshot, TraceSnapshot, SeqNo, Antichain<u64>);
 
 impl IndexedSnapshot {
     /// Returns the SeqNo at which this snapshot was run.
@@ -1013,6 +1063,20 @@ impl IndexedSnapshot {
     /// All writes assigned a seqno < this are included.
     pub fn seqno(&self) -> SeqNo {
         self.2
+    }
+
+    /// Returns the since frontier of this snapshot.
+    ///
+    /// All updates at times less than this frontier must be forwarded
+    /// to some time in this frontier.
+    pub fn since(&self) -> Antichain<u64> {
+        self.1.since.clone()
+    }
+
+    /// A logical upper bound on the times that had been added to the collection
+    /// when this snapshot was taken
+    fn get_seal(&self) -> Antichain<u64> {
+        self.3.clone()
     }
 }
 
@@ -1064,10 +1128,12 @@ mod tests {
         let id = block_on(|res| i.register("0", "()", "()", res))?;
 
         // Empty things are empty.
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 0);
+        assert_eq!(seal_frontier.elements(), &[0]);
 
         // Register a listener for writes.
         let (listen_tx, listen_rx) = mpsc::channel();
@@ -1088,19 +1154,23 @@ mod tests {
             i.write(vec![(id, updates.clone())], handle)
         })?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), updates);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[0]);
 
         // After a step, it's all still in the unsealed as nothing has been sealed
         // yet.
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), updates);
         assert_eq!(trace.read_to_end(), vec![]);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[0]);
 
         // After a seal and a step, the relevant data has moved into the trace
         // part of the index. Since we haven't sealed all the data, some of it
@@ -1108,19 +1178,23 @@ mod tests {
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), updates[1..]);
         assert_eq!(trace.read_to_end(), updates[..1]);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[2]);
 
         // All the data has been sealed, so it's now all in the trace.
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
         i.step()?;
         assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
-        let IndexedSnapshot(unsealed, trace, seqno) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
+            block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
         assert_eq!(seqno.0, 1);
+        assert_eq!(seal_frontier.elements(), &[3]);
 
         // Verify that the listener got a copy of the writes.
         let listen_received = {
@@ -1133,7 +1207,9 @@ mod tests {
         assert_eq!(listen_received, updates);
 
         // Can advance compaction frontier to a time that has already been sealed
-        block_on_drain(&mut i, |i, handle| i.allow_compaction(id, 2, handle))?;
+        block_on_drain(&mut i, |i, handle| {
+            i.allow_compaction(vec![(id, Antichain::from_elem(2))], handle)
+        })?;
 
         Ok(())
     }
@@ -1167,7 +1243,7 @@ mod tests {
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(unsealed, trace, _) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), updates);
         Ok(())
@@ -1209,7 +1285,7 @@ mod tests {
         i.step()?;
 
         // Sanity check that all the data made it into trace as expected.
-        let IndexedSnapshot(unsealed, trace, _) = block_on(|res| i.snapshot(id, res))?;
+        let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
         assert_eq!(unsealed.read_to_end(), vec![]);
         assert_eq!(trace.read_to_end(), vec![(("1".into(), "".into()), 1, 4)]);
 

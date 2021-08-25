@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -15,7 +15,7 @@ use anyhow::anyhow;
 use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
 use futures::executor::block_on;
 use log::error;
-use ore::metrics::IntGauge;
+use ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use repr::MessagePayload;
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
@@ -30,6 +30,7 @@ use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 use super::metrics::{KinesisMetrics, SourceBaseMetrics};
+use prometheus::core::AtomicI64;
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -45,7 +46,7 @@ pub struct KinesisSourceReader {
     /// The name of the stream
     stream_name: String,
     /// The set of active shards
-    shard_set: HashSet<String>,
+    shard_set: HashMap<String, ShardMetrics>,
     /// A queue representing the next shard to read from. This is necessary
     /// to ensure that all shards are read from uniformly
     shard_queue: VecDeque<(String, Option<String>)>,
@@ -60,17 +61,36 @@ pub struct KinesisSourceReader {
     base_metrics: KinesisMetrics,
 }
 
+struct ShardMetrics {
+    millis_behind_latest: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+}
+
+impl ShardMetrics {
+    fn new(kinesis_metrics: &KinesisMetrics, stream_name: &str, shard_id: &str) -> Self {
+        Self {
+            millis_behind_latest: kinesis_metrics
+                .millis_behind_latest
+                .get_delete_on_drop_gauge(vec![stream_name.to_string(), shard_id.to_string()]),
+        }
+    }
+}
+
 impl KinesisSourceReader {
     async fn update_shard_information(&mut self) -> Result<(), anyhow::Error> {
-        let new_shards: HashSet<String> = get_shard_ids(&self.kinesis_client, &self.stream_name)
+        let current_shards: HashSet<_> = get_shard_ids(&self.kinesis_client, &self.stream_name)
             .await?
-            .difference(&self.shard_set)
-            .map(|shard_id| shard_id.to_owned())
             .collect();
+        let known_shards: HashSet<_> = self.shard_set.keys().cloned().collect();
+        let new_shards = current_shards
+            .difference(&known_shards)
+            .map(|shard_id| shard_id.to_owned());
         for shard_id in new_shards {
-            self.shard_set.insert(shard_id.clone());
+            self.shard_set.insert(
+                shard_id.to_string(),
+                ShardMetrics::new(&self.base_metrics, &self.stream_name, &shard_id),
+            );
             self.shard_queue.push_back((
-                shard_id.clone(),
+                shard_id.to_string(),
                 get_shard_iterator(&self.kinesis_client, &self.stream_name, &shard_id).await?,
             ));
         }
@@ -107,7 +127,7 @@ impl SourceReader for KinesisSourceReader {
             _ => unreachable!(),
         };
 
-        let state = block_on(create_state(kc));
+        let state = block_on(create_state(&base_metrics.kinesis, kc));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
                 KinesisSourceReader {
@@ -147,11 +167,11 @@ impl SourceReader for KinesisSourceReader {
                         Ok(output) => {
                             shard_iterator = output.next_shard_iterator.clone();
                             if let Some(millis) = output.millis_behind_latest {
-                                let shard_metrics: IntGauge = self
-                                    .base_metrics
+                                self.shard_set
+                                    .get(&shard_id)
+                                    .unwrap()
                                     .millis_behind_latest
-                                    .with_label_values(&[&self.stream_name, &shard_id]);
-                                shard_metrics.set(millis);
+                                    .set(millis);
                             }
                             output
                         }
@@ -221,31 +241,37 @@ impl SourceReader for KinesisSourceReader {
 /// Creates the necessary data-structures for shard management
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 async fn create_state(
+    base_metrics: &KinesisMetrics,
     c: KinesisSourceConnector,
 ) -> Result<
     (
         KinesisClient,
         String,
-        HashSet<String>,
+        HashMap<String, ShardMetrics>,
         VecDeque<(String, Option<String>)>,
     ),
     anyhow::Error,
 > {
     let kinesis_client = aws_util::client::kinesis(c.aws_info)?;
 
-    let shard_set: HashSet<String> = get_shard_ids(&kinesis_client, &c.stream_name).await?;
+    let shard_set = get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
-    for shard_id in &shard_set {
+    let mut shard_map = HashMap::new();
+    for shard_id in shard_set {
         shard_queue.push_back((
             shard_id.clone(),
-            get_shard_iterator(&kinesis_client, &c.stream_name, shard_id).await?,
+            get_shard_iterator(&kinesis_client, &c.stream_name, &shard_id).await?,
         ));
+        shard_map.insert(
+            shard_id.clone(),
+            ShardMetrics::new(base_metrics, &c.stream_name, &shard_id),
+        );
     }
 
     Ok((
         kinesis_client,
         c.stream_name.clone(),
-        shard_set,
+        shard_map,
         shard_queue,
     ))
 }

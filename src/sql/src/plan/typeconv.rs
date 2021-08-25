@@ -25,6 +25,19 @@ use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarTy
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
+use crate::func;
+
+/// Like func::sql_impl_func, but for casts.
+fn sql_impl_cast(expr: &'static str) -> CastTemplate {
+    let invoke = func::sql_impl(expr);
+    CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
+        let mut out = invoke(&ecx.qcx, vec![from_type.clone()]).ok()?;
+        Some(move |e| {
+            out.splice_parameters(&[e], 0);
+            out
+        })
+    })
+}
 
 /// A cast is a function that takes a `ScalarExpr` to another `ScalarExpr`.
 type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
@@ -130,6 +143,7 @@ lazy_static! {
             //INT32
             (Int32, Bool) => Explicit: CastInt32ToBool,
             (Int32, Oid) => Implicit: CastInt32ToOid,
+            (Int32, RegProc) => Implicit: CastInt32ToRegProc,
             (Int32, Int16) => Assignment: CastInt32ToInt16,
             (Int32, Int64) => Implicit: CastInt32ToInt64,
             (Int32, Float32) => Implicit: CastInt32ToFloat32,
@@ -155,6 +169,10 @@ lazy_static! {
             // OID
             (Oid, Int32) => Assignment: CastOidToInt32,
             (Oid, String) => Explicit: CastInt32ToString,
+            (Oid, RegProc) => Assignment: CastOidToRegProc,
+
+            // REGPROC
+            (RegProc,Oid) => Implicit: CastRegProcToOid,
 
             // FLOAT32
             (Float32, Int16) => Assignment: CastFloat32ToInt16,
@@ -210,6 +228,30 @@ lazy_static! {
             (String, Int32) => Explicit: CastStringToInt32,
             (String, Int64) => Explicit: CastStringToInt64,
             (String, Oid) => Explicit: CastStringToInt32,
+            // A regproc represents a function by oid. Converting from string to regproc
+            // does a lookup of the function name and expects exactly one function to
+            // match it. You can also specify (in postgres) a string that's a valid
+            // int4 and it'll happily cast it (without verifying that the int4 matches
+            // a function oid). To support this, use a SQL expression that checks if
+            // the input might be a valid int4 with a regex, otherwise try to lookup in
+            // mz_functions. CASE will return NULL if the subquery returns zero results,
+            // so use mz_error_if_null to coerce that into an error. This is hacky and
+            // incomplete in a few ways, but gets us close enough to making drivers happy.
+            // TODO: Support the correct error code for does not exist (42883).
+            (String, RegProc) => Explicit: sql_impl_cast("(
+                SELECT
+                    CASE
+                    WHEN $1 IS NULL THEN NULL
+                    WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regproc
+                    ELSE (
+                        mz_internal.mz_error_if_null(
+                            (SELECT oid::pg_catalog.regproc FROM mz_catalog.mz_functions WHERE name = $1),
+                            'function \"' || $1 || '\" does not exist'
+                        )
+                    )
+                    END
+            )"),
+
             (String, Float32) => Explicit: CastStringToFloat32,
             (String, Float64) => Explicit: CastStringToFloat64,
             (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {

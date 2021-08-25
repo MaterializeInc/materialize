@@ -45,7 +45,7 @@ use log::info;
 use ore::cgroup::{detect_memory_limit, MemoryLimit};
 use ore::metric;
 use ore::metrics::ThirdPartyMetric;
-use ore::metrics::{IntCounterVec, MetricsRegistry};
+use ore::metrics::{raw::IntCounterVec, MetricsRegistry};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 
@@ -93,6 +93,9 @@ struct Args {
     /// (cloud.materialize.com), but may be useful in other contexts as well.
     #[structopt(long, hidden = true)]
     safe: bool,
+
+    #[structopt(long)]
+    disable_user_indexes: bool,
 
     /// The address on which metrics visible to "third parties" get exposed.
     ///
@@ -148,8 +151,8 @@ struct Args {
     #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str =repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
     /// Default frequency with which to scrape prometheus metrics
-    #[structopt(long, env = "MZ_METRICS_SCRAPING_FREQUENCY", hidden = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1s")]
-    metrics_scraping_frequency: OptionalDuration,
+    #[structopt(long, env = "MZ_METRICS_SCRAPING_INTERVAL", hidden = true, parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "30s")]
+    metrics_scraping_interval: OptionalDuration,
 
     /// [ADVANCED] Timely progress tracking mode.
     #[structopt(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
@@ -362,14 +365,14 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Configure Timely and Differential workers.
     let log_logging = args.debug_introspection;
     let retain_readings_for = args.retain_prometheus_metrics;
-    let metrics_scraping_frequency = args.metrics_scraping_frequency;
+    let metrics_scraping_interval = args.metrics_scraping_interval;
     let logging = args
         .introspection_frequency
         .map(|granularity| coord::LoggingConfig {
             granularity,
             log_logging,
             retain_readings_for,
-            metrics_scraping_frequency,
+            metrics_scraping_interval,
         });
     if log_logging && logging.is_none() {
         bail!(
@@ -636,7 +639,6 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         PersistConfig {
             // TODO: These paths are hardcoded for now, but we'll want to make
             // them configurable once we add additional Log and Blob impls.
-            log_path: data_directory.join("persist").join("log"),
             blob_path: data_directory.join("persist").join("blob"),
             user_table_enabled,
             system_table_enabled,
@@ -656,6 +658,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         data_directory,
         symbiosis_url: args.symbiosis,
         experimental_mode: args.experimental,
+        disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
         telemetry,
         introspection_frequency: args
@@ -679,6 +682,20 @@ to improve both our software and your queries! Please reach out at:
 =======================================================================
 "
     );
+
+    if args.disable_user_indexes {
+        eprintln!(
+            "************************************************************************
+                                NOTE!
+************************************************************************
+Starting Materialize with user indexes disabled.
+
+For more details, see
+    https://materialize.com/docs/cli#user-indexes-disabled
+************************************************************************
+"
+        );
+    }
 
     if args.experimental {
         eprintln!(

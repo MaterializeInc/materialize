@@ -18,6 +18,10 @@ use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
 use serde::{Deserialize, Serialize};
 use tokio::time::{self, Duration};
 
+/// How long Materialize waits for various parts of initial authorization
+// TODO(#7115): Make this configurable everywhere it is used
+pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Information required to connnect to AWS
 ///
 /// Credentials are optional because in most cases users should use the

@@ -27,6 +27,7 @@ use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::jsonb_stringify;
+use crate::EvalError;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -416,6 +417,41 @@ where
         })
 }
 
+fn string_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    const EMPTY_SEP: &'static str = "";
+
+    let mut sep_value_pairs = datums.into_iter().filter_map(|d| {
+        if d.is_null() {
+            return None;
+        }
+        let mut value_sep = d.unwrap_list().iter();
+        match (value_sep.next().unwrap(), value_sep.next().unwrap()) {
+            (Datum::Null, _) => None,
+            (Datum::String(val), Datum::Null) => Some((EMPTY_SEP, val)),
+            (Datum::String(val), Datum::String(sep)) => Some((sep, val)),
+            _ => unreachable!(),
+        }
+    });
+
+    let mut s = String::default();
+    match sep_value_pairs.next() {
+        // First value not prefixed by its separator
+        Some((_, value)) => s.push_str(value),
+        // If no non-null values sent, return NULL.
+        None => return Datum::Null,
+    }
+
+    for (sep, value) in sep_value_pairs {
+        s.push_str(sep);
+        s.push_str(value);
+    }
+
+    Datum::String(temp_storage.push_string(s))
+}
+
 fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -530,6 +566,7 @@ pub enum AggregateFunc {
     ArrayConcat,
     /// Accumulates `Datum::List`s into a single `Datum::List`.
     ListConcat,
+    StringAgg,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -578,6 +615,7 @@ impl AggregateFunc {
             AggregateFunc::JsonbObjectAgg => jsonb_object_agg(datums, temp_storage),
             AggregateFunc::ArrayConcat => array_concat(datums, temp_storage),
             AggregateFunc::ListConcat => list_concat(datums, temp_storage),
+            AggregateFunc::StringAgg => string_agg(datums, temp_storage),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -625,6 +663,7 @@ impl AggregateFunc {
             // Inputs are coerced to the correct container type, so the input_type is
             // already correct.
             AggregateFunc::ArrayConcat | AggregateFunc::ListConcat => input_type.scalar_type,
+            AggregateFunc::StringAgg => ScalarType::String,
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -672,7 +711,8 @@ impl AggregateFunc {
             | AggregateFunc::SumInt64
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
-            | AggregateFunc::SumNumeric => true,
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::StringAgg => true,
             // Count is never null
             AggregateFunc::Count => false,
             _ => false,
@@ -737,16 +777,70 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
     Some((Row::pack(datums), 1))
 }
 
-fn generate_series_int32(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
+fn generate_series_step_int32(
+    start: Datum,
+    stop: Datum,
+    step: Datum,
+) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
     let start = start.unwrap_int32();
     let stop = stop.unwrap_int32();
-    (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
+    let step = step.unwrap_int32();
+    if step == 0 {
+        return Err(EvalError::InvalidParameterValue(
+            "step size cannot equal zero".to_owned(),
+        ));
+    }
+
+    let pos_series = start <= stop;
+    let pos_step = step > 0;
+    if step == 0 || (pos_series && !pos_step) || (!pos_series && pos_step) {
+        Ok(vec![].into_iter())
+    } else {
+        let (start, stop) = if pos_series {
+            (start, stop)
+        } else {
+            (stop, start)
+        };
+        let step = if pos_step { step } else { i32::abs(step) };
+        let series: Vec<(Row, Diff)> = (start..=stop)
+            .step_by(step as usize)
+            .map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
+            .collect();
+        Ok(series.into_iter())
+    }
 }
 
-fn generate_series_int64(start: Datum, stop: Datum) -> impl Iterator<Item = (Row, Diff)> {
+fn generate_series_step_int64(
+    start: Datum,
+    stop: Datum,
+    step: Datum,
+) -> Result<impl Iterator<Item = (Row, Diff)>, EvalError> {
     let start = start.unwrap_int64();
     let stop = stop.unwrap_int64();
-    (start..=stop).map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
+    let step = step.unwrap_int64();
+    if step == 0 {
+        return Err(EvalError::InvalidParameterValue(
+            "step size cannot equal zero".to_owned(),
+        ));
+    }
+
+    let pos_series = start <= stop;
+    let pos_step = step > 0;
+    if (pos_series && !pos_step) || (!pos_series && pos_step) {
+        Ok(vec![].into_iter())
+    } else {
+        let (start, stop) = if pos_series {
+            (start, stop)
+        } else {
+            (stop, start)
+        };
+        let step = if pos_step { step } else { i64::abs(step) };
+        let series: Vec<(Row, Diff)> = (start..=stop)
+            .step_by(step as usize)
+            .map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
+            .collect();
+        Ok(series.into_iter())
+    }
 }
 
 fn unnest_array<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
@@ -800,6 +894,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::JsonbObjectAgg => f.write_str("jsonb_object_agg"),
             AggregateFunc::ArrayConcat => f.write_str("array_agg"),
             AggregateFunc::ListConcat => f.write_str("list_agg"),
+            AggregateFunc::StringAgg => f.write_str("string_agg"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
@@ -882,8 +977,8 @@ pub enum TableFunc {
     JsonbArrayElements { stringify: bool },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
-    GenerateSeriesInt32,
-    GenerateSeriesInt64,
+    GenerateSeriesStepInt32,
+    GenerateSeriesStepInt64,
     // TODO(justin): should also possibly have GenerateSeriesTimestamp{,Tz}.
     Repeat,
     UnnestArray { el_typ: ScalarType },
@@ -895,27 +990,35 @@ impl TableFunc {
         &'a self,
         datums: Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
-    ) -> Box<dyn Iterator<Item = (Row, Diff)> + 'a> {
+    ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
         if self.empty_on_null_input() {
             if datums.iter().any(|d| d.is_null()) {
-                return Box::new(vec![].into_iter());
+                return Ok(Box::new(vec![].into_iter()));
             }
         }
         match self {
             TableFunc::JsonbEach { stringify } => {
-                Box::new(jsonb_each(datums[0], temp_storage, *stringify))
+                Ok(Box::new(jsonb_each(datums[0], temp_storage, *stringify)))
             }
-            TableFunc::JsonbObjectKeys => Box::new(jsonb_object_keys(datums[0])),
-            TableFunc::JsonbArrayElements { stringify } => {
-                Box::new(jsonb_array_elements(datums[0], temp_storage, *stringify))
+            TableFunc::JsonbObjectKeys => Ok(Box::new(jsonb_object_keys(datums[0]))),
+            TableFunc::JsonbArrayElements { stringify } => Ok(Box::new(jsonb_array_elements(
+                datums[0],
+                temp_storage,
+                *stringify,
+            ))),
+            TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
+            TableFunc::CsvExtract(n_cols) => {
+                Ok(Box::new(csv_extract(datums[0], *n_cols).into_iter()))
             }
-            TableFunc::RegexpExtract(a) => Box::new(regexp_extract(datums[0], a).into_iter()),
-            TableFunc::CsvExtract(n_cols) => Box::new(csv_extract(datums[0], *n_cols).into_iter()),
-            TableFunc::GenerateSeriesInt32 => Box::new(generate_series_int32(datums[0], datums[1])),
-            TableFunc::GenerateSeriesInt64 => Box::new(generate_series_int64(datums[0], datums[1])),
-            TableFunc::Repeat => Box::new(repeat(datums[0]).into_iter()),
-            TableFunc::UnnestArray { .. } => Box::new(unnest_array(datums[0])),
-            TableFunc::UnnestList { .. } => Box::new(unnest_list(datums[0])),
+            TableFunc::GenerateSeriesStepInt32 => Ok(Box::new(generate_series_step_int32(
+                datums[0], datums[1], datums[2],
+            )?)),
+            TableFunc::GenerateSeriesStepInt64 => Ok(Box::new(generate_series_step_int64(
+                datums[0], datums[1], datums[2],
+            )?)),
+            TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
+            TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
+            TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
         }
     }
 
@@ -943,8 +1046,12 @@ impl TableFunc {
             TableFunc::CsvExtract(n_cols) => iter::repeat(ScalarType::String.nullable(false))
                 .take(*n_cols)
                 .collect(),
-            TableFunc::GenerateSeriesInt32 => vec![ScalarType::Int32.nullable(false)],
-            TableFunc::GenerateSeriesInt64 => vec![ScalarType::Int64.nullable(false)],
+            TableFunc::GenerateSeriesStepInt32 => {
+                vec![ScalarType::Int32.nullable(false)]
+            }
+            TableFunc::GenerateSeriesStepInt64 => {
+                vec![ScalarType::Int64.nullable(false)]
+            }
             TableFunc::Repeat => vec![],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
@@ -958,8 +1065,8 @@ impl TableFunc {
             TableFunc::JsonbArrayElements { .. } => 1,
             TableFunc::RegexpExtract(a) => a.capture_groups_len(),
             TableFunc::CsvExtract(n_cols) => *n_cols,
-            TableFunc::GenerateSeriesInt32 => 1,
-            TableFunc::GenerateSeriesInt64 => 1,
+            TableFunc::GenerateSeriesStepInt32 => 1,
+            TableFunc::GenerateSeriesStepInt64 => 1,
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
@@ -976,8 +1083,8 @@ impl TableFunc {
             TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys
             | TableFunc::JsonbArrayElements { .. }
-            | TableFunc::GenerateSeriesInt32
-            | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesStepInt32
+            | TableFunc::GenerateSeriesStepInt64
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
@@ -996,8 +1103,8 @@ impl TableFunc {
             TableFunc::JsonbArrayElements { .. } => true,
             TableFunc::RegexpExtract(_) => true,
             TableFunc::CsvExtract(_) => true,
-            TableFunc::GenerateSeriesInt32 => true,
-            TableFunc::GenerateSeriesInt64 => true,
+            TableFunc::GenerateSeriesStepInt32 => true,
+            TableFunc::GenerateSeriesStepInt64 => true,
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
@@ -1013,8 +1120,8 @@ impl fmt::Display for TableFunc {
             TableFunc::JsonbArrayElements { .. } => f.write_str("jsonb_array_elements"),
             TableFunc::RegexpExtract(a) => write!(f, "regexp_extract({:?}, _)", a.0),
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
-            TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
-            TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesStepInt32 => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesStepInt64 => f.write_str("generate_series"),
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),

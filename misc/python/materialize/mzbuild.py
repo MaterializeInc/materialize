@@ -100,6 +100,14 @@ def xbinutil(tool: str) -> str:
 xobjcopy = xbinutil("objcopy")
 xstrip = xbinutil("strip")
 
+xrustflags = "-C link-arg=-Wl,--compress-debug-sections=zlib"
+if sys.platform != "darwin":
+    # The cross-compiling toolchain that bin/xcompile installs on macOS does not
+    # support lld.
+    #
+    # TODO(benesch): use a newer cross toolchain.
+    xrustflags += " -C link-arg=-fuse-ld=lld"
+
 
 def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
@@ -228,10 +236,7 @@ class CargoBuild(CargoPreImage):
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
-        self.rustflags = config.pop(
-            "rustflags",
-            "-C link-arg=-Wl,--compress-debug-sections=zlib -C link-arg=-fuse-ld=lld",
-        )
+        self.rustflags = config.pop("rustflags", xrustflags)
         if rd.coverage:
             self.rustflags += " -Zinstrument-coverage -C link-dead-code "
             # Nix generates some unresolved symbols that -Zinstrument-coverage
@@ -280,7 +285,9 @@ class CargoBuild(CargoPreImage):
             )
         if self.extract:
             output = spawn.capture(
-                cargo_build + ["--message-format=json"], unicode=True
+                cargo_build + ["--message-format=json"],
+                unicode=True,
+                env=dict(os.environ, XCOMPILE_RUSTFLAGS=self.rustflags),
             )
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):

@@ -21,6 +21,7 @@ use std::time::Instant;
 
 use log;
 use ore::metrics::MetricsRegistry;
+use timely::progress::Antichain;
 
 use crate::error::Error;
 use crate::future::{Future, FutureHandle};
@@ -38,7 +39,7 @@ enum Cmd {
         FutureHandle<SeqNo>,
     ),
     Seal(Vec<Id>, u64, FutureHandle<()>),
-    AllowCompaction(Id, u64, FutureHandle<()>),
+    AllowCompaction(Vec<(Id, Antichain<u64>)>, FutureHandle<()>),
     Snapshot(Id, FutureHandle<IndexedSnapshot>),
     Listen(Id, ListenFn<Vec<u8>, Vec<u8>>, FutureHandle<()>),
     Stop(FutureHandle<()>),
@@ -122,7 +123,7 @@ impl RuntimeCore {
                 Cmd::Destroy(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Write(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Seal(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
-                Cmd::AllowCompaction(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+                Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
             }
@@ -236,14 +237,15 @@ impl RuntimeClient {
         self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
     }
 
-    /// Asynchronously advances the compaction frontier for the stream with the given id,
-    /// which lets the stream discard historical detail for times not beyond the
-    /// compaction frontier. This also restricts what times the compaction frontier
-    /// can later be advanced to for this id.
+    /// Asynchronously advances the compaction frontier for the streams with the
+    /// given ids, which lets the stream discard historical detail for times not
+    /// beyond the compaction frontier. This also restricts what times the
+    /// compaction frontier can later be advanced to for these ids.
     ///
-    /// The id must have previously been registered.
-    fn allow_compaction(&self, id: Id, ts: u64, res: FutureHandle<()>) {
-        self.core.send(Cmd::AllowCompaction(id, ts, res))
+    /// The ids must have previously been registered.
+    fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: FutureHandle<()>) {
+        self.core
+            .send(Cmd::AllowCompaction(id_sinces.to_vec(), res))
     }
 
     /// Asynchronously returns a [crate::indexed::Snapshot] for the stream
@@ -351,6 +353,13 @@ impl<K: Codec, V: Codec> StreamWriteHandle<K, V> {
         self.runtime.seal(&[self.id], upper, tx);
         rx
     }
+
+    /// Unblocks compaction for updates at or before `since`.
+    pub fn allow_compaction(&self, since: Antichain<u64>) -> Future<()> {
+        let (tx, rx) = Future::new();
+        self.runtime.allow_compaction(&[(self.id, since)], tx);
+        rx
+    }
 }
 
 /// A handle for writing to multiple streams.
@@ -453,6 +462,26 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
         self.runtime.seal(ids, upper, tx);
         rx
     }
+
+    /// Unblocks compaction for updates for the given streams at the paired
+    /// `since` timestamp.
+    ///
+    /// Ids may not be duplicated (this is equivalent to allowing compaction on
+    /// the stream twice at the same timestamp, which we currently disallow).
+    pub fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)]) -> Future<()> {
+        let (tx, rx) = Future::new();
+        for (id, _) in id_sinces {
+            if !self.ids.contains(id) {
+                tx.fill(Err(Error::from(format!(
+                    "MultiWriteHandle cannot allow_compaction stream: {:?}",
+                    id
+                ))));
+                return rx;
+            }
+        }
+        self.runtime.allow_compaction(id_sinces, tx);
+        rx
+    }
 }
 
 /// A consistent snapshot of all data currently stored for an id, with keys and
@@ -478,6 +507,14 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     /// All writes assigned a seqno < this are included.
     pub fn seqno(&self) -> SeqNo {
         self.snap.seqno()
+    }
+
+    /// Returns the since frontier of this snapshot.
+    ///
+    /// All updates at times less than this frontier must be forwarded
+    /// to some time in this frontier.
+    pub fn since(&self) -> Antichain<u64> {
+        self.snap.since()
     }
 }
 
@@ -511,6 +548,14 @@ impl<K: Codec, V: Codec> Snapshot<Result<K, String>, Result<V, String>> for Deco
             ((k, v), ts, diff)
         }));
         ret
+    }
+}
+
+impl<K, V> DecodedSnapshot<K, V> {
+    /// A logical upper bound on the times that had been added to the collection
+    /// when this snapshot was taken
+    pub fn get_seal(&self) -> Antichain<u64> {
+        self.snap.get_seal()
     }
 }
 
@@ -575,13 +620,6 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
         self.runtime.listen(self.id, listen_fn, tx);
         rx.recv()
     }
-
-    /// Unblocks compaction for updates at or before `since`.
-    pub fn allow_compaction(&mut self, since: u64) -> Future<()> {
-        let (tx, rx) = Future::new();
-        self.runtime.allow_compaction(self.id, since, tx);
-        rx
-    }
 }
 
 struct RuntimeImpl<L: Log, B: Blob> {
@@ -629,7 +667,10 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             match cmd {
                 Cmd::Stop(res) => {
                     // Finish up any pending work that we can before closing.
-                    let _ = self.indexed.step();
+                    if let Err(e) = self.indexed.step() {
+                        self.metrics.cmd_step_error_count.inc();
+                        log::warn!("error running step: {:?}", e);
+                    }
                     res.fill(self.indexed.close());
                     return false;
                 }
@@ -647,8 +688,8 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Seal(ids, ts, res) => {
                     self.indexed.seal(ids, ts, res);
                 }
-                Cmd::AllowCompaction(id, ts, res) => {
-                    self.indexed.allow_compaction(id, ts, res);
+                Cmd::AllowCompaction(id_sinces, res) => {
+                    self.indexed.allow_compaction(id_sinces, res);
                 }
                 Cmd::Snapshot(id, res) => {
                     self.indexed.snapshot(id, res);
@@ -665,6 +706,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             .inc_by(metric_duration_ms(step_start.duration_since(run_start)));
 
         if let Err(e) = self.indexed.step() {
+            self.metrics.cmd_step_error_count.inc();
             // TODO: revisit whether we need to move this to a different log level
             // depending on how spammy it ends up being. Alternatively, we
             // may want to rate-limit our logging here.

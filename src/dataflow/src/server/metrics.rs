@@ -10,13 +10,16 @@
 //! Prometheus metrics for our interactive dataflow server
 
 use enum_iterator::IntoEnumIterator;
-use ore::metrics::MetricsRegistry;
+use ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, MetricsRegistry,
+};
 use ore::{
     metric,
-    metrics::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec},
+    metrics::{IntCounterVec, IntGaugeVec},
 };
 
 use super::{Command, CommandKind, PendingPeek};
+use prometheus::core::AtomicI64;
 
 #[derive(Clone)]
 pub(super) struct ServerMetrics {
@@ -50,8 +53,12 @@ impl ServerMetrics {
         let worker_id = id.to_string();
 
         WorkerMetrics {
-            command_queue: self.command_queue.with_label_values(&[&worker_id]),
-            pending_peeks: self.pending_peeks.with_label_values(&[&worker_id]),
+            command_queue: self
+                .command_queue
+                .get_delete_on_drop_gauge(vec![worker_id.clone()]),
+            pending_peeks: self
+                .pending_peeks
+                .get_delete_on_drop_gauge(vec![worker_id.clone()]),
             commands_processed: CommandsProcessedMetrics::new(
                 &worker_id,
                 &self.commands_processed_metric,
@@ -65,11 +72,11 @@ pub(super) struct WorkerMetrics {
     /// The size of the command queue
     ///
     /// Updated every time we decide to handle some
-    command_queue: IntGauge,
+    command_queue: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// The number of pending peeks
     ///
     /// Updated every time we successfully fulfill a peek
-    pending_peeks: IntGauge,
+    pending_peeks: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Total number of commands of each type processed
     commands_processed: CommandsProcessedMetrics,
 }
@@ -98,7 +105,7 @@ impl WorkerMetrics {
 #[derive(Debug)]
 struct CommandsProcessedMetrics {
     cache: Vec<i64>,
-    counters: Vec<IntCounter>,
+    counters: Vec<DeleteOnDropCounter<'static, AtomicI64, Vec<String>>>,
 }
 
 impl CommandsProcessedMetrics {
@@ -106,7 +113,12 @@ impl CommandsProcessedMetrics {
         CommandsProcessedMetrics {
             cache: CommandKind::into_enum_iter().map(|_| 0).collect(),
             counters: CommandKind::into_enum_iter()
-                .map(|kind| commands_processed_metric.with_label_values(&[worker, kind.name()]))
+                .map(|kind| {
+                    commands_processed_metric.get_delete_on_drop_counter(vec![
+                        worker.to_string(),
+                        kind.name().to_string(),
+                    ])
+                })
                 .collect(),
         }
     }

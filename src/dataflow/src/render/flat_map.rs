@@ -47,7 +47,10 @@ where
                     Ok(exprs) => exprs,
                     Err(e) => return vec![(Err((e.into(), time, diff)))],
                 };
-                let output_rows = func.eval(exprs, &temp_storage);
+                let output_rows = match func.eval(exprs, &temp_storage) {
+                    Ok(exprs) => exprs,
+                    Err(e) => return vec![(Err((e.into(), time, diff)))],
+                };
                 // Declare borrows outside the closure so that appropriately lifetimed
                 // borrows are moved in and used by `mfp.evaluate`.
                 let temp_storage = &temp_storage;

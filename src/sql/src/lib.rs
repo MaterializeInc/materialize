@@ -65,7 +65,7 @@
 
 #![warn(missing_debug_implementations)]
 
-macro_rules! unsupported {
+macro_rules! bail_unsupported {
     ($feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),

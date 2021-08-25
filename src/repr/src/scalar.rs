@@ -394,6 +394,7 @@ impl<'a> Datum<'a> {
                     (Datum::Int16(_), _) => false,
                     (Datum::Int32(_), ScalarType::Int32) => true,
                     (Datum::Int32(_), ScalarType::Oid) => true,
+                    (Datum::Int32(_), ScalarType::RegProc) => true,
                     (Datum::Int32(_), _) => false,
                     (Datum::Int64(_), ScalarType::Int64) => true,
                     (Datum::Int64(_), _) => false,
@@ -782,6 +783,8 @@ pub enum ScalarType {
         value_type: Box<ScalarType>,
         custom_oid: Option<u32>,
     },
+    /// A PostgreSQL function name.
+    RegProc,
 }
 
 impl<'a> ScalarType {

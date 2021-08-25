@@ -30,6 +30,7 @@ _jsonb
 _numeric
 _oid
 _record
+_regproc
 _text
 _time
 _timestamp
@@ -57,6 +58,7 @@ map
 numeric
 oid
 record
+regproc
 text
 time
 timestamp
@@ -82,6 +84,7 @@ _jsonb           system
 _numeric         system
 _oid             system
 _record          system
+_regproc         system
 _text            system
 _time            system
 _timestamp       system
@@ -108,6 +111,7 @@ list             system
 map              system
 numeric          system
 oid              system
+regproc          system
 record           system
 text             system
 time             system

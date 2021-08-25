@@ -5,5 +5,5 @@ To run:
 
 ./mzcompose down -v ; ./mzcompose run debezium-avro
 
-The tests are numbered so that 01-initialize.td runs before all others and 9*.td run
-after all others, since they modify the Debezium configuration on the fly.
+The tests are numbered so that 9*.td run after all the others,
+since they modify the Debezium configuration on the fly.

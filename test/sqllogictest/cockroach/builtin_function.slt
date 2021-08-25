@@ -1884,6 +1884,21 @@ SELECT format_type(oid, -1) FROM pg_type WHERE typname='_text' LIMIT 1
 text[]
 
 query T
+SELECT pg_catalog.pg_get_expr('abc', 1);
+----
+abc
+
+query T
+SELECT pg_catalog.pg_get_expr('abc', 1, true);
+----
+abc
+
+query T
+SELECT pg_catalog.pg_get_expr('abc', 1, false);
+----
+abc
+
+query T
 SELECT pg_catalog.pg_get_userbyid((SELECT oid FROM pg_roles WHERE rolname='root'))
 ----
 root

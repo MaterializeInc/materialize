@@ -9,14 +9,19 @@
 
 //! Persistence related errors.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::{error, fmt, io, sync};
+
+use crate::storage::{Log, SeqNo};
 
 /// A persistence related error.
 #[derive(Debug, Clone)]
 pub enum Error {
     /// A persistence related error resulting from an io failure.
     IO(Arc<io::Error>),
+    /// An operation failed because storage was out of space or quota.
+    OutOfQuota(String),
     /// An unstructured persistence related error.
     String(String),
     /// An error returned when a command is sent to a persistence runtime that
@@ -30,6 +35,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::IO(e) => fmt::Display::fmt(e, f),
+            Error::OutOfQuota(e) => f.write_str(e),
             Error::String(e) => f.write_str(e),
             Error::RuntimeShutdown => f.write_str("runtime shutdown"),
         }
@@ -50,6 +56,10 @@ impl PartialEq for Error {
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
+        // This only works on unix/macos, but I don't see a great alternative.
+        if let Some(28) = e.raw_os_error() {
+            return Error::OutOfQuota(e.to_string());
+        }
         Error::IO(Arc::new(e))
     }
 }
@@ -69,5 +79,41 @@ impl<'a> From<&'a str> for Error {
 impl<T> From<sync::PoisonError<T>> for Error {
     fn from(e: sync::PoisonError<T>) -> Self {
         Error::String(format!("poison: {}", e))
+    }
+}
+
+/// A stub implementation of [Log] that always returns errors.
+///
+/// This exists to let us keep the (surprisingly non-trivial) Log plumbing while
+/// we don't actually use it, but without the risk of accidentally using it.
+pub struct ErrorLog;
+
+impl Log for ErrorLog {
+    fn write_sync(&mut self, _buf: Vec<u8>) -> Result<SeqNo, Error> {
+        Err(Error::from(
+            "ErrorLog method unexpectedly called, please report a bug: write_sync",
+        ))
+    }
+
+    fn snapshot<F>(&self, _logic: F) -> Result<Range<SeqNo>, Error>
+    where
+        F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
+    {
+        Err(Error::from(
+            "ErrorLog method unexpectedly called, please report a bug: snapshot",
+        ))
+    }
+
+    fn truncate(&mut self, _upper: SeqNo) -> Result<(), Error> {
+        Err(Error::from(
+            "ErrorLog method unexpectedly called, please report a bug: snapshot",
+        ))
+    }
+
+    fn close(&mut self) -> Result<bool, Error> {
+        // This one should actually be used, so implement it. The bool result is
+        // only used for logging when a Log impl was dropped without being
+        // closed, so it's safe to always return false.
+        Ok(false)
     }
 }

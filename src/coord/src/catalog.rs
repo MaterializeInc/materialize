@@ -104,7 +104,9 @@ pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: CatalogEntryMap,
     by_oid: HashMap<u32, GlobalId>,
-    indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    /// Contains only enabled indexes from objects in the catalog; does not
+    /// contain indexes disabled by e.g. the disable_user_indexes flag.
+    enabled_indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
@@ -328,6 +330,7 @@ pub struct Index {
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -602,7 +605,7 @@ impl Catalog {
             by_name: BTreeMap::new(),
             by_id: CatalogEntryMap::new(BTreeMap::new()),
             by_oid: HashMap::new(),
-            indexes: HashMap::new(),
+            enabled_indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             roles: HashMap::new(),
@@ -620,6 +623,7 @@ impl Catalog {
                 num_workers: config.num_workers,
                 timestamp_frequency: config.timestamp_frequency,
                 now: config.now,
+                disable_user_indexes: config.disable_user_indexes,
             },
             persist,
         };
@@ -736,6 +740,7 @@ impl Catalog {
                             ),
                             conn_id: None,
                             depends_on: vec![log.id],
+                            enabled: catalog.enable_index(&log.index_id),
                         }),
                     );
                 }
@@ -786,6 +791,7 @@ impl Catalog {
                             create_sql: index_sql,
                             conn_id: None,
                             depends_on: vec![table.id],
+                            enabled: catalog.enable_index(&table.index_id),
                         }),
                     );
                 }
@@ -871,6 +877,9 @@ impl Catalog {
             for (_item_name, item_id) in &schema.items {
                 builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
             }
+            for (_item_name, function_id) in &schema.functions {
+                builtin_table_updates.extend(catalog.pack_item_update(*function_id, 1));
+            }
         }
         for (db_name, db) in &catalog.by_name {
             builtin_table_updates.push(catalog.pack_database_update(db_name, 1));
@@ -879,6 +888,9 @@ impl Catalog {
                 builtin_table_updates.push(catalog.pack_schema_update(&db_spec, schema_name, 1));
                 for (_item_name, item_id) in &schema.items {
                     builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
+                }
+                for (_item_name, function_id) in &schema.functions {
+                    builtin_table_updates.extend(catalog.pack_item_update(*function_id, 1));
                 }
             }
         }
@@ -952,6 +964,7 @@ impl Catalog {
             persist: PersistConfig::disabled(),
             skip_migrations: true,
             metrics_registry: &MetricsRegistry::new(),
+            disable_user_indexes: false,
         })?;
         Ok(catalog)
     }
@@ -1249,13 +1262,15 @@ impl Catalog {
 
         match entry.item() {
             CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_) => {
-                self.indexes.insert(id, vec![]);
+                self.enabled_indexes.insert(id, vec![]);
             }
             CatalogItem::Index(index) => {
-                self.indexes
-                    .get_mut(&index.on)
-                    .unwrap()
-                    .push((id, index.keys.clone()));
+                if index.enabled {
+                    self.enabled_indexes
+                        .get_mut(&index.on)
+                        .unwrap()
+                        .push((id, index.keys.clone()));
+                }
             }
             CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
         }
@@ -1826,16 +1841,19 @@ impl Catalog {
                         .expect("catalog out of sync");
                     if let CatalogItem::Index(index) = &metadata.item {
                         let indexes = self
-                            .indexes
+                            .enabled_indexes
                             .get_mut(&index.on)
                             .expect("catalog out of sync");
-                        let i = indexes
-                            .iter()
-                            .position(|(idx_id, _keys)| *idx_id == id)
-                            .expect("catalog out of sync");
-                        indexes.remove(i);
+                        let i = indexes.iter().position(|(idx_id, _keys)| *idx_id == id);
+                        match i {
+                            Some(i) => {
+                                indexes.remove(i);
+                            }
+                            None if !index.enabled => {}
+                            None => panic!("catalog out of sync"),
+                        };
                     }
-                    self.indexes.remove(&id);
+                    self.enabled_indexes.remove(&id);
                 }
 
                 Action::UpdateItem { id, to_name, item } => {
@@ -1947,7 +1965,7 @@ impl Catalog {
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 let mut optimizer = Optimizer::for_view();
-                let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
+                let optimized_expr = optimizer.optimize(source.expr, self.enabled_indexes())?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
@@ -1961,7 +1979,7 @@ impl Catalog {
                 view, depends_on, ..
             }) => {
                 let mut optimizer = Optimizer::for_view();
-                let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
+                let optimized_expr = optimizer.optimize(view.expr, self.enabled_indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
@@ -1979,6 +1997,7 @@ impl Catalog {
                 keys: index.keys,
                 conn_id: None,
                 depends_on,
+                enabled: self.enable_index(&id),
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -2004,10 +2023,21 @@ impl Catalog {
         })
     }
 
-    /// Returns a mapping that indicates all indices that are available for
-    /// each item in the catalog.
-    pub fn indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
-        &self.indexes
+    /// Determines the appropriate value for a [`Index`]'s `enabled` field.
+    ///
+    /// Note that it is the caller's responsibility to ensure that the `id` is
+    /// used for an `Index`.
+    pub fn enable_index(&self, id: &GlobalId) -> bool {
+        !self.config.disable_user_indexes || !id.is_user()
+    }
+
+    /// Returns a mapping that indicates all indices that are available for each
+    /// item in the catalog.
+    ///
+    /// Note that when `self.config.disable_user_indexes` is `true`, this does
+    /// not include any user indexes.
+    pub fn enabled_indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
+        &self.enabled_indexes
     }
 
     /// Returns the default index for the specified `id`.
@@ -2017,7 +2047,7 @@ impl Catalog {
     pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
         // The default index is just whatever index happens to appear first in
         // self.indexes.
-        self.indexes[&id].first().map(|(id, _keys)| *id)
+        self.enabled_indexes[&id].first().map(|(id, _keys)| *id)
     }
 
     /// Finds the nearest indexes that can satisfy the views or sources whose
@@ -2044,7 +2074,7 @@ impl Catalog {
                 return;
             }
 
-            if let Some((index_id, _)) = catalog.indexes[&id].first() {
+            if let Some((index_id, _)) = catalog.enabled_indexes[&id].first() {
                 indexes.push(*index_id);
                 return;
             }

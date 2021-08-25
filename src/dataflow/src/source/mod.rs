@@ -33,9 +33,7 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 use log::error;
-use ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, UIntGauge,
-};
+use ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use ore::now::NowFn;
 use prometheus::core::{AtomicI64, AtomicU64};
 
@@ -738,9 +736,9 @@ impl ConsistencyInfo {
 /// Source-specific Prometheus metrics
 pub struct SourceMetrics {
     /// Number of times an operator gets scheduled
-    operator_scheduled_counter: IntCounter,
+    operator_scheduled_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     /// Value of the capability associated with this source
-    capability: UIntGauge,
+    capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Per-partition Prometheus metrics.
     pub partition_metrics: HashMap<PartitionId, PartitionMetrics>,
     logger: Option<Logger>,
@@ -758,14 +756,20 @@ impl SourceMetrics {
         worker_id: &str,
         logger: Option<Logger>,
     ) -> SourceMetrics {
-        let source_id_string = source_id.to_string();
-        let labels = &[source_name, &source_id_string, worker_id];
+        let labels = &[
+            source_name.to_string(),
+            source_id.to_string(),
+            worker_id.to_string(),
+        ];
         SourceMetrics {
             operator_scheduled_counter: base
                 .source_specific
                 .operator_scheduled_counter
-                .with_label_values(labels),
-            capability: base.source_specific.capability.with_label_values(labels),
+                .get_delete_on_drop_counter(labels.to_vec()),
+            capability: base
+                .source_specific
+                .capability
+                .get_delete_on_drop_gauge(labels.to_vec()),
             partition_metrics: Default::default(),
             logger,
             source_name: source_name.to_string(),

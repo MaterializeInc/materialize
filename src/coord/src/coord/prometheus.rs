@@ -133,9 +133,9 @@ fn add_expiring_update(
     retain_for: u64,
     out: &mut Vec<TimestampedUpdate>,
 ) {
-    // TODO: Make this send both records in the same message so we can
-    // persist them atomically. Otherwise, we may end up with permanent
-    // orphans if a restart/crash happens at the wrong time.
+    // NB: This makes sure to send both records in the same message so we can
+    // persist them atomically. Otherwise, we may end up with permanent orphans
+    // if a restart/crash happens at the wrong time.
     let id = table.id;
     out.push(TimestampedUpdate {
         updates: updates
@@ -183,7 +183,7 @@ impl Scraper {
     ) -> Result<Scraper, anyhow::Error> {
         let (interval, retain_for) = match logging_config {
             Some(config) => {
-                let interval = config.metrics_scraping_frequency;
+                let interval = config.metrics_scraping_interval;
                 let retain_for = u64::try_from(config.retain_readings_for.as_millis())
                     .map_err(|_| anyhow!("scraper retention duration does not fit in an i64"))?;
                 (interval, retain_for)

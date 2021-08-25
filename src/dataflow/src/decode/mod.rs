@@ -52,7 +52,7 @@ pub fn rewrite_for_upsert(
     val: Result<Row, DataflowError>,
     keys: &mut HashMap<Row, Row>,
     key: Row,
-    metrics: &mut UIntGauge,
+    metrics: &UIntGauge,
 ) -> Result<Row, DataflowError> {
     if let Ok(row) = val {
         // often off by one, but is only tracked every N seconds so it will always be off

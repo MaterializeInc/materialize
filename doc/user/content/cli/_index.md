@@ -17,7 +17,7 @@ Flag | Default | Modifies
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
-[`--metrics_scraping-frequency`](#prometheus-metrics) | 1s | The frequency at which to update [prometheus metrics](#prometheus-metrics).
+[`--metrics-scraping-interval`](#prometheus-metrics) | 30s | The update interval for the `mz_metrics` table, see [prometheus metrics](#prometheus-metrics).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
 [`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where to emit log messages
@@ -30,6 +30,7 @@ Flag | Default | Modifies
 [`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
 `-v` / `--version` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
+[`--disable-user-indexes`](#disable-user-indexes) | Disabled | Starts the node without creating any dataflows for user indexes.
 
 If a command line flag takes an argument, you can alternatively set that flag
 via an environment variable named after the flag. If both the environment
@@ -112,7 +113,7 @@ the port that Materialize listens on from the default `6875`.
 
 The `--logical-compaction-window` option specifies the duration of time for
 which Materialize is required to maintain full historical detail in its
-[arrangements](/overview/api-components#indexes). Note that compaction happens
+[arrangements][api-indexes]. Note that compaction happens
 lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
 
@@ -202,20 +203,21 @@ In prior versions of Materialize, the metrics scraping interval was linked to
 the introspection interval.
 {{< /version-changed >}}
 
-The `--metrics-scraping-frequency` option determines the frequency at which the
-prometheus metrics are collected. The default frequency is `1s`. To disable
-prometheus metrics collection entirely, use the special value `off`.
+The `--metrics-scraping-interval` option determines the interval at which the
+prometheus metrics are collected to update the `mz_metrics` table. The default
+interval is `30s`. To disable prometheus metrics collection entirely, use the
+special value `off`.
 
-Higher frequencies provide more up-to-date metrics but increase load on
-the system. Lower frequencies increase staleness in exchange for decreased load.
-The default frequency is a good choice for most deployments.
+Lower intervals provide more up-to-date metrics but increase load on
+the system. Higher intervals increase staleness in exchange for decreased load.
+The default interval is a good choice for most deployments.
 
 {{< version-changed v0.7.3 >}}
 Materialize imports its own [Prometheus metrics](/ops/monitoring#prometheus)
 into the systems tables `mz_metrics` (counters and gauge readings),
 `mz_metric_histograms` (histogram distributions) and `mz_metrics_meta` (type
 information and help for each metric). These readings are imported once per
-`--metrics-scraping-frequency` period, and are retained for the duration given with
+`--metrics-scraping-interval` period, and are retained for the duration given with
 `--retain-prometheus-metrics` (defaulting to 5 minutes). Higher retention
 periods lead to greater memory usage.
 {{< /version-changed >}}
@@ -366,6 +368,41 @@ Using these parameters correctly requires substantial knowledge about how
 the underlying Timely and Differential Dataflow engines work. Typically you
 should only set these parameters in consultation with Materialize engineers.
 
+### Disable user indexes
+
+{{< version-added v0.9.2 />}}
+
+{{< warning >}}
+This feature is primarily meant for advanced administrators of Materialize.
+{{< /warning >}}
+
+If you cannot boot a Materialize node because it runs out of memory, you can use
+the `--disable-user-indexes` to prevent Materialize from creating any
+[indexes][api-indexes] on user-created objects. For
+example, if you add a view that contains a cross join that causes your node to
+immediately run out of memory on boot, you can use `--disable-user-indexes` to
+boot the node and then drop the offending view.
+
+In this mode users...
+
+- Can access objects within the [system catalog][sys-cat] to help determine
+  which indexes are causing the crash.
+- Can only `SELECT` from user-created objects that do not rely on user-created
+  indexes. In essence, this means users can still `SELECT` from user-created...
+  - Tables, but they will never return any data.
+  - Views that contain only references to constant values or depend entirely on
+    system tables' indexes.
+- Cannot `INSERT` data into tables.
+- Can create new objects, but any created indexes will remain disabled.
+
+For assistance with this mode, see:
+
+- [Architecture over: Indexes][api-indexes]
+- [System catalog][sys-cat]
+- [`SHOW INDEX`](/sql/show-index)
+- [`DROP VIEW`](/sql/drop-view)
+- [`DROP INDEX`](/sql/drop-index)
+
 ## Special environment variables
 
 Materialize respects several environment variables that have conventional
@@ -381,6 +418,8 @@ behavior generally matches the behavior of other HTTP clients.
 For precise details of Materialize's behavior, consult the documentation of
 the [`mz_http_proxy`](https://docs.rs/mz_http_proxy) crate.
 
+[api-indexes]: /overview/api-components#indexes
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source
+[sys-cat]: /sql/system-catalog

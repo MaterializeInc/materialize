@@ -99,7 +99,7 @@ mämmalmore    moose    42
 
 $ kafka-create-topic topic=textbytes
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 fish:fish
 bìrd1:goose
 bírdmore:geese
@@ -133,7 +133,7 @@ fish          fish  1
 bírdmore      geese 3
 mammal1       moose 4
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 bírdmore:géese
 mammalmore:moose
 mammal1:
@@ -147,7 +147,7 @@ bírdmore      g\xc3\xa9ese     6
 mammal1       mouse            9
 mammalmore    moose            7
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 mammalmore:herd
 
 > select * from bytesbytes
@@ -158,7 +158,7 @@ b\xc3\xadrdmore  g\xc3\xa9ese     6
 mammal1          mouse            9
 mammalmore       herd             10
 
-$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 bìrd1:
 fish:
 
@@ -183,7 +183,7 @@ $ kafka-create-topic topic=textproto
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
   ENVELOPE UPSERT FORMAT BYTES
 
-$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=:
 fish:{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
 bìrd1:{"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
 birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
@@ -198,7 +198,7 @@ fish 1 1 ONE my-string 1
 bìrd1 2 2 ONE something-valid 2
 birdmore 2 2 ONE something-valid 3
 
-$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=:
 mammal1: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
 bìrd1:
 birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "stuff"}
@@ -224,7 +224,7 @@ mammalmore 2 2 ONE something-valid 10
 $ kafka-create-topic topic=nullkey
 
 # A null key should result in an error decoding that row but not a panic
-$ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=: publish=true
+$ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
 bird1:goose
 :geese
 mammal1:moose

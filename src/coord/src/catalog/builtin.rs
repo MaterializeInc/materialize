@@ -441,6 +441,18 @@ pub const TYPE_BPCHAR_ARRAY: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::BPCHAR_ARRAY,
 };
 
+pub const TYPE_REGPROC: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1046),
+    pgtype: &postgres_types::Type::REGPROC,
+};
+
+pub const TYPE_REGPROC_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1047),
+    pgtype: &postgres_types::Type::REGPROC_ARRAY,
+};
+
 lazy_static! {
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -691,7 +703,8 @@ lazy_static! {
             .with_named_column("oid", ScalarType::Oid.nullable(false))
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("on_id", ScalarType::String.nullable(false))
-            .with_named_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("volatility", ScalarType::String.nullable(false))
+            .with_named_column("enabled", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4015),
         index_id: GlobalId::System(4016),
         persistent: false,
@@ -1232,7 +1245,9 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
-    typtype,
+    -- 'a' is used internally to denote an array type, but in postgres they show up
+    -- as 'b'.
+    CASE mztype WHEN 'a' THEN 'b' ELSE mztype END AS typtype,
     0::pg_catalog.oid AS typrelid,
     NULL::pg_catalog.oid AS typelem,
     coalesce(
@@ -1248,6 +1263,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
         0
     )
         AS typarray,
+    (CASE mztype WHEN 'a' THEN 'array_in' ELSE NULL END)::pg_catalog.regproc AS typinput,
     NULL::pg_catalog.oid AS typreceive,
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype
@@ -1255,7 +1271,9 @@ FROM
     mz_catalog.mz_types
     JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id
     JOIN (
-            SELECT type_id, 'a' AS typtype FROM mz_catalog.mz_array_types
+            -- 'a' is not a supported typtype, but we use it to denote an array. It is
+            -- converted to the correct value above.
+            SELECT type_id, 'a' AS mztype FROM mz_catalog.mz_array_types
             UNION ALL SELECT type_id, 'b' FROM mz_catalog.mz_base_types
             UNION ALL SELECT type_id, 'l' FROM mz_catalog.mz_list_types
             UNION ALL SELECT type_id, 'm' FROM mz_catalog.mz_map_types
@@ -1270,9 +1288,9 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_proc AS SELECT
-    NULL::pg_catalog.oid AS oid,
-    NULL::pg_catalog.text AS proname
-    WHERE false",
+    oid,
+    name AS proname
+FROM mz_catalog.mz_functions",
     id: GlobalId::System(5021),
     needs_logs: false,
 };
@@ -1343,6 +1361,8 @@ lazy_static! {
             Builtin::Type(&TYPE_OID_ARRAY),
             Builtin::Type(&TYPE_RECORD),
             Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_REGPROC),
+            Builtin::Type(&TYPE_REGPROC_ARRAY),
             Builtin::Type(&TYPE_INT2),
             Builtin::Type(&TYPE_INT2_ARRAY),
             Builtin::Type(&TYPE_TEXT),
@@ -1528,11 +1548,12 @@ mod tests {
         });
 
         let rows = client
-            .query("SELECT oid, proname FROM pg_proc", &[])
+            .query("SELECT oid, proname, proargtypes FROM pg_proc", &[])
             .await?;
 
         struct PgProc {
             name: String,
+            arg_oids: Vec<u32>,
         }
 
         let mut pg_proc = HashMap::new();
@@ -1542,6 +1563,7 @@ mod tests {
                 oid,
                 PgProc {
                     name: row.get("proname"),
+                    arg_oids: row.get("proargtypes"),
                 },
             );
         }
@@ -1574,6 +1596,15 @@ mod tests {
                         "funcs with oid {} don't match names: {} in mz, {} in pg",
                         imp.oid, func.name, pg_fn.name
                     );
+
+                    // Complain, but don't fail, if argument oids don't match.
+                    // TODO: make these match.
+                    if imp.arg_oids != pg_fn.arg_oids {
+                        println!(
+                            "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
+                            imp.oid, func.name, imp.arg_oids, pg_fn.arg_oids
+                        );
+                    }
                 }
             }
         }

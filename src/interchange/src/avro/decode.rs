@@ -117,9 +117,9 @@ fn push_coords(coords: Option<DebeziumSourceCoordinates>, packer: &mut Row) -> R
         None => packer.push(Datum::Null),
     }
     if is_unknown {
-        Ok(())
-    } else {
         Err(())
+    } else {
+        Ok(())
     }
 }
 

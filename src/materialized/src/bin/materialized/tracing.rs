@@ -156,8 +156,8 @@ mod test {
     use super::MetricsRecorderLayer;
     use log::{error, info, warn};
     use ore::metric;
+    use ore::metrics::raw::IntCounterVec;
     use ore::metrics::{MetricsRegistry, ThirdPartyMetric};
-    use prometheus::IntCounterVec;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 

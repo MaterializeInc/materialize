@@ -10,3 +10,5 @@ one of three ways:
 - Providing a path to a file that contains the Avro Schema.
 - Providing the Avro schema [in-line when creating the
   source](#inlining-the-avro-schema).
+
+To avoid case-sensitivity conflicts with Materialize identifiers, we recommend you double-quote all field names when working with Avro-formatted sources. For more information, see [Identifiers: Case sensitivity](/sql/identifiers/#case-sensitivity).

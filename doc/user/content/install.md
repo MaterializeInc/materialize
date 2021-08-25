@@ -17,7 +17,7 @@ instructions install the latest release of Materialize, **{{< version >}}**. The
 developer builds are available at https://dev.materialize.com/. For prior releases,
 see the [Versions page](/versions).
 
-**Have any questions?** [Contact us](https://materialize.com/contact/)
+**Have any questions?** [Ask us on Slack](https://materialize.com/s/chat)
 
 ## Docker
 
@@ -128,7 +128,8 @@ Detail | Info
 
 ### CLI Connections
 
-To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/), like `psql` or `mzcli`. To install the `psql` client:
+To connect to a running instance, you can use any [Materialize-compatible CLI](/connect/cli/),
+like `psql` or `mzcli`. To install the `psql` client:
 
 {{< tabs >}}
 {{< tab "macOS">}}

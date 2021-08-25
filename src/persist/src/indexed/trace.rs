@@ -12,6 +12,7 @@
 //!
 //! This is directly a persistent analog of [differential_dataflow::trace::Trace].
 
+use std::mem;
 use std::sync::Arc;
 
 use differential_dataflow::trace::Description;
@@ -51,8 +52,9 @@ use crate::storage::Blob;
 ///    to the trace it is assigned a compaction level of 0.
 ///  - We periodically merge consecutive batches at the same level L representing
 ///    time intervals [lo, mid) and [mid, hi) into a single batch representing
-///    all of the updates in [lo, hi) with level L + 1. Once two batches are merged
-///    they are removed from the trace and replaced with the merged batch.
+///    all of the updates in [lo, hi) with level L + 1 iff the new batch contains
+///    more data than both of its parents, and L otherwise.. Once two batches are
+///    merged they are removed from the trace and replaced with the merged batch.
 ///  - Perform merges for the oldest batches possible first.
 ///
 /// NB: this approach assumes that all batches are roughly uniformly sized when they
@@ -147,10 +149,52 @@ impl Trace {
         self.seal = seal;
     }
 
+    /// Checks whether the given seal would be valid to pass to
+    /// [Trace::update_seal].
+    pub fn validate_seal(&self, ts: u64) -> Result<(), Error> {
+        let prev = self.get_seal();
+        if !prev.less_than(&ts) {
+            return Err(Error::from(format!(
+                "invalid seal for {:?}: {:?} not in advance of current seal frontier {:?}",
+                self.id, ts, prev
+            )));
+        }
+        Ok(())
+    }
+
     /// A lower bound on the time at which updates may have been logically
     /// compacted together.
     pub fn since(&self) -> Antichain<u64> {
         self.since.clone()
+    }
+
+    /// Checks whether the given since would be valid to pass to
+    /// [Trace::allow_compaction].
+    pub fn validate_allow_compaction(&self, since: &Antichain<u64>) -> Result<(), Error> {
+        if PartialOrder::less_equal(&self.seal, since) {
+            return Err(Error::from(format!(
+                "invalid compaction at or in advance of trace seal {:?}: {:?}",
+                self.seal, since,
+            )));
+        }
+
+        if PartialOrder::less_equal(since, &self.since) {
+            return Err(Error::from(format!(
+                "invalid compaction less than or equal to trace since {:?}: {:?}",
+                self.since, since
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Update the compaction frontier to `since`.
+    ///
+    /// This function intentionally does not do any checking to see if ts is
+    /// in advance of the current seal frontier, because we sometimes need to
+    /// use this to revert a seal update in the event of a storage failure.
+    pub fn allow_compaction(&mut self, since: Antichain<u64>) {
+        self.since = since;
     }
 
     /// Writes the given batch to [Blob] storage and logically adds the contained
@@ -184,11 +228,16 @@ impl Trace {
     /// Returns a consistent read of all the updates contained in this trace.
     pub fn snapshot<B: Blob>(&self, blob: &BlobCache<B>) -> Result<TraceSnapshot, Error> {
         let ts_upper = self.ts_upper();
+        let since = self.since();
         let mut updates = Vec::with_capacity(self.batches.len());
         for meta in self.batches.iter() {
             updates.push(blob.get_trace_batch(&meta.key)?);
         }
-        Ok(TraceSnapshot { ts_upper, updates })
+        Ok(TraceSnapshot {
+            ts_upper,
+            since,
+            updates,
+        })
     }
 
     /// Merge two batches into one, forwarding all updates not beyond the current
@@ -209,7 +258,6 @@ impl Trace {
         // Sanity check that both batches being merged are at identical compaction
         // levels.
         debug_assert_eq!(first.level, second.level);
-        let merged_level = first.level + 1;
 
         let desc = Description::new(
             first.desc.lower().clone(),
@@ -241,6 +289,16 @@ impl Trace {
         // TODO: actually clear the unwanted batches from the blob storage
         let size_bytes = blob.set_trace_batch(key.clone(), new_batch)?;
 
+        // Only upgrade the compaction level if we know this new batch represents
+        // an increase in data over both of its parents so that we know we need
+        // even more additional batches to amortize the cost of compacting it in
+        // the future.
+        let merged_level = if size_bytes > first.size_bytes && size_bytes > second.size_bytes {
+            first.level + 1
+        } else {
+            first.level
+        };
+
         Ok(TraceBatchMeta {
             key,
             desc,
@@ -251,8 +309,14 @@ impl Trace {
 
     /// Take one step towards compacting the trace.
     ///
-    /// Returns true if the trace was modified, false otherwise.
-    pub fn step<B: Blob>(&mut self, blob: &mut BlobCache<B>) -> Result<bool, Error> {
+    /// Returns a list of trace batches that can now be physically deleted after
+    /// the compaction step is committed to durable storage.
+    pub fn step<B: Blob>(
+        &mut self,
+        blob: &mut BlobCache<B>,
+    ) -> Result<(u64, Vec<TraceBatchMeta>), Error> {
+        let mut written_bytes = 0;
+        let mut deleted = vec![];
         // TODO: should we remember our position in this list?
         for i in 1..self.batches.len() {
             if (self.batches[i - 1].level == self.batches[i].level)
@@ -261,11 +325,13 @@ impl Trace {
                 let first = self.batches[i - 1].clone();
                 let second = self.batches[i].clone();
 
-                let new_batch = self.merge(&first, &second, blob)?;
+                let mut new_batch = self.merge(&first, &second, blob)?;
+                written_bytes += new_batch.size_bytes;
 
                 // TODO: more performant way to do this?
-                self.batches.remove(i);
-                self.batches[i - 1] = new_batch;
+                deleted.push(self.batches.remove(i));
+                mem::swap(&mut self.batches[i - 1], &mut new_batch);
+                deleted.push(new_batch);
 
                 // Sanity check that the modified list of batches satisfies
                 // all invariants.
@@ -273,30 +339,10 @@ impl Trace {
                     self.meta().validate()?;
                 }
 
-                return Ok(true);
+                break;
             }
         }
-        Ok(false)
-    }
-
-    /// Update the compaction frontier to `since`.
-    pub fn allow_compaction(&mut self, since: Antichain<u64>) -> Result<(), Error> {
-        if PartialOrder::less_equal(&self.seal, &since) {
-            return Err(Error::from(format!(
-                "invalid compaction at or in advance of trace seal {:?}: {:?}",
-                self.seal, since,
-            )));
-        }
-
-        if PartialOrder::less_equal(&since, &self.since) {
-            return Err(Error::from(format!(
-                "invalid compaction less than or equal to trace since {:?}: {:?}",
-                self.since, since
-            )));
-        }
-
-        self.since = since;
-        Ok(())
+        Ok((written_bytes, deleted))
     }
 }
 
@@ -305,6 +351,11 @@ impl Trace {
 pub struct TraceSnapshot {
     /// An open upper bound on the times of contained updates.
     pub ts_upper: Antichain<u64>,
+    /// Since frontier of the given updates.
+    ///
+    /// All updates not at times greater than this frontier must be advanced
+    /// to a time that is equivalent to this frontier.
+    pub since: Antichain<u64>,
     updates: Vec<Arc<BlobTraceBatch>>,
 }
 
@@ -326,17 +377,21 @@ mod tests {
 
     use super::*;
 
+    fn desc_from(lower: u64, upper: u64, since: u64) -> Description<u64> {
+        Description::new(
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(since),
+        )
+    }
+
     #[test]
     fn test_allow_compaction() -> Result<(), Error> {
         let mut t: Trace = Trace::new(TraceMeta {
             id: Id(0),
             batches: vec![TraceBatchMeta {
                 key: "key1".to_string(),
-                desc: Description::new(
-                    Antichain::from_elem(0),
-                    Antichain::from_elem(10),
-                    Antichain::from_elem(5),
-                ),
+                desc: desc_from(0, 10, 5),
                 level: 1,
                 size_bytes: 0,
             }],
@@ -346,22 +401,23 @@ mod tests {
         });
 
         // Normal case: advance since frontier.
-        t.allow_compaction(Antichain::from_elem(6))?;
+        t.validate_allow_compaction(&Antichain::from_elem(6))?;
+        t.allow_compaction(Antichain::from_elem(6));
 
         // Repeat same since frontier.
-        assert_eq!(t.allow_compaction(Antichain::from_elem(6)),
+        assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(6)),
             Err(Error::from("invalid compaction less than or equal to trace since Antichain { elements: [6] }: Antichain { elements: [6] }")));
 
         // Regress since frontier.
-        assert_eq!(t.allow_compaction(Antichain::from_elem(5)),
+        assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(5)),
             Err(Error::from("invalid compaction less than or equal to trace since Antichain { elements: [6] }: Antichain { elements: [5] }")));
 
         // Advance since frontier to seal
-        assert_eq!(t.allow_compaction(Antichain::from_elem(10)),
+        assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(10)),
             Err(Error::from("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [10] }")));
 
         // Advance since frontier beyond seal
-        assert_eq!(t.allow_compaction(Antichain::from_elem(11)),
+        assert_eq!(t.validate_allow_compaction(&Antichain::from_elem(11)),
             Err(Error::from("invalid compaction at or in advance of trace seal Antichain { elements: [10] }: Antichain { elements: [11] }")));
 
         Ok(())
@@ -377,62 +433,68 @@ mod tests {
         t.update_seal(10);
 
         let batch = BlobTraceBatch {
-            desc: Description::new(
-                Antichain::from_elem(0),
-                Antichain::from_elem(1),
-                Antichain::from_elem(0),
-            ),
-            updates: vec![(("k".into(), "v".into()), 0, 1)],
+            desc: desc_from(0, 1, 0),
+            updates: vec![
+                (("k".into(), "v".into()), 0, 1),
+                (("k2".into(), "v2".into()), 0, 1),
+            ],
         };
 
         assert_eq!(t.append(batch, &mut blob), Ok(()));
         let batch = BlobTraceBatch {
-            desc: Description::new(
-                Antichain::from_elem(1),
-                Antichain::from_elem(3),
-                Antichain::from_elem(0),
-            ),
-            updates: vec![(("k".into(), "v".into()), 2, 1)],
+            desc: desc_from(1, 3, 0),
+            updates: vec![
+                (("k".into(), "v".into()), 2, 1),
+                (("k3".into(), "v3".into()), 2, 1),
+            ],
         };
         assert_eq!(t.append(batch, &mut blob), Ok(()));
 
         let batch = BlobTraceBatch {
-            desc: Description::new(
-                Antichain::from_elem(3),
-                Antichain::from_elem(9),
-                Antichain::from_elem(0),
-            ),
+            desc: desc_from(3, 9, 0),
             updates: vec![(("k".into(), "v".into()), 5, 1)],
         };
         assert_eq!(t.append(batch, &mut blob), Ok(()));
 
-        t.allow_compaction(Antichain::from_elem(3))?;
-        t.step(&mut blob)?;
-        let batch_meta: Vec<_> = t
-            .batches
-            .iter()
-            .map(|meta| {
-                (
-                    meta.key.clone(),
-                    (
-                        meta.desc.lower()[0],
-                        meta.desc.upper()[0],
-                        meta.desc.since()[0],
-                    ),
-                    meta.level,
-                )
-            })
-            .collect();
+        t.validate_allow_compaction(&Antichain::from_elem(3))?;
+        t.allow_compaction(Antichain::from_elem(3));
+        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        // Change this to a >0 check if it starts to be a maintenance burden.
+        assert_eq!(written_bytes, 322);
+        assert_eq!(
+            deleted_batches
+                .into_iter()
+                .map(|b| b.key)
+                .collect::<Vec<_>>(),
+            vec!["Id(0)-trace-1".to_string(), "Id(0)-trace-0".to_string()]
+        );
+
+        // Check that step doesn't do anything when there's nothing to compact.
+        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        assert_eq!(written_bytes, 0);
+        assert_eq!(deleted_batches, vec![]);
 
         assert_eq!(
-            batch_meta,
+            t.batches,
             vec![
-                ("Id(0)-trace-3".to_string(), (0, 3, 3), 1),
-                ("Id(0)-trace-2".to_string(), (3, 9, 0), 0)
+                TraceBatchMeta {
+                    key: "Id(0)-trace-3".to_string(),
+                    desc: desc_from(0, 3, 3),
+                    level: 1,
+                    size_bytes: 322,
+                },
+                TraceBatchMeta {
+                    key: "Id(0)-trace-2".to_string(),
+                    desc: desc_from(3, 9, 0),
+                    level: 0,
+                    size_bytes: 186,
+                },
             ]
         );
 
         let snapshot = t.snapshot(&blob)?;
+        assert_eq!(snapshot.since, Antichain::from_elem(3));
+        assert_eq!(snapshot.ts_upper, Antichain::from_elem(9));
 
         let updates = snapshot.read_to_end();
 
@@ -440,7 +502,64 @@ mod tests {
             updates,
             vec![
                 (("k".into(), "v".into()), 3, 2),
-                (("k".into(), "v".into()), 5, 1)
+                (("k".into(), "v".into()), 5, 1),
+                (("k2".into(), "v2".into()), 3, 1),
+                (("k3".into(), "v3".into()), 3, 1),
+            ]
+        );
+
+        t.update_seal(11);
+
+        let batch = BlobTraceBatch {
+            desc: desc_from(9, 10, 0),
+            updates: vec![(("k".into(), "v".into()), 9, 1)],
+        };
+        assert_eq!(t.append(batch, &mut blob), Ok(()));
+        t.validate_allow_compaction(&Antichain::from_elem(10))?;
+        t.allow_compaction(Antichain::from_elem(10));
+        let (written_bytes, deleted_batches) = t.step(&mut blob)?;
+        assert_eq!(written_bytes, 186);
+        assert_eq!(
+            deleted_batches
+                .into_iter()
+                .map(|b| b.key)
+                .collect::<Vec<_>>(),
+            vec!["Id(0)-trace-4".to_string(), "Id(0)-trace-2".to_string()]
+        );
+
+        // Check that compactions which do not result in a batch larger than both
+        // parents do not increment the result batch's compaction level.
+        assert_eq!(
+            t.batches,
+            vec![
+                TraceBatchMeta {
+                    key: "Id(0)-trace-3".to_string(),
+                    desc: desc_from(0, 3, 3),
+                    level: 1,
+                    size_bytes: 322,
+                },
+                TraceBatchMeta {
+                    key: "Id(0)-trace-5".to_string(),
+                    desc: desc_from(3, 10, 10),
+                    level: 0,
+                    size_bytes: 186,
+                },
+            ]
+        );
+
+        let snapshot = t.snapshot(&blob)?;
+        assert_eq!(snapshot.since, Antichain::from_elem(10));
+        assert_eq!(snapshot.ts_upper, Antichain::from_elem(10));
+
+        let updates = snapshot.read_to_end();
+
+        assert_eq!(
+            updates,
+            vec![
+                (("k".into(), "v".into()), 3, 2),
+                (("k".into(), "v".into()), 10, 2),
+                (("k2".into(), "v2".into()), 3, 1),
+                (("k3".into(), "v3".into()), 3, 1),
             ]
         );
 

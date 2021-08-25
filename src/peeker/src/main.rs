@@ -22,12 +22,16 @@ use hyper::{Body, Response, Server};
 use log::{debug, error, info, warn};
 use ore::{
     metric,
-    metrics::{HistogramVec, IntCounterVec, MetricsRegistry},
+    metrics::{
+        raw::IntCounterVec as RawIntCounterVec, CounterVecExt, HistogramVecExt, IntCounterVec,
+        MetricsRegistry,
+    },
 };
 use postgres::Client;
 use prometheus::Encoder;
 
 use crate::args::{Args, Config, QueryGroup, Source};
+use ore::metrics::HistogramVec;
 
 mod args;
 
@@ -138,8 +142,12 @@ fn spawn_query_thread(
                     let stmt = postgres_client
                         .prepare(&format!("SELECT * FROM {}", q.name))
                         .expect("should be able to prepare a query");
-                    let hist = metrics.histogram_unlabeled.with_label_values(&[&q.name]);
-                    let rows_counter = metrics.rows_unlabeled.with_label_values(&[&q.name]);
+                    let hist = metrics
+                        .histogram_unlabeled
+                        .get_delete_on_drop_histogram(vec![q.name.clone()]);
+                    let rows_counter = metrics
+                        .rows_unlabeled
+                        .get_delete_on_drop_counter(vec![q.name.clone()]);
                     (stmt, q.name.clone(), hist, rows_counter)
                 })
                 .collect::<Vec<_>>();
@@ -356,7 +364,8 @@ fn try_initialize(client: &mut Client, query_group: &QueryGroup) -> bool {
 #[derive(Clone)]
 struct Metrics {
     histogram_unlabeled: HistogramVec,
-    errors_unlabeled: IntCounterVec,
+    // TODO: The error metric is not deleted after removing self
+    errors_unlabeled: RawIntCounterVec,
     rows_unlabeled: IntCounterVec,
 }
 

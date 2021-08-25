@@ -387,6 +387,19 @@ For example, this test will pass:
 "${testdrive.seed}"
 ```
 
+#### `$ set name`
+
+Sets the variable to the possibly multi-line value that follows.
+
+```
+$ set schema
+syntax = "proto3";
+
+message SimpleId {
+  string id = 1;
+}
+```
+
 ## Variable reference
 
 The following variables are defined for every test. Many correspond to the command-line options passed to `testdrive`:
@@ -502,6 +515,30 @@ COMMIT;
 #### `$ postgres-verify-slot connection=... slot=... active=(true|false)`
 
 Pauses the test until the desired Postgres replication slot has become active or inactive on the Postgres side of the direct Postgres replication. This is used to prevent flakiness in Postgres-related tests.
+
+
+## Connecting to Microsoft SQL Server
+
+#### `$ sql-server-connect name=...`
+
+Creates a named connection to SQL Server. The parameters of the connection are specified in ADO syntax. As the ADO string can contain spaces, it needs to be provided in the body of the action:
+
+```
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${env.SA_PASSWORD}
+```
+
+#### `$ sql-server-execute name=...`
+
+Executes SQL queries over the specified named connection to SQL server. If transactions are used, each transaction must be fully self-contained within a single line:
+
+```
+$ sql-server-execute name=sql-server
+USE test;
+BEGIN TRANSACTION INSERT INTO t1 VALUES (1); INSERT INTO t2 VALUES (2); COMMIT;
+```
+
+The output of the queries is not validated in any way. An error during execution will cause the test to fail.
 
 ## Sleeping in the test
 
