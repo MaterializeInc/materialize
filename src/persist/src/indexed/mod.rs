@@ -678,7 +678,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             return Err(format!("failed to append to unsealed: {}", e).into());
         }
 
-        let mut seal_updates: HashMap<Id, u64> = HashMap::new();
+        let mut seal_updates: HashMap<Id, Antichain<u64>> = HashMap::new();
 
         let prev_traces: HashMap<_, _> = self
             .prev_meta
@@ -705,7 +705,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             };
 
             if PartialOrder::less_than(prev_seal, &curr_seal) {
-                seal_updates.insert(id, curr_seal[0]);
+                seal_updates.insert(id, curr_seal);
             }
         }
 
@@ -742,10 +742,15 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             }
         }
 
-        for (id, seal_ts) in seal_updates.iter() {
+        for (id, seal) in seal_updates.iter() {
             if let Some(listen_fns) = self.listeners.get(&id) {
                 for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Sealed(*seal_ts));
+                    // TODO: perhaps this event should take an antichain directly? If
+                    // the downstream user held a timely::CapabilitySet they could
+                    // use the antichain directly as well.
+                    for seal_ts in seal.elements().iter() {
+                        listen_fn(ListenEvent::Sealed(*seal_ts));
+                    }
                 }
             }
         }

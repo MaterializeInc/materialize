@@ -270,11 +270,11 @@ impl Trace {
         updates.extend(blob.get_trace_batch(&first.key)?.updates.iter().cloned());
         updates.extend(blob.get_trace_batch(&second.key)?.updates.iter().cloned());
 
-        // TODO: use antichain more idiomatically.
-        let since_time = self.since[0];
         for ((_, _), t, _) in updates.iter_mut() {
-            if *t < since_time {
-                *t = since_time;
+            for since_ts in self.since.elements().iter() {
+                if *t < *since_ts {
+                    *t = *since_ts;
+                }
             }
         }
 
