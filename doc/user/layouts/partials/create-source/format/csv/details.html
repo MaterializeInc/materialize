@@ -14,6 +14,7 @@ Note that:
   the _col&lowbar;name_ option in `CREATE SOURCE`.
 - All rows without the number of columns determined by the format are dropped,
   and Materialize logs an error.
+- To avoid case-sensitivity conflicts with Materialize identifiers, we recommend you double-quote all field names when working with Avro-formatted sources. For more information, see [Identifiers: Case sensitivity](/sql/identifiers/#case-sensitivity).
 
 #### Types
 
