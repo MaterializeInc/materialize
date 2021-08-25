@@ -690,7 +690,8 @@ lazy_static! {
             .with_named_column("name", ScalarType::String.nullable(false))
             .with_named_column("position", ScalarType::Int64.nullable(false))
             .with_named_column("nullable", ScalarType::Bool.nullable(false))
-            .with_named_column("type", ScalarType::String.nullable(false)),
+            .with_named_column("type", ScalarType::String.nullable(false))
+            .with_named_column("default", ScalarType::String.nullable(true)),
         id: GlobalId::System(4013),
         index_id: GlobalId::System(4014),
         persistent: false,
@@ -1254,7 +1255,8 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid AS typreceive,
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype,
-    -1::pg_catalog.int4 AS typtypmod
+    -1::pg_catalog.int4 AS typtypmod,
+    NULL::pg_catalog.text AS typdefault
 FROM
     mz_catalog.mz_types
     JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id
@@ -1283,12 +1285,12 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     position as attnum,
     -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
+    mz_columns.default IS NOT NULL as atthasdef,
     FALSE as attisdropped
 FROM mz_catalog.mz_objects
 JOIN mz_catalog.mz_columns ON mz_objects.id = mz_columns.id
 JOIN mz_catalog.mz_types ON mz_columns.type = mz_types.name
-JOIN pg_catalog.pg_type ON pg_type.oid = mz_types.oid
-",
+JOIN pg_catalog.pg_type ON pg_type.oid = mz_types.oid",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
     id: GlobalId::System(5020),
@@ -1334,11 +1336,16 @@ pub const PG_ATTRDEF: BuiltinView = BuiltinView {
     name: "pg_attrdef",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_attrdef AS SELECT
-    NULL::pg_catalog.oid AS adrelid,
-    NULL::pg_catalog.int2 AS adnum,
-    NULL::pg_catalog.text AS adbin,
-    NULL::pg_catalog.text AS adsrc
-    WHERE false",
+    NULL::pg_catalog.oid AS oid,
+    mz_objects.oid AS adrelid,
+    mz_columns.position AS adnum,
+    mz_columns.default AS adbin,
+    mz_columns.default AS adsrc
+FROM
+    mz_catalog.mz_columns
+    JOIN mz_catalog.mz_objects ON mz_columns.id = mz_objects.id
+WHERE
+    default IS NOT NULL",
     id: GlobalId::System(5025),
     needs_logs: false,
 };
