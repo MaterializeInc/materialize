@@ -2580,10 +2580,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(ArrayAny) => Operation::unary(|_ecx, _e| bail_unsupported!("array_agg on arrays")) => ArrayAny, 4053;
         },
         "bool_and" => Aggregate {
-            params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_and")) => Bool, 2517;
+            params!(Bool) => Operation::nullary(|_ecx| catalog_name_only!("bool_and")) => Bool, 2517;
         },
         "bool_or" => Aggregate {
-            params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("bool_or")) => Bool, 2518;
+            params!(Bool) => Operation::nullary(|_ecx| catalog_name_only!("bool_or")) => Bool, 2518;
         },
         "count" => Aggregate {
             params!() => Operation::nullary(|_ecx| {

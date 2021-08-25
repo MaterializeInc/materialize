@@ -578,6 +578,13 @@ impl<T: AstInfo> Expr<T> {
         self.binop(Op::bare("/"), right)
     }
 
+    pub fn cast(self, data_type: T::DataType) -> Expr<T> {
+        Expr::Cast {
+            expr: Box::new(self),
+            data_type,
+        }
+    }
+
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
             name: UnresolvedObjectName(name.into_iter().map(Into::into).collect()),

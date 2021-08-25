@@ -15,14 +15,14 @@
 
 use uuid::Uuid;
 
-use crate::names::Aug;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName,
+    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
 
+use crate::names::{Aug, PartialObjectName, ResolvedDataType};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -85,6 +85,30 @@ impl<'a> FuncRewriter<'a> {
             scx,
             status: Ok(()),
         }
+    }
+
+    fn resolve_known_valid_data_type(&self, name: &PartialObjectName) -> ResolvedDataType {
+        let item = self
+            .scx
+            .catalog
+            .resolve_item(name)
+            .expect("data type known to be valid");
+        let full_name = self.scx.catalog.resolve_full_name(item.name());
+        ResolvedDataType::Named {
+            id: item.id(),
+            qualifiers: item.name().qualifiers.clone(),
+            full_name,
+            modifiers: vec![],
+            print_id: true,
+        }
+    }
+
+    fn int32_data_type(&self) -> ResolvedDataType {
+        self.resolve_known_valid_data_type(&PartialObjectName {
+            database: None,
+            schema: Some("pg_catalog".into()),
+            item: "int4".into(),
+        })
     }
 
     // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL;
@@ -199,6 +223,61 @@ impl<'a> FuncRewriter<'a> {
         Self::plan_variance(expr, filter, distinct, sample).call_unary(vec!["sqrt"])
     }
 
+    fn plan_bool_and(
+        &self,
+        expr: Expr<Aug>,
+        filter: Option<Box<Expr<Aug>>>,
+        distinct: bool,
+    ) -> Expr<Aug> {
+        // The code below converts `bool_and(x)` into:
+        //
+        //     sum((NOT x)::int4) = 0
+        //
+        // It is tempting to use `count` instead, but count does not return NULL
+        // when all input values are NULL, as required.
+        //
+        // The `NOT x` expression has the side effect of implicitly casting `x`
+        // to `bool`. We intentionally do not write `NOT x::bool`, because that
+        // would perform an explicit cast, and to match PostgreSQL we must
+        // perform only an implicit cast.
+        let sum = Self::plan_agg(
+            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
+            expr.negate().cast(self.int32_data_type()),
+            vec![],
+            filter,
+            distinct,
+        );
+        sum.equals(Expr::Value(Value::Number(0.to_string())))
+    }
+
+    fn plan_bool_or(
+        &self,
+        expr: Expr<Aug>,
+        filter: Option<Box<Expr<Aug>>>,
+        distinct: bool,
+    ) -> Expr<Aug> {
+        // The code below converts `bool_or(x)` into:
+        //
+        //     sum((x OR false)::int4) > 0
+        //
+        // It is tempting to use `count` instead, but count does not return NULL
+        // when all input values are NULL, as required.
+        //
+        // The `(x OR false)` expression implicity casts `x` to `bool` without
+        // changing its logical value. It is tempting to use `x::bool` instead,
+        // but that performs an explicit cast, and to match PostgreSQL we must
+        // perform only an implicit cast.
+        let sum = Self::plan_agg(
+            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
+            expr.or(Expr::Value(Value::Boolean(false)))
+                .cast(self.int32_data_type()),
+            vec![],
+            filter,
+            distinct,
+        );
+        sum.gt(Expr::Value(Value::Number(0.to_string())))
+    }
+
     fn rewrite_expr(&mut self, expr: &Expr<Aug>) -> Option<(Ident, Expr<Aug>)> {
         match expr {
             Expr::Function(Function {
@@ -230,6 +309,8 @@ impl<'a> FuncRewriter<'a> {
                         "var_pop" => Self::plan_variance(arg, filter, distinct, false),
                         "stddev" | "stddev_samp" => Self::plan_stddev(arg, filter, distinct, true),
                         "stddev_pop" => Self::plan_stddev(arg, filter, distinct, false),
+                        "bool_and" => self.plan_bool_and(arg, filter, distinct),
+                        "bool_or" => self.plan_bool_or(arg, filter, distinct),
                         _ => return None,
                     }
                 } else if args.len() == 2 {

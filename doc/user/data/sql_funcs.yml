@@ -30,6 +30,12 @@
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
 
+  - signature: 'bool_and(x: T) -> T'
+    description: _NULL_ if all values of `x` are _NULL_, otherwise true if all values of `x` are true, otherwise false.
+
+  - signature: 'bool_or(x: T) -> T'
+    description: _NULL_ if all values of `x` are _NULL_, otherwise true if any values of `x` are true, otherwise false.
+
   - signature: 'count(x: T) -> int'
     description: Number of non-_NULL_ inputs.
 
