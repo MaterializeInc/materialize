@@ -1947,22 +1947,24 @@ impl Catalog {
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
-        let persist = if allow_persist {
-            self.persist_details(id, name)?
-        } else {
-            None
-        };
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
-            }) => CatalogItem::Table(Table {
-                create_sql: table.create_sql,
-                desc: table.desc,
-                defaults: table.defaults,
-                conn_id: None,
-                depends_on,
-                persist,
-            }),
+            }) => {
+                let persist = if allow_persist {
+                    self.persist_details(id, name)?
+                } else {
+                    None
+                };
+                CatalogItem::Table(Table {
+                    create_sql: table.create_sql,
+                    desc: table.desc,
+                    defaults: table.defaults,
+                    conn_id: None,
+                    depends_on,
+                    persist,
+                })
+            }
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 let mut optimizer = Optimizer::for_view();
                 let optimized_expr = optimizer.optimize(source.expr, self.enabled_indexes())?;
