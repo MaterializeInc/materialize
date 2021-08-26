@@ -12,7 +12,7 @@ Debezium emits records using an envelope that contains valuable information abou
 
 
 {{< note >}}
-Currently, Materialize only supports Avro-encoded Debezium records. If you're interested in JSON support, please reach out in the community Slack or leave a comment in [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
+Currently, Materialize only supports Avro-encoded Debezium records. If you're interested in JSON support, please reach out in the community Slack or leave a comment on [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
 {{</ note >}}
 
 ### Database settings
