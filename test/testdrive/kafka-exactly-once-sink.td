@@ -289,7 +289,7 @@ $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true 
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
     WITH (reuse_topic=true)
   FORMAT JSON
-JSON consistency topic not yet supported
+For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY TOPIC consistency_topic CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url'. The default of using a JSON consistency topic is not supported.
 
 > CREATE SINK json_reuse_topic FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
