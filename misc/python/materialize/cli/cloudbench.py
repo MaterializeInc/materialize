@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Launch benchmark for a particular commit on cloud infrastructure, using `scratch.py`"""
+"""Launch benchmark for a particular commit on cloud infrastructure, using bin/scratch"""
 
 import argparse
 import asyncio
