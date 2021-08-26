@@ -358,6 +358,7 @@ impl ErrorResponse {
             CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
             CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             CoordError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction" is not a thing in Postgres. This error
