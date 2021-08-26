@@ -34,7 +34,18 @@ multiple_mz = [
     for i in [1, 2]
 ]
 
-services = confluents + versioned_mz + multiple_mz + [Testdrive()]
+mz_with_options = [
+    Materialized(name="mz_2_workers", hostname="materialized", options="--workers 2"),
+    Materialized(name="mz_4_workers", hostname="materialized", options="--workers 4"),
+]
+
+services = [
+    *confluents,
+    *versioned_mz,
+    *multiple_mz,
+    *mz_with_options,
+    Testdrive(),
+]
 
 
 def workflow_start_confluents(w: Workflow):
@@ -56,3 +67,13 @@ def workflow_two_mz(w: Workflow):
     for mz in multiple_mz:
         w.start_services(services=[mz.name])
         w.wait_for_mz(service=mz.name)
+
+
+def workflow_mz_with_options(w: Workflow):
+    w.start_services(services=["mz_2_workers"])
+    w.wait_for_mz(service="mz_2_workers")
+    w.kill_services(services=["mz_2_workers"])
+
+    w.start_services(services=["mz_4_workers"])
+    w.wait_for_mz(service="mz_4_workers")
+    w.kill_services(services=["mz_4_workers"])
