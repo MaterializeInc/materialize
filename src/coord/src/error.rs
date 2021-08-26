@@ -21,7 +21,11 @@ use crate::session::Var;
 #[derive(Debug)]
 pub enum CoordError {
     /// Query needs AS OF <time> or indexes to succeed.
-    AutomaticTimestampFailure(Vec<String>),
+    // Embeded object is meant to be of structure Vec<(Objectname, Vec<Index names w/ enabled stats>)>.
+    AutomaticTimestampFailure {
+        unmaterialized: Vec<String>,
+        disabled_indexes: Vec<(String, Vec<String>)>,
+    },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The specified session parameter is constrained to its current value.
@@ -80,10 +84,41 @@ impl CoordError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
-            CoordError::AutomaticTimestampFailure(deps) => Some(format!(
-                "The query transitively depends on the following unmaterialized sources:\n\t{}",
-                itertools::join(deps, "\n\t")
-            )),
+            CoordError::AutomaticTimestampFailure {
+                unmaterialized,
+                disabled_indexes,
+            } => {
+                let unmaterialized_err = if unmaterialized.is_empty() {
+                    "".into()
+                } else {
+                    format!(
+                        "\nUnmaterialized sources:\n\t{}",
+                        itertools::join(unmaterialized, "\n\t")
+                    )
+                };
+
+                let disabled_indexes_err = if disabled_indexes.is_empty() {
+                    "".into()
+                } else {
+                    let d = disabled_indexes.iter().fold(
+                        String::default(),
+                        |acc, (object_name, disabled_indexes)| {
+                            format!(
+                                "{}\n\n\t{}\n\tDisabled indexes:\n\t\t{}",
+                                acc,
+                                object_name,
+                                itertools::join(disabled_indexes, "\n\t\t")
+                            )
+                        },
+                    );
+                    format!("\nSources w/ disabled indexes:{}", d)
+                };
+
+                Some(format!(
+                    "The query transitively depends on the following:{}{}",
+                    unmaterialized_err, disabled_indexes_err
+                ))
+            }
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
             CoordError::SafeModeViolation(_) => Some(
@@ -98,12 +133,33 @@ impl CoordError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
-            CoordError::AutomaticTimestampFailure(..) => Some(
-                "Create indexes on the listed sources or on the views derived from \
-                those sources, or use `SELECT ... AS OF` to manually choose a \
-                timestamp for your query."
-                    .into(),
-            ),
+            CoordError::AutomaticTimestampFailure {
+                unmaterialized,
+                disabled_indexes,
+            } => {
+                let unmaterialized_hint = if unmaterialized.is_empty() {
+                    ""
+                } else {
+                    "\n- Use `SELECT ... AS OF` to manually choose a timestamp for your query.
+- Create indexes on the listed unmaterialized sources or on the views derived from those sources"
+                };
+                let disabled_indexes_hint = if disabled_indexes.is_empty() {
+                    ""
+                } else {
+                    "ALTER INDEX ... SET ENABLED to enable indexes"
+                };
+
+                Some(format!(
+                    "{}{}{}",
+                    unmaterialized_hint,
+                    if !unmaterialized_hint.is_empty() {
+                        "\n-"
+                    } else {
+                        ""
+                    },
+                    disabled_indexes_hint
+                ))
+            }
             CoordError::Catalog(c) => c.hint(),
             CoordError::Eval(e) => e.hint(),
             CoordError::InvalidAlterOnDisabledIndex(idx) => Some(format!(
@@ -129,7 +185,7 @@ impl CoordError {
 impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CoordError::AutomaticTimestampFailure(..) => {
+            CoordError::AutomaticTimestampFailure { .. } => {
                 f.write_str("unable to automatically determine a query timestamp")
             }
             CoordError::Catalog(e) => e.fmt(f),

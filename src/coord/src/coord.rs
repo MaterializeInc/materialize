@@ -2823,13 +2823,32 @@ impl Coordinator {
             // original sources on which they depend.
             PeekWhen::Immediately => {
                 if !unmaterialized_source_ids.is_empty() {
-                    let unmaterialized_dep_names = unmaterialized_source_ids
-                        .iter()
-                        .map(|id| self.catalog.get_by_id(id).name().to_string())
-                        .collect();
-                    return Err(CoordError::AutomaticTimestampFailure(
-                        unmaterialized_dep_names,
-                    ));
+                    let mut unmaterialized = vec![];
+                    let mut disabled_indexes = vec![];
+                    for id in unmaterialized_source_ids {
+                        // Determine which sources are unmaterialized and which have disabled indexes
+                        let name = self.catalog.get_by_id(&id).name().to_string();
+                        let indexes = self.catalog.get_indexes_on(id);
+                        if indexes.is_empty() {
+                            unmaterialized.push(name);
+                        } else {
+                            let disabled_index_names = indexes
+                                .iter()
+                                .filter_map(|id| {
+                                    if !self.catalog.is_index_enabled(id) {
+                                        Some(self.catalog.get_by_id(&id).name().to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            disabled_indexes.push((name, disabled_index_names));
+                        }
+                    }
+                    return Err(CoordError::AutomaticTimestampFailure {
+                        unmaterialized,
+                        disabled_indexes,
+                    });
                 }
 
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {

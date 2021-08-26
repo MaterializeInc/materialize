@@ -2105,13 +2105,8 @@ impl Catalog {
         }
     }
 
-    /// Returns the default index for the specified `id`.
-    ///
-    /// Panics if `id` does not exist, or if `id` is not an object on which
-    /// indexes can be built.
-    pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
-        // The default index is the index with the smallest ID, i.e. the one
-        // created in closest temporal proximity to the object itself.
+    /// Returns all indexes on this object known in the catalog.
+    pub fn get_indexes_on(&self, id: GlobalId) -> Vec<GlobalId> {
         self.get_by_id(&id)
             .used_by()
             .iter()
@@ -2119,8 +2114,18 @@ impl Catalog {
                 CatalogItem::Index(index) => index.on == id,
                 _ => false,
             })
-            .min()
             .cloned()
+            .collect()
+    }
+
+    /// Returns the default index for the specified `id`.
+    ///
+    /// Panics if `id` does not exist, or if `id` is not an object on which
+    /// indexes can be built.
+    pub fn default_index_for(&self, id: GlobalId) -> Option<GlobalId> {
+        // The default index is the index with the smallest ID, i.e. the one
+        // created in closest temporal proximity to the object itself.
+        self.get_indexes_on(id).iter().min().cloned()
     }
 
     /// Returns an error if the object's default index is disabled.
