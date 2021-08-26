@@ -48,9 +48,49 @@ struct Args {
     )]
     domain: String,
 
+    /// Whether to use HTTP instead of HTTPS when accessing the core API.
+    ///
+    /// Defaults to false unless `domain` is set to `localhost`.
+    #[structopt(long, env = "MZCLOUD_INSECURE", hidden = true)]
+    insecure: Option<bool>,
+
+    /// The domain of the admin API.
+    ///
+    /// Defaults to `admin.{domain}` unless `domain` is set to `localhost`, in
+    /// which case it assumes the standard local development environment setup
+    /// for Materialize Cloud and defaults to
+    /// `admin.staging.cloud.materialize.com`.
+    #[structopt(long, env = "MZCLOUD_ADMIN_DOMAIN", hidden = true)]
+    admin_domain: Option<String>,
+
     /// Which resources to operate on.
     #[structopt(subcommand)]
     category: Category,
+}
+
+impl Args {
+    /// Reports whether the requested API domain is localhost.
+    fn is_localhost(&self) -> bool {
+        self.domain.starts_with("localhost:") || self.domain == "localhost"
+    }
+
+    /// Returns the base URL at which the core API is hosted.
+    fn url(&self) -> String {
+        let insecure = self.insecure.unwrap_or_else(|| self.is_localhost());
+        match insecure {
+            true => format!("http://{}", self.domain),
+            false => format!("https://{}", self.domain),
+        }
+    }
+
+    /// Returns the base URL at which the admin API is hosted.
+    fn admin_url(&self) -> String {
+        match &self.admin_domain {
+            Some(admin_domain) => format!("https://{}", admin_domain),
+            None if self.is_localhost() => "https://admin.staging.cloud.materialize.com".into(),
+            None => format!("https://admin.{}", self.domain),
+        }
+    }
 }
 
 #[derive(Debug, StructOpt, Serialize)]
@@ -242,8 +282,8 @@ struct OauthResponse {
 async fn get_oauth_token(args: &Args) -> Result<String, reqwest::Error> {
     Ok(reqwest::Client::new()
         .post(format!(
-            "https://admin.{}/identity/resources/auth/v1/api-token",
-            args.domain
+            "{}/identity/resources/auth/v1/api-token",
+            args.admin_url()
         ))
         .json(&args.oauth)
         .send()
@@ -259,7 +299,7 @@ async fn run() -> anyhow::Result<()> {
 
     let access_token = get_oauth_token(&args).await?;
     let config = Configuration {
-        base_path: format!("https://{}", args.domain),
+        base_path: args.url(),
         user_agent: Some(format!("mzcloud-cli/{}/rust", VERSION)),
         // Yes, this came from OAuth, but Frontegg wants it as a bearer token.
         bearer_access_token: Some(access_token),
