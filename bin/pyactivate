@@ -78,19 +78,20 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
         os.stat(stamp_path)
         subprocess.check_call([python, "-c", ""])
     except Exception as e:
-        print("==> Checking for existing virtualenv")
+        print("==> Checking for existing virtualenv", file=sys.stderr)
         if isinstance(e, FileNotFoundError):
-            print("no existing virtualenv detected")
+            print("no existing virtualenv detected", file=sys.stderr)
         else:
             # Usually just an indication that the user has upgraded the system
             # Python that the virtualenv is referring to. Not important to
             # bubble up the error here. If it's persistent, it'll occur in the
             # new virtual env and bubble up when we exec later.
             print(
-                "warning: existing virtualenv is unable to execute python; will recreate"
+                "warning: existing virtualenv is unable to execute python; will recreate",
+                file=sys.stderr
             )
             logger.info(f"python exec error: {e}")
-        print("==> Initializing virtualenv in {}".format(venv_dir))
+        print("==> Initializing virtualenv in {}".format(venv_dir), file=sys.stderr)
         # Install Python into the virtualenv via a symlink rather than copying,
         # except on Windows. This matches the behavior of the `python -m venv`
         # command line tool. This is important on macOS, where the default
@@ -150,11 +151,13 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
 
     # Update dependencies, if necessary.
     if stamp_mtime <= requirements_mtime:
-        print("==> Updating {}dependencies with pip".format(variant + " " if variant else ""))
+        print("==> Updating {}dependencies with pip".format(variant + " " if variant else ""), file=sys.stderr)
         subprocess.check_call([
             venv_dir / "bin" / "pip", "install", "-r", requirements_path,
             "--disable-pip-version-check",
-        ])
+        ],
+            stdout=sys.stderr
+        )
         stamp_path.touch()
 
 

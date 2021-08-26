@@ -16,8 +16,9 @@ operations provided by the standard [`subprocess`][subprocess] module.
 """
 
 import subprocess
+import sys
 from pathlib import Path
-from typing import IO, Dict, Literal, Optional, Sequence, Union, overload
+from typing import IO, Dict, Literal, Optional, Sequence, TextIO, Union, overload
 
 from materialize import ui
 
@@ -28,9 +29,11 @@ def runv(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
     stdin: Union[None, int, IO[bytes], bytes] = None,
-    stdout: Union[None, int, IO[bytes]] = None,
+    stdout: Union[None, int, IO[bytes], TextIO] = None,
     capture_output: bool = False,
     env: Optional[Dict[str, str]] = None,
+    stderr: Union[None, int, IO[bytes], TextIO] = None,
+    print_to: TextIO = sys.stdout,
 ) -> subprocess.CompletedProcess:
     """Verbosely run a subprocess.
 
@@ -57,9 +60,8 @@ def runv(
             program does not exist.
         CalledProcessError: The process exited with a non-zero exit status.
     """
-    print("$", ui.shell_quote(args))
+    print("$", ui.shell_quote(args), file=print_to)
 
-    stderr = None
     if capture_output:
         stdout = subprocess.PIPE
         stderr = subprocess.PIPE
