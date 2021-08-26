@@ -70,6 +70,8 @@ pub enum CoordError {
     //
     // TODO(benesch): convert all those errors to structured errors.
     Unstructured(anyhow::Error),
+    /// The named feature is not supported and will (probably) not be.
+    Unsupported(&'static str),
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
 }
@@ -200,6 +202,7 @@ impl fmt::Display for CoordError {
             CoordError::UnknownParameter(name) => {
                 write!(f, "unrecognized configuration parameter {}", name.quoted())
             }
+            CoordError::Unsupported(features) => write!(f, "{} are not supported", features),
             CoordError::Unstructured(e) => write!(f, "{:#}", e),
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
         }

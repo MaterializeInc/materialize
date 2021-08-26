@@ -3099,7 +3099,11 @@ impl Coordinator {
             // If we couldn't optimize the INSERT statement to a constant, it
             // must depend on another relation. We're not yet sophisticated
             // enough to handle this.
-            _ => coord_bail!("INSERT statements cannot reference other relations"),
+            _ => {
+                return Err(CoordError::Unsupported(
+                    "INSERT statements referencing other relations",
+                ))
+            }
         }
     }
 
@@ -3387,7 +3391,9 @@ impl Coordinator {
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static | ExprPrepStyle::Write) {
-            coord_bail!("mz_logical_timestamp cannot be used in static or write queries");
+            return Err(CoordError::Unsupported(
+                "calls to mz_logical_timestamp in in static or write queries",
+            ));
         }
         Ok(())
     }
@@ -3596,7 +3602,9 @@ impl Coordinator {
         // transaction counter number because those counters are unrelated to the
         // other.
         if timelines.len() > 1 {
-            coord_bail!("Dataflow cannot use multiple timelines");
+            return Err(CoordError::Unsupported(
+                "multiple timelines within one dataflow",
+            ));
         }
         Ok(timelines.into_iter().next())
     }

@@ -143,7 +143,7 @@ a      b
 <null> "c"
 
 ! INSERT INTO t SELECT * FROM t;
-INSERT statements cannot reference other relations
+INSERT statements referencing other relations are not supported
 
 ! INSERT INTO t VALUES (1);
 null value in column "b" violates not-null constraint
@@ -202,7 +202,7 @@ null value in column "a" violates not-null constraint
 now cannot be used in static queries
 
 ! CREATE INDEX ON v (mz_logical_timestamp())
-mz_logical_timestamp cannot be used in static or write queries
+calls to mz_logical_timestamp in in static or write queries are not supported
 
 > DROP TABLE IF EXISTS s;
 
