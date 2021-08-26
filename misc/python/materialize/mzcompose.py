@@ -680,6 +680,7 @@ class Materialized(PythonService):
         image: Optional[str] = None,
         port: int = 6875,
         data_directory: str = "/share/mzdata",
+        options: str = "",
         environment: List[str] = [
             "MZ_DEV=1",
             "MZ_LOG_FILTER",
@@ -692,7 +693,7 @@ class Materialized(PythonService):
         ],
         volumes: List[str] = ["mzdata:/share/mzdata", "tmp:/share/tmp"],
     ) -> None:
-        command = f"--data-directory={data_directory} --experimental --disable-telemetry --listen-addr 0.0.0.0:{port}"
+        command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port}"
 
         config: PythonServiceConfig = (
             {"image": image} if image else {"mzbuild": "materialized"}
