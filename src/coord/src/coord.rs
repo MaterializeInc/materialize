@@ -91,12 +91,12 @@ use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan,
+    FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
+    Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use transform::Optimizer;
 
@@ -931,7 +931,7 @@ impl Coordinator {
                                 }
 
                                 // Statements below must by run singly (in Started).
-                                Statement::AlterIndexOptions(_)
+                                Statement::AlterIndex(_)
                                 | Statement::AlterObjectRename(_)
                                 | Statement::CreateDatabase(_)
                                 | Statement::CreateIndex(_)
@@ -1609,6 +1609,9 @@ impl Coordinator {
             Plan::AlterIndexResetOptions(plan) => {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
+            Plan::AlterIndexEnable(plan) => {
+                tx.send(self.sequence_alter_index_enable(plan), session);
+            }
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id());
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
@@ -1763,7 +1766,7 @@ impl Coordinator {
             &table.desc,
             conn_id,
             index_depends_on,
-            self.catalog.enable_index(&index_id),
+            self.catalog.index_enabled_by_default(&index_id),
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
@@ -1898,7 +1901,7 @@ impl Coordinator {
                     &source.desc,
                     None,
                     vec![source_id],
-                    self.catalog.enable_index(&index_id),
+                    self.catalog.index_enabled_by_default(&index_id),
                 );
                 let index_oid = self.catalog.allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
@@ -2055,7 +2058,7 @@ impl Coordinator {
                 &view.desc,
                 view.conn_id,
                 vec![view_id],
-                self.catalog.enable_index(&index_id),
+                self.catalog.index_enabled_by_default(&index_id),
             );
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -2152,7 +2155,7 @@ impl Coordinator {
             on: index.on,
             conn_id: None,
             depends_on,
-            enabled: self.catalog.enable_index(&id),
+            enabled: self.catalog.index_enabled_by_default(&id),
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -2165,7 +2168,7 @@ impl Coordinator {
             Ok(()) => {
                 self.dataflow_builder().build_index_dataflow(id).map(|df| {
                     self.ship_dataflow(df);
-                    self.set_index_options(id, options);
+                    self.set_index_options(id, options).expect("index enabled");
                 });
 
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -2820,13 +2823,32 @@ impl Coordinator {
             // original sources on which they depend.
             PeekWhen::Immediately => {
                 if !unmaterialized_source_ids.is_empty() {
-                    let unmaterialized_dep_names = unmaterialized_source_ids
-                        .iter()
-                        .map(|id| self.catalog.get_by_id(id).name().to_string())
-                        .collect();
-                    return Err(CoordError::AutomaticTimestampFailure(
-                        unmaterialized_dep_names,
-                    ));
+                    let mut unmaterialized = vec![];
+                    let mut disabled_indexes = vec![];
+                    for id in unmaterialized_source_ids {
+                        // Determine which sources are unmaterialized and which have disabled indexes
+                        let name = self.catalog.get_by_id(&id).name().to_string();
+                        let indexes = self.catalog.get_indexes_on(id);
+                        if indexes.is_empty() {
+                            unmaterialized.push(name);
+                        } else {
+                            let disabled_index_names = indexes
+                                .iter()
+                                .filter_map(|id| {
+                                    if !self.catalog.is_index_enabled(id) {
+                                        Some(self.catalog.get_by_id(&id).name().to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            disabled_indexes.push((name, disabled_index_names));
+                        }
+                    }
+                    return Err(CoordError::AutomaticTimestampFailure {
+                        unmaterialized,
+                        disabled_indexes,
+                    });
                 }
 
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
@@ -3043,13 +3065,7 @@ impl Coordinator {
             MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
             MutationKind::Insert => {
                 if self.catalog.config().disable_user_indexes {
-                    if self.catalog.enabled_indexes()[&plan.id].is_empty() {
-                        // Have to hard error here because we won't encounter the failure to
-                        // select an index until a panic occurs in the dataflow layer.
-                        return Err(CoordError::TableWithoutIndexes(
-                            self.catalog.get_by_id(&plan.id).name().to_string(),
-                        ));
-                    }
+                    self.catalog.ensure_default_index_enabled(plan.id)?;
                 }
 
                 ExecuteResponse::Inserted(plan.affected_rows)
@@ -3141,7 +3157,7 @@ impl Coordinator {
         &mut self,
         plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(plan.id, plan.options);
+        self.set_index_options(plan.id, plan.options)?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -3158,7 +3174,26 @@ impl Coordinator {
                 ),
             })
             .collect();
-        self.set_index_options(plan.id, options);
+        self.set_index_options(plan.id, options)?;
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
+
+    fn sequence_alter_index_enable(
+        &mut self,
+        plan: AlterIndexEnablePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let ops = self.catalog.enable_index_ops(plan.id)?;
+
+        // If ops is not empty, index was disabled.
+        if !ops.is_empty() {
+            self.catalog_transact(ops)?;
+            let df = self
+                .dataflow_builder()
+                .build_index_dataflow(plan.id)
+                .expect("index enabled");
+            self.ship_dataflow(df);
+        }
+
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -3321,8 +3356,24 @@ impl Coordinator {
         }
     }
 
-    fn set_index_options(&mut self, id: GlobalId, options: Vec<IndexOption>) {
-        let index = self.indexes.get_mut(&id).expect("index known to exist");
+    fn set_index_options(
+        &mut self,
+        id: GlobalId,
+        options: Vec<IndexOption>,
+    ) -> Result<(), CoordError> {
+        let index = match self.indexes.get_mut(&id) {
+            Some(index) => index,
+            None => {
+                if !self.catalog.is_index_enabled(&id) {
+                    return Err(CoordError::InvalidAlterOnDisabledIndex(
+                        self.catalog.get_by_id(&id).name().to_string(),
+                    ));
+                } else {
+                    panic!("coord indexes out of sync")
+                }
+            }
+        };
+
         for o in options {
             match o {
                 IndexOption::LogicalCompactionWindow(window) => {
@@ -3331,6 +3382,7 @@ impl Coordinator {
                 }
             }
         }
+        Ok(())
     }
 
     /// Prepares a relation expression for execution by preparing all contained

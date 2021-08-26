@@ -29,6 +29,10 @@ pub enum ErrorKind {
     OidExhaustion,
     Sql(SqlCatalogError),
     DatabaseAlreadyExists(String),
+    DefaultIndexDisabled {
+        idx_on: String,
+        default_idx: String,
+    },
     SchemaAlreadyExists(String),
     RoleAlreadyExists(String),
     ItemAlreadyExists(String),
@@ -83,7 +87,13 @@ impl Error {
 
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
-        None
+        match &self.kind {
+            ErrorKind::DefaultIndexDisabled { default_idx, .. } => Some(format!(
+                "You can enable the default index using ALTER INDEX {} SET ENABLED",
+                default_idx
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -128,7 +138,8 @@ impl std::error::Error for Error {
             | ErrorKind::TypeRename(_)
             | ErrorKind::ExperimentalModeRequired
             | ErrorKind::ExperimentalModeUnavailable
-            | ErrorKind::FailedMigration { .. } => None,
+            | ErrorKind::FailedMigration { .. }
+            | ErrorKind::DefaultIndexDisabled { .. } => None,
             ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
             ErrorKind::Persistence(e) => Some(e),
@@ -221,6 +232,17 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
                     f,
                     "cannot migrate from catalog version {} to version {} (earlier versions might still work): {}",
                     last_seen_version, this_version, cause
+                )
+            }
+            ErrorKind::DefaultIndexDisabled {
+                idx_on,
+                default_idx,
+            } => {
+                write!(
+                    f,
+                    "cannot perform operation on {} while its default index ({}) is disabled",
+                    idx_on.quoted(),
+                    default_idx.quoted()
                 )
             }
         }

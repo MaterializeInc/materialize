@@ -47,7 +47,7 @@ pub enum Statement<T: AstInfo> {
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     AlterObjectRename(AlterObjectRenameStatement),
-    AlterIndexOptions(AlterIndexOptionsStatement),
+    AlterIndex(AlterIndexStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropObjects(DropObjectsStatement),
@@ -102,7 +102,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
-            Statement::AlterIndexOptions(stmt) => f.write_node(stmt),
+            Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
@@ -820,20 +820,21 @@ impl AstDisplay for AlterObjectRenameStatement {
 impl_display!(AlterObjectRenameStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AlterIndexOptionsList {
-    Set(Vec<WithOption>),
-    Reset(Vec<Ident>),
+pub enum AlterIndexAction {
+    SetOptions(Vec<WithOption>),
+    ResetOptions(Vec<Ident>),
+    Enable,
 }
 
 /// `ALTER INDEX ... {RESET, SET}`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterIndexOptionsStatement {
+pub struct AlterIndexStatement {
     pub index_name: UnresolvedObjectName,
     pub if_exists: bool,
-    pub options: AlterIndexOptionsList,
+    pub action: AlterIndexAction,
 }
 
-impl AstDisplay for AlterIndexOptionsStatement {
+impl AstDisplay for AlterIndexStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER INDEX ");
         if self.if_exists {
@@ -842,22 +843,23 @@ impl AstDisplay for AlterIndexOptionsStatement {
         f.write_node(&self.index_name);
         f.write_str(" ");
 
-        match &self.options {
-            AlterIndexOptionsList::Set(options) => {
+        match &self.action {
+            AlterIndexAction::SetOptions(options) => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(&options));
                 f.write_str(")");
             }
-            AlterIndexOptionsList::Reset(options) => {
+            AlterIndexAction::ResetOptions(options) => {
                 f.write_str("RESET (");
                 f.write_node(&display::comma_separated(&options));
                 f.write_str(")");
             }
+            AlterIndexAction::Enable => f.write_str("SET ENABLED"),
         }
     }
 }
 
-impl_display!(AlterIndexOptionsStatement);
+impl_display!(AlterIndexStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {

@@ -337,9 +337,10 @@ impl ErrorResponse {
         // a various classes of uncategorized errors that use this error code
         // inappropriately.
         let code = match e {
+            CoordError::InvalidAlterOnDisabledIndex(_) => SqlState::INTERNAL_ERROR,
             CoordError::Catalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::ConstrainedParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
-            CoordError::AutomaticTimestampFailure(..) => SqlState::INTERNAL_ERROR,
+            CoordError::AutomaticTimestampFailure { .. } => SqlState::INTERNAL_ERROR,
             CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
@@ -351,7 +352,6 @@ impl ErrorResponse {
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             CoordError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
-            CoordError::TableWithoutIndexes(..) => SqlState::INTERNAL_ERROR,
             CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
