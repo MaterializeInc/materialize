@@ -235,7 +235,7 @@ num name num mod
   SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
 
 ! SELECT * FROM test15;
-Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
+unable to automatically determine a query timestamp
 
 ! SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
-Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
+unable to automatically determine a query timestamp
