@@ -357,7 +357,7 @@ pub struct AggregateExpr {
 /// here than in `expr`, as these aggregates may be applied over empty
 /// result sets and should be null in those cases, whereas `expr` variants
 /// only return null values when supplied nulls as input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -390,19 +390,33 @@ pub enum AggregateFunc {
     Count,
     Any,
     All,
-    /// Accumulates JSON-typed `Datum`s into a JSON list.
+    /// Accumulates `Datum::List`s whose first element is a JSON-typed `Datum`s
+    /// into a JSON list. The other elements are columns used by `order_by`.
     ///
     /// WARNING: Unlike the `jsonb_agg` function that is exposed by the SQL
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
-    JsonbAgg,
-    /// Aggregates pairs of JSON-typed `Datum`s into a JSON object.
-    JsonbObjectAgg,
-    /// Accumulates `Datum::Array`s into a single `Datum::Array`.
-    ArrayConcat,
-    /// Accumulates `Datum::List`s into a single `Datum::List`.
-    ListConcat,
-    StringAgg,
+    JsonbAgg {
+        order_by: Vec<ColumnOrder>,
+    },
+    /// Zips `Datum::List`s whose first element is a JSON-typed `Datum`s into a
+    /// JSON map. The other elements are columns used by `order_by`.
+    JsonbObjectAgg {
+        order_by: Vec<ColumnOrder>,
+    },
+    /// Accumulates `Datum::List`s whose first element is a `Datum::Array` into a
+    /// single `Datum::Array`. The other elements are columns used by `order_by`.
+    ArrayConcat {
+        order_by: Vec<ColumnOrder>,
+    },
+    /// Accumulates `Datum::List`s whose first element is a `Datum::List` into a
+    /// single `Datum::List`. The other elements are columns used by `order_by`.
+    ListConcat {
+        order_by: Vec<ColumnOrder>,
+    },
+    StringAgg {
+        order_by: Vec<ColumnOrder>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -445,11 +459,15 @@ impl AggregateFunc {
             AggregateFunc::Count => expr::AggregateFunc::Count,
             AggregateFunc::Any => expr::AggregateFunc::Any,
             AggregateFunc::All => expr::AggregateFunc::All,
-            AggregateFunc::JsonbAgg => expr::AggregateFunc::JsonbAgg,
-            AggregateFunc::JsonbObjectAgg => expr::AggregateFunc::JsonbObjectAgg,
-            AggregateFunc::ArrayConcat => expr::AggregateFunc::ArrayConcat,
-            AggregateFunc::ListConcat => expr::AggregateFunc::ListConcat,
-            AggregateFunc::StringAgg => expr::AggregateFunc::StringAgg,
+            AggregateFunc::JsonbAgg { order_by } => expr::AggregateFunc::JsonbAgg { order_by },
+            AggregateFunc::JsonbObjectAgg { order_by } => {
+                expr::AggregateFunc::JsonbObjectAgg { order_by }
+            }
+            AggregateFunc::ArrayConcat { order_by } => {
+                expr::AggregateFunc::ArrayConcat { order_by }
+            }
+            AggregateFunc::ListConcat { order_by } => expr::AggregateFunc::ListConcat { order_by },
+            AggregateFunc::StringAgg { order_by } => expr::AggregateFunc::StringAgg { order_by },
             AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
         }
     }
@@ -461,8 +479,8 @@ impl AggregateFunc {
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
-            AggregateFunc::ArrayConcat => Datum::empty_array(),
-            AggregateFunc::ListConcat => Datum::empty_list(),
+            AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
+            AggregateFunc::ListConcat { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -477,19 +495,35 @@ impl AggregateFunc {
             AggregateFunc::Count => ScalarType::Int64,
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
-            AggregateFunc::JsonbAgg => ScalarType::Jsonb,
-            AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
-            AggregateFunc::StringAgg => ScalarType::String,
+            AggregateFunc::JsonbAgg { .. } => ScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg { .. } => ScalarType::Jsonb,
+            AggregateFunc::StringAgg { .. } => ScalarType::String,
             AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
-            // Inputs are coerced to the correct container type, so the input_type is
-            // already correct.
-            AggregateFunc::ArrayConcat | AggregateFunc::ListConcat => input_type.scalar_type,
+            AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
+                match input_type.scalar_type {
+                    // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
+                    ScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
+                    _ => unreachable!(),
+                }
+            }
             _ => input_type.scalar_type,
         };
         // max/min/sum return null on empty sets
         let nullable = !matches!(self, AggregateFunc::Count);
         scalar_type.nullable(nullable)
+    }
+
+    pub fn is_order_sensitive(&self) -> bool {
+        use AggregateFunc::*;
+        matches!(
+            self,
+            JsonbAgg { .. }
+                | JsonbObjectAgg { .. }
+                | ArrayConcat { .. }
+                | ListConcat { .. }
+                | StringAgg { .. }
+        )
     }
 }
 

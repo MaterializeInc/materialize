@@ -520,7 +520,7 @@ impl<T: AstInfo> Expr<T> {
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
             name: UnresolvedObjectName(name.into_iter().map(Into::into).collect()),
-            args: FunctionArgs::Args(args),
+            args: FunctionArgs::args(args),
             filter: None,
             over: None,
             distinct: false,
@@ -705,14 +705,32 @@ pub enum FunctionArgs<T: AstInfo> {
     /// The special star argument, as in `count(*)`.
     Star,
     /// A normal list of arguments.
-    Args(Vec<Expr<T>>),
+    Args {
+        args: Vec<Expr<T>>,
+        order_by: Vec<OrderByExpr<T>>,
+    },
+}
+
+impl<T: AstInfo> FunctionArgs<T> {
+    pub fn args(args: Vec<Expr<T>>) -> Self {
+        Self::Args {
+            args,
+            order_by: vec![],
+        }
+    }
 }
 
 impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             FunctionArgs::Star => f.write_str("*"),
-            FunctionArgs::Args(args) => f.write_node(&display::comma_separated(&args)),
+            FunctionArgs::Args { args, order_by } => {
+                f.write_node(&display::comma_separated(&args));
+                if !order_by.is_empty() {
+                    f.write_str(" ORDER BY ");
+                    f.write_node(&display::comma_separated(&order_by));
+                }
+            }
         }
     }
 }

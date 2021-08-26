@@ -2404,3 +2404,41 @@ query T
 SELECT list_agg(a)::text FROM (VALUES (array[1,2]), (array[3]), (NULL)) v(a);
 ----
 {NULL,{3},{1,2}}
+
+statement ok
+INSERT INTO t2 VALUES (3, date '2020-01-03')
+
+query T
+SELECT list_agg(a ORDER BY b)::text FROM t2
+----
+{1,NULL,3}
+
+query T
+SELECT list_agg(a ORDER BY a DESC)::text FROM t2
+----
+{NULL,3,1}
+
+query T
+SELECT list_agg(a ORDER BY a)::text FROM t2
+----
+{1,3,NULL}
+
+query T
+SELECT (list_agg(a ORDER BY a) FILTER (WHERE b IS NOT NULL))::text FROM t2
+----
+{1,3,NULL}
+
+query T
+SELECT (list_agg(a ORDER BY a) FILTER (WHERE b > '2050-01-01'))::text FROM t2
+----
+{}
+
+# Unsupported.
+query error ORDER BY must specify unmodified columns
+SELECT list_agg(a ORDER BY a-1) FROM t2
+
+# Test that a function that does not support ORDER BY is correct.
+query T
+SELECT sum(a ORDER BY b) FROM t2
+----
+4
