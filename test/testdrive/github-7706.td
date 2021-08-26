@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This test verifies that SELECTs on unmaterialized sources have the
-# same error regardless of if there's an AS OF clause or not.
+# This test verifies that SELECT with AS OF on unmaterialized sources
+# does not panic.
+
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ set schema={
     "type": "record",
@@ -21,4 +23,11 @@ $ set schema={
   FORMAT AVRO USING SCHEMA '${schema}'
 
 ! SELECT * FROM s AS OF 0
-Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources.
+Timestamp (0) is not valid for all inputs
+
+! SELECT * FROM s AS OF now() - '10s'::interval
+Timestamp (<TIMESTAMP>) is not valid for all inputs
+
+# Although not the original issue, also test that AS OF does work on an
+# unmaterialized source if the timestamp is queryable.
+> SELECT * FROM s AS OF now()
