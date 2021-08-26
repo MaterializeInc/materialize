@@ -9,7 +9,7 @@
 
 mod test {
     use expr::canonicalize::canonicalize_predicates;
-    use expr::MirScalarExpr;
+    use expr::{MapFilterProject, MirScalarExpr};
     use expr_test_util::*;
     use lowertest::{deserialize, tokenize};
     use ore::str::separated;
@@ -35,6 +35,40 @@ mod test {
         Ok(predicates)
     }
 
+    /// Builds a [MapFilterProject] of a certain arity, then modifies it.
+    /// The test syntax is `<input_arity> [<commands>]`
+    /// The syntax for a command is `<name_of_command> [<args>]`
+    fn test_mfp(s: &str) -> Result<MapFilterProject, String> {
+        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut ctx = MirScalarExprDeserializeContext::default();
+        let input_arity: usize = deserialize(&mut input_stream, "usize", &RTI, &mut ctx)?;
+        let mut mfp = MapFilterProject::new(input_arity);
+        while let Some(proc_macro2::TokenTree::Ident(ident)) = input_stream.next() {
+            match &ident.to_string()[..] {
+                "map" => {
+                    let map: Vec<MirScalarExpr> =
+                        deserialize(&mut input_stream, "Vec<MirScalarExpr>", &RTI, &mut ctx)?;
+                    mfp = mfp.map(map);
+                }
+                "filter" => {
+                    let filter: Vec<MirScalarExpr> =
+                        deserialize(&mut input_stream, "Vec<MirScalarExpr>", &RTI, &mut ctx)?;
+                    mfp = mfp.filter(filter);
+                }
+                "project" => {
+                    let project: Vec<usize> =
+                        deserialize(&mut input_stream, "Vec<usize>", &RTI, &mut ctx)?;
+                    mfp = mfp.project(project);
+                }
+                "optimize" => mfp.optimize(),
+                unsupported => {
+                    return Err(format!("Unsupport MFP command {}", unsupported));
+                }
+            }
+        }
+        Ok(mfp)
+    }
+
     #[test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
@@ -50,6 +84,18 @@ mod test {
                     "canonicalize" => match test_canonicalize_pred(&s.input) {
                         Ok(preds) => {
                             format!("{}\n", separated("\n", preds.iter().map(|p| p.to_string())))
+                        }
+                        Err(err) => format!("error: {}\n", err),
+                    },
+                    "mfp" => match test_mfp(&s.input) {
+                        Ok(mfp) => {
+                            let (map, filter, project) = mfp.as_map_filter_project();
+                            format!(
+                                "[{}]\n[{}]\n[{}]\n",
+                                separated(" ", map.iter()),
+                                separated(" ", filter.iter()),
+                                separated(" ", project.iter())
+                            )
                         }
                         Err(err) => format!("error: {}\n", err),
                     },

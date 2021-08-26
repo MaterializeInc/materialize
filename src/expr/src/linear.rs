@@ -881,20 +881,20 @@ impl MapFilterProject {
         // Inline only those columns that 1. are expressions not inputs, and
         // 2a. are column references or literals or 2b. have a refcount of 1,
         // or 2c. reference temporal expressions (which cannot be evaluated).
-        let should_inline = (0..reference_count.len())
-            .map(|i| {
-                if i < input_arity {
-                    false
-                } else {
-                    if let MirScalarExpr::Column(_) = self.expressions[i - input_arity] {
-                        true
-                    } else {
-                        reference_count[i] == 1 || is_temporal[i]
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-
+        let mut should_inline = vec![false; reference_count.len()];
+        for i in (input_arity..reference_count.len()).rev() {
+            if let MirScalarExpr::Column(c) = self.expressions[i - input_arity] {
+                should_inline[i] = true;
+                // The reference count of the referenced column should be
+                // incremented with the number of references
+                // `self.expressions[i - input_arity]` has.
+                // Subtract 1 because `self.expressions[i - input_arity]` is
+                // itself a reference.
+                reference_count[c] += reference_count[i] - 1;
+            } else {
+                should_inline[i] = reference_count[i] == 1 || is_temporal[i];
+            }
+        }
         // Inline expressions per `should_inline`.
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
