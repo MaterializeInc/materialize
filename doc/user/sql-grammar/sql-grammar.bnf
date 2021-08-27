@@ -1,8 +1,13 @@
 alter_rename ::=
   'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
-  'ALTER' 'INDEX' name 'SET' '(' field '=' val ( ',' field '=' val )* ')'
-  | 'ALTER' 'INDEX' name 'RESET' '(' field ( ',' field )* ')'
+  'ALTER' 'INDEX' name (
+    'SET' (
+      'ENABLED'
+      | '(' field '=' val ( ',' field '=' val )* ')'
+    )
+    | 'RESET' '(' field ( ',' field )* ')'
+  )
 close ::=
   'CLOSE' cursor_name
 col_option ::=

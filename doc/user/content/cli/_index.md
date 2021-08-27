@@ -393,7 +393,11 @@ In this mode users...
   - Views that contain only references to constant values or depend entirely on
     system tables' indexes.
 - Cannot `INSERT` data into tables.
-- Can create new objects, but any created indexes will remain disabled.
+- Can create new objects, but any created indexes are disabled.
+
+After troubleshooting any issues, you can [enable individual
+indexes](/sql/alter-index) or reboot Materialize _without_
+`--disable-user-indexes` to enable all indexes at once.
 
 For assistance with this mode, see:
 
