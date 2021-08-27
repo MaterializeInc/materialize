@@ -105,10 +105,20 @@ message SimpleId {
   string id = 1;
 }
 
-$ kafka-ingest topic=tester format=protobuf message=simpleid schema=${schema} publish=true
+$ kafka-ingest topic=tester format=protobuf schema=${schema} message=simpleid publish=true
 {"id": "a"}
+{"id": "b"}
 
-! CREATE MATERIALIZED SOURCE tester
+> CREATE MATERIALIZED SOURCE tester
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tester-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-confluent schema registry protobuf schemas not yet supported
+
+> SHOW COLUMNS FROM tester
+id         true   text
+mz_offset  false  bigint
+
+> SELECT * FROM tester
+id   mz_offset
+------------
+a    1
+b    2
