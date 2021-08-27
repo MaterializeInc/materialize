@@ -1073,63 +1073,6 @@
       "id": 32,
       "panels": [
         {
-          "datasource": null,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {},
-              "mappings": [],
-              "noValue": "0",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "rgb(52, 52, 52)",
-                    "value": null
-                  },
-                  {
-                    "color": "green",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 4,
-            "x": 10,
-            "y": 11
-          },
-          "id": 111,
-          "options": {
-            "colorMode": "value",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            }
-          },
-          "pluginVersion": "7.0.3",
-          "targets": [
-            {
-              "expr": "mz_source_count{type=\"kafka\"}",
-              "interval": "",
-              "legendFormat": ".",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Kafka Sources",
-          "type": "stat"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -1148,7 +1091,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 14
+            "y": 11
           },
           "hiddenSeries": false,
           "id": 49,
@@ -1262,7 +1205,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 14
+            "y": 11
           },
           "hiddenSeries": false,
           "id": 57,
@@ -1371,7 +1314,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 22
+            "y": 19
           },
           "hiddenSeries": false,
           "id": 10,
@@ -1492,7 +1435,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 22
+            "y": 19
           },
           "hiddenSeries": false,
           "id": 12,
@@ -1607,63 +1550,6 @@
       "id": 93,
       "panels": [
         {
-          "datasource": null,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {},
-              "mappings": [],
-              "noValue": "0",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "rgb(52, 52, 52)",
-                    "value": null
-                  },
-                  {
-                    "color": "green",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 4,
-            "x": 10,
-            "y": 12
-          },
-          "id": 112,
-          "options": {
-            "colorMode": "value",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            }
-          },
-          "pluginVersion": "7.0.3",
-          "targets": [
-            {
-              "expr": "mz_source_count{type=\"kinesis\"}",
-              "interval": "",
-              "legendFormat": ".",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Kinesis Sources",
-          "type": "stat"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -1682,7 +1568,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 15
+            "y": 12
           },
           "hiddenSeries": false,
           "id": 47,
@@ -1781,63 +1667,6 @@
       "id": 89,
       "panels": [
         {
-          "datasource": null,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {},
-              "mappings": [],
-              "noValue": "0",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "rgb(52, 52, 52)",
-                    "value": null
-                  },
-                  {
-                    "color": "green",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 4,
-            "x": 10,
-            "y": 13
-          },
-          "id": 113,
-          "options": {
-            "colorMode": "value",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            }
-          },
-          "pluginVersion": "7.0.3",
-          "targets": [
-            {
-              "expr": "mz_sink_count",
-              "interval": "",
-              "legendFormat": "{{type}}",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Sinks",
-          "type": "stat"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -1856,7 +1685,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 16
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 87,
@@ -1962,7 +1791,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 16
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 91,
