@@ -21,14 +21,14 @@ accepts input data from a variety of streaming sources (e.g. Kafka) and files
 
 {{< multilinkbox >}}
 {{< linkbox icon="bulb" title="Key Concepts" >}}
-- [High-Level Overview]({{< relref "what-is-materialize" >}})
-- [API Components: Sources, Views, Indexes, Sinks]({{< relref "/overview/api-components" >}})
-- [Materialize Cloud Overview]({{< relref "/cloud/what-is-materialize-cloud" >}})
+- [High-Level Overview](/overview/what-is-materialize)
+- [API Components: Sources, Views, Indexes, Sinks](/overview/api-components)
+- [Materialize Cloud Overview](/cloud/what-is-materialize-cloud)
 {{</ linkbox >}}
 {{< linkbox icon="touch" title="Demos" >}}
-- [Real-Time Analytics Dashboard]({{< relref "/demos/business-intelligence" >}})
-- [Streaming SQL on server logs]({{< relref "/demos/log-parsing" >}})
-- [A microservice to transform and join two streams of data]({{< relref "/demos/microservice" >}})
+- [Real-Time Analytics Dashboard](/demos/business-intelligence)
+- [Streaming SQL on server logs](/demos/log-parsing)
+- [A microservice to transform and join two streams of data](/demos/microservice)
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
 - [Connect Postgres to Materialize with CDC](/guides/cdc-postgres/)
@@ -36,10 +36,10 @@ accepts input data from a variety of streaming sources (e.g. Kafka) and files
 - [Interact with Materialize from Node.js](/guides/node-js/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
-- [CREATE SOURCE]({{< relref "/sql/create-source" >}})
-- [CREATE MATERIALIZED VIEW]({{< relref "/sql/create-materialized-view" >}})
-- [SQL Data Types]({{< relref "/sql/types" >}})
-- [SQL Functions]({{< relref "/sql/functions" >}})
+- [CREATE SOURCE](/sql/create-source)
+- [CREATE MATERIALIZED VIEW](/sql/create-materialized-view)
+- [SQL Data Types](/sql/types)
+- [SQL Functions](/sql/functions)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
