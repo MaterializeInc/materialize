@@ -18,7 +18,11 @@ use repr::{Datum, RelationType, ScalarType};
 /// This function:
 /// * ensures the same expression appears in only one equivalence class.
 /// * ensures the equivalence classes are sorted and dedupped.
-/// * simplifies expressions to involve the least number of non-leaves.
+/// * simplifies expressions to involve the least number of function calls
+///   involving one or more arguments. This is to prevent infinite loops/100%
+///   CPU situations where transforms can cause the equivalence class to evolve
+///   from `[A f(A) f(C, A)]` to `[A f(A) g(C, A) g(C, f(A))]` and then to
+///   `[A f(A) g(C, A) g(C, f(A)) g(C, f(f(A)))]` and so on.
 ///
 /// ```rust
 /// use expr::MirScalarExpr;
@@ -117,6 +121,16 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
     equivalences.sort();
 }
 
+/// Gives a relative complexity ranking for an expression. Higher numbers mean
+/// greater complexity.
+///
+/// This method weighs literals as the least complex and weighs all other
+/// expressions by the number of function calls involving one or more
+/// arguments. Function calls involving one or more arguments are synonymous
+/// with non-leaves in the expression.
+///
+/// As an example, this method will rank `coalesce(a, b, c, d)` as less complex
+/// than `(a + (b + c))` even though both are 5-node expressions.
 fn rank_complexity(expr: &MirScalarExpr) -> usize {
     if expr.is_literal() {
         // literals are the least complex
