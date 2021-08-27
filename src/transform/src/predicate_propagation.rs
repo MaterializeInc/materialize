@@ -7,23 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Lift predicate information towards the root.
+//! Lifts information about predicates towards the expression root.
+//!
+//! This transform produces a collection of predicates that could be harmlessly
+//! applied to the argument expression, in the sense that the would neither
+//! discard any records nor produce errors.
 //!
 //! This transform does not move the predicates, which remain in force
 //! in their current location, but it is able to simplify expressions
 //! as it moves from inputs toward the query root.
 //!
-//! Importantly, the simplifications must all be robust to the possibility
+//! Importantly, any simplifications performed must all be robust to the possibility
 //! that the filter might move elsewhere. In particular, we should perform
 //! no simplifications that could result in errors that could not otherwise
 //! occur (e.g. by optimizing the `cond` of an `If` expression).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
 use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::Datum;
-use repr::{RelationType, ScalarType};
+use repr::ScalarType;
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
@@ -35,7 +39,12 @@ impl crate::Transform for PredicateKnowledge {
         expr: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
+        // let before = expr.clone();
         let _predicates = PredicateKnowledge::action(expr, &mut HashMap::new())?;
+        // if &before != expr {
+        //     println!("BEFORE: {:?}", before);
+        //     println!("AFTER: {:?}", expr);
+        // }
         Ok(())
     }
 }
@@ -100,13 +109,21 @@ impl PredicateKnowledge {
                     let mut predicates = Vec::new();
                     for column in 0..literal.len() {
                         if let Some(datum) = literal[column] {
-                            predicates.push(MirScalarExpr::Column(column).call_binary(
-                                MirScalarExpr::literal(
-                                    Ok(datum),
-                                    typ.column_types[column].scalar_type.clone(),
-                                ),
-                                expr::BinaryFunc::Eq,
-                            ));
+                            // Having found a literal, if it is Null use `IsNull` and otherwise use `Eq`.
+                            if datum == Datum::Null {
+                                predicates.push(
+                                    MirScalarExpr::Column(column)
+                                        .call_unary(expr::UnaryFunc::IsNull),
+                                );
+                            } else {
+                                predicates.push(MirScalarExpr::Column(column).call_binary(
+                                    MirScalarExpr::literal(
+                                        Ok(datum),
+                                        typ.column_types[column].scalar_type.clone(),
+                                    ),
+                                    expr::BinaryFunc::Eq,
+                                ));
+                            }
                         }
                         if non_null[column] {
                             predicates.push(
@@ -175,9 +192,10 @@ impl PredicateKnowledge {
             }
             MirRelationExpr::Map { input, scalars } => {
                 let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
+                let structured = PredicateStructure::new(&input_knowledge);
                 // Scalars could be simplified based on known predicates.
                 for scalar in scalars.iter_mut() {
-                    optimize(scalar, &input.typ(), &input_knowledge[..])?;
+                    optimize(scalar, &structured);
                 }
                 // TODO: present literal columns (and non-null?) as predicates.
                 input_knowledge
@@ -189,20 +207,22 @@ impl PredicateKnowledge {
                 demand: _,
             } => {
                 let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
+                let structured = PredicateStructure::new(&input_knowledge);
                 for expr in exprs {
-                    optimize(expr, &input.typ(), &input_knowledge[..])?;
+                    optimize(expr, &structured);
                 }
                 input_knowledge
             }
             MirRelationExpr::Filter { input, predicates } => {
-                let mut input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
+                let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
+                let structured = PredicateStructure::new(&input_knowledge);
+                let mut output_knowledge = input_knowledge.clone();
 
-                // Add predicates to the knowledge as we go.
                 for predicate in predicates.iter_mut() {
-                    optimize(predicate, &input.typ(), &input_knowledge[..])?;
-                    input_knowledge.push(predicate.clone());
+                    optimize(predicate, &structured);
+                    output_knowledge.push(predicate.clone());
                 }
-                input_knowledge
+                output_knowledge
             }
             MirRelationExpr::Join {
                 inputs,
@@ -225,20 +245,23 @@ impl PredicateKnowledge {
                     prior_arity += input.arity();
                 }
 
+                let structured = PredicateStructure::new(&knowledge);
+                let mut new_predicates = Vec::new();
+
                 for equivalence in equivalences.iter_mut() {
                     for expr in equivalence.iter_mut() {
-                        optimize(expr, &self_type, &knowledge[..])?;
+                        optimize(expr, &structured);
                     }
 
                     if let Some(first) = equivalence.get(0) {
                         for other in equivalence[1..].iter() {
-                            // TODO: Canonicalize information to refer to first column / something.
-                            knowledge
+                            new_predicates
                                 .push(first.clone().call_binary(other.clone(), BinaryFunc::Eq));
                         }
                     }
                 }
 
+                knowledge.extend(new_predicates);
                 normalize_predicates(&mut knowledge);
                 knowledge
             }
@@ -250,11 +273,12 @@ impl PredicateKnowledge {
             } => {
                 let input_type = input.typ();
                 let input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
+                let structured = PredicateStructure::new(&input_knowledge);
                 for key in group_key.iter_mut() {
-                    optimize(key, &input_type, &input_knowledge[..])?;
+                    optimize(key, &structured);
                 }
                 for aggregate in aggregates.iter_mut() {
-                    optimize(&mut aggregate.expr, &input_type, &input_knowledge[..])?;
+                    optimize(&mut aggregate.expr, &structured);
                 }
 
                 // List of predicates we will return.
@@ -280,14 +304,18 @@ impl PredicateKnowledge {
                 for (index, aggregate) in aggregates.iter_mut().enumerate() {
                     let column = group_key.len() + index;
                     if let Some(Ok(literal)) = aggregate.as_literal() {
-                        predicates.push(MirScalarExpr::Column(column).call_binary(
-                            MirScalarExpr::literal(
-                                Ok(literal),
-                                self_type.column_types[column].scalar_type.clone(),
-                            ),
-                            expr::BinaryFunc::Eq,
-                        ));
-                        if literal != Datum::Null {
+                        if literal == Datum::Null {
+                            predicates.push(
+                                MirScalarExpr::Column(column).call_unary(expr::UnaryFunc::IsNull),
+                            );
+                        } else {
+                            predicates.push(MirScalarExpr::Column(column).call_binary(
+                                MirScalarExpr::literal(
+                                    Ok(literal),
+                                    self_type.column_types[column].scalar_type.clone(),
+                                ),
+                                expr::BinaryFunc::Eq,
+                            ));
                             predicates.push(
                                 MirScalarExpr::column(column)
                                     .call_unary(UnaryFunc::IsNull)
@@ -352,6 +380,10 @@ impl PredicateKnowledge {
     }
 }
 
+/// Put `predicates` into a normal form that minimizes redundancy and exploits equality.
+///
+/// The method extracts equality statements, chooses representatives for each equivalence relation,
+/// and substitutes the representatives.
 fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     // Remove duplicates
     predicates.sort();
@@ -403,7 +435,7 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
             // This last class could be problematic if a complex expression sorts lower than
             // expressions it contains (e.g. in x + y = x, if x + y comes before x then x would
             // repeatedly be replaced by x + y).
-            _ => x.cmp(y),
+            _ => (nodes(x), x).cmp(&(nodes(y), y)),
         });
         class.dedup();
         // If we have a second literal, not equal to the first, we have a contradiction and can
@@ -417,23 +449,21 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     // TODO: Sort by complexity of representative, and perform substitutions within predicates.
     classes.sort();
 
+    // let mut normalization = HashMap::<&MirScalarExpr, &MirScalarExpr>::new();
+    let mut structured = PredicateStructure::default();
+    for class in classes.iter() {
+        let mut iter = class.iter();
+        if let Some(representative) = iter.next() {
+            for other in iter {
+                structured.replacements.insert(other, representative);
+            }
+        }
+    }
+
     // Visit each predicate and rewrite using the representative from each class.
     // Feel welcome to remove all equality tests and re-introduce canonical tests.
     for predicate in predicates.iter_mut() {
-        if let MirScalarExpr::CallBinary {
-            expr1: _,
-            expr2: _,
-            func: BinaryFunc::Eq,
-        } = predicate
-        {
-            *predicate = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
-        } else {
-            predicate.visit_mut(&mut |e| {
-                if let Some(class) = classes.iter().find(|c| c.contains(e)) {
-                    *e = class[0].clone();
-                }
-            });
-        }
+        optimize(predicate, &structured);
     }
     // Re-introduce equality constraints using the representative.
     for class in classes.iter() {
@@ -445,68 +475,6 @@ fn normalize_predicates(predicates: &mut Vec<MirScalarExpr>) {
     predicates.sort();
     predicates.dedup();
     predicates.retain(|p| !p.is_literal_true());
-}
-
-/// Attempts to optimize a supplied expression.
-///
-/// Naively traverse the expression looking for instances of statements that are known
-/// to be true, or known to be false. This is restricted to exact matches in the predicate,
-/// and is not clever enough to reason about various forms of inequality.
-pub fn optimize(
-    expr: &mut MirScalarExpr,
-    input_type: &RelationType,
-    predicates: &[MirScalarExpr],
-) -> Result<(), crate::TransformError> {
-    // To simplify things, we'll build a map from complex expressions to the simpler ones
-    // that should replace them.
-    let mut normalizing_map = HashMap::new();
-    for predicate in predicates.iter() {
-        if let MirScalarExpr::CallBinary {
-            expr1,
-            expr2,
-            func: BinaryFunc::Eq,
-        } = predicate
-        {
-            normalizing_map.insert(expr2.clone(), expr1.clone());
-        }
-    }
-    // Replace all expressions with a normalized representative.
-    // Ideally we would do a pre-order traversal here, but that
-    // method doesn't seem to exist.
-    expr.visit_mut(&mut |e| {
-        if let Some(expr) = normalizing_map.get(e) {
-            *e = (**expr).clone();
-        }
-    });
-
-    expr.visit_mut(&mut |expr| {
-        if predicates.contains(expr) {
-            assert!(expr.typ(input_type).scalar_type == ScalarType::Bool);
-            *expr = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
-            expr.reduce(input_type);
-        } else if predicates.contains(&expr.clone().call_unary(UnaryFunc::Not)) {
-            assert!(expr.typ(input_type).scalar_type == ScalarType::Bool);
-            *expr = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
-            expr.reduce(input_type);
-        } else {
-            for predicate in predicates {
-                if let MirScalarExpr::CallBinary {
-                    expr1,
-                    expr2,
-                    func: BinaryFunc::Eq,
-                } = predicate
-                {
-                    if &**expr1 == expr && expr2.is_literal() {
-                        *expr = (**expr2).clone();
-                    } else if &**expr2 == expr && expr1.is_literal() {
-                        *expr = (**expr1).clone();
-                    }
-                }
-            }
-        }
-    });
-
-    Ok(())
 }
 
 /// Attempts to perform substitutions via `map` and returns `false` if an unreplaced column reference is reached.
@@ -530,5 +498,79 @@ fn substitute(expression: &mut MirScalarExpr, map: &HashMap<MirScalarExpr, MirSc
                 substitute(cond, map) && substitute(then, map) && substitute(els, map)
             }
         }
+    }
+}
+
+/// Replaces subexpressions of `expr` that have a value in `map` with the value, not including
+/// the `If { cond, .. }` field.
+fn optimize(expr: &mut MirScalarExpr, predicates: &PredicateStructure) {
+    expr.visit_mut_pre_post(
+        &mut |e| {
+            // The `cond` of an if statement is not visited to prevent `then`
+            // or `els` from being evaluated before `cond`, resulting in a
+            // correctness error.
+            if let MirScalarExpr::If { then, els, .. } = e {
+                Some(vec![then, els])
+            } else {
+                None
+            }
+        },
+        &mut |e| {
+            if let Some(replacement) = predicates.replacements.get(e) {
+                *e = (*replacement).clone();
+            } else if predicates.known_true.contains(e) {
+                *e = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
+            } else if predicates.known_false.contains(e) {
+                *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+            }
+        },
+    );
+}
+
+/// The number of nodes in the expression.
+fn nodes(expr: &MirScalarExpr) -> usize {
+    let mut count = 0;
+    expr.visit(&mut |_e| count += 1);
+    count
+}
+
+#[derive(Default)]
+struct PredicateStructure<'predicates> {
+    /// Each instance of the former should be replaced with an instance of the latter.
+    pub replacements: HashMap<&'predicates MirScalarExpr, &'predicates MirScalarExpr>,
+    /// These expressions are known to equal `Datum::True` for all records that will eventually be produced.
+    pub known_true: HashSet<&'predicates MirScalarExpr>,
+    /// These expressions are known to be false, because `not(expr)` is known to be true.
+    pub known_false: HashSet<&'predicates MirScalarExpr>,
+}
+
+impl<'a> PredicateStructure<'a> {
+    /// Creates a structured form of predicates that can be randomly accessed.
+    ///
+    /// The predicates are assumed normalized in the sense that all instances of `x = y` imply that
+    /// `y` can and should be replaced by `x`.
+    pub fn new(predicates: &'a [MirScalarExpr]) -> Self {
+        let mut structured = Self::default();
+        for predicate in predicates.iter() {
+            match predicate {
+                MirScalarExpr::CallBinary {
+                    expr1,
+                    expr2,
+                    func: BinaryFunc::Eq,
+                } => {
+                    structured.replacements.insert(&**expr2, &**expr1);
+                }
+                MirScalarExpr::CallUnary {
+                    expr,
+                    func: UnaryFunc::Not,
+                } => {
+                    structured.known_false.insert(expr);
+                }
+                _ => {
+                    structured.known_true.insert(predicate);
+                }
+            }
+        }
+        structured
     }
 }
