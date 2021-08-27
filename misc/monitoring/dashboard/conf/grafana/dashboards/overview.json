@@ -4061,10 +4061,13 @@
     "list": [
       {
         "allFormat": "glob",
-        "allValue": null,
+        "allValue": ".*",
         "current": {
-          "selected": false,
-          "text": "execute + query",
+          "selected": true,
+          "text": [
+            "execute",
+            "query"
+          ],
           "value": [
             "execute",
             "query"
@@ -4320,7 +4323,7 @@
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, memory_total)",
         "hide": 2,
-        "includeAll": true,
+        "includeAll": false,
         "label": "Git commit",
         "multi": false,
         "name": "memory_total",
