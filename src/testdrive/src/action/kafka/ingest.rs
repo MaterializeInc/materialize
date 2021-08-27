@@ -126,6 +126,10 @@ impl Transcoder {
                     protobuf::MessageType::SimpleId => {
                         Self::decode_json::<_, protobuf::gen::simple::SimpleId>(row)?.map(convert)
                     }
+                    protobuf::MessageType::NestedOuter => {
+                        Self::decode_json::<_, protobuf::gen::nested::NestedOuter>(row)?
+                            .map(convert)
+                    }
                 };
                 let val = if let Some(decoded) = val {
                     decoded

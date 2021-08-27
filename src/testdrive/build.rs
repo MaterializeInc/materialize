@@ -14,5 +14,6 @@ fn main() {
         .input("src/format/protobuf/billing.proto")
         .input("src/format/protobuf/recursive.proto")
         .input("src/format/protobuf/simple.proto")
+        .input("src/format/protobuf/nested.proto")
         .build_script_exec();
 }
