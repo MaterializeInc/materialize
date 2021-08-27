@@ -12,6 +12,7 @@
 pub mod filter;
 pub mod join;
 pub mod map;
+pub mod negate;
 pub mod project;
 pub mod reduce;
 pub mod union;
