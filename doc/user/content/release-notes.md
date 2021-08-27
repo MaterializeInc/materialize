@@ -53,6 +53,9 @@ Wrap your release notes at the 80 character mark.
   now independent of the introspection interval. It is controlled by the
   flag [--metrics-scraping-interval](/cli/#prometheus-metrics).
 
+- Allow users to specify the names of columns that must be present in CSV
+  objects with headers. {{% gh 7507 %}}
+
 {{% version-header v0.9.1 %}}
 
 - Change the type of the [`mz_metrics`](/sql/system-catalog#mz_metrics).`time`
@@ -91,6 +94,7 @@ Wrap your release notes at the 80 character mark.
 - Add support for JSON-encoded Kafka sinks.
 
 {{% version-header v0.8.3 %}}
+
 - The `MZ_LOG` environment variable is no longer recognized. Setting the log
   level can be done using the `--log-filter` command line parameter or the
   `MZ_LOG_FILTER` environment variable.

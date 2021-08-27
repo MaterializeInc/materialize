@@ -27,12 +27,12 @@ use regex::Regex;
 use reqwest::Url;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, Consistency,
-    CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkFormat, KafkaSourceConnector, KeyEnvelope,
-    KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector,
-    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
-    SourceDataEncoding, SourceEnvelope, Timeline,
+    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, ColumnSpec,
+    Consistency, CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector,
+    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSinkFormat, KafkaSourceConnector,
+    KeyEnvelope, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
+    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
+    SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
 };
 use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
@@ -40,7 +40,7 @@ use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use sql_parser::ast::{CreateSourceFormat, KeyConstraint};
+use sql_parser::ast::{CreateSourceFormat, CsvColumns, KeyConstraint};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -463,7 +463,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
+            let encoding = get_encoding(format, envelope, with_options_original)?;
             let key_envelope = get_key_envelope(key_envelope, envelope, &encoding)?;
 
             let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
@@ -507,7 +507,7 @@ pub fn plan_create_source(
                 stream_name,
                 aws_info,
             });
-            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
+            let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding, KeyEnvelope::None)
         }
         CreateSourceConnector::File { path, compression } => {
@@ -529,7 +529,7 @@ pub fn plan_create_source(
                 },
                 tail,
             });
-            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
+            let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding, KeyEnvelope::None)
         }
         CreateSourceConnector::S3 {
@@ -571,7 +571,7 @@ pub fn plan_create_source(
                     Compression::None => dataflow_types::Compression::None,
                 },
             });
-            let encoding = get_encoding(format, envelope, with_options_original, col_names)?;
+            let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding, KeyEnvelope::None)
         }
         CreateSourceConnector::Postgres {
@@ -811,6 +811,7 @@ pub fn plan_create_source(
     } else {
         None
     };
+
     bare_desc =
         plan_utils::maybe_rename_columns(format!("source {}", name), bare_desc, &col_names)?;
 
@@ -921,17 +922,16 @@ fn get_encoding<T: sql_parser::ast::AstInfo>(
     format: &CreateSourceFormat<Raw>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<T>>,
-    col_names: &[Ident],
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
-        CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options, col_names)?,
+        CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options)?,
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(key, with_options, col_names)? {
+            let key = match get_encoding_inner(key, with_options)? {
                 SourceDataEncoding::Single(key) => key,
                 SourceDataEncoding::KeyValue { key, .. } => key,
             };
-            let value = match get_encoding_inner(value, with_options, col_names)? {
+            let value = match get_encoding_inner(value, with_options)? {
                 SourceDataEncoding::Single(value) => value,
                 SourceDataEncoding::KeyValue { value, .. } => value,
             };
@@ -954,7 +954,6 @@ fn get_encoding<T: sql_parser::ast::AstInfo>(
 fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
     format: &Format<Raw>,
     with_options: &Vec<SqlOption<T>>,
-    col_names: &[Ident],
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncoding::Single(match format {
@@ -1069,25 +1068,20 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
             let regex = Regex::new(&regex)?;
             DataEncoding::Regex(RegexEncoding { regex })
         }
-        Format::Csv {
-            header_row,
-            n_cols,
-            delimiter,
-        } => {
-            let n_cols = if col_names.is_empty() {
-                match n_cols {
-                    Some(n) => *n,
-                    None => bail!(
-                        "Cannot determine number of columns in CSV source; specify using \
-                             CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
-                    ),
+        Format::Csv { columns, delimiter } => {
+            let columns = match columns {
+                CsvColumns::Header { names } => {
+                    if names.is_empty() {
+                        bail!("[internal error] column spec should get names in purify")
+                    }
+                    ColumnSpec::Header {
+                        names: names.iter().cloned().map(|n| n.into_string()).collect(),
+                    }
                 }
-            } else {
-                col_names.len()
+                CsvColumns::Count(n) => ColumnSpec::Count(*n),
             };
             DataEncoding::Csv(CsvEncoding {
-                header_row: *header_row,
-                n_cols,
+                columns,
                 delimiter: match *delimiter as u32 {
                     0..=127 => *delimiter as u8,
                     _ => bail!("CSV delimiter must be an ASCII character"),

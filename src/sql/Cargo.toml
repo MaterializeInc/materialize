@@ -12,6 +12,7 @@ aws-util = { path = "../aws-util" }
 build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
+csv = "1.1.6"
 dataflow-types = { path = "../dataflow-types" }
 dec = "0.4.5"
 enum-kinds = "0.5.1"

@@ -8,17 +8,20 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
+use futures::executor::block_on;
 use lazy_static::lazy_static;
 use semver::Version;
+use tokio::fs::File;
 
 use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
-    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceFormat,
-    CreateSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
-    CsrConnector, DataType, Format, Function, Ident, Raw, RawName, SqlOption, Statement,
-    TableFactor, UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
+    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceConnector,
+    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeStatement,
+    CreateViewStatement, CsrConnector, CsvColumns, DataType, Format, Function, Ident, Raw, RawName,
+    SqlOption, Statement, TableFactor, UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
 
@@ -76,6 +79,7 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         ast_insert_default_confluent_wire_format_0_7_1(stmt)?;
         if catalog_version < *VER_0_9_1 {
             ast_rewrite_pg_catalog_char_to_text_0_9_1(stmt)?;
+            ast_rewrite_csv_column_aliases_0_9_1(stmt)?;
         }
         Ok(())
     })?;
@@ -455,6 +459,72 @@ fn ast_rewrite_type_references_0_6_1(
 
         _ => bail!("catalog item contained inappropriate statement: {}", stmt),
     };
+
+    Ok(())
+}
+
+/// Rewrite CSV sources to use the explicit `FORMAT CSV WITH HEADER (name, ...)` syntax
+///
+/// This provides us an explicit check that we are reading the correct columns, and also allows us
+/// to in the future correctly loosen the semantics of our column aliases syntax to not exactly
+/// match the number of columns in a source.
+fn ast_rewrite_csv_column_aliases_0_9_1(
+    stmt: &mut sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    let (connector, col_names, columns, delimiter) =
+        if let Statement::CreateSource(CreateSourceStatement {
+            connector,
+            col_names,
+            format: CreateSourceFormat::Bare(Format::Csv { columns, delimiter }),
+            ..
+        }) = stmt
+        {
+            // only do anything if we have empty header names for a csv source
+            if !matches!(columns, CsvColumns::Header { .. }) {
+                return Ok(());
+            }
+            if let CsvColumns::Header { names } = columns {
+                if !names.is_empty() {
+                    return Ok(());
+                }
+            }
+
+            (connector, col_names, columns, delimiter)
+        } else {
+            return Ok(());
+        };
+
+    // Try to load actual columns from existing file if we don't have correct data
+    let result = (|| -> anyhow::Result<()> {
+        if let CreateSourceConnector::File { path, .. } = &connector {
+            let file = block_on(async {
+                let f = File::open(&path).await?;
+
+                if f.metadata().await?.is_dir() {
+                    bail!("expected a regular file, but {} is a directory.", path);
+                }
+                Ok(Some(f))
+            })?;
+
+            block_on(async { sql::pure::purify_csv(file, &connector, *delimiter, columns).await })?;
+        }
+        Ok(())
+    })();
+
+    // if we can't read from the file, or purification fails for some other reason, then we can
+    // at least use the names that may have been auto-populated from the file previously. If
+    // they match then everything will work out. If they don't match, then at least there isn't
+    // a catalog corruption error.
+    if let Err(e) = result {
+        log::warn!(
+            "Error retrieving column names from file ({}) \
+                 using previously defined column aliases",
+            e
+        );
+        if let CsvColumns::Header { names } = columns {
+            names.extend_from_slice(col_names);
+        }
+    }
 
     Ok(())
 }

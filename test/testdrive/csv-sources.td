@@ -21,6 +21,39 @@ place""",CA,92679
   FORMAT CSV WITH 3 COLUMNS
 unexpected parameters for CREATE SOURCE: badoption
 
+! CREATE SOURCE mismatched_column_count
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FORMAT CSV WITH 2 COLUMNS
+Specified column count (WITH 2 COLUMNS) does not match number of columns in CSV file (3)
+
+> CREATE MATERIALIZED SOURCE matching_column_names
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FORMAT CSV WITH HEADER (city, state, zip)
+
+> SELECT * FROM matching_column_names where zip = '14618'
+city state zip mz_line_no
+-------------------------
+Rochester NY 14618 1
+
+> CREATE MATERIALIZED SOURCE matching_column_names_alias (a, b, c)
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FORMAT CSV WITH HEADER (city, state, zip)
+
+> SELECT * FROM matching_column_names_alias where c = '14618'
+a b c mz_line_no
+----------------
+Rochester NY 14618 1
+
+! CREATE SOURCE mismatched_column_names
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FORMAT CSV WITH HEADER (cities, country, zip)
+Header columns do not match named columns from CREATE SOURCE statement. First mismatched columns: cities != city
+
+! CREATE SOURCE mismatched_column_names_count
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FORMAT CSV WITH HEADER (cities, state)
+Named column count (2) does not match number of columns discovered (3)
+
 # Static CSV without headers.
 > CREATE MATERIALIZED SOURCE static_csv
   FROM FILE '${testdrive.temp-dir}/static.csv'
@@ -33,6 +66,18 @@ city           state     zip     1
 Rochester      NY        14618   2
 "New York"     NY        10004   3
 "bad,\nplace\""  CA        92679   4
+
+> CREATE SOURCE static_csv_nothing_demanded_src
+  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FORMAT CSV WITH HEADER
+
+> CREATE MATERIALIZED VIEW static_csv_nothing_demanded AS
+  SELECT true FROM static_csv_nothing_demanded_src
+
+> SELECT * FROM static_csv_nothing_demanded
+true
+true
+true
 
 # The timestamp chosen when reading from a static CSV should be the end of time,
 # since the definition of "static" means "will never change again".
@@ -135,6 +180,21 @@ Dollars,Category
 
 ! SELECT * FROM bad_text_csv
 Decode error: Text: CSV error at record number 2: invalid UTF-8
+
+# CSV file with comma in header
+
+$ file-append path=header-delimiter.csv
+"interesting,id",name
+1,blat
+
+> CREATE MATERIALIZED SOURCE header_delimited
+  FROM FILE '${testdrive.temp-dir}/header-delimiter.csv'
+  FORMAT CSV WITH HEADER
+
+> SELECT * FROM header_delimited
+interesting,id name mz_line_no
+------------------------------
+1 blat 1
 
 # Declare a key constraint (PRIMARY KEY NOT ENFORCED)
 
