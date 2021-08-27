@@ -49,6 +49,9 @@ by the Apache License, Version 2.0.  */}}
         anchors.add(".content h2, .content h3, .content h4, .content h5, .content h6");
 
         $(".content ol:has(p)").addClass("has-p");
+        
+        /* Make external links open in new tabs */
+        $('a[href*="//"]:not([href*="materialize.com"])').attr({target:"_blank", title:"External Link"});
     </script>
 </body>
 

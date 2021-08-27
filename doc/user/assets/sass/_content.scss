@@ -14,6 +14,17 @@ a {
     a {
       color: $black-v2;
       font-weight: 500;
+
+      &:hover {
+        border-bottom: none;
+      }
+    }
+
+    code {
+        font-size: inherit;
+        color: inherit;
+        background: none;
+        border: none;
     }
     
     + ul {
@@ -21,11 +32,12 @@ a {
     }
   }
   
-  h1 {
+  > h1 {
     font-size: 2.25rem;
     
     &:first-of-type{
-      padding: 0.5rem 0 1.25rem;
+      margin-top: 0;
+      padding: 0 0 1.25rem;
       
       &::after {
         content: "";
@@ -84,14 +96,14 @@ a {
   .highlight + p,
   pre + p,
   table + p {
-    margin-top: 16px;
+    margin-top: 1rem;
   }
   
   p + table {
-    margin-top: 8px;
+    margin-top: 0.5rem;
   }
   
-  p, li, pre {
+  p, li, pre, .warning, .note {
     font-size: 0.9375rem;
     font-weight: 400;
     line-height: 1.40625rem;
@@ -103,14 +115,30 @@ a {
     
     &:hover {
       color: $medium-purple-v2;
-      text-decoration: underline;
+      border-bottom: 1px solid $medium-purple-v2;
+
+      code {
+        color: $medium-purple-v2;
+        border-bottom: 1px solid $medium-purple-v2;
+      }
     }
     
     // Coloring of code overrides link coloring; instead insert border-bottom to
     // indicate hyperlink on code element. This is very prevalent in our docs,
     // especially among type references.
     code {
-      border-bottom: 1px dotted $purple-20;
+        color: $purple-v2;
+    }
+
+    /* Style external links with a "open in new window" icon. */
+    &[href*="//"]:not([href*="materialize.com"])::after {
+        content: "";
+        background-image: url('/images/icon_external_link.svg');
+        width: 16px;
+        height: 16px;
+        display: inline-block;
+        position: relative;
+        top: 1px;
     }
   }
   
@@ -139,7 +167,6 @@ a {
     text-align: left;
     padding: 8px;
     font-size: 0.8125rem;
-    padding-bottom: 1rem;
   }
   
   td {
@@ -157,32 +184,34 @@ a {
   
   pre {
     background-color: #f9f7fd;
-    border-radius: 0;
+    border-radius: 4px;
     border: 1px solid $grey-light;
     color: $black-v2;
     font-family: Courier, monospace;
     font-size: 15px;
-    margin: 16px 0 8px;
+    margin: 1rem 0 0.5rem;
     overflow: auto;
-    padding: 8px 10px;
+    padding: 1rem;
     
     code {
       color: $black-v2;
       background: none;
       border: none;
+      padding: 0;
     }
   }
   
   code {
     color: $orchid-v2;
     font-family: 'Fira Code', Courier, monospace;
+    font-variant-ligatures: none;
     font-size: 0.8125rem;
     font-weight: 500;
     background: #F9F9F9;
     border: 1px solid #DDDDDD;
     box-sizing: border-box;
     border-radius: 2px;
-    padding: 0.1rem 0.25rem;
+    padding: 0.1rem 0.25rem 0rem;
   }
   
   // Merge a highlighted code block followed by a non-highlighted code block,
@@ -194,11 +223,11 @@ a {
     padding-top: 0;
   }
   
-  ul {
+  ul, ol {
     margin: 0;
     
     li {
-      margin-bottom: 1rem;
+      margin-bottom: 0.5rem;
     }
   }
   
@@ -212,7 +241,7 @@ a {
       counter-increment: list-counter;
       min-height: 5rem;
       position: relative;
-      padding: 0.25rem 0 1rem 3rem;
+      padding: 0.25rem 0 1rem 3.75rem;
       border-top: 1px solid $medium-grey-v2;
       
       &:before {
@@ -240,35 +269,72 @@ a {
   }
   
   .warning {
-    background-color: rgba(255, 124, 26, 0.1);
-    border: 1px dashed rgb(255, 124, 26);
-    margin: 16px 0;
-    padding: 16px;
+    background: rgba(238, 134, 96, 0.05);
+    border: 1px solid rgba(238, 134, 96, 0.2);
+
+    &::after {
+        border-color: #fff #fff #FBE2D9 #FBE2D9;
+        background: #FBE2D9;
+    }
+
+    .gutter {
+        color: #E97A52;
+    }
   }
   
   .note {
-    background-color: rgba(255, 222, 11, 0.1);
-    border: 1px dashed rgb(255, 222, 11);
-    margin: 16px 0;
-    padding: 16px;
-  }
-  
-  .beta {
-    background-color: $purple-1;
-    border: 1px dashed $purple-60;
-    margin: 16px 0;
-    padding: 16px;
-  }
-  
-  .promo {
-    background-color: #d12fa7;
-    color: #fff;
-    margin: 16px 0;
-    padding: 16px;
-    text-align: center;
-    a {
-      color: #fff;
+    background: #FBF9E9;
+    border: 1px solid #D9D6C1;
+
+    &::after {
+        border-color: #fff #fff #D9D6C1 #D9D6C1;
+        background: #D9D6C1;
     }
+
+    .gutter {
+        color: #766C18;
+    }
+  }
+
+  .beta {
+    background: #e9f7fb;
+    border: 1px solid #c0d3d8;
+
+    &::after {
+        border-color: #fff #fff #c0d3d8 #c0d3d8;
+        background: #c0d3d8;
+    }
+
+    .gutter {
+        color: #186477;
+    }
+  }
+
+  .warning, .note, .beta {
+    box-sizing: border-box;
+    margin: 1rem 0;
+    padding: 1rem 1rem 1rem 6rem;
+    position: relative;
+
+    &::after {
+        content: "";
+        position: absolute;
+        top: -1px;
+        right: -1px;
+        border-width: 0 1rem 1rem 0;
+        border-style: solid;
+    }
+
+    .gutter {
+        position: absolute;
+        left: 1rem;
+        top: 1rem;
+        line-height: 23px;
+        font-size: 0.75rem;
+        font-weight: bold;
+        text-transform: uppercase;
+    }
+
   }
   
   .cta {
@@ -277,15 +343,30 @@ a {
     color: #fff;
     display: inline-block;
     font-weight: 600;
-    margin: 16px 0 0 0;
+    margin: 2rem 0;
     padding: 0.8125rem 4rem;
     opacity: 1.0;
     transition: opacity 350ms ease;
+
+    &.full_width {
+        display: block;
+        width: 100%;
+        text-align: center;
+    }
+
+    &.secondary {
+        background: $faded-purple-v2;
+        color:$dark-purple-v2;
+
+        &:hover {
+            color:$dark-purple-v2;
+        }
+    }
     
     &:hover {
       opacity:0.9;
       color: #fff;
-      text-decoration: none;;
+      border-bottom: none;
     }
   }
   
@@ -304,10 +385,9 @@ a {
   }
   
   .breadcrumb {
-    margin-top: 2.25rem;
-    font-size: .625rem;
+    margin: 0 0 2.5rem;
+    font-size: 0.75rem;
     font-weight: 700;
-    line-height: 11px;
     letter-spacing: -0.015em;
     text-transform: uppercase;
     color: $grey-v2;
@@ -414,4 +494,103 @@ pre {
 .nav-tabs > li.active > a, .nav-tabs > li > a:hover {
   color: $purple !important;
   background: $purple-1;
+
+  .callout {
+    background-color: $faded-purple-v2;
+    border-radius: 3px;
+    padding: 2rem 2.5rem;
+    margin: 2rem 0;
+
+    > :first-child {
+      margin-top: 0;
+    }
+
+    .cta {
+      margin: 1rem 1rem 1rem 0;
+
+      &.secondary {
+        background: #FFF;
+      }
+    }
+  }
+}
+
+.multilinkbox {
+  margin: 2rem 0;
+  overflow: hidden;
+
+  & > div {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 0 -1px -1px 0;
+    box-sizing: border-box;
+  }
+
+  .linkbox {
+    box-sizing: border-box;
+    flex: 1;
+    min-width: 50%;
+    border-right: 1px solid $medium-grey-v2;
+    border-bottom: 1px solid $medium-grey-v2;
+
+    &:nth-of-type(2n) {
+        padding-left: 8.5rem;
+        padding-right: 0;
+
+        &::before {
+            left: 2.5rem;
+        }
+    }
+  }
+}
+
+.linkbox {
+  padding:2.5rem 2rem 2.5rem 6rem;
+  position: relative;
+
+  &::before {
+    content: "";
+    width: 71px;
+    height: 71px;
+    position: absolute;
+    top: 2.5rem;
+    left: 0;
+    background-size: contain;
+  }
+
+  &.book::before {
+    background-image:url('/images/icon_book.png');
+  }
+  &.bulb::before {
+    background-image:url('/images/icon_bulb.png');
+  }
+  &.doc::before {
+    background-image:url('/images/icon_doc.png');
+  }
+  &.touch::before {
+    background-image:url('/images/icon_touch.png');
+  }
+
+  .title {
+    text-transform: uppercase;
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: $medium-purple-v2;
+    margin-bottom: 1.25rem;
+  }
+
+  ul {
+    padding: 0;
+    list-style: none;
+  }
+
+  a {
+    color: $black-v2;
+    font-weight: 400;
+
+    &:hover {
+      color: $purple-v2;
+      border-bottom-color: $purple-v2;
+    }
+  }
 }

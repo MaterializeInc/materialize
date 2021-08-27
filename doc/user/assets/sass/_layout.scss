@@ -20,12 +20,13 @@ body {
 }
 
 .content {
-  flex: 1000;
-  min-height: calc(100vh - 89px);
+  flex: 3;
+  flex-shrink: 1;
+  min-height: calc(100vh - 178px);
   // https://weblog.west-wind.com/posts/2016/Feb/15/Flexbox-Containers-PRE-tags-and-managing-Overflow
   min-width: 0;
   max-width: 840px;
-  padding: 0 60px;
+  padding: 2.25rem 2.5rem;
 }
 
 .algolia-autocomplete {
@@ -46,7 +47,7 @@ body {
   position: absolute;
   z-index: 2;
   top: 2.25rem;
-  left: 2.25rem;
+  left: 2.75rem;
 }
 
 #search-input {
@@ -58,6 +59,12 @@ body {
   margin-bottom: 12px;
   padding: 0.5rem 1rem 0.5rem 2.5rem;
   width: 100%;
+
+  &:focus {
+    outline-width: 0;
+    border: 1px solid $purple-v2;
+    box-shadow:0 0 3px $purple-v2;
+  }
 }
 
 .sidebar-wrapper {
@@ -68,11 +75,11 @@ body {
 
 .sidebar {
   font-size: 0.875rem;
-  padding: 1.625rem 1rem;
   margin-left: auto;
-  max-width: 300px;
+  max-width: 344px;
   min-width: 200px;
   position: relative;
+  padding: 1.625rem 2rem;
   
   a {
     display: block;
@@ -152,15 +159,15 @@ body {
 }
 
 .toc {
-  font-size: 14px;
+  font-size: 0.875rem;
   max-width: 280px;
   min-width: 180px;
-  padding: 1.625rem 2.25rem;
+  padding: 2.25rem 2rem;
   position: sticky;
   top: 0;
   
   h2 {
-    font-size: 0.625rem;
+    font-size: 0.75rem;
     font-weight: bold;
     margin: 0 0 0.75rem 0;
     padding: 0;
@@ -175,20 +182,29 @@ body {
   }
   
   ul ul {
-    margin-left: 15px;
+    margin-left: 1rem;
   }
   
   li {
-    padding: 3px 0;
+    padding: 0.25rem 0;
   }
   
   a {
-    color: scale-color($grey-dark, $lightness: 15%);
+    color: $black-v2;
     
     &.active {
-      color: $purple;
-      font-weight: 500;
+      color: $purple-v2;
+      font-weight: 600;
     }
+
+    &:hover {
+      color: $purple-v2;
+    }
+  }
+
+  code {
+      font-family: "Fira Code";
+      font-variant-ligatures: none;
   }
   
   nav > ul > li > a {
@@ -234,6 +250,10 @@ header {
     padding: 0.5rem 0.5rem;
     margin: 0.5rem 1rem;
     white-space: nowrap;
+
+    @media (max-width: 1100px) {
+        margin: 0.5rem;
+    }
     
     &.active,
     &.hoverable:hover {
@@ -260,14 +280,15 @@ header {
   
   .btn {
     background: $medium-purple-v2;
-    padding: 0.7rem 1.625rem 0.55rem;
+    padding: 0.625rem 1.625rem;
     margin: 0rem;
     font-weight: 700;
     font-size: 14px;
     line-height: 17px;
+    transition: background 350ms ease;
     
-    &::before {
-      background: $primary-gradient-v2;
+    &:hover {
+        background: $purple-v2;
     }
   }
   
@@ -280,7 +301,7 @@ header {
   align-items: center;
   display: flex;
   list-style: none;
-  max-width: 1494px;
+  max-width: 1540px;
   margin: 0 auto;
   padding: 0 2.8rem;
   
@@ -298,21 +319,6 @@ header {
   text-align: center;
 }
 
-.hide_on_mobile {
-  display: none;
-  
-  @media (min-width: $breakpoint) {
-    display: unset;
-  }
-}
-.show_on_mobile {
-  display: block;
-  
-  @media (min-width: $breakpoint) {
-    display: none !important;
-  }
-}
-
 .gradient_text {
   background: $primary-gradient-v2;
   -webkit-background-clip: text;
@@ -321,8 +327,8 @@ header {
 
 .btn {
   background-color: $light-grey-v2;
-  border-radius: 4px;
   color: $medium-purple-v2;
+  border-radius: 4px;
   font-size: 13px;
   font-weight: 600;
   margin: 0.4375rem;
@@ -330,32 +336,22 @@ header {
   position: relative;
   user-select: none;
   z-index: 1;
+  transition: color 350ms ease, background-color 350ms ease;
   
   &:hover {
     opacity: 1;
-  }
-  
-  &::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: $secondary-gradient-v2;
-    border-radius: 4px;
-    z-index: -1;
-    opacity: 0;
-    transition: opacity 350ms ease;
-  }
-  
-  &:hover::before {
-    opacity: 0.5;
+    color: $light-grey-v2;
+    background-color: $medium-purple-v2;
+
+    svg {
+        color: inherit;
+    }
   }
   
   svg {
     position: relative;
     top: 6px;
     left: -7px;
+    color: $purple-v2;
   }
 }

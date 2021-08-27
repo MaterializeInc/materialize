@@ -1,3 +1,3 @@
-<a class="cta" href="{{ .Get "href" | relURL }}" {{with .Get "target"}}target="{{.}}"{{end}}}>
-    {{ .Inner | $.Page.RenderString }}
+<a class="cta {{with .Get "full_width"}}full_width{{end}}" href="{{ .Get "href" | relURL }}" {{with .Get "target"}}target="{{.}}"{{end}}}>
+  {{ .Inner | $.Page.RenderString }}
 </a>

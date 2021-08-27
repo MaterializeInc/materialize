@@ -5,6 +5,7 @@ linktitle: "Docs Home"
 menu: "main"
 disable_toc: true
 disable_list: true
+disable_h1: true
 weight: 1
 ---
 
@@ -12,9 +13,35 @@ Materialize is a streaming database for real-time applications. Materialize
 accepts input data from a variety of streaming sources (e.g. Kafka) and files
 (e.g. CSVs), and lets you query them using SQL.
 
-{{< cta href="/install" >}}
-Install Materialize →
-{{</ cta >}}
+{{< callout primary_url="/get-started/" primary_text="Begin Quickstart" secondary_url="/install/" secondary_text="View Install Guide">}}
+  # Quickstart
+
+  Follow this 10 minute walkthrough to install, run, and start creating live views on streaming data with Materialize.
+{{</ callout >}}
+
+{{< multilinkbox >}}
+{{< linkbox icon="bulb" title="Key Concepts" >}}
+- [High-Level Overview]({{< relref "what-is-materialize" >}})
+- [API Components: Sources, Views, Indexes, Sinks]({{< relref "/overview/api-components" >}})
+- [`materialized` Architecture]({{< relref "/overview/architecture" >}})
+{{</ linkbox >}}
+{{< linkbox icon="touch" title="Demos" >}}
+- [Real-Time Analytics Dashboard]({{< relref "/demos/business-intelligence" >}})
+- [Streaming SQL on server logs]({{< relref "/demos/log-parsing" >}})
+- [A microservice to transform and join two streams of data]({{< relref "/demos/microservice" >}})
+{{</ linkbox >}}
+{{< linkbox icon="doc" title="Guides" >}}
+- [Link One](#)
+- [Second Link](#)
+- [Link number three](#)
+{{</ linkbox >}}
+{{< linkbox icon="book" title="Reference" >}}
+- [CREATE SOURCE]({{< relref "/sql/create-source" >}})
+- [CREATE MATERIALIZED VIEW]({{< relref "/sql/create-materialized-view" >}})
+- [SQL Data Types]({{< relref "/sql/types" >}})
+- [SQL Functions]({{< relref "/sql/functions" >}})
+{{</ linkbox >}}
+{{</ multilinkbox >}}
 
 ## What does Materialize do?
 

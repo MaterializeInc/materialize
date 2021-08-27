@@ -5,11 +5,9 @@ menu: "main"
 weight: 2
 ---
 
-{{< promo >}}
-
-[Want to connect with Materialize? Join our growing community on Slack! →](https://materialize.com/s/chat)
-
-{{< /promo >}}
+{{< cta target="_blank" full_width="true" href="https://materialize.com/s/chat" >}}
+Want to connect with Materialize? Join our growing community on Slack! →
+{{< /cta >}}
 
 You can access Materialize through the `materialized` binary, which you can
 install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
