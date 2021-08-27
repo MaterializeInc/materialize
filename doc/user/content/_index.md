@@ -31,9 +31,9 @@ accepts input data from a variety of streaming sources (e.g. Kafka) and files
 - [A microservice to transform and join two streams of data]({{< relref "/demos/microservice" >}})
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
-- [](#)
-- [](#)
-- [](#)
+- [Connect Postgres to Materialize with CDC](/guides/cdc-postgres/)
+- [Use Temporal Filters to Index events within a window of time](/guides/temporal-filters/)
+- [Interact with Materialize from Node.js](/guides/node-js/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
 - [CREATE SOURCE]({{< relref "/sql/create-source" >}})

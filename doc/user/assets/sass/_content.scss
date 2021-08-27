@@ -10,7 +10,7 @@ a {
     color: $dark-purple-v2;
     position:relative;
     margin: 2rem 0 1rem;
-    
+
     a {
       color: $black-v2;
       font-weight: 500;
@@ -26,20 +26,20 @@ a {
         background: none;
         border: none;
     }
-    
+
     + ul {
       padding-left: 20px;
     }
   }
-  
+
   > h1 {
     font-size: 2.25rem;
-    
+
     &:first-of-type{
       margin-top: 0;
       margin-bottom: 2rem;
       padding: 0 0 1.25rem;
-      
+
       &::after {
         content: "";
         position: absolute;
@@ -50,42 +50,42 @@ a {
         background: $grey-v2;
       }
     }
-    
+
     + h2 {
       margin-top: 0;
     }
   }
-  
+
   h2 {
     font-size: 1.875rem;
-    
+
     + h3 {
       margin-top: 16px;
     }
   }
-  
+
   h3 {
     font-size: 1.5rem;
-    
+
     + h4 {
       margin-top: 8px;
     }
   }
-  
+
   h4 {
     font-size: 1.4rem;
   }
-  
+
   h5 {
     font-size: 1.2rem;
     font-style: italic;
     font-weight: lighter;
   }
-  
+
   p, ul > li:first-child > p:first-child {
     margin: 0;
   }
-  
+
   p + p,
   p + ul,
   ul + p,
@@ -99,21 +99,21 @@ a {
   table + p {
     margin-top: 1rem;
   }
-  
+
   p + table {
     margin-top: 0.5rem;
   }
-  
+
   p, li, pre, .warning, .note {
     font-size: 0.9375rem;
     font-weight: 400;
     line-height: 1.40625rem;
   }
-  
+
   a {
     color: $purple-v2;
     font-weight: 600;
-    
+
     &:hover {
       color: $medium-purple-v2;
       border-bottom: 1px solid $medium-purple-v2;
@@ -123,7 +123,7 @@ a {
         border-bottom: 1px solid $medium-purple-v2;
       }
     }
-    
+
     // Coloring of code overrides link coloring; instead insert border-bottom to
     // indicate hyperlink on code element. This is very prevalent in our docs,
     // especially among type references.
@@ -142,26 +142,26 @@ a {
         top: 1px;
     }
   }
-  
+
   strong {
     font-weight: 600;
   }
-  
+
   img {
     max-width: 100%;
   }
-  
+
   table {
     border-collapse: collapse;
     font-size: 0.875rem;
     font-weight: 400;
     line-height: 1.3125rem;
   }
-  
+
   tr {
     border-bottom: 1px $medium-grey-v2 solid;
   }
-  
+
   th {
     color: $dark-black-v2;
     border-bottom: 2px $purple-v2 solid;
@@ -169,11 +169,11 @@ a {
     padding: 8px;
     font-size: 0.8125rem;
   }
-  
+
   td {
     padding: 10px;
     vertical-align: top;
-    
+
     pre {
       background-color: inherit;
       border: 0;
@@ -182,7 +182,7 @@ a {
       padding: 0;
     }
   }
-  
+
   pre {
     background-color: #f9f7fd;
     border-radius: 4px;
@@ -193,7 +193,7 @@ a {
     margin: 1rem 0 0.5rem;
     overflow: auto;
     padding: 1rem;
-    
+
     code {
       color: $black-v2;
       background: none;
@@ -201,7 +201,7 @@ a {
       padding: 0;
     }
   }
-  
+
   code {
     color: $orchid-v2;
     font-family: 'Fira Code', Courier, monospace;
@@ -214,7 +214,7 @@ a {
     border-radius: 2px;
     padding: 0.1rem 0.25rem 0rem;
   }
-  
+
   // Merge a highlighted code block followed by a non-highlighted code block,
   // since this is a common pattern in our docs to indicate a (highlighted)
   // shell or SQL snippet followed by its (unhighlighted) output.
@@ -223,28 +223,28 @@ a {
     margin-top: -16px;
     padding-top: 0;
   }
-  
+
   ul, ol {
     margin: 0;
-    
+
     li {
       margin-bottom: 0.5rem;
     }
   }
-  
+
   ol.has-p {
     list-style-type: none;
     counter-reset: list-counter;
     margin: 0;
     padding: 0;
-    
+
     li {
       counter-increment: list-counter;
       min-height: 5rem;
       position: relative;
       padding: 0.25rem 0 1rem 3.75rem;
       border-top: 1px solid $medium-grey-v2;
-      
+
       &:before {
         content: counter(list-counter);
         color: $light-purple-v2;
@@ -255,20 +255,20 @@ a {
         top: 1.75rem;
         left: 0.25rem;
       }
-      
+
       &:last-child {
         padding-bottom: 0;
       }
     }
   }
-  
+
   hr {
     border: none;
     border-top: 1px solid $medium-grey-v2;
     margin: 36px auto;
     width: 80%;
   }
-  
+
   .warning {
     background: rgba(238, 134, 96, 0.05);
     border: 1px solid rgba(238, 134, 96, 0.2);
@@ -282,7 +282,7 @@ a {
         color: #E97A52;
     }
   }
-  
+
   .note {
     background: #FBF9E9;
     border: 1px solid #D9D6C1;
@@ -337,7 +337,7 @@ a {
     }
 
   }
-  
+
   .cta {
     background: $purple-gradient-v2;
     border-radius: 4px;
@@ -363,28 +363,28 @@ a {
             color:$dark-purple-v2;
         }
     }
-    
+
     &:hover {
       opacity:0.9;
       color: #fff;
       border-bottom: none;
     }
   }
-  
+
   .release-date {
     font-style: italic;
   }
-  
+
   .release-date + ul,
   .release-date + ol {
     margin-top: 10px;
     padding-left: 20px;
   }
-  
+
   .symbol {
     color: $purple;
   }
-  
+
   .breadcrumb {
     margin: 0 0 1.5rem;
     font-size: 0.75rem;
@@ -392,21 +392,21 @@ a {
     letter-spacing: -0.015em;
     text-transform: uppercase;
     color: $grey-v2;
-    
+
     a {
       color: $grey-v2;
       margin: 0 0.5rem;
-      
+
       &:hover {
         color: $black-v2;
         opacity: 1.0;
       }
-      
+
       &:first-of-type {
         margin-left: 0;
       }
     }
-    
+
   }
 }
 
@@ -416,7 +416,7 @@ a {
   max-width: 40%;
   padding-top: .5rem;
   text-align: center;
-  
+
   table {
     table-layout: fixed;
     width: 100%;
