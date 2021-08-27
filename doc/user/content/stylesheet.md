@@ -24,7 +24,7 @@ _underline_
 
 `code`
 
-[Linked `code`](#)
+[Linked `code`](/)
 
 ```shell
 code block
@@ -112,9 +112,9 @@ Used for prominent messages. Optionally can include a primary and secondary CTA 
 Used to render categorized lists of links, most helpful for "routing" pages like the homepage.
 
 {{< linkbox icon="bulb" title="Linkbox One" >}}
-- [Link One](#)
-- [Second Link](#)
-- [Link number three](#)
+- [Link One](/)
+- [Second Link](/)
+- [Link number three](/)
 {{</ linkbox >}}
 
 ### `multilinkbox` shortcode
@@ -123,23 +123,23 @@ Group multiple linkboxes together to form a grid:
 
 {{< multilinkbox >}}
 {{< linkbox icon="bulb" title="Linkbox One" >}}
-- [Link One](#)
-- [Second Link](#)
-- [Link number three](#)
+- [Link One](/)
+- [Second Link](/)
+- [Link number three](/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Linkbox Two" >}}
-- [Link One](#)
-- [Second Link](#)
-- [Link number three](#)
+- [Link One](/)
+- [Second Link](/)
+- [Link number three](/)
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Linkbox Three" >}}
-- [Link One](#)
-- [Second Link](#)
-- [Link number three](#)
+- [Link One](/)
+- [Second Link](/)
+- [Link number three](/)
 {{</ linkbox >}}
 {{< linkbox icon="touch" title="Linkbox Four" >}}
-- [Link One](#)
-- [Second Link](#)
-- [Link number three](#)
+- [Link One](/)
+- [Second Link](/)
+- [Link number three](/)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
