@@ -31,11 +31,11 @@ body {
 
 .algolia-autocomplete {
   width: 100%;
-  
+
   .ds-cursor .algolia-docsearch-suggestion--content {
     background: rgba($purple, 0.03) !important;
   }
-  
+
   .algolia-docsearch-suggestion--highlight {
     background: rgba($purple, 0.03) !important;
     color: $purple !important;
@@ -80,41 +80,41 @@ body {
   min-width: 200px;
   position: relative;
   padding: 1.625rem 2rem;
-  
+
   a {
     display: block;
     color: $black-v2;
     cursor: pointer;
-    
+
     &:hover {
       color: $purple-v2;
     }
-    
+
     &.active {
       font-weight: bold;
     }
   }
-  
+
   > ul {
     margin-left: 1rem;
   }
-  
+
   ul {
     list-style-type: none;
     margin-top: 0;
     padding-left: 0;
   }
-  
+
   li.level-1 {
     padding: 7px;
     position: relative;
-    
+
     &.has-children {
       ul {
         display: none;
         margin-top: 5px;
       }
-      
+
       > a::before {
         content: "";
         display: inline-block;
@@ -127,21 +127,21 @@ body {
         top: 8px;
       }
     }
-    
+
     &.open {
       ul {
         display: block;
       }
-      
+
       > a::before {
         background-image: url('/images/icon_sidebar_expanded.svg');
       }
     }
   }
-  
+
   li.level-2 {
     padding-left: 15px;
-    
+
     a {
       font-size: 14px;
       padding: 3px 0;
@@ -165,7 +165,7 @@ body {
   padding: 2.25rem 2rem;
   position: sticky;
   top: 0;
-  
+
   h2 {
     font-size: 0.75rem;
     font-weight: bold;
@@ -174,24 +174,24 @@ body {
     text-transform: uppercase;
     display: inline-block;
   }
-  
+
   ul {
     list-style-type: none;
     margin: 0;
     padding: 0;
   }
-  
+
   ul ul {
     margin-left: 1rem;
   }
-  
+
   li {
     padding: 0.25rem 0;
   }
-  
+
   a {
     color: $black-v2;
-    
+
     &.active {
       color: $purple-v2;
       font-weight: 600;
@@ -206,7 +206,7 @@ body {
       font-family: "Fira Code";
       font-variant-ligatures: none;
   }
-  
+
   nav > ul > li > a {
     font-weight: 500;
   }
@@ -221,7 +221,7 @@ body {
 
 header {
   height: 105px;
-  
+
   .primary {
     font-family: "Encode Sans Expanded";
     font-size: 30px;
@@ -241,7 +241,7 @@ header {
   font-size: 14px;
   height: 71px;
   line-height: 21px;
-  
+
   *[role="menuitem"] {
     border-bottom-color: $transparent-v2;
     color: #fff;
@@ -254,30 +254,30 @@ header {
     @media (max-width: 1100px) {
         margin: 0.5rem;
     }
-    
+
     &.active,
     &.hoverable:hover {
       border-bottom: 1px solid $white;
       transition: border-bottom-color 350ms ease;
     }
-    
+
     &.logo {
       padding: 0.5rem 0;
       margin: 0.5rem 0;
       position: relative;
       top: 3px;
-      
+
       & + * {
         font-size: 20.375px;
         margin-left: 0.75rem;
       }
     }
-    
+
     &:hover {
       opacity: 1;
     }
   }
-  
+
   .btn {
     background: $medium-purple-v2;
     padding: 0.625rem 1.625rem;
@@ -286,12 +286,12 @@ header {
     font-size: 14px;
     line-height: 17px;
     transition: background 350ms ease;
-    
+
     &:hover {
         background: $purple-v2;
     }
   }
-  
+
   .secondary {
     opacity: 0.5;
   }
@@ -304,7 +304,7 @@ header {
   max-width: 1540px;
   margin: 0 auto;
   padding: 0 2.8rem;
-  
+
   .flex_grow {
     flex: 1;
     flex-shrink: 1;
@@ -337,7 +337,7 @@ header {
   user-select: none;
   z-index: 1;
   transition: color 350ms ease, background-color 350ms ease;
-  
+
   &:hover {
     opacity: 1;
     color: $light-grey-v2;
@@ -347,7 +347,7 @@ header {
         color: inherit;
     }
   }
-  
+
   svg {
     position: relative;
     top: 6px;
