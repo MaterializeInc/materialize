@@ -21,6 +21,9 @@ CREATE TABLE t2 (key integer PRIMARY KEY, nokey integer)
 statement ok
 INSERT INTO t2 VALUES (2, 3), (5, 5);
 
+statement ok
+CREATE TABLE t3 (f1 INTEGER, f2 INTEGER);
+
 # Test that nested unions are fused into a single Union operator
 query T multiline
 EXPLAIN (SELECT * FROM t1 UNION ALL SELECT * FROM t1) UNION ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
@@ -83,3 +86,30 @@ query II
 1  1
 4  5
 4  5
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM t2  EXCEPT ALL SELECT * FROM t1 INTERSECT ALL SELECT * FROM t3;
+----
+%0 =
+| Get materialize.public.t2 (u3)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Negate
+
+%2 =
+| Get materialize.public.t1 (u1)
+
+%3 =
+| Get materialize.public.t3 (u5)
+| Negate
+
+%4 =
+| Union %2 %3
+| Threshold
+
+%5 =
+| Union %0 %1 %4
+| Threshold
+
+EOF

@@ -65,7 +65,7 @@ steps format=types
 ====
 No change: TopKElision, NonNullRequirements
 ====
-Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
+Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
 %0 =
 | Get x (u0)
 | | types = (Int32?, Int64?, Int32?)
@@ -75,7 +75,7 @@ Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtract
 | | keys = ((#0), (#1))
 
 ====
-No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project
+No change: Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project
 ====
 Applied RelationCSE:
 %0 = Let l0 =
