@@ -478,10 +478,11 @@ a {
       }
     }
   }
+
   .tab-pane {
     display: none;
     padding: 1rem 0;
-    
+
     &.active {
       display: block;
     }
