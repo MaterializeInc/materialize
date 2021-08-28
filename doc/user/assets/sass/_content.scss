@@ -134,7 +134,7 @@ a {
     /* Style external links with a "open in new window" icon. */
     &[href*="//"]:not([href*="materialize.com"])::after {
         content: "";
-        background-image: url('/images/icon_external_link.svg');
+        background-image: url('../images/icon_external_link.svg');
         width: 16px;
         height: 16px;
         display: inline-block;
@@ -438,47 +438,54 @@ a {
 }
 
 // Navigation tabs (tab+tabs.html)
+.code-tabs {
+  margin: 1rem 0;
 
-.nav-tabs {
-  position: unset;
-  width: unset;
-}
+  .nav-tabs {
+    list-style: none;
+    padding: 0;
+    border-bottom: 1px solid #9C86E0;
 
-.tab-content > .tab-pane {
-  display: none;
-}
+    li {
+      display: inline-block;
+      margin: 0 .125rem;
+      padding: 0;
+      background: $faded-purple-v2;
+      position: relative;
+      bottom: -1px;
 
-.tab-pane {
-  padding: 3px 0px;
-  border-top: 1px solid $grey;
-}
+      a {
+        color: $medium-purple-v2;
+        display: block;
+        padding: 0.5rem 2rem;
+        font-size: 1rem;
 
-.tab-pane {
-  padding: 3px 0px;
-}
+        &:hover {
+          color: $purple;
+          border-bottom: none;
+        }
+      }
 
-.tab-content > .active {
-  display: block;
-  padding: 15px 0px 15px 0px
-}
+      &.active {
+        background: $white-v2;
+        border-radius: 2px 2px 0 0;
+        border:1px solid #9C86E0;
+        border-bottom-color: $white;
 
-.nav-tabs {
-  color: $grey-light;
-  list-style-type: none;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.nav-tabs > li {
-  color: #0f0f0f;
-  float: left;
-}
-
-.nav-tabs > li > a {
-  display: block;
-  padding: 5px 10px;
-  font-size: 16px;
+        a {
+            color: $off-black;
+        }
+      }
+    }
+  }
+  .tab-pane {
+    display: none;
+    padding: 1rem 0;
+    
+    &.active {
+      display: block;
+    }
+  }
 }
 
 pre {
@@ -488,30 +495,21 @@ pre {
   line-height: 1;
 }
 
-.code-tabs {
-  margin: 10px 0px 0px 0px;
-}
+.callout {
+  background-color: $faded-purple-v2;
+  border-radius: 3px;
+  padding: 2rem 2.5rem;
+  margin: 2rem 0;
 
-.nav-tabs > li.active > a, .nav-tabs > li > a:hover {
-  color: $purple !important;
-  background: $purple-1;
+  > :first-child {
+    margin-top: 0;
+  }
 
-  .callout {
-    background-color: $faded-purple-v2;
-    border-radius: 3px;
-    padding: 2rem 2.5rem;
-    margin: 2rem 0;
+  .cta {
+    margin: 1rem 1rem 1rem 0;
 
-    > :first-child {
-      margin-top: 0;
-    }
-
-    .cta {
-      margin: 1rem 1rem 1rem 0;
-
-      &.secondary {
-        background: #FFF;
-      }
+    &.secondary {
+    background: #FFF;
     }
   }
 }
@@ -560,16 +558,16 @@ pre {
   }
 
   &.book::before {
-    background-image:url('/images/icon_book.png');
+    background-image:url('../images/icon_book.png');
   }
   &.bulb::before {
-    background-image:url('/images/icon_bulb.png');
+    background-image:url('../images/icon_bulb.png');
   }
   &.doc::before {
-    background-image:url('/images/icon_doc.png');
+    background-image:url('../images/icon_doc.png');
   }
   &.touch::before {
-    background-image:url('/images/icon_touch.png');
+    background-image:url('../images/icon_touch.png');
   }
 
   .title {
