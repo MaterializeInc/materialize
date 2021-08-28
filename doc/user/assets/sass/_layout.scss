@@ -119,7 +119,7 @@ body {
         content: "";
         display: inline-block;
         margin-left: 2px;
-        background-image: url('/images/icon_sidebar_minimized.svg');
+        background-image: url('../images/icon_sidebar_minimized.svg');
         width: 14px;
         height: 14px;
         position:absolute;
@@ -134,7 +134,7 @@ body {
       }
 
       > a::before {
-        background-image: url('/images/icon_sidebar_expanded.svg');
+        background-image: url('../images/icon_sidebar_expanded.svg');
       }
     }
   }
