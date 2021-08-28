@@ -1,19 +1,30 @@
 a {
   text-decoration: none;
-
-  &:hover {
-    opacity: 0.75;
-  }
 }
 
-
 .content {
+  color: $black-v2;
   h1, h2, h3, h4, h5, h6 {
-    font-weight: 500;
+    font-family: 'Encode Sans Expanded';
+    font-weight: 300;
+    color: $dark-purple-v2;
+    position:relative;
+    margin: 2rem 0 1rem;
 
     a {
-      color: $black;
+      color: $black-v2;
       font-weight: 500;
+
+      &:hover {
+        border-bottom: none;
+      }
+    }
+
+    code {
+        font-size: inherit;
+        color: inherit;
+        background: none;
+        border: none;
     }
 
     + ul {
@@ -21,10 +32,24 @@ a {
     }
   }
 
-  h1 {
-    font-weight: bold;
-    font-size: 2.2rem;
-    margin: 16px 0;
+  > h1 {
+    font-size: 2.25rem;
+
+    &:first-of-type{
+      margin-top: 0;
+      margin-bottom: 2rem;
+      padding: 0 0 1.25rem;
+
+      &::after {
+        content: "";
+        position: absolute;
+        width: 47px;
+        bottom: 0;
+        left: 0;
+        height: 1px;
+        background: $grey-v2;
+      }
+    }
 
     + h2 {
       margin-top: 0;
@@ -32,8 +57,7 @@ a {
   }
 
   h2 {
-    font-size: 1.8rem;
-    margin: 32px 0 8px;
+    font-size: 1.875rem;
 
     + h3 {
       margin-top: 16px;
@@ -41,35 +65,21 @@ a {
   }
 
   h3 {
-    color: $off-black;
-    font-size: 1.6rem;
-    font-weight: lighter;
-    margin: 32px 0 8px;
+    font-size: 1.5rem;
 
     + h4 {
       margin-top: 8px;
     }
-
-    a {
-      color: $off-black;
-    }
   }
 
   h4 {
-    color: $grey-dark;
     font-size: 1.4rem;
-    margin: 32px 0 8px;
-
-    a {
-      color: $grey-dark;
-    }
   }
 
   h5 {
     font-size: 1.2rem;
     font-style: italic;
     font-weight: lighter;
-    margin: 32px 0px 8px 0px;
   }
 
   p, ul > li:first-child > p:first-child {
@@ -87,27 +97,54 @@ a {
   .highlight + p,
   pre + p,
   table + p {
-    margin-top: 16px;
+    margin-top: 1rem;
   }
 
   p + table {
-    margin-top: 8px;
+    margin-top: 0.5rem;
   }
 
-  p, li, pre {
-    line-height: 1.5;
+  p, li, pre, .warning, .note {
+    font-size: 0.9375rem;
+    font-weight: 400;
+    line-height: 1.40625rem;
   }
 
   a {
-    color: $purple;
-    font-weight: 500;
+    color: $purple-v2;
+    font-weight: 600;
+
+    &:hover {
+      color: $medium-purple-v2;
+      border-bottom: 1px solid $medium-purple-v2;
+
+      code {
+        color: $medium-purple-v2;
+        border-bottom: 1px solid $medium-purple-v2;
+      }
+    }
 
     // Coloring of code overrides link coloring; instead insert border-bottom to
     // indicate hyperlink on code element. This is very prevalent in our docs,
     // especially among type references.
     code {
-      border-bottom: 1px dotted $purple-20;
+        color: $purple-v2;
     }
+
+    /* Style external links with a "open in new window" icon. */
+    &[href*="//"]:not([href*="materialize.com"])::after {
+        content: "";
+        background-image: url('/images/icon_external_link.svg');
+        width: 16px;
+        height: 16px;
+        display: inline-block;
+        position: relative;
+        top: 1px;
+    }
+  }
+
+  strong {
+    font-weight: 600;
   }
 
   img {
@@ -116,17 +153,21 @@ a {
 
   table {
     border-collapse: collapse;
+    font-size: 0.875rem;
+    font-weight: 400;
+    line-height: 1.3125rem;
   }
 
   tr {
-    border-bottom: 1px $grey solid;
+    border-bottom: 1px $medium-grey-v2 solid;
   }
 
   th {
-    color: $purple;
-    border-bottom: 2px $purple solid;
+    color: $dark-black-v2;
+    border-bottom: 2px $purple-v2 solid;
     text-align: left;
     padding: 8px;
+    font-size: 0.8125rem;
   }
 
   td {
@@ -144,24 +185,34 @@ a {
 
   pre {
     background-color: #f9f7fd;
-    border-radius: 0;
+    border-radius: 4px;
     border: 1px solid $grey-light;
-    color: $off-black;
+    color: $black-v2;
     font-family: Courier, monospace;
     font-size: 15px;
-    margin: 16px 0 8px;
+    margin: 1rem 0 0.5rem;
     overflow: auto;
-    padding: 8px 10px;
+    padding: 1rem;
 
     code {
-      color: $off-black;
+      color: $black-v2;
+      background: none;
+      border: none;
+      padding: 0;
     }
   }
 
   code {
-    color: #3f6e75;
-    font-family: Courier, monospace;
-    font-size: 0.9375em;
+    color: $orchid-v2;
+    font-family: 'Fira Code', Courier, monospace;
+    font-variant-ligatures: none;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    background: #F9F9F9;
+    border: 1px solid #DDDDDD;
+    box-sizing: border-box;
+    border-radius: 2px;
+    padding: 0.1rem 0.25rem 0rem;
   }
 
   // Merge a highlighted code block followed by a non-highlighted code block,
@@ -173,8 +224,12 @@ a {
     padding-top: 0;
   }
 
-  ul {
+  ul, ol {
     margin: 0;
+
+    li {
+      margin-bottom: 0.5rem;
+    }
   }
 
   ol.has-p {
@@ -185,17 +240,20 @@ a {
 
     li {
       counter-increment: list-counter;
+      min-height: 5rem;
       position: relative;
-      padding: 0 0 16px 48px;
-      border-top: 2px dashed $grey-light;
+      padding: 0.25rem 0 1rem 3.75rem;
+      border-top: 1px solid $medium-grey-v2;
 
       &:before {
         content: counter(list-counter);
-        color: $grey;
-        font-size: 32px;
+        color: $light-purple-v2;
+        font-size: 3.5rem;
+        font-family: 'Encode Sans Expanded';
+        font-weight: 100;
         position: absolute;
-        top: 4px;
-        left: 10px;
+        top: 1.75rem;
+        left: 0.25rem;
       }
 
       &:last-child {
@@ -206,50 +264,111 @@ a {
 
   hr {
     border: none;
-    border-top: 1px solid $grey-light;
+    border-top: 1px solid $medium-grey-v2;
     margin: 36px auto;
     width: 80%;
   }
 
   .warning {
-    background-color: rgba(255, 124, 26, 0.1);
-    border: 1px dashed rgb(255, 124, 26);
-    margin: 16px 0;
-    padding: 16px;
-  }
+    background: rgba(238, 134, 96, 0.05);
+    border: 1px solid rgba(238, 134, 96, 0.2);
 
-  .note {
-    background-color: rgba(255, 222, 11, 0.1);
-    border: 1px dashed rgb(255, 222, 11);
-    margin: 16px 0;
-    padding: 16px;
-  }
+    &::after {
+        border-color: #fff #fff #FBE2D9 #FBE2D9;
+        background: #FBE2D9;
+    }
 
-  .beta {
-    background-color: $purple-1;
-    border: 1px dashed $purple-60;
-    margin: 16px 0;
-    padding: 16px;
-  }
-
-  .promo {
-    background-color: #d12fa7;
-    color: #fff;
-    margin: 16px 0;
-    padding: 16px;
-    text-align: center;
-    a {
-      color: #fff;
+    .gutter {
+        color: #E97A52;
     }
   }
 
+  .note {
+    background: #FBF9E9;
+    border: 1px solid #D9D6C1;
+
+    &::after {
+        border-color: #fff #fff #D9D6C1 #D9D6C1;
+        background: #D9D6C1;
+    }
+
+    .gutter {
+        color: #766C18;
+    }
+  }
+
+  .beta {
+    background: #e9f7fb;
+    border: 1px solid #c0d3d8;
+
+    &::after {
+        border-color: #fff #fff #c0d3d8 #c0d3d8;
+        background: #c0d3d8;
+    }
+
+    .gutter {
+        color: #186477;
+    }
+  }
+
+  .warning, .note, .beta {
+    box-sizing: border-box;
+    margin: 1rem 0;
+    padding: 1rem 1rem 1rem 6rem;
+    position: relative;
+
+    &::after {
+        content: "";
+        position: absolute;
+        top: -1px;
+        right: -1px;
+        border-width: 0 1rem 1rem 0;
+        border-style: solid;
+    }
+
+    .gutter {
+        position: absolute;
+        left: 1rem;
+        top: 1rem;
+        line-height: 23px;
+        font-size: 0.75rem;
+        font-weight: bold;
+        text-transform: uppercase;
+    }
+
+  }
+
   .cta {
-    background-color: $purple;
+    background: $purple-gradient-v2;
+    border-radius: 4px;
     color: #fff;
     display: inline-block;
-    font-weight: bold;
-    margin: 16px 0 0 0;
-    padding: 16px;
+    font-weight: 600;
+    margin: 2rem 0;
+    padding: 0.8125rem 4rem;
+    opacity: 1.0;
+    transition: opacity 350ms ease;
+
+    &.full_width {
+        display: block;
+        width: 100%;
+        text-align: center;
+    }
+
+    &.secondary {
+        background: $faded-purple-v2;
+        color:$dark-purple-v2;
+
+        &:hover {
+            color:$dark-purple-v2;
+        }
+    }
+
+    &:hover {
+      opacity:0.9;
+      color: #fff;
+      border-bottom: none;
+    }
   }
 
   .release-date {
@@ -267,17 +386,27 @@ a {
   }
 
   .breadcrumb {
-    margin-top: 1rem;
-    font-size: .9rem;
+    margin: 0 0 1.5rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    text-transform: uppercase;
+    color: $grey-v2;
+
     a {
-      color: $grey-dark;
-      font-weight: lighter;
+      color: $grey-v2;
+      margin: 0 0.5rem;
 
       &:hover {
-        color: $black;
+        color: $black-v2;
         opacity: 1.0;
       }
+
+      &:first-of-type {
+        margin-left: 0;
+      }
     }
+
   }
 }
 
@@ -366,4 +495,103 @@ pre {
 .nav-tabs > li.active > a, .nav-tabs > li > a:hover {
   color: $purple !important;
   background: $purple-1;
+
+  .callout {
+    background-color: $faded-purple-v2;
+    border-radius: 3px;
+    padding: 2rem 2.5rem;
+    margin: 2rem 0;
+
+    > :first-child {
+      margin-top: 0;
+    }
+
+    .cta {
+      margin: 1rem 1rem 1rem 0;
+
+      &.secondary {
+        background: #FFF;
+      }
+    }
+  }
+}
+
+.multilinkbox {
+  margin: 2rem 0;
+  overflow: hidden;
+
+  & > div {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 0 -1px -1px 0;
+    box-sizing: border-box;
+  }
+
+  .linkbox {
+    box-sizing: border-box;
+    flex: 1;
+    min-width: 50%;
+    border-right: 1px solid $medium-grey-v2;
+    border-bottom: 1px solid $medium-grey-v2;
+
+    &:nth-of-type(2n) {
+        padding-left: 8.5rem;
+        padding-right: 0;
+
+        &::before {
+            left: 2.5rem;
+        }
+    }
+  }
+}
+
+.linkbox {
+  padding:2.5rem 2rem 2.5rem 6rem;
+  position: relative;
+
+  &::before {
+    content: "";
+    width: 71px;
+    height: 71px;
+    position: absolute;
+    top: 2.5rem;
+    left: 0;
+    background-size: contain;
+  }
+
+  &.book::before {
+    background-image:url('/images/icon_book.png');
+  }
+  &.bulb::before {
+    background-image:url('/images/icon_bulb.png');
+  }
+  &.doc::before {
+    background-image:url('/images/icon_doc.png');
+  }
+  &.touch::before {
+    background-image:url('/images/icon_touch.png');
+  }
+
+  .title {
+    text-transform: uppercase;
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: $medium-purple-v2;
+    margin-bottom: 1.25rem;
+  }
+
+  ul {
+    padding: 0;
+    list-style: none;
+  }
+
+  a {
+    color: $black-v2;
+    font-weight: 400;
+
+    &:hover {
+      color: $purple-v2;
+      border-bottom-color: $purple-v2;
+    }
+  }
 }
