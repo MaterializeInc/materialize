@@ -7,4 +7,4 @@ publish = false
 
 [dependencies]
 reqwest = "0.11.4"
-serde = { version = "1.0.128", features = ["derive"] }
+serde = { version = "1.0.130", features = ["derive"] }

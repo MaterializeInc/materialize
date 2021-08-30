@@ -39,7 +39,7 @@ rusoto_kinesis = "0.47.0"
 rusoto_s3 = "0.47.0"
 rusoto_sqs = "0.47.0"
 rusoto_sts = "0.47.0"
-serde = "1.0.128"
+serde = "1.0.130"
 serde-protobuf = "0.8.2"
 serde_json = "1.0.67"
 sql-parser = { path = "../sql-parser" }
