@@ -88,7 +88,7 @@ production readiness.
 
 - [ ] An issue should be automatically created with unreviewed PRs linked inside
   of it. Review (or get review on) all unreviewed PRs, and link to that issue
-  here.
+  here. Once all PRs have been reviewed, close the issue.
 
 [gh]: https://cli.github.com/
 
@@ -98,12 +98,15 @@ Release notes should be updated by engineers as they merge PRs. The release note
 team is responsible for reviewing release notes and the release announcement before
 a release is published.
 
-- [ ] Post the following message to the `#release` channel in slack, modifying the link to the issue to point to this one:
+- [ ] Post the following message to the `#release` channel in slack, modifying the two
+  issue links, one to point to the unreviewed PRs issue you went through above, and one
+  to point to this issue:
 
   > @relnotes-team the release is in progress, now's a great time to verify or
   > prepare the release notes and any announcement posts.
   > * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
-  > * release issue: https://github.com/MaterializeInc/materialize/issues/
+  > * All PRs in this release: https://github.com/MaterializeInc/materialize/issues/`<unreviewed PRs issue>`
+  > * Release: https://github.com/MaterializeInc/materialize/issues/`<this issue>`
 
 ### Test the release candidate
 
