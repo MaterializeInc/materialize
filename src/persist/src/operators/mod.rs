@@ -19,6 +19,7 @@ use crate::indexed::runtime::DecodedSnapshot;
 use crate::indexed::Snapshot;
 use crate::Codec;
 
+pub mod await_seal;
 pub mod input;
 pub mod source;
 pub mod stream;
