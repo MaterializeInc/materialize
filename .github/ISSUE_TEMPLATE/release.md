@@ -107,9 +107,6 @@ a release is published.
 
 ### Test the release candidate
 
-Cloud engineers run many of the steps in this section, their steps are prefixed with **cloud
-engineer**.
-
 To run the required load tests on the release candidate tag, Materialize employees
 can follow [these instructions for running semi-automatic load tests][load-instr]
 in the infrastructure repository. All of these tests can be run in parallel.
@@ -160,8 +157,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
   ```
   </details>
 
-- [ ] **cloud engineer** Let the tests run for at least 24 hours, with the following success
-  criteria:
+- [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
   - [ ] chbench: The ingest rate should not be slower than the previous release.
   - [ ] billing-demo: The container should run and finish without error. You can get the exit code
