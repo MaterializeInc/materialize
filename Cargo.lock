@@ -1059,7 +1059,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#d8775a3c17a27a333f7202d61abc8950374ae26a"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#8a5efd76970f69d3c012574eaecdf9c2ab1c0bfc"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1114,7 +1114,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#d8775a3c17a27a333f7202d61abc8950374ae26a"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#8a5efd76970f69d3c012574eaecdf9c2ab1c0bfc"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3314,9 +3314,9 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.9.1"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab8809e0c18450a2db0f236d2a44ec0b4c1412d0eb936233579f0990faa5d5cd"
+checksum = "95e344cafeaeefe487300c361654bcfc85db3ac53619eeccced29f5ea18c4c70"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -3593,9 +3593,9 @@ dependencies = [
 
 [[package]]
 name = "rayon"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b0d8e0819fadc20c74ea8373106ead0600e3a67ef1fe8da56e39b9ae7275674"
+checksum = "c06aca804d41dbc8ba42dfd964f0d01334eceb64314b9ecf7c5fad5188a06d90"
 dependencies = [
  "autocfg",
  "crossbeam-deque",
@@ -3605,9 +3605,9 @@ dependencies = [
 
 [[package]]
 name = "rayon-core"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ab346ac5921dc62ffa9f89b7a773907511cdfa5490c572ae9be1be33e8afa4a"
+checksum = "d78120e2c850279833f1dd3582f730c4ab53ed95aeaaaa862a2a5c71b1656d8e"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-deque",
@@ -4499,9 +4499,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.20.0"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0af066e6272f2175c1783cfc2ebf3e2d8dfe2c182b00677fdeccbf8291af83fb"
+checksum = "4786f320388e6031aa78c68455553f4e3425deeeb40565fecba3d101c1faf21f"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",
@@ -4781,7 +4781,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#2c2a054f48f9357ddfcb12e8319345c68c7e8516"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#94102cddfff421e0171e62c6b66f738a2e0c9454"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4798,12 +4798,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#2c2a054f48f9357ddfcb12e8319345c68c7e8516"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#94102cddfff421e0171e62c6b66f738a2e0c9454"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#2c2a054f48f9357ddfcb12e8319345c68c7e8516"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#94102cddfff421e0171e62c6b66f738a2e0c9454"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4819,7 +4819,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#2c2a054f48f9357ddfcb12e8319345c68c7e8516"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#94102cddfff421e0171e62c6b66f738a2e0c9454"
 
 [[package]]
 name = "tinytemplate"
