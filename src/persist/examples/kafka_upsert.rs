@@ -19,6 +19,7 @@ use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, NowFn};
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
+use persist::operators::await_seal::AwaitSeal;
 use persist::storage::LockInfo;
 use persist::{Codec, Data};
 use timely::dataflow::channels::pact::Pipeline;
@@ -83,6 +84,9 @@ fn construct_persistent_upsert_source<G, S>(
 where
     G: Scope<Timestamp = u64>,
     S: Source + 'static,
+    <S as Source>::K: Send,
+    <S as Source>::V: Send,
+    <S as Source>::SourceTimestamp: Send,
 {
     let (ts_write, ts_read) = persist
         .create_or_load::<S::SourceTimestamp, AssignedTimestamp>(&format!("{}_ts", name_base))?;
@@ -114,7 +118,7 @@ where
         now_fn,
         source_interval_ms,
         timestamp_interval_ms,
-        ts_read,
+        ts_read.clone(),
     )?;
 
     let bindings_persist_err = persist_bindings(&bindings, ts_write);
@@ -122,13 +126,15 @@ where
     bindings.inspect(|b| println!("Binding: {:?}", b));
 
     let (records_persist_ok, records_persist_err) =
-        persist_records::<G, S>(&source_records, start_ts, out_read, out_write)?;
+        persist_records::<G, S>(&source_records, start_ts, out_read.clone(), out_write)?;
 
     // TODO: add an operator that waits for the seal on bindings and
     // records (or upsert state, or whatnot) to advance before it releases records.
     //
     // We could do this either by listening for `Seal` events on a
     // StreamReadHandle or by waiting for the frontier to advance
+
+    let records_persist_ok = records_persist_ok.await_seal_binary(ts_read, out_read)?;
 
     let errs = bindings_persist_err.concat(&records_persist_err);
 
