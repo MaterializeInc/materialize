@@ -26,7 +26,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1614711973950,
+  "iteration": 1630092627457,
   "links": [],
   "panels": [
     {
@@ -231,7 +231,7 @@
     },
     {
       "datasource": null,
-      "description": "Total number of sql data queries being executed per second.\n\nSee the client queries row for a detailed breakdown.",
+      "description": "Total number of SQL data queries being executed per second.\n\nSee the client queries row for a detailed breakdown.",
       "fieldConfig": {
         "defaults": {
           "custom": {},
@@ -271,9 +271,9 @@
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "mean"
+            "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^Value$/",
           "values": false
         }
       },
@@ -491,7 +491,7 @@
     },
     {
       "datasource": null,
-      "description": "Median query latency, see SQL Query Timing row for a detailed breakdown.",
+      "description": "p99 query latency, see SQL Query Timing row for a detailed breakdown.",
       "fieldConfig": {
         "defaults": {
           "custom": {},
@@ -505,7 +505,7 @@
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 0.95
               }
             ]
           },
@@ -536,7 +536,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=~\"execute|query\",status=\"success\"}[$__interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"execute|query\",status=\"success\"}[$__interval])) by (le))",
           "interval": "",
           "legendFormat": "median",
           "refId": "D"
@@ -544,7 +544,7 @@
       ],
       "timeFrom": null,
       "timeShift": null,
-      "title": "Query Latency",
+      "title": "Query Latency p99",
       "type": "stat"
     },
     {
@@ -1073,63 +1073,6 @@
       "id": 32,
       "panels": [
         {
-          "datasource": null,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {},
-              "mappings": [],
-              "noValue": "0",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "rgb(52, 52, 52)",
-                    "value": null
-                  },
-                  {
-                    "color": "green",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 4,
-            "x": 10,
-            "y": 11
-          },
-          "id": 111,
-          "options": {
-            "colorMode": "value",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            }
-          },
-          "pluginVersion": "7.0.3",
-          "targets": [
-            {
-              "expr": "mz_source_count{type=\"kafka\"}",
-              "interval": "",
-              "legendFormat": ".",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Kafka Sources",
-          "type": "stat"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -1148,7 +1091,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 14
+            "y": 11
           },
           "hiddenSeries": false,
           "id": 49,
@@ -1195,7 +1138,7 @@
               "refId": "B"
             },
             {
-              "expr": "topk(10, clamp_min(\n(mz_kafka_partition_offset_max{topic=~\".*stock\"}\n  - on(id,partition_id,source_id,topic) group_right\n    max by(instance,id,partition_id,source_id,topic,source_instance) (mz_partition_offset_ingested{topic=~\".*stock\"})),\n  0))",
+              "expr": "topk(10, clamp_min(\n(mz_kafka_partition_offset_max\n  - on(id,partition_id,source_id,topic) group_right\n    max by(instance,id,partition_id,source_id,topic,source_instance) (mz_partition_offset_ingested)),\n  0))",
               "hide": false,
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}/{{source_instance}}",
@@ -1262,7 +1205,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 14
+            "y": 11
           },
           "hiddenSeries": false,
           "id": 57,
@@ -1301,13 +1244,13 @@
             {
               "expr": "rate(mz_kafka_messages_ingested[$__interval])",
               "interval": "",
-              "legendFormat": "rate {{topic}} {{source_id}} {{partition_id}}",
+              "legendFormat": "rate {{topic}}/{{partition_id}} source={{source_id}}",
               "refId": "A"
             },
             {
               "expr": "rate(mz_messages_ingested[$__interval])",
               "interval": "",
-              "legendFormat": "rate {{topic}} {{source_id}} {{partition_id}}",
+              "legendFormat": "rate {{topic}}/{{partition_id}} source={{source_id}}/{{source_instance}}",
               "refId": "C"
             }
           ],
@@ -1371,7 +1314,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 22
+            "y": 19
           },
           "hiddenSeries": false,
           "id": 10,
@@ -1492,7 +1435,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 22
+            "y": 19
           },
           "hiddenSeries": false,
           "id": 12,
@@ -1607,63 +1550,6 @@
       "id": 93,
       "panels": [
         {
-          "datasource": null,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {},
-              "mappings": [],
-              "noValue": "0",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "rgb(52, 52, 52)",
-                    "value": null
-                  },
-                  {
-                    "color": "green",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 4,
-            "x": 10,
-            "y": 12
-          },
-          "id": 112,
-          "options": {
-            "colorMode": "value",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            }
-          },
-          "pluginVersion": "7.0.3",
-          "targets": [
-            {
-              "expr": "mz_source_count{type=\"kinesis\"}",
-              "interval": "",
-              "legendFormat": ".",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Kinesis Sources",
-          "type": "stat"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -1682,7 +1568,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 15
+            "y": 12
           },
           "hiddenSeries": false,
           "id": 47,
@@ -1781,63 +1667,6 @@
       "id": 89,
       "panels": [
         {
-          "datasource": null,
-          "fieldConfig": {
-            "defaults": {
-              "custom": {},
-              "mappings": [],
-              "noValue": "0",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "rgb(52, 52, 52)",
-                    "value": null
-                  },
-                  {
-                    "color": "green",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 3,
-            "w": 4,
-            "x": 10,
-            "y": 24
-          },
-          "id": 113,
-          "options": {
-            "colorMode": "value",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            }
-          },
-          "pluginVersion": "7.0.3",
-          "targets": [
-            {
-              "expr": "mz_sink_count",
-              "interval": "",
-              "legendFormat": "{{type}}",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Active Sinks",
-          "type": "stat"
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -1856,7 +1685,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 27
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 87,
@@ -1962,7 +1791,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 27
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 91,
@@ -2119,7 +1948,7 @@
               "refId": "B"
             },
             {
-              "expr": "rate(process_cpu_seconds_total{instance=~\".*16875\"}[$__interval])",
+              "expr": "rate(process_cpu_seconds_total{instance=~\".*:16875\"}[$__interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "peeker",
@@ -2705,6 +2534,29 @@
                   "type": "avg"
                 },
                 "type": "query"
+              },
+              {
+                "evaluator": {
+                  "params": [
+                    50
+                  ],
+                  "type": "gt"
+                },
+                "operator": {
+                  "type": "and"
+                },
+                "query": {
+                  "params": [
+                    "F",
+                    "5m",
+                    "now"
+                  ]
+                },
+                "reducer": {
+                  "params": [],
+                  "type": "last"
+                },
+                "type": "query"
               }
             ],
             "executionErrorState": "alerting",
@@ -2757,7 +2609,16 @@
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "largest command queue",
+              "yaxis": 2
+            },
+            {
+              "alias": "largest peek queue",
+              "yaxis": 2
+            }
+          ],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": true,
@@ -2782,6 +2643,25 @@
               "interval": "",
               "legendFormat": "",
               "refId": "C"
+            },
+            {
+              "expr": "max(mz_worker_command_queue_size)",
+              "interval": "",
+              "legendFormat": "largest command queue",
+              "refId": "D"
+            },
+            {
+              "expr": "max(mz_worker_pending_peeks_queue_size)",
+              "interval": "",
+              "legendFormat": "largest peek queue",
+              "refId": "E"
+            },
+            {
+              "expr": "max(max(mz_worker_pending_peeks_queue_size) or max(mz_worker_command_queue_size))",
+              "hide": true,
+              "interval": "",
+              "legendFormat": "",
+              "refId": "F"
             }
           ],
           "thresholds": [
@@ -2997,11 +2877,13 @@
           "targets": [
             {
               "expr": "mz_worker_command_queue_size",
+              "interval": "",
               "legendFormat": "pending commands worker={{worker}}",
               "refId": "A"
             },
             {
               "expr": "mz_worker_pending_peeks_queue_size",
+              "interval": "",
               "legendFormat": "pending peeks worker={{worker}}",
               "refId": "B"
             }
@@ -3792,6 +3674,8 @@
           "legend": {
             "avg": false,
             "current": false,
+            "hideEmpty": true,
+            "hideZero": true,
             "max": false,
             "min": false,
             "show": true,
@@ -3814,16 +3698,11 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum by (format, status) (rate(mz_dataflow_events_read_total{status=\"error\"}[$__interval]))",
+              "expr": "sum by (format, status) (rate(mz_dataflow_events_read_total[$__interval]))",
+              "hide": false,
               "interval": "",
-              "legendFormat": "",
+              "legendFormat": "{{format}} {{status}}",
               "refId": "A"
-            },
-            {
-              "expr": "sum by (format, status) (rate(mz_dataflow_events_read_total{status=\"success\"}[$__interval]))",
-              "interval": "",
-              "legendFormat": "",
-              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -4174,7 +4053,7 @@
       "type": "row"
     }
   ],
-  "refresh": "",
+  "refresh": false,
   "schemaVersion": 25,
   "style": "dark",
   "tags": [],
@@ -4182,10 +4061,13 @@
     "list": [
       {
         "allFormat": "glob",
-        "allValue": null,
+        "allValue": ".*",
         "current": {
-          "selected": false,
-          "text": "execute + query",
+          "selected": true,
+          "text": [
+            "execute",
+            "query"
+          ],
           "value": [
             "execute",
             "query"
@@ -4436,7 +4318,7 @@
       },
       {
         "allFormat": "glob",
-        "allValue": null,
+        "allValue": "1",
         "current": {},
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, memory_total)",

@@ -134,6 +134,8 @@ RUN chmod -R 666 \
         /etc/grafana \
         /etc/grafana/provisioning \
         /etc/grafana/provisioning/datasources \
+        /etc/grafana/provisioning/plugins \
+        /etc/grafana/provisioning/access-control \
         /etc/grafana/provisioning/dashboards \
         /etc/grafana/provisioning/notifiers \
     ;
