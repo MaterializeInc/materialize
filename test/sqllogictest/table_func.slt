@@ -456,3 +456,87 @@ EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigi
 | Constant (0) (2) (-2)
 
 EOF
+
+# information_schema._pg_expandarray
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray()
+
+query error arguments cannot be implicitly cast
+SELECT * FROM information_schema._pg_expandarray()
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY[])
+
+query error cannot determine type of empty array
+SELECT * FROM information_schema._pg_expandarray(ARRAY[])
+
+query error arguments cannot be implicitly cast
+SELECT * FROM information_schema._pg_expandarray(NULL)
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(NULL)
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY[]::int[])
+----
+_pg_expandarray
+
+query TI colnames
+SELECT * FROM information_schema._pg_expandarray(ARRAY[]::int[])
+----
+x  n
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY[100])
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY[100])
+----
+100 1
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY[2, 1]) ORDER BY 1
+
+query II
+SELECT * FROM information_schema._pg_expandarray(ARRAY[2, 1]) ORDER BY x
+----
+1 2
+2 1
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY[3, 2, 1])
+
+query II
+SELECT * FROM information_schema._pg_expandarray(ARRAY[3, 2, 1]) ORDER BY x
+----
+1 3
+2 2
+3 1
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY['a'])
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY['a'])
+----
+a 1
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY['b', 'a'])
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY['b', 'a']) ORDER BY x
+----
+a 2
+b 1
+
+query error scalar position not yet supported
+SELECT information_schema._pg_expandarray(ARRAY['c', 'b', 'a'])
+
+query TI
+SELECT * FROM information_schema._pg_expandarray(ARRAY['c', 'b', 'a']) ORDER BY x
+----
+a 3
+b 2
+c 1

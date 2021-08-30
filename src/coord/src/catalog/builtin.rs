@@ -35,6 +35,7 @@ pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
 pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
+pub const INFORMATION_SCHEMA: &str = "information_schema";
 
 pub enum Builtin {
     Log(&'static BuiltinLog),
@@ -1684,6 +1685,7 @@ lazy_static! {
 
         for (schema, funcs) in &[
             (PG_CATALOG_SCHEMA, &*sql::func::PG_CATALOG_BUILTINS),
+            (INFORMATION_SCHEMA, &*sql::func::INFORMATION_SCHEMA_BUILTINS),
             (MZ_CATALOG_SCHEMA, &*sql::func::MZ_CATALOG_BUILTINS),
             (MZ_INTERNAL_SCHEMA, &*sql::func::MZ_INTERNAL_BUILTINS),
         ] {

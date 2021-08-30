@@ -15,6 +15,7 @@ public
 > SHOW EXTENDED SCHEMAS
 name
 -------
+information_schema
 public
 mz_catalog
 mz_internal
