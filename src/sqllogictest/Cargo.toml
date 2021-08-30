@@ -20,7 +20,7 @@ pgrepr = { path = "../pgrepr" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 regex = "1.5.4"
 repr = { path = "../repr" }
-serde_json = "1.0.66"
+serde_json = "1.0.67"
 sql = { path = "../sql" }
 structopt = "0.3.22"
 tempfile = "3.2.0"
