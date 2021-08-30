@@ -120,6 +120,11 @@ const MIGRATIONS: &[&str] = &[
         offset blob NOT NULL,
         PRIMARY KEY (sid, pid, timestamp, offset)
     );",
+    // Makes the information_schema schema literal so it can store functions.
+    //
+    // Introduced in v0.9.12.
+    "INSERT INTO schemas (database_id, name) VALUES
+        (NULL, 'information_schema');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:

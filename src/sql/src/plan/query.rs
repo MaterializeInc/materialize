@@ -1271,7 +1271,7 @@ fn plan_query(
     result
 }
 
-fn plan_subquery(
+pub fn plan_subquery(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
@@ -2098,11 +2098,7 @@ fn plan_table_function(
         bail!("VALUES expression in FROM clause must be surrounded by parentheses");
     }
 
-    let impls = match resolve_func(ecx, name, args)? {
-        Func::Table(impls) => impls,
-        _ => bail!("{} is not a table function", name),
-    };
-    let args = match args {
+    let scalar_args = match args {
         FunctionArgs::Star => bail!("{} does not accept * as an argument", name),
         FunctionArgs::Args { args, order_by } => {
             if !order_by.is_empty() {
@@ -2114,7 +2110,24 @@ fn plan_table_function(
             plan_exprs(ecx, args)?
         }
     };
-    let name = normalize::unresolved_object_name(name.clone())?;
+    let resolved_name = normalize::unresolved_object_name(name.clone())?;
+
+    let impls = match resolve_func(ecx, name, args)? {
+        Func::Table(impls) => impls,
+        Func::Set(impls) => {
+            let tf = func::select_impl(
+                ecx,
+                FuncSpec::Func(&resolved_name),
+                impls,
+                scalar_args,
+                vec![],
+            )?;
+            return Ok(tf);
+        }
+        _ => bail!("{} is not a table function", name),
+    };
+    let name = resolved_name;
+    let args = scalar_args;
     let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, vec![])?;
     let call = HirRelationExpr::CallTable {
         func: tf.func,
@@ -3350,6 +3363,12 @@ fn plan_function<'a>(
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
         Func::Table(_) => {
+            bail_unsupported!(
+                1546,
+                format!("table function ({}) in scalar position", name)
+            );
+        }
+        Func::Set(_) => {
             bail_unsupported!(
                 1546,
                 format!("table function ({}) in scalar position", name)
