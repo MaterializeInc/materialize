@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="803" height="377">
+<svg xmlns="http://www.w3.org/2000/svg" width="833" height="443">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="51" y="3" width="106" height="32" rx="10"/>
@@ -91,57 +91,89 @@
    <rect x="137" y="167" width="54" height="32"/>
    <rect x="135" y="165" width="54" height="32" class="nonterminal"/>
    <text class="nonterminal" x="145" y="185">regex</text>
-   <rect x="51" y="211" width="88" height="32" rx="10"/>
+   <rect x="51" y="255" width="88" height="32" rx="10"/>
    <rect x="49"
-         y="209"
+         y="253"
          width="88"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="59" y="229">CSV WITH</text>
-   <rect x="179" y="211" width="76" height="32"/>
-   <rect x="177" y="209" width="76" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="187" y="229">HEADER</text>
-   <rect x="179" y="255" width="28" height="32"/>
-   <rect x="177" y="253" width="28" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="187" y="273">n</text>
-   <rect x="227" y="255" width="90" height="32" rx="10"/>
-   <rect x="225"
+   <text class="terminal" x="59" y="273">CSV WITH</text>
+   <rect x="179" y="255" width="76" height="32" rx="10"/>
+   <rect x="177"
          y="253"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="187" y="273">HEADER</text>
+   <rect x="295" y="255" width="24" height="32" rx="10"/>
+   <rect x="293"
+         y="253"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="303" y="273">(</text>
+   <rect x="359" y="255" width="80" height="32"/>
+   <rect x="357" y="253" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="367" y="273">col_name</text>
+   <rect x="359" y="211" width="24" height="32" rx="10"/>
+   <rect x="357"
+         y="209"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="367" y="229">,</text>
+   <rect x="479" y="255" width="24" height="32" rx="10"/>
+   <rect x="477"
+         y="253"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="487" y="273">)</text>
+   <rect x="179" y="321" width="28" height="32"/>
+   <rect x="177" y="319" width="28" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="187" y="339">n</text>
+   <rect x="227" y="321" width="90" height="32" rx="10"/>
+   <rect x="225"
+         y="319"
          width="90"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="235" y="273">COLUMNS</text>
-   <rect x="377" y="243" width="116" height="32" rx="10"/>
-   <rect x="375"
-         y="241"
+   <text class="terminal" x="235" y="339">COLUMNS</text>
+   <rect x="583" y="287" width="116" height="32" rx="10"/>
+   <rect x="581"
+         y="285"
          width="116"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="385" y="261">DELIMITED BY</text>
-   <rect x="513" y="243" width="46" height="32"/>
-   <rect x="511" y="241" width="46" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="521" y="261">char</text>
-   <rect x="51" y="299" width="54" height="32" rx="10"/>
+   <text class="terminal" x="591" y="305">DELIMITED BY</text>
+   <rect x="719" y="287" width="46" height="32"/>
+   <rect x="717" y="285" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="727" y="305">char</text>
+   <rect x="51" y="365" width="54" height="32" rx="10"/>
    <rect x="49"
-         y="297"
+         y="363"
          width="54"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="59" y="317">TEXT</text>
-   <rect x="51" y="343" width="64" height="32" rx="10"/>
+   <text class="terminal" x="59" y="383">TEXT</text>
+   <rect x="51" y="409" width="64" height="32" rx="10"/>
    <rect x="49"
-         y="341"
+         y="407"
          width="64"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="59" y="361">BYTES</text>
+   <text class="terminal" x="59" y="427">BYTES</text>
    <path class="line"
-         d="m17 17 h2 m20 0 h10 m106 0 h10 m20 0 h10 m240 0 h10 m0 0 h10 m36 0 h10 m20 0 h10 m0 0 h108 m-138 0 h20 m118 0 h20 m-158 0 q10 0 10 10 m138 0 q0 -10 10 -10 m-148 10 v12 m138 0 v-12 m-138 12 q0 10 10 10 m118 0 q10 0 10 -10 m-128 10 h10 m98 0 h10 m-474 -32 h20 m474 0 h20 m-514 0 q10 0 10 10 m494 0 q0 -10 10 -10 m-504 10 v56 m494 0 v-56 m-494 56 q0 10 10 10 m474 0 q10 0 10 -10 m-484 10 h10 m80 0 h10 m0 0 h10 m48 0 h10 m0 0 h10 m128 0 h10 m0 0 h158 m20 -76 h84 m-744 0 h20 m724 0 h20 m-764 0 q10 0 10 10 m744 0 q0 -10 10 -10 m-754 10 v100 m744 0 v-100 m-744 100 q0 10 10 10 m724 0 q10 0 10 -10 m-734 10 h10 m168 0 h10 m0 0 h10 m116 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m80 0 h10 m0 0 h10 m48 0 h10 m0 0 h10 m128 0 h10 m-734 -10 v20 m744 0 v-20 m-744 20 v24 m744 0 v-24 m-744 24 q0 10 10 10 m724 0 q10 0 10 -10 m-734 10 h10 m66 0 h10 m0 0 h10 m54 0 h10 m0 0 h564 m-734 -10 v20 m744 0 v-20 m-744 20 v24 m744 0 v-24 m-744 24 q0 10 10 10 m724 0 q10 0 10 -10 m-734 10 h10 m88 0 h10 m20 0 h10 m76 0 h10 m0 0 h62 m-178 0 h20 m158 0 h20 m-198 0 q10 0 10 10 m178 0 q0 -10 10 -10 m-188 10 v24 m178 0 v-24 m-178 24 q0 10 10 10 m158 0 q10 0 10 -10 m-168 10 h10 m28 0 h10 m0 0 h10 m90 0 h10 m40 -44 h10 m0 0 h192 m-222 0 h20 m202 0 h20 m-242 0 q10 0 10 10 m222 0 q0 -10 10 -10 m-232 10 v12 m222 0 v-12 m-222 12 q0 10 10 10 m202 0 q10 0 10 -10 m-212 10 h10 m116 0 h10 m0 0 h10 m46 0 h10 m20 -32 h176 m-734 -10 v20 m744 0 v-20 m-744 20 v68 m744 0 v-68 m-744 68 q0 10 10 10 m724 0 q10 0 10 -10 m-734 10 h10 m54 0 h10 m0 0 h650 m-734 -10 v20 m744 0 v-20 m-744 20 v24 m744 0 v-24 m-744 24 q0 10 10 10 m724 0 q10 0 10 -10 m-734 10 h10 m64 0 h10 m0 0 h640 m23 -340 h-3"/>
-   <polygon points="793 17 801 13 801 21"/>
-   <polygon points="793 17 785 13 785 21"/>
+         d="m17 17 h2 m20 0 h10 m106 0 h10 m20 0 h10 m240 0 h10 m0 0 h10 m36 0 h10 m20 0 h10 m0 0 h108 m-138 0 h20 m118 0 h20 m-158 0 q10 0 10 10 m138 0 q0 -10 10 -10 m-148 10 v12 m138 0 v-12 m-138 12 q0 10 10 10 m118 0 q10 0 10 -10 m-128 10 h10 m98 0 h10 m-474 -32 h20 m474 0 h20 m-514 0 q10 0 10 10 m494 0 q0 -10 10 -10 m-504 10 v56 m494 0 v-56 m-494 56 q0 10 10 10 m474 0 q10 0 10 -10 m-484 10 h10 m80 0 h10 m0 0 h10 m48 0 h10 m0 0 h10 m128 0 h10 m0 0 h158 m20 -76 h114 m-774 0 h20 m754 0 h20 m-794 0 q10 0 10 10 m774 0 q0 -10 10 -10 m-784 10 v100 m774 0 v-100 m-774 100 q0 10 10 10 m754 0 q10 0 10 -10 m-764 10 h10 m168 0 h10 m0 0 h10 m116 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m80 0 h10 m0 0 h10 m48 0 h10 m0 0 h10 m128 0 h10 m0 0 h30 m-764 -10 v20 m774 0 v-20 m-774 20 v24 m774 0 v-24 m-774 24 q0 10 10 10 m754 0 q10 0 10 -10 m-764 10 h10 m66 0 h10 m0 0 h10 m54 0 h10 m0 0 h594 m-764 -10 v20 m774 0 v-20 m-774 20 v68 m774 0 v-68 m-774 68 q0 10 10 10 m754 0 q10 0 10 -10 m-764 10 h10 m88 0 h10 m20 0 h10 m76 0 h10 m20 0 h10 m24 0 h10 m20 0 h10 m80 0 h10 m-120 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m100 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-100 0 h10 m24 0 h10 m0 0 h56 m20 44 h10 m24 0 h10 m-248 0 h20 m228 0 h20 m-268 0 q10 0 10 10 m248 0 q0 -10 10 -10 m-258 10 v14 m248 0 v-14 m-248 14 q0 10 10 10 m228 0 q10 0 10 -10 m-238 10 h10 m0 0 h218 m-364 -34 h20 m364 0 h20 m-404 0 q10 0 10 10 m384 0 q0 -10 10 -10 m-394 10 v46 m384 0 v-46 m-384 46 q0 10 10 10 m364 0 q10 0 10 -10 m-374 10 h10 m28 0 h10 m0 0 h10 m90 0 h10 m0 0 h206 m40 -66 h10 m0 0 h192 m-222 0 h20 m202 0 h20 m-242 0 q10 0 10 10 m222 0 q0 -10 10 -10 m-232 10 v12 m222 0 v-12 m-222 12 q0 10 10 10 m202 0 q10 0 10 -10 m-212 10 h10 m116 0 h10 m0 0 h10 m46 0 h10 m-744 -42 v20 m774 0 v-20 m-774 20 v90 m774 0 v-90 m-774 90 q0 10 10 10 m754 0 q10 0 10 -10 m-764 10 h10 m54 0 h10 m0 0 h680 m-764 -10 v20 m774 0 v-20 m-774 20 v24 m774 0 v-24 m-774 24 q0 10 10 10 m754 0 q10 0 10 -10 m-764 10 h10 m64 0 h10 m0 0 h670 m23 -406 h-3"/>
+   <polygon points="823 17 831 13 831 21"/>
+   <polygon points="823 17 815 13 815 21"/>
 </svg>

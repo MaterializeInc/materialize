@@ -9,18 +9,24 @@
 
 import argparse
 import json
-import random
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any, Dict, List
 
+from materialize import util
 from materialize.cli.scratch import (
     DEFAULT_INSTPROF_NAME,
     DEFAULT_SG_ID,
     DEFAULT_SUBNET_ID,
     check_required_vars,
 )
-from materialize.scratch import MachineDesc, launch_cluster, print_instances, whoami
+from materialize.scratch import (
+    MachineDesc,
+    launch_cluster,
+    now_plus,
+    print_instances,
+    whoami,
+)
 
 MAX_AGE = timedelta(weeks=1)
 
@@ -87,9 +93,9 @@ def run(args: argparse.Namespace) -> None:
         for obj in multi_json(sys.stdin.read())
     ]
 
-    nonce = "".join(random.choice("0123456789abcdef") for _ in range(8))
+    nonce = util.nonce(8)
 
-    delete_after = int(datetime.now(timezone.utc).timestamp() + MAX_AGE.total_seconds())
+    delete_after = now_plus(MAX_AGE)
     instances = launch_cluster(
         descs,
         nonce,

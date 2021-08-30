@@ -17,6 +17,7 @@ use std::future::Future;
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use aws_util::aws;
+use csv::ReaderBuilder;
 use itertools::Itertools;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
@@ -28,8 +29,8 @@ use repr::strconv;
 use sql_parser::ast::{
     display::AstDisplay, AvroSchema, CreateSourceConnector, CreateSourceFormat,
     CreateSourceStatement, CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnector, CsrSeed, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema, Query, Raw,
-    RawName, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins,
+    CsrConnector, CsrSeed, CsvColumns, DbzMode, Envelope, Expr, Format, Ident, ProtobufSchema,
+    Query, Raw, RawName, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins,
     UnresolvedObjectName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql_parser::parser::parse_columns;
@@ -75,7 +76,6 @@ pub fn purify(
 
     async move {
         if let Statement::CreateSource(CreateSourceStatement {
-            col_names,
             connector,
             format,
             envelope,
@@ -197,15 +197,7 @@ pub fn purify(
                 CreateSourceConnector::PubNub { .. } => (),
             }
 
-            purify_source_format(
-                format,
-                connector,
-                &envelope,
-                col_names,
-                file,
-                &config_options,
-            )
-            .await?;
+            purify_source_format(format, connector, &envelope, file, &config_options).await?;
 
             if key_envelope.is_present() && !matches!(format, CreateSourceFormat::KeyValue { .. }) {
                 bail!(
@@ -367,7 +359,6 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
     connector: &mut CreateSourceConnector,
     envelope: &Envelope,
-    col_names: &mut Vec<Ident>,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
@@ -400,15 +391,8 @@ async fn purify_source_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(
-                format,
-                connector,
-                envelope,
-                col_names,
-                file,
-                connector_options,
-            )
-            .await?
+            purify_source_format_single(format, connector, envelope, file, connector_options)
+                .await?
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
@@ -417,24 +401,8 @@ async fn purify_source_format(
                 anyhow!("[internal-error] File sources cannot be key-value sources")
             );
 
-            purify_source_format_single(
-                key,
-                connector,
-                envelope,
-                col_names,
-                None,
-                connector_options,
-            )
-            .await?;
-            purify_source_format_single(
-                val,
-                connector,
-                envelope,
-                col_names,
-                None,
-                connector_options,
-            )
-            .await?;
+            purify_source_format_single(key, connector, envelope, None, connector_options).await?;
+            purify_source_format_single(val, connector, envelope, None, connector_options).await?;
         }
     }
     Ok(())
@@ -444,7 +412,6 @@ async fn purify_source_format_single(
     format: &mut Format<Raw>,
     connector: &mut CreateSourceConnector,
     envelope: &Envelope,
-    col_names: &mut Vec<Ident>,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
@@ -493,26 +460,10 @@ async fn purify_source_format_single(
             }
         },
         Format::Csv {
-            header_row,
             delimiter,
-            ..
+            ref mut columns,
         } => {
-            if *header_row && col_names.is_empty() {
-                if let Some(file) = file {
-                    let file = tokio::io::BufReader::new(file);
-                    let csv_header = file.lines().next_line().await?;
-                    match csv_header {
-                        Some(csv_header) => {
-                            csv_header
-                                .split(*delimiter as char)
-                                .for_each(|v| col_names.push(Ident::from(v)));
-                        }
-                        None => bail!("CSV file expected header line, but is empty"),
-                    }
-                } else {
-                    bail!("CSV format with headers only works with file connectors")
-                }
-            }
+            purify_csv(file, connector, *delimiter, columns).await?;
         }
         Format::Bytes | Format::Regex(_) | Format::Json | Format::Text => (),
     }
@@ -562,6 +513,127 @@ async fn purify_csr_connector(
         })
     }
 
+    Ok(())
+}
+
+pub async fn purify_csv(
+    file: Option<File>,
+    connector: &CreateSourceConnector,
+    delimiter: char,
+    columns: &mut CsvColumns,
+) -> anyhow::Result<()> {
+    if matches!(columns, CsvColumns::Header { .. })
+        && !matches!(connector, CreateSourceConnector::File { .. })
+    {
+        bail_unsupported!("CSV WITH HEADER with non-file sources");
+    }
+
+    let first_row = if let Some(file) = file {
+        let file = tokio::io::BufReader::new(file);
+        let csv_header = file.lines().next_line().await;
+        if !delimiter.is_ascii() {
+            bail!("CSV delimiter must be ascii");
+        }
+        match csv_header {
+            Ok(Some(csv_header)) => {
+                let mut reader = ReaderBuilder::new()
+                    .delimiter(delimiter as u8)
+                    .has_headers(false)
+                    .from_reader(csv_header.as_bytes());
+
+                if let Some(result) = reader.records().next() {
+                    match result {
+                        Ok(headers) => Some(headers),
+                        Err(e) => bail!("Unable to parse header row: {}", e),
+                    }
+                } else {
+                    None
+                }
+            }
+            Ok(None) => {
+                if let CsvColumns::Header { names } = columns {
+                    if names.is_empty() {
+                        bail!(
+                            "CSV file expected to have at least one line \
+                             to determine column names, but is empty"
+                        );
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                // TODO(#7562): support compressed files
+                if let CsvColumns::Header { names } = columns {
+                    if names.is_empty() {
+                        bail!("Cannot determine header by reading CSV file: {}", e);
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    } else {
+        None
+    };
+
+    match (&columns, first_row) {
+        (CsvColumns::Header { names }, Some(headers)) if names.is_empty() => {
+            *columns = CsvColumns::Header {
+                names: headers.into_iter().map(Ident::from).collect(),
+            };
+        }
+        (CsvColumns::Header { names }, Some(headers)) => {
+            if names.len() != headers.len() {
+                bail!(
+                    "Named column count ({}) does not match \
+                     number of columns discovered ({})",
+                    names.len(),
+                    headers.len()
+                );
+            } else if let Some((sql, csv)) = names
+                .iter()
+                .zip(headers.iter())
+                .find(|(sql, csv)| sql.as_str() != &**csv)
+            {
+                bail!(
+                    "Header columns do not match named columns from CREATE SOURCE statement. \
+                               First mismatched columns: {} != {}",
+                    sql,
+                    csv
+                );
+            }
+        }
+        (CsvColumns::Header { names }, None) if names.is_empty() => {
+            bail!(
+                "WITH HEADER requires a way to determine the header row, but file does not exist"
+            );
+        }
+        (CsvColumns::Header { names }, None) => {
+            // we don't need to do any verification if we are told the names of the headers
+            assert!(
+                !names.is_empty(),
+                "empty names should be caught in a previous match arm"
+            );
+        }
+
+        (CsvColumns::Count(n), first_line) => {
+            if let Some(columns) = first_line {
+                if *n != columns.len() {
+                    bail!(
+                        "Specified column count (WITH {} COLUMNS) \
+                                 does not match number of columns in CSV file ({})",
+                        n,
+                        columns.len()
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 

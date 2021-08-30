@@ -410,28 +410,35 @@ CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Bare(Csv { header_row: true, n_cols: None, delimiter: ',' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Bare(Csv { columns: Header { names: [] }, delimiter: ',' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER (a, b, c)
+----
+CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH HEADER (a, b, c)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Bare(Csv { columns: Header { names: [Ident("a"), Ident("b"), Ident("c")] }, delimiter: ',' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = false) FORMAT CSV WITH 3 COLUMNS
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Bare(Csv { header_row: false, n_cols: Some(3), delimiter: ',' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(false) }], format: Bare(Csv { columns: Count(3), delimiter: ',' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo (one, two) FROM FILE 'bar' FORMAT CSV WITH HEADER
 ----
 CREATE SOURCE foo (one, two) FROM FILE 'bar' FORMAT CSV WITH HEADER
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar", compression: None }, with_options: [], format: Bare(Csv { header_row: true, n_cols: None, delimiter: ',' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [Ident("one"), Ident("two")], connector: File { path: "bar", compression: None }, with_options: [], format: Bare(Csv { columns: Header { names: [] }, delimiter: ',' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|'
 ----
 CREATE SOURCE foo FROM FILE 'bar' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Bare(Csv { header_row: false, n_cols: Some(3), delimiter: '|' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [Value { name: Ident("tail"), value: Boolean(true) }], format: Bare(Csv { columns: Count(3), delimiter: '|' }), key_envelope: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
@@ -1014,21 +1021,21 @@ ALTER INDEX name SET (property = true)
 ----
 ALTER INDEX name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Set([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name RESET (property)
 ----
 ALTER INDEX name RESET (property)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Reset([Ident("property")]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Ident("property")]) })
 
 parse-statement
 ALTER INDEX IF EXISTS name SET (property = true)
 ----
 ALTER INDEX IF EXISTS name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, options: Set([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name SET ()
@@ -1049,7 +1056,7 @@ ALTER INDEX name SET (property)
 ----
 ALTER INDEX name SET (property)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Set([WithOption { key: Ident("property"), value: None }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: None }]) })
 
 parse-statement
 ALTER INDEX name RESET (property = true)
@@ -1085,3 +1092,24 @@ ALTER INDEX name RENAME TO name2
 ALTER INDEX name RENAME TO name2
 =>
 AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
+
+parse-statement
+ALTER INDEX name SET ENABLED
+----
+ALTER INDEX name SET ENABLED
+=>
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: Enable })
+
+parse-statement
+ALTER INDEX name SET (property = true) ENABLED
+----
+error: Expected end of statement, found ENABLED
+ALTER INDEX name SET (property = true) ENABLED
+                                       ^
+
+parse-statement
+ALTER INDEX name SET ENABLED (property = true)
+----
+error: Expected end of statement, found left parenthesis
+ALTER INDEX name SET ENABLED (property = true)
+                             ^

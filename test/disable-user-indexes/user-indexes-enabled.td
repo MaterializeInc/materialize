@@ -16,7 +16,7 @@
 > SELECT * FROM logging_derived
 1
 
-> CREATE VIEW IF NOT EXISTS logging_derived_mat AS SELECT count(*) FROM mz_databases
+> CREATE MATERIALIZED VIEW IF NOT EXISTS logging_derived_mat AS SELECT count(*) FROM mz_databases
 > SELECT * FROM logging_derived_mat
 1
 
@@ -49,8 +49,15 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > SELECT * FROM mat_view
 1
 
+# Enabling indexes is idempotent
+> ALTER INDEX mat_view_primary_idx SET ENABLED;
+
+> SELECT * FROM mat_view
+1
+
 > SHOW MATERIALIZED VIEWS
 mat_view
+logging_derived_mat
 
 > CREATE MATERIALIZED SOURCE IF NOT EXISTS mat_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -61,6 +68,33 @@ mat_view
 
 > SHOW MATERIALIZED SOURCES
 mat_data
+
+$ set join-schema={
+    "type": "record",
+    "name": "row",
+    "fields": [
+      {"name": "a", "type": "long"},
+      {"name": "b", "type": "string"}
+    ]
+  }
+
+$ kafka-create-topic topic=join-data
+
+$ kafka-ingest format=avro topic=join-data schema=${join-schema} timestamp=1
+{"a": 1, "b": "a"}
+
+> CREATE MATERIALIZED SOURCE IF NOT EXISTS join_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-join-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${join-schema}'
+
+> CREATE VIEW join_view AS
+    SELECT join_data.a, join_data.b
+    FROM join_data
+    JOIN mat_data
+    ON mat_data.a = join_data.a;
+
+> SELECT * FROM join_view;
+1 a
 
 # 🔬 Sinks
 

@@ -113,6 +113,7 @@ Field            | Type        | Meaning
 `position`       | [`bigint`]  | The 1-indexed position of the column in its containing table, source, or view.
 `nullable`       | [`boolean`] | Can the column contain a `NULL` value?
 `type`           | [`text`]    | The data type of the column.
+`default`        | [`text`]    | The default expression of the column.
 
 ### `mz_databases`
 

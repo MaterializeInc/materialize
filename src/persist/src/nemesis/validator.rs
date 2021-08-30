@@ -234,7 +234,7 @@ impl Validator {
         let should_succeed = self.runtime_available
             && self.storage_available
             && req.ts
-                > self
+                >= self
                     .seal_frontier
                     .get(&req.stream)
                     .copied()
@@ -254,7 +254,7 @@ impl Validator {
         let should_succeed = self.runtime_available
             && self.storage_available
             && req.ts
-                > self
+                >= self
                     .since_frontier
                     .get(&req.stream)
                     .copied()

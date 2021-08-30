@@ -877,7 +877,7 @@ pub mod plan {
                         .filter_map(|key| {
                             mfp.literal_constraints(key).map(|val| (key.clone(), val))
                         })
-                        .next();
+                        .max_by_key(|(key, _val)| key.len());
                     // If we discover a literal constraint, we can discard other arrangements.
                     if let Some((key, _)) = &key_val {
                         in_keys = vec![key.clone()];
@@ -1112,7 +1112,7 @@ pub mod plan {
                 let key_val = keys
                     .iter()
                     .filter_map(|key| mfp.literal_constraints(key).map(|val| (key.clone(), val)))
-                    .next();
+                    .max_by_key(|(key, _val)| key.len());
                 plan = Plan::Mfp {
                     input: Box::new(plan),
                     mfp,

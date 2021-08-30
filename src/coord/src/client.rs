@@ -426,7 +426,7 @@ impl SessionClient {
                 .map(|portal| portal.desc.clone())
                 .expect("unnamed portal should be present");
             if !desc.param_types.is_empty() {
-                coord_bail!("parameters are not supported");
+                return Err(CoordError::Unsupported("parameters"));
             }
 
             let res = self.execute(EMPTY_PORTAL.into()).await?;
@@ -436,7 +436,7 @@ impl SessionClient {
                     let response = rows.await;
                     response
                 }
-                _ => coord_bail!("unsupported statement type"),
+                _ => return Err(CoordError::Unsupported("statements of the executed type")),
             };
             let rows = match rows {
                 PeekResponse::Rows(rows) => rows,

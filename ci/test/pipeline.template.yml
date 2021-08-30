@@ -233,6 +233,15 @@ steps:
           composition: catalog-compat
           run: catalog-compat
 
+  - id: disable-user-indexes
+    label: ":chart_with_downwards_trend: disable user indexes"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: disable-user-indexes
+          run: disable-user-indexes
+
   - id: upgrade
     label: "Upgrade testing"
     depends_on: build
@@ -316,6 +325,14 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
           run: kafka-exactly-once
+
+  - id: persistent-tables
+    label: "Test for --persistent-tables"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+          run: persistent-tables
 
   - id: mzcompose-self
     label: "mzcompose self test"

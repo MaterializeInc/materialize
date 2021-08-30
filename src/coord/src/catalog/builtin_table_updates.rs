@@ -17,6 +17,7 @@ use repr::adt::array::ArrayDimension;
 use repr::{Datum, Diff, Row};
 use sql::ast::{CreateIndexStatement, Statement};
 use sql::names::DatabaseSpecifier;
+use sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES, MZ_FUNCTIONS,
@@ -116,7 +117,16 @@ impl Catalog {
         };
 
         if let Ok(desc) = entry.desc() {
+            let defaults = match entry.item() {
+                CatalogItem::Table(table) => Some(&table.defaults),
+                _ => None,
+            };
             for (i, (column_name, column_type)) in desc.iter().enumerate() {
+                let default: Option<String> = defaults.map(|d| d[i].to_ast_string_stable());
+                let default: Datum = default
+                    .as_ref()
+                    .map(|d| Datum::String(d))
+                    .unwrap_or(Datum::Null);
                 updates.push(BuiltinTableUpdate {
                     id: MZ_COLUMNS.id,
                     row: Row::pack_slice(&[
@@ -129,6 +139,7 @@ impl Catalog {
                         Datum::Int64(i as i64 + 1),
                         Datum::from(column_type.nullable),
                         Datum::String(pgrepr::Type::from(&column_type.scalar_type).name()),
+                        default,
                     ]),
                     diff,
                 });

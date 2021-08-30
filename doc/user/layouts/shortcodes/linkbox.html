@@ -1,0 +1,6 @@
+<div class="linkbox {{ .Get "icon" }}">
+  <div class="title">
+    {{ .Get "title" }}
+  </div>
+  {{ .Inner | $.Page.RenderString }}
+</div>

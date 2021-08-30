@@ -1827,7 +1827,7 @@ lazy_static! {
                     let row = Row::pack(&[Datum::Int32(1)]);
                     let column_type = ColumnType { scalar_type: ScalarType::Int32, nullable: false };
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesStepInt32,
+                        func: TableFunc::GenerateSeriesInt32,
                         exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                         column_names: vec![Some("generate_series".into())],
                     })
@@ -1836,21 +1836,21 @@ lazy_static! {
                     let row = Row::pack(&[Datum::Int64(1)]);
                     let column_type = ColumnType { scalar_type: ScalarType::Int64, nullable: false };
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesStepInt64,
+                        func: TableFunc::GenerateSeriesInt64,
                         exprs: vec![start, stop, HirScalarExpr::Literal(row, column_type)],
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1069;
                 params!(Int32, Int32, Int32) => Operation::variadic(|_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesStepInt32,
+                        func: TableFunc::GenerateSeriesInt32,
                         exprs,
                         column_names: vec![Some("generate_series".into())],
                     })
                 }), 1066;
                 params!(Int64, Int64, Int64) => Operation::variadic(|_ecx, exprs| {
                     Ok(TableFuncPlan {
-                        func: TableFunc::GenerateSeriesStepInt64,
+                        func: TableFunc::GenerateSeriesInt64,
                         exprs,
                         column_names: vec![Some("generate_series".into())],
                     })

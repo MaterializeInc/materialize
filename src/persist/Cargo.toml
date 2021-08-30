@@ -29,11 +29,11 @@ futures-executor = "0.3.16"
 log = "0.4.13"
 ore = { path = "../ore", default-features = false, features = ["metrics"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.10.0", default-features = false, features = ["macros", "sync"] }
+tokio = { version = "1.10.1", default-features = false, features = ["macros", "sync"] }
 
 [dev-dependencies]
 criterion = "0.3.5"
 ore = { path = "../ore", default-features = false, features = ["test"] }
 rand = { version = "0.8.4", features = [ "small_rng" ] }
 tempfile = "3.2.0"
-serde = { version = "1.0.128", features = ["derive"] }
+serde = { version = "1.0.130", features = ["derive"] }

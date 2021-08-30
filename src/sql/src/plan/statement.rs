@@ -118,7 +118,7 @@ pub fn describe(
         Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
-        Statement::AlterIndexOptions(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
@@ -201,7 +201,7 @@ pub fn plan(
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
-        Statement::AlterIndexOptions(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
 
         // DML statements.

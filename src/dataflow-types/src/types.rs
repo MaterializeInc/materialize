@@ -536,14 +536,19 @@ impl DataEncoding {
                     let ty = ScalarType::String.nullable(true);
                     desc.with_named_column(name, ty)
                 }),
-            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => {
-                (1..=*n_cols).fold(key_desc, |desc, i| {
+            DataEncoding::Csv(CsvEncoding { columns, .. }) => match columns {
+                ColumnSpec::Count(n) => (1..=*n).into_iter().fold(key_desc, |desc, i| {
                     desc.with_named_column(
                         format!("column{}", i),
                         ScalarType::String.nullable(false),
                     )
-                })
-            }
+                }),
+                ColumnSpec::Header { names } => {
+                    names.iter().map(|s| &**s).fold(key_desc, |desc, name| {
+                        desc.with_named_column(name, ScalarType::String.nullable(false))
+                    })
+                }
+            },
             DataEncoding::Text => {
                 key_desc.with_named_column("text", ScalarType::String.nullable(false))
             }
@@ -598,12 +603,45 @@ pub struct ProtobufEncoding {
     pub message_name: String,
 }
 
-/// Encoding in CSV format, with `n_cols` columns per row, with an optional header.
+/// Arguments necessary to define how to decode from CSV format
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
-    pub header_row: bool,
-    pub n_cols: usize,
+    pub columns: ColumnSpec,
     pub delimiter: u8,
+}
+
+impl CsvEncoding {
+    pub fn has_header(&self) -> bool {
+        matches!(self.columns, ColumnSpec::Header { .. })
+    }
+}
+
+/// Determines the RelationDesc and decoding of CSV objects
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ColumnSpec {
+    /// The first row is not a header row, and all columns get default names like `columnN`.
+    Count(usize),
+    /// The first row is a header row and therefore does become data
+    ///
+    /// Each of the values in `names` becomes the default name of a column in the dataflow.
+    Header { names: Vec<String> },
+}
+
+impl ColumnSpec {
+    /// The number of columns described by the column spec.
+    pub fn arity(&self) -> usize {
+        match self {
+            ColumnSpec::Count(n) => *n,
+            ColumnSpec::Header { names } => names.len(),
+        }
+    }
+
+    pub fn into_header_names(self) -> Option<Vec<String>> {
+        match self {
+            ColumnSpec::Count(_) => None,
+            ColumnSpec::Header { names } => Some(names),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

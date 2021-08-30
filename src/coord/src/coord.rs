@@ -91,12 +91,12 @@ use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan,
+    FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
+    Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use transform::Optimizer;
 
@@ -931,7 +931,7 @@ impl Coordinator {
                                 }
 
                                 // Statements below must by run singly (in Started).
-                                Statement::AlterIndexOptions(_)
+                                Statement::AlterIndex(_)
                                 | Statement::AlterObjectRename(_)
                                 | Statement::CreateDatabase(_)
                                 | Statement::CreateIndex(_)
@@ -1193,8 +1193,8 @@ impl Coordinator {
         let mut table_since_updates = vec![];
         for (id, frontier) in since_updates.iter() {
             // HACK: Avoid the "failed to compact persisted tables" error log at
-            // startup, by not trying to allow compaction on the minimum
-            // timestamp. Real fix in #7977.
+            // restart, by not trying to allow compaction on the minimum
+            // timestamp.
             if !frontier
                 .elements()
                 .iter()
@@ -1609,6 +1609,9 @@ impl Coordinator {
             Plan::AlterIndexResetOptions(plan) => {
                 tx.send(self.sequence_alter_index_reset_options(plan), session);
             }
+            Plan::AlterIndexEnable(plan) => {
+                tx.send(self.sequence_alter_index_enable(plan), session);
+            }
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id());
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
@@ -1763,7 +1766,7 @@ impl Coordinator {
             &table.desc,
             conn_id,
             index_depends_on,
-            self.catalog.enable_index(&index_id),
+            self.catalog.index_enabled_by_default(&index_id),
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
@@ -1898,7 +1901,7 @@ impl Coordinator {
                     &source.desc,
                     None,
                     vec![source_id],
-                    self.catalog.enable_index(&index_id),
+                    self.catalog.index_enabled_by_default(&index_id),
                 );
                 let index_oid = self.catalog.allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
@@ -2055,7 +2058,7 @@ impl Coordinator {
                 &view.desc,
                 view.conn_id,
                 vec![view_id],
-                self.catalog.enable_index(&index_id),
+                self.catalog.index_enabled_by_default(&index_id),
             );
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -2152,7 +2155,7 @@ impl Coordinator {
             on: index.on,
             conn_id: None,
             depends_on,
-            enabled: self.catalog.enable_index(&id),
+            enabled: self.catalog.index_enabled_by_default(&id),
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -2165,7 +2168,7 @@ impl Coordinator {
             Ok(()) => {
                 self.dataflow_builder().build_index_dataflow(id).map(|df| {
                     self.ship_dataflow(df);
-                    self.set_index_options(id, options);
+                    self.set_index_options(id, options).expect("index enabled");
                 });
 
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
@@ -2799,18 +2802,15 @@ impl Coordinator {
         // a larger timestamp and block, perhaps the user should intervene).
         let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
 
-        if !unmaterialized_source_ids.is_empty() {
-            coord_bail!(
-                "Unable to automatically determine a timestamp for your query; \
-                this can happen if your query depends on non-materialized sources.\n\
-                For more details, see https://materialize.com/s/non-materialized-error"
-            );
-        }
-
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
         // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(index_ids.iter().cloned());
+        let mut since = self.indexes.least_valid_since(index_ids.iter().cloned());
+        since.join_assign(
+            &self
+                .sources
+                .least_valid_since(unmaterialized_source_ids.iter().cloned()),
+        );
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
@@ -2822,6 +2822,35 @@ impl Coordinator {
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
+                if !unmaterialized_source_ids.is_empty() {
+                    let mut unmaterialized = vec![];
+                    let mut disabled_indexes = vec![];
+                    for id in unmaterialized_source_ids {
+                        // Determine which sources are unmaterialized and which have disabled indexes
+                        let name = self.catalog.get_by_id(&id).name().to_string();
+                        let indexes = self.catalog.get_indexes_on(id);
+                        if indexes.is_empty() {
+                            unmaterialized.push(name);
+                        } else {
+                            let disabled_index_names = indexes
+                                .iter()
+                                .filter_map(|id| {
+                                    if !self.catalog.is_index_enabled(id) {
+                                        Some(self.catalog.get_by_id(&id).name().to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            disabled_indexes.push((name, disabled_index_names));
+                        }
+                    }
+                    return Err(CoordError::AutomaticTimestampFailure {
+                        unmaterialized,
+                        disabled_indexes,
+                    });
+                }
+
                 let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
@@ -2875,17 +2904,23 @@ impl Coordinator {
         if since.less_equal(&timestamp) {
             Ok((timestamp, index_ids))
         } else {
-            let invalid = index_ids
-                .iter()
-                .filter(|id| {
-                    !self
-                        .indexes
-                        .since_of(id)
-                        .expect("id not found")
-                        .less_equal(&timestamp)
-                })
-                .map(|id| (id, self.indexes.since_of(id)))
-                .collect::<Vec<_>>();
+            let invalid_indexes = index_ids.iter().filter_map(|id| {
+                let since = self.indexes.since_of(id).expect("id not found");
+                if since.less_equal(&timestamp) {
+                    None
+                } else {
+                    Some(since)
+                }
+            });
+            let invalid_sources = unmaterialized_source_ids.iter().filter_map(|id| {
+                let since = self.sources.since_of(id).expect("id not found");
+                if since.less_equal(&timestamp) {
+                    None
+                } else {
+                    Some(since)
+                }
+            });
+            let invalid = invalid_indexes.chain(invalid_sources).collect::<Vec<_>>();
             coord_bail!(
                 "Timestamp ({}) is not valid for all inputs: {:?}",
                 timestamp,
@@ -3030,13 +3065,7 @@ impl Coordinator {
             MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
             MutationKind::Insert => {
                 if self.catalog.config().disable_user_indexes {
-                    if self.catalog.enabled_indexes()[&plan.id].is_empty() {
-                        // Have to hard error here because we won't encounter the failure to
-                        // select an index until a panic occurs in the dataflow layer.
-                        return Err(CoordError::TableWithoutIndexes(
-                            self.catalog.get_by_id(&plan.id).name().to_string(),
-                        ));
-                    }
+                    self.catalog.ensure_default_index_enabled(plan.id)?;
                 }
 
                 ExecuteResponse::Inserted(plan.affected_rows)
@@ -3086,7 +3115,11 @@ impl Coordinator {
             // If we couldn't optimize the INSERT statement to a constant, it
             // must depend on another relation. We're not yet sophisticated
             // enough to handle this.
-            _ => coord_bail!("INSERT statements cannot reference other relations"),
+            _ => {
+                return Err(CoordError::Unsupported(
+                    "INSERT statements referencing other relations",
+                ))
+            }
         }
     }
 
@@ -3124,7 +3157,7 @@ impl Coordinator {
         &mut self,
         plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(plan.id, plan.options);
+        self.set_index_options(plan.id, plan.options)?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -3141,7 +3174,26 @@ impl Coordinator {
                 ),
             })
             .collect();
-        self.set_index_options(plan.id, options);
+        self.set_index_options(plan.id, options)?;
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
+
+    fn sequence_alter_index_enable(
+        &mut self,
+        plan: AlterIndexEnablePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let ops = self.catalog.enable_index_ops(plan.id)?;
+
+        // If ops is not empty, index was disabled.
+        if !ops.is_empty() {
+            self.catalog_transact(ops)?;
+            let df = self
+                .dataflow_builder()
+                .build_index_dataflow(plan.id)
+                .expect("index enabled");
+            self.ship_dataflow(df);
+        }
+
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -3304,8 +3356,24 @@ impl Coordinator {
         }
     }
 
-    fn set_index_options(&mut self, id: GlobalId, options: Vec<IndexOption>) {
-        let index = self.indexes.get_mut(&id).expect("index known to exist");
+    fn set_index_options(
+        &mut self,
+        id: GlobalId,
+        options: Vec<IndexOption>,
+    ) -> Result<(), CoordError> {
+        let index = match self.indexes.get_mut(&id) {
+            Some(index) => index,
+            None => {
+                if !self.catalog.is_index_enabled(&id) {
+                    return Err(CoordError::InvalidAlterOnDisabledIndex(
+                        self.catalog.get_by_id(&id).name().to_string(),
+                    ));
+                } else {
+                    panic!("coord indexes out of sync")
+                }
+            }
+        };
+
         for o in options {
             match o {
                 IndexOption::LogicalCompactionWindow(window) => {
@@ -3314,6 +3382,7 @@ impl Coordinator {
                 }
             }
         }
+        Ok(())
     }
 
     /// Prepares a relation expression for execution by preparing all contained
@@ -3374,7 +3443,9 @@ impl Coordinator {
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static | ExprPrepStyle::Write) {
-            coord_bail!("mz_logical_timestamp cannot be used in static or write queries");
+            return Err(CoordError::Unsupported(
+                "calls to mz_logical_timestamp in in static or write queries",
+            ));
         }
         Ok(())
     }
@@ -3583,7 +3654,9 @@ impl Coordinator {
         // transaction counter number because those counters are unrelated to the
         // other.
         if timelines.len() > 1 {
-            coord_bail!("Dataflow cannot use multiple timelines");
+            return Err(CoordError::Unsupported(
+                "multiple timelines within one dataflow",
+            ));
         }
         Ok(timelines.into_iter().next())
     }

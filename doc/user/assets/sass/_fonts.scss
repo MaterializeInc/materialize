@@ -1,63 +1,57 @@
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Bold.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Bold.woff") format("woff");
-  font-weight: bold;
-  font-style: normal;
-}
+/* TODO: Move fonts to materialize.com */
+  /* ----------------------- variable ----------------------- */
+  @font-face {
+    font-family: 'Inter var';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('https://rsms.me/inter/font-files/Inter-roman.var.woff2?v=3.19') format('woff2');
+    font-named-instance: 'Regular';
+  }
 
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-BoldItalic.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Bold.woff") format("woff");
-  font-weight: bold;
-  font-style: italic;
-}
+  @font-face {
+    font-family: 'Inter var';
+    font-style: italic;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('https://rsms.me/inter/font-files/Inter-italic.var.woff2?v=3.19') format('woff2');
+    font-named-instance: 'Italic';
+  }
 
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-SemiBold.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-SemiBold.woff") format("woff");
-  font-weight: 600;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-SemiBoldItalic.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-SemiBoldItalic.woff") format("woff");
-  font-weight: 600;
-  font-style: italic;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Regular.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Regular.woff") format("woff");
-  font-weight: 500;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Italic.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Italic.woff") format("woff");
-  font-weight: 500;
-  font-style: italic;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Light.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-Light.woff") format("woff");
-  font-weight: normal;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-LightItalic.woff2") format("woff2"),
-    url("https://materialize.com/wp-content/themes/materialize/fonts/RMNeue-LightItalic.woff") format("woff");
-  font-weight: normal;
-  font-style: italic;
-}
+  /* ENCODE SANS EXPANDED */
+  /* latin-ext */
+  @font-face {
+    font-family: 'Encode Sans Expanded';
+    font-style: normal;
+    font-weight: 100;
+    font-display: swap;
+    src: url(https://fonts.gstatic.com/s/encodesansexpanded/v5/c4mx1mF4GcnstG_Jh1QH6ac4hNLeNyeYUpJGGQpoc6IYNl36yg.woff2) format('woff2');
+    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  /* latin */
+  @font-face {
+    font-family: 'Encode Sans Expanded';
+    font-style: normal;
+    font-weight: 100;
+    font-display: swap;
+    src: url(https://fonts.gstatic.com/s/encodesansexpanded/v5/c4mx1mF4GcnstG_Jh1QH6ac4hNLeNyeYUpJGGQRoc6IYNl0.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  /* latin-ext */
+  @font-face {
+    font-family: 'Encode Sans Expanded';
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+    src: url(https://fonts.gstatic.com/s/encodesansexpanded/v5/c4mw1mF4GcnstG_Jh1QH6ac4hNLeNyeYUpKOCxNBVo0wPFXC82Y.woff2) format('woff2');
+    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  /* latin */
+  @font-face {
+    font-family: 'Encode Sans Expanded';
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+    src: url(https://fonts.gstatic.com/s/encodesansexpanded/v5/c4mw1mF4GcnstG_Jh1QH6ac4hNLeNyeYUpKOCxNPVo0wPFXC.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }

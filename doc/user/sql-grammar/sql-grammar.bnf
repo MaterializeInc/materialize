@@ -1,8 +1,13 @@
 alter_rename ::=
   'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
-  'ALTER' 'INDEX' name 'SET' '(' field '=' val ( ',' field '=' val )* ')'
-  | 'ALTER' 'INDEX' name 'RESET' '(' field ( ',' field )* ')'
+  'ALTER' 'INDEX' name (
+    'SET' (
+      'ENABLED'
+      | '(' field '=' val ( ',' field '=' val )* ')'
+    )
+    | 'RESET' '(' field ( ',' field )* ')'
+  )
 close ::=
   'CLOSE' cursor_name
 col_option ::=
@@ -62,7 +67,7 @@ create_source_csv_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
-  'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
+  'FORMAT' 'CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
@@ -74,14 +79,14 @@ create_source_csv_kafka ::=
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic? with_options?
   ('KEY FORMAT' format_spec 'VALUE FORMAT' | 'FORMAT')
-  ('CSV WITH' ( 'HEADER' | n 'COLUMNS') ('DELIMITED BY' char)? | format_spec)
+  ('CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? | format_spec)
   ('INCLUDE KEY' ('AS' key_name)?)?
   ('ENVELOPE' ( 'NONE' | 'UPSERT' ))?
 create_source_csv_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
+  'FORMAT' 'CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_json_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
@@ -260,7 +265,7 @@ format_spec ::=
         ) |
   'PROTOBUF MESSAGE' message_name 'USING' 'SCHEMA' 'FILE' schema_file_path |
   'REGEX' regex |
-  'CSV WITH' (HEADER | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
 key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')

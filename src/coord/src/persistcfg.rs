@@ -90,15 +90,14 @@ impl PersisterWithConfig {
     fn stream_name(&self, id: GlobalId, pretty: &str) -> Option<String> {
         match id {
             GlobalId::User(id) if self.config.user_table_enabled => {
-                // TODO: This needs to be written down somewhere in the catalog
-                // in case we need to change the naming at some point. See
-                // related TODO in Catalog::deserialize_item.
+                // NB: This gets written down in the catalog, so it should be
+                // safe to change the naming, if necessary. See
+                // Catalog::deserialize_item.
                 Some(format!("user-table-{:?}-{}", id, pretty))
             }
             GlobalId::System(id) if self.config.system_table_enabled => {
-                // TODO: This needs to be written down somewhere in the catalog
-                // in case we need to change the naming at some point. See
-                // related TODO in Catalog::deserialize_item.
+                // NB: Until the end of our persisted system tables experiment, give
+                // persist team a heads up if you change this, please!
                 Some(format!("system-table-{:?}-{}", id, pretty))
             }
             _ => None,
@@ -106,11 +105,18 @@ impl PersisterWithConfig {
     }
 
     pub fn details(&self, id: GlobalId, pretty: &str) -> Result<Option<PersistDetails>, Error> {
-        let persister = match self.persister.as_ref() {
+        self.details_from_name(self.stream_name(id, pretty))
+    }
+
+    pub fn details_from_name(
+        &self,
+        stream_name: Option<String>,
+    ) -> Result<Option<PersistDetails>, Error> {
+        let stream_name = match stream_name {
             Some(x) => x,
             None => return Ok(None),
         };
-        let stream_name = match self.stream_name(id, pretty) {
+        let persister = match self.persister.as_ref() {
             Some(x) => x,
             None => return Ok(None),
         };

@@ -15,8 +15,9 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::{fmt, io};
 
+use abomonation::abomonated::Abomonated;
 use abomonation_derive::Abomonation;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
@@ -25,6 +26,7 @@ use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::storage::SeqNo;
+use crate::Codec;
 
 /// An internally unique id for a persisted stream. External users identify
 /// streams with a string, which is then mapped internally to this.
@@ -269,7 +271,83 @@ impl Default for BlobMeta {
     }
 }
 
+struct ExtendWriteAdapter<'e, E>(&'e mut E);
+
+impl<'e, E: for<'a> Extend<&'a u8>> io::Write for ExtendWriteAdapter<'e, E> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        self.0.extend(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+}
+
+// The encoding of BlobMeta is:
+// ```
+// buf[0]          = <BlobMeta::CURRENT_VERSION>
+// buf[1..3]       = <BlobMeta::MAGIC>
+// buf[3..3+N]     = <the N-byte Abomonation serialization of BlobMeta>
+// buf[3+N..3+N+2] = <BlobMeta::MAGIC>
+// ```
+//
+// This will allow us to gracefully detect changes at startup and react to them.
+// MZ is not (yet) a system of record, so in the short-term (persisting
+// mz_metrics) we are free to simply delete the data. In the medium-term (fast
+// restarts for kafka sources), we'll make an effort to decode old data. In the
+// long-term (1.0), we'll have backward-compatibility guarantees.
+impl Codec for BlobMeta {
+    fn codec_name() -> &'static str {
+        "BlobMeta"
+    }
+
+    fn size_hint(&self) -> usize {
+        0
+    }
+
+    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E) {
+        buf.extend(&[BlobMeta::CURRENT_VERSION]);
+        buf.extend(BlobMeta::MAGIC);
+        unsafe { abomonation::encode(self, &mut ExtendWriteAdapter(buf)) }
+            .expect("write to ExtendWriteAdapter is infallible");
+        buf.extend(BlobMeta::MAGIC);
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let version_pos = 0..1;
+        let begin_magic_pos = version_pos.end..version_pos.end + BlobMeta::MAGIC.len();
+        // Avoid panicking when buf is short.
+        let end_magic_start = if begin_magic_pos.end + BlobMeta::MAGIC.len() > buf.len() {
+            begin_magic_pos.end
+        } else {
+            buf.len() - BlobMeta::MAGIC.len()
+        };
+        let end_magic_pos = end_magic_start..buf.len();
+        match buf.get(version_pos.start) {
+            Some(&BlobMeta::CURRENT_VERSION) => {}
+            Some(x) => return Err(format!("unsupported version: {}", x)),
+            None => return Err("unknown version".into()),
+        }
+        match buf.get(begin_magic_pos.clone()) {
+            Some(BlobMeta::MAGIC) => {}
+            _ => return Err("bad magic".into()),
+        }
+        match buf.get(end_magic_pos.clone()) {
+            Some(BlobMeta::MAGIC) => {}
+            _ => return Err("bad magic".into()),
+        }
+        let buf = &buf[begin_magic_pos.end..end_magic_pos.start];
+        let meta: Abomonated<BlobMeta, Vec<u8>> =
+            unsafe { Abomonated::new(buf.to_owned()) }.ok_or_else(|| "invalid meta")?;
+        Ok((*meta).clone())
+    }
+}
+
 impl BlobMeta {
+    const MAGIC: &'static [u8] = b"mz";
+    const CURRENT_VERSION: u8 = 0;
+
     /// Asserts Self's documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -1429,5 +1507,28 @@ mod tests {
                 "next stream Id(2), but only registered 1 ids and deleted 0 ids"
             ))
         );
+    }
+
+    #[test]
+    fn blob_meta_codec() {
+        // Sanity check that encode/decode roundtrips and that we don't panic
+        // (or erroneously succeed) on invalid data.
+        let original = BlobMeta {
+            next_stream_id: Id(1),
+            unsealeds_seqno_upper: SeqNo(2),
+            // This is not a test of abomonation's roundtrip-ability, so don't
+            // bother too much with the test data.
+            id_mapping: vec![],
+            graveyard: vec![],
+            unsealeds: vec![],
+            traces: vec![],
+        };
+        let mut encoded = Vec::new();
+        original.encode(&mut encoded);
+        let decoded = BlobMeta::decode(&encoded);
+        assert_eq!(decoded, Ok(original));
+        for i in 0..encoded.len() {
+            assert!(BlobMeta::decode(&encoded[0..i]).is_err());
+        }
     }
 }

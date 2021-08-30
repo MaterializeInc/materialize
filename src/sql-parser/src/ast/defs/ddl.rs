@@ -226,8 +226,7 @@ pub enum Format<T: AstInfo> {
     Protobuf(ProtobufSchema<T>),
     Regex(String),
     Csv {
-        header_row: bool,
-        n_cols: Option<usize>,
+        columns: CsvColumns,
         delimiter: char,
     },
     Json,
@@ -238,6 +237,33 @@ impl<T: AstInfo> Format<T> {
     /// True if the format cannot carry any configuration
     pub fn is_simple(&self) -> bool {
         matches!(self, Format::Bytes | Format::Text)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CsvColumns {
+    /// `WITH count COLUMNS`
+    Count(usize),
+    /// `WITH HEADER (ident, ...)?`: `names` is empty if there are no names specified
+    Header { names: Vec<Ident> },
+}
+
+impl AstDisplay for CsvColumns {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CsvColumns::Count(n) => {
+                f.write_str(n);
+                f.write_str(" COLUMNS")
+            }
+            CsvColumns::Header { names } => {
+                f.write_str("HEADER");
+                if !names.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(&names));
+                    f.write_str(")");
+                }
+            }
+        }
     }
 }
 
@@ -324,18 +350,10 @@ impl<T: AstInfo> AstDisplay for Format<T> {
                 f.write_node(&display::escape_single_quote_string(regex));
                 f.write_str("'");
             }
-            Self::Csv {
-                header_row,
-                n_cols,
-                delimiter,
-            } => {
+            Self::Csv { columns, delimiter } => {
                 f.write_str("CSV WITH ");
-                if *header_row {
-                    f.write_str("HEADER");
-                } else {
-                    f.write_str(n_cols.unwrap());
-                    f.write_str(" COLUMNS");
-                }
+                f.write_node(columns);
+
                 if *delimiter != ',' {
                     f.write_str(" DELIMITED BY '");
                     f.write_node(&display::escape_single_quote_string(&delimiter.to_string()));

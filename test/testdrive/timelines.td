@@ -186,28 +186,28 @@ unexpected parameters for CREATE SOURCE: epoch_ms_timeline
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
 ! CREATE VIEW must_fail AS SELECT * FROM source_byo, source_system;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_byo;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_byo;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_cdcv2;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_byo, source_cdcv2;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT (SELECT a FROM source_system LIMIT 1) FROM source_byo;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_system, source_system_user;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_byo, source_byo_user;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 # Can join static view with anything.
 > CREATE VIEW values_table_view AS SELECT * FROM input_values_view, input_table;
@@ -224,27 +224,27 @@ Dataflow cannot use multiple timelines
 
 # System things should be joinable only with system sources.
 ! CREATE VIEW must_fail AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_byo;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 ! CREATE VIEW must_fail AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_cdcv2;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 > CREATE VIEW various_system_no_byo AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, source_system;
 > CREATE VIEW various_system_table AS SELECT * FROM mz_catalog_names, mz_views, mz_source_info, input_table;
 
 # EXPLAIN should complain too.
 ! EXPLAIN SELECT * FROM source_system, source_byo;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 # Can join user-specified timelines.
 > CREATE MATERIALIZED VIEW source_system_byo_user AS SELECT * FROM source_system_user, source_byo_user, source_cdcv2_user;
 
 # Unless they are from different user timelines.
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_byo_user, source_byo_user2;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 # CDCv2 can only be joined with system time stuff if specified
 > CREATE MATERIALIZED VIEW source_cdcv2_table_system AS SELECT * FROM source_cdcv2_system, input_table;
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2, input_table;
-Dataflow cannot use multiple timelines
+multiple timelines within one dataflow are not supported
 
 # Verify that timedomains don't cross timelines. In the case that
 # source_byo is grouped in the same timedomain as epoch ms sources,

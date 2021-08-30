@@ -235,6 +235,7 @@ pub fn extract_config(
             Config::path("ssl_key_location"),
             Config::string("ssl_key_password").include_env_var(),
             Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
+            Config::new("enable_idempotence", ValType::Boolean),
         ],
     )
 }

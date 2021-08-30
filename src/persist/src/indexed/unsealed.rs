@@ -356,27 +356,26 @@ mod tests {
         }
     }
 
-    // Read unsealed batch metadata into a structure that can be asserted against.
-    //
-    // TODO: Revisit Antichain / Eq to see if we can do something better here.
     fn unsealed_batch_meta(
-        unsealed: &Unsealed,
-    ) -> Vec<(String, (SeqNo, SeqNo, SeqNo), (u64, u64))> {
-        unsealed
-            .batches
-            .iter()
-            .map(|meta| {
-                (
-                    meta.key.clone(),
-                    (
-                        meta.desc.lower()[0],
-                        meta.desc.upper()[0],
-                        meta.desc.since()[0],
-                    ),
-                    (meta.ts_lower, meta.ts_upper),
-                )
-            })
-            .collect()
+        key: &str,
+        lower: u64,
+        upper: u64,
+        since: u64,
+        ts_lower: u64,
+        ts_upper: u64,
+        size_bytes: u64,
+    ) -> UnsealedBatchMeta {
+        UnsealedBatchMeta {
+            key: key.to_string(),
+            desc: Description::new(
+                Antichain::from_elem(SeqNo(lower)),
+                Antichain::from_elem(SeqNo(upper)),
+                Antichain::from_elem(SeqNo(since)),
+            ),
+            ts_upper,
+            ts_lower,
+            size_bytes,
+        }
     }
 
     // Attempt to read every update in `unsealed` at times in [lo, hi)
@@ -470,23 +469,11 @@ mod tests {
         let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
         assert_eq!(snapshot_updates, unsealed_updates(vec![0, 0, 1, 1]));
         assert_eq!(
-            unsealed_batch_meta(&f),
+            f.batches,
             vec![
-                (
-                    "Id(0)-unsealed-0".to_string(),
-                    (SeqNo(0), SeqNo(1), SeqNo(0)),
-                    (0, 0)
-                ),
-                (
-                    "Id(0)-unsealed-1".to_string(),
-                    (SeqNo(1), SeqNo(2), SeqNo(0)),
-                    (1, 1)
-                ),
-                (
-                    "Id(0)-unsealed-2".to_string(),
-                    (SeqNo(2), SeqNo(3), SeqNo(0)),
-                    (0, 1)
-                ),
+                unsealed_batch_meta("Id(0)-unsealed-0", 0, 1, 0, 0, 0, 186),
+                unsealed_batch_meta("Id(0)-unsealed-1", 1, 2, 0, 1, 1, 186),
+                unsealed_batch_meta("Id(0)-unsealed-2", 2, 3, 0, 0, 1, 252),
             ],
         );
 
@@ -509,18 +496,10 @@ mod tests {
         let snapshot_updates = slurp_from(&f, &blob, 0, None)?;
         assert_eq!(snapshot_updates, unsealed_updates(vec![0, 1, 1]));
         assert_eq!(
-            unsealed_batch_meta(&f),
+            f.batches,
             vec![
-                (
-                    "Id(0)-unsealed-1".to_string(),
-                    (SeqNo(1), SeqNo(2), SeqNo(0)),
-                    (1, 1)
-                ),
-                (
-                    "Id(0)-unsealed-2".to_string(),
-                    (SeqNo(2), SeqNo(3), SeqNo(0)),
-                    (0, 1)
-                ),
+                unsealed_batch_meta("Id(0)-unsealed-1", 1, 2, 0, 1, 1, 186),
+                unsealed_batch_meta("Id(0)-unsealed-2", 2, 3, 0, 0, 1, 252),
             ],
         );
 
@@ -642,12 +621,8 @@ mod tests {
         assert_eq!(snapshot_updates, updates[1..]);
 
         assert_eq!(
-            unsealed_batch_meta(&f),
-            vec![(
-                "Id(0)-unsealed-1".to_string(),
-                (SeqNo(0), SeqNo(2), SeqNo(0)),
-                (1, 2)
-            )]
+            f.batches,
+            vec![unsealed_batch_meta("Id(0)-unsealed-1", 0, 2, 0, 1, 2, 252)],
         );
 
         Ok(())
