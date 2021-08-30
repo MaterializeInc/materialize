@@ -64,6 +64,12 @@ impl CsvDecoderState {
         }
     }
 
+    pub fn reset_for_new_object(&mut self) {
+        if self.header_names.is_some() {
+            self.next_row_is_header = true;
+        }
+    }
+
     pub fn decode(
         &mut self,
         chunk: &mut &[u8],

@@ -25,7 +25,7 @@ contain multiple records serialized as CSV, separated by newlines.
 
 {{% create-source/syntax-details connector="s3" formats="csv" envelopes="append-only" keyConstraint=true %}}
 
-## Example
+## Example without CSV header
 
 Assuming there is an S3 bucket "analytics" that contains the following keys and
 associated content:
@@ -83,6 +83,38 @@ This creates a view that has the same properties as above, except it:
 
 * Has two columns (one *integer*, one *interval*)
 * Does not store the string data in memory after it has been parsed
+
+## Example with CSV header
+
+Use the `FORMAT CSV WITH HEADER (column, column2, ...)` syntax to validate and remove header rows
+when reading from an S3 bucket. The column names are required for S3 sources, unlike file sources.
+
+**users/2021/engagement-with-header.csv**
+```csv
+id,status,active time
+9999,active,8 hours
+888,inactive,
+777,active,3 hours
+```
+
+**users/2020/engagement-with-header.csv**
+```csv
+id,status,active time
+9999,active,750 hours
+888,inactive,
+777,active,1002 hours
+```
+
+Load all these keys, while renaming the columns from the headers provided in the CSV files using
+the following command:
+
+```sql
+CREATE MATERIALIZED SOURCE csv_example (user_id, status, usage) -- provide SQL names
+FROM S3 DISCOVER OBJECTS MATCHING '**/*.csv' USING BUCKET SCAN 'analytics'
+WITH (region = 'us-east-2')
+FORMAT CSV
+WITH HEADER (id, status, "active time"); -- expect a header for each file with these names
+```
 
 ## Related pages
 

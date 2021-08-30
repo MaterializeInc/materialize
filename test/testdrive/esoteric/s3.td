@@ -165,3 +165,41 @@ b3
 c1
 c2
 c3
+
+
+# CSV with headers
+
+$ s3-put-object bucket=test key=csv/a.csv
+id,value
+1,a
+2,a
+
+$ s3-put-object bucket=test key=csv/b.csv
+id,value
+3,b
+
+$ s3-put-object bucket=test key=csv/c.csv
+id,value
+4,c
+5,c
+
+> CREATE MATERIALIZED SOURCE s3_csv_headers
+  FROM S3 DISCOVER OBJECTS MATCHING 'csv/*'
+  USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT CSV WITH HEADER (id, value);
+
+> SELECT id, value FROM s3_csv_headers
+id value
+--------
+1  a
+2  a
+3  b
+4  c
+5  c

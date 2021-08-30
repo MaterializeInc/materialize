@@ -299,7 +299,11 @@ impl DataDecoder {
         push_metadata: bool,
     ) -> Result<Option<Row>, DataflowError> {
         match &mut self.inner {
-            DataDecoderInner::Csv(csv) => csv.decode(bytes, upstream_coord, push_metadata),
+            DataDecoderInner::Csv(csv) => {
+                let result = csv.decode(bytes, upstream_coord, push_metadata);
+                csv.reset_for_new_object();
+                result
+            }
             DataDecoderInner::DelimitedBytes { format, .. } => {
                 let data = *bytes;
                 *bytes = &[][..];

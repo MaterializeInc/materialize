@@ -523,9 +523,12 @@ pub async fn purify_csv(
     columns: &mut CsvColumns,
 ) -> anyhow::Result<()> {
     if matches!(columns, CsvColumns::Header { .. })
-        && !matches!(connector, CreateSourceConnector::File { .. })
+        && !matches!(
+            connector,
+            CreateSourceConnector::File { .. } | CreateSourceConnector::S3 { .. }
+        )
     {
-        bail_unsupported!("CSV WITH HEADER with non-file sources");
+        bail_unsupported!("CSV WITH HEADER with non-file or S3 sources");
     }
 
     let first_row = if let Some(file) = file {
@@ -608,11 +611,15 @@ pub async fn purify_csv(
                 );
             }
         }
-        (CsvColumns::Header { names }, None) if names.is_empty() => {
-            bail!(
-                "WITH HEADER requires a way to determine the header row, but file does not exist"
-            );
-        }
+        (CsvColumns::Header { names }, None) if names.is_empty() => match connector {
+            CreateSourceConnector::File { .. } => {
+                bail!("CSV WITH HEADER requires a way to determine the header row, but does not exist")
+            }
+            CreateSourceConnector::S3 { .. } => {
+                bail!("CSV WITH HEADER for S3 sources requiers specifying the header columns")
+            }
+            _ => bail!("CSV WITH HEADER is only supported for S3 and file sources"),
+        },
         (CsvColumns::Header { names }, None) => {
             // we don't need to do any verification if we are told the names of the headers
             assert!(
