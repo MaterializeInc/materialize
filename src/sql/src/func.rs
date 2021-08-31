@@ -1719,7 +1719,7 @@ lazy_static! {
             },
             "max" => Aggregate {
                 params!(Bool) => AggregateFunc::MaxBool, oid::FUNC_MAX_BOOL_OID;
-                params!(Int16) => AggregateFunc::MaxInt32, 2117;
+                params!(Int16) => AggregateFunc::MaxInt16, 2117;
                 params!(Int32) => AggregateFunc::MaxInt32, 2116;
                 params!(Int64) => AggregateFunc::MaxInt64, 2115;
                 params!(Float32) => AggregateFunc::MaxFloat32, 2119;
