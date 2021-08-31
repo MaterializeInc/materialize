@@ -50,5 +50,6 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 ## Learn more
 
 - [**Install Materialize**](./install) to try it out.
-- [**What is Materialize?**](./overview/what-is-materialize) to learn more about what Materialize does and how it works.
+- [**What is Materialize?**](./overview/what-is-materialize) to learn
+more about what Materialize does and how it works.
 - [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.
