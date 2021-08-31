@@ -45,7 +45,6 @@ impl FoldConstants {
     /// that are larger than `self.limit`, if that is set. It is not guaranteed that
     /// a constant input within the limit will be reduced to a `Constant` variant.
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
-        let relation_type = relation.typ();
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
@@ -78,6 +77,7 @@ impl FoldConstants {
                         Ok(rows) => Self::fold_reduce_constant(group_key, aggregates, rows),
                         Err(e) => Err(e.clone()),
                     };
+                    let relation_type = relation.typ();
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation_type,
@@ -108,51 +108,8 @@ impl FoldConstants {
                     *relation = input.take_dangerous();
                 }
             }
-            MirRelationExpr::Map { input, scalars } => {
-                // Before reducing the scalar expressions, we need to form an appropriate
-                // RelationType to provide to each. Each expression needs a different
-                // relation type; although we could in principle use `relation_type` here,
-                // we shouldn't rely on `reduce` not looking at its cardinality to assess
-                // the number of columns.
-                let input_arity = input.arity();
-                for (index, scalar) in scalars.iter_mut().enumerate() {
-                    let mut current_type = repr::RelationType::new(
-                        relation_type.column_types[..(input_arity + index)].to_vec(),
-                    );
-                    for key in relation_type.keys.iter() {
-                        if key.iter().all(|i| *i < input_arity + index) {
-                            current_type = current_type.with_key(key.clone());
-                        }
-                    }
-                    scalar.reduce(&current_type);
-                }
-
-                // Guard against evaluating expression that may contain temporal expressions.
-                if scalars.iter().any(|e| e.contains_temporal()) {
-                    return Ok(());
-                }
-
-                if let MirRelationExpr::Constant { rows, .. } = &**input {
-                    let new_rows = match rows {
-                        Ok(rows) => rows
-                            .iter()
-                            .cloned()
-                            .map(|(input_row, diff)| {
-                                let mut unpacked = input_row.unpack();
-                                let temp_storage = RowArena::new();
-                                for scalar in scalars.iter() {
-                                    unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
-                                }
-                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), diff))
-                            })
-                            .collect::<Result<_, _>>(),
-                        Err(e) => Err(e.clone()),
-                    };
-                    *relation = MirRelationExpr::Constant {
-                        rows: new_rows,
-                        typ: relation_type,
-                    };
-                }
+            MirRelationExpr::Map { .. } => {
+                self.action_with_type_info(relation);
             }
             MirRelationExpr::FlatMap {
                 input,
@@ -178,12 +135,14 @@ impl FoldConstants {
                     match new_rows {
                         Ok(None) => {}
                         Ok(Some(rows)) => {
+                            let relation_type = relation.typ();
                             *relation = MirRelationExpr::Constant {
                                 rows: Ok(rows),
                                 typ: relation_type,
                             };
                         }
                         Err(err) => {
+                            let relation_type = relation.typ();
                             *relation = MirRelationExpr::Constant {
                                 rows: Err(err),
                                 typ: relation_type,
@@ -217,6 +176,7 @@ impl FoldConstants {
                         Ok(rows) => Self::fold_filter_constant(predicates, rows),
                         Err(e) => Err(e.clone()),
                     };
+                    let relation_type = relation.typ();
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation_type,
@@ -237,6 +197,7 @@ impl FoldConstants {
                             .collect()),
                         Err(e) => Err(e.clone()),
                     };
+                    let relation_type = relation.typ();
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation_type,
@@ -250,12 +211,17 @@ impl FoldConstants {
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
                     relation.take_safely();
-                } else if let Some(e) = inputs.iter().find_map(|i| match i {
-                    MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
-                    _ => None,
-                }) {
+                } else if let Some(e) = inputs
+                    .iter()
+                    .find_map(|i| match i {
+                        MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
+                        _ => None,
+                    })
+                    .cloned()
+                {
+                    let relation_type = relation.typ();
                     *relation = MirRelationExpr::Constant {
-                        rows: Err(e.clone()),
+                        rows: Err(e),
                         typ: relation_type,
                     };
                 } else if inputs
@@ -313,6 +279,7 @@ impl FoldConstants {
                         })
                     });
 
+                    let relation_type = relation.typ();
                     *relation = MirRelationExpr::Constant {
                         rows: Ok(old_rows),
                         typ: relation_type,
@@ -327,9 +294,11 @@ impl FoldConstants {
                         MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
                         _ => None,
                     })
+                    .cloned()
                 {
+                    let relation_type = relation.typ();
                     *relation = MirRelationExpr::Constant {
-                        rows: Err(e.clone()),
+                        rows: Err(e),
                         typ: relation_type,
                     };
                 } else {
@@ -345,6 +314,8 @@ impl FoldConstants {
                             input => new_inputs.push(input),
                         }
                     }
+
+                    let relation_type = relation.typ();
                     if !rows.is_empty() {
                         new_inputs.push(MirRelationExpr::Constant {
                             rows: Ok(rows),
@@ -395,6 +366,59 @@ impl FoldConstants {
         }
 
         Ok(())
+    }
+
+    fn action_with_type_info(&self, relation: &mut MirRelationExpr) {
+        let relation_type = relation.typ();
+        match relation {
+            MirRelationExpr::Map { input, scalars } => {
+                // Before reducing the scalar expressions, we need to form an appropriate
+                // RelationType to provide to each. Each expression needs a different
+                // relation type; although we could in principle use `relation_type` here,
+                // we shouldn't rely on `reduce` not looking at its cardinality to assess
+                // the number of columns.
+                let input_arity = input.arity();
+                for (index, scalar) in scalars.iter_mut().enumerate() {
+                    let mut current_type = repr::RelationType::new(
+                        relation_type.column_types[..(input_arity + index)].to_vec(),
+                    );
+                    for key in relation_type.keys.iter() {
+                        if key.iter().all(|i| *i < input_arity + index) {
+                            current_type = current_type.with_key(key.clone());
+                        }
+                    }
+                    scalar.reduce(&current_type);
+                }
+
+                // Guard against evaluating expression that may contain temporal expressions.
+                if scalars.iter().any(|e| e.contains_temporal()) {
+                    return;
+                }
+
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = match rows {
+                        Ok(rows) => rows
+                            .iter()
+                            .cloned()
+                            .map(|(input_row, diff)| {
+                                let mut unpacked = input_row.unpack();
+                                let temp_storage = RowArena::new();
+                                for scalar in scalars.iter() {
+                                    unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
+                                }
+                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), diff))
+                            })
+                            .collect::<Result<_, _>>(),
+                        Err(e) => Err(e.clone()),
+                    };
+                    *relation = MirRelationExpr::Constant {
+                        rows: new_rows,
+                        typ: relation_type,
+                    };
+                }
+            }
+            _ => panic!(),
+        }
     }
 
     fn fold_reduce_constant(
