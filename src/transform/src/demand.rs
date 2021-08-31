@@ -54,7 +54,6 @@ impl Demand {
         mut columns: HashSet<usize>,
         gets: &mut HashMap<Id, HashSet<usize>>,
     ) {
-        let relation_type = relation.typ();
         match relation {
             MirRelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
@@ -82,37 +81,8 @@ impl Demand {
                     gets,
                 );
             }
-            MirRelationExpr::Map { input, scalars } => {
-                let arity = input.arity();
-                // contains columns whose supports have yet to be explored
-                let mut new_columns = columns.clone();
-                new_columns.retain(|c| *c >= arity);
-                while !new_columns.is_empty() {
-                    // explore supports
-                    new_columns = new_columns
-                        .iter()
-                        .flat_map(|c| scalars[*c - arity].support())
-                        .filter(|c| !columns.contains(c))
-                        .collect();
-                    // add those columns to the seen list
-                    columns.extend(new_columns.clone());
-                    new_columns.retain(|c| *c >= arity);
-                }
-
-                // Replace un-read expressions with literals to prevent evaluation.
-                for (index, scalar) in scalars.iter_mut().enumerate() {
-                    if !columns.contains(&(arity + index)) {
-                        // Leave literals as they are, to benefit explain.
-                        if !scalar.is_literal() {
-                            let typ = relation_type.column_types[arity + index].clone();
-                            *scalar =
-                                MirScalarExpr::Literal(Ok(Row::pack_slice(&[Datum::Dummy])), typ);
-                        }
-                    }
-                }
-
-                columns.retain(|c| *c < arity);
-                self.action(input, columns, gets);
+            MirRelationExpr::Map { .. } => {
+                self.action_with_type_info(relation, columns, gets);
             }
             MirRelationExpr::FlatMap {
                 input,
@@ -270,6 +240,50 @@ impl Demand {
                 }
                 self.action(input, columns, gets);
             }
+        }
+    }
+
+    fn action_with_type_info(
+        &self,
+        relation: &mut MirRelationExpr,
+        mut columns: HashSet<usize>,
+        gets: &mut HashMap<Id, HashSet<usize>>,
+    ) {
+        let relation_type = relation.typ();
+        match relation {
+            MirRelationExpr::Map { input, scalars } => {
+                let arity = input.arity();
+                // contains columns whose supports have yet to be explored
+                let mut new_columns = columns.clone();
+                new_columns.retain(|c| *c >= arity);
+                while !new_columns.is_empty() {
+                    // explore supports
+                    new_columns = new_columns
+                        .iter()
+                        .flat_map(|c| scalars[*c - arity].support())
+                        .filter(|c| !columns.contains(c))
+                        .collect();
+                    // add those columns to the seen list
+                    columns.extend(new_columns.clone());
+                    new_columns.retain(|c| *c >= arity);
+                }
+
+                // Replace un-read expressions with literals to prevent evaluation.
+                for (index, scalar) in scalars.iter_mut().enumerate() {
+                    if !columns.contains(&(arity + index)) {
+                        // Leave literals as they are, to benefit explain.
+                        if !scalar.is_literal() {
+                            let typ = relation_type.column_types[arity + index].clone();
+                            *scalar =
+                                MirScalarExpr::Literal(Ok(Row::pack_slice(&[Datum::Dummy])), typ);
+                        }
+                    }
+                }
+
+                columns.retain(|c| *c < arity);
+                self.action(input, columns, gets);
+            }
+            _ => panic!(),
         }
     }
 }
