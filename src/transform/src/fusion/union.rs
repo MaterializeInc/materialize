@@ -39,7 +39,6 @@ impl Union {
     /// Nested negated unions are merged into the parent one by pushing
     /// the Negate to all their branches.
     pub fn action(&self, relation: &mut MirRelationExpr) {
-        let relation_type = relation.typ();
         if let MirRelationExpr::Union { base, inputs } = relation {
             let can_fuse = iter::once(&**base).chain(&*inputs).any(|input| -> bool {
                 match input {
@@ -76,6 +75,7 @@ impl Union {
                         _ => new_inputs.push(outer_input),
                     }
                 }
+                let relation_type = relation.typ();
                 *relation = MirRelationExpr::union_many(new_inputs, relation_type);
             }
         }
