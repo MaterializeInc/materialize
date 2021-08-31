@@ -19,30 +19,21 @@
 
 use std::mem;
 
-use crate::TransformArgs;
+use crate::InputTypeInfo;
 use expr::MirRelationExpr;
 
 /// Fuses a sequence of `Map` operators in to one `Map` operator.
 #[derive(Debug)]
 pub struct Map;
 
-impl crate::Transform for Map {
+impl crate::LocalTransform for Map {
+    /// Fuses a sequence of `Map` operators in to one `Map` operator.
+    /// Remove the map operator if it is empty.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        inputs: &mut InputTypeInfo,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Map {
-    /// Fuses a sequence of `Map` operators in to one `Map` operator.
-    /// Remove the map operator if it is empty.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Map { input, scalars } = relation {
             while let MirRelationExpr::Map {
                 input: inner_input,
@@ -52,11 +43,14 @@ impl Map {
                 inner_scalars.append(scalars);
                 mem::swap(scalars, inner_scalars);
                 **input = inner_input.take_dangerous();
+                inputs.take_first();
             }
 
             if scalars.is_empty() {
                 *relation = input.take_dangerous();
+                inputs.take_first();
             }
         }
+        Ok(())
     }
 }

@@ -44,29 +44,20 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::TransformArgs;
+use crate::InputTypeInfo;
 use expr::MirRelationExpr;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
 pub struct Filter;
 
-impl crate::Transform for Filter {
+impl crate::LocalTransform for Filter {
+    /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        inputs: &mut InputTypeInfo,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Filter {
-    /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Filter { input, predicates } = relation {
             // consolidate nested filters.
             while let MirRelationExpr::Filter {
@@ -76,6 +67,7 @@ impl Filter {
             {
                 predicates.extend(p2.drain(..));
                 *input = Box::new(inner.take_dangerous());
+                inputs.take_first();
             }
 
             expr::canonicalize::canonicalize_predicates(predicates, &input.typ());
@@ -83,7 +75,9 @@ impl Filter {
             // remove the Filter stage if empty.
             if predicates.is_empty() {
                 *relation = input.take_dangerous();
+                inputs.take_first();
             }
         }
+        Ok(())
     }
 }

@@ -9,7 +9,7 @@
 
 //! Transform column references in a `Map` into a `Project`.
 
-use crate::TransformArgs;
+use crate::InputTypeInfo;
 use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Transform column references in a `Map` into a `Project`, or repeated
@@ -17,28 +17,19 @@ use expr::{MirRelationExpr, MirScalarExpr};
 #[derive(Debug)]
 pub struct ProjectionExtraction;
 
-impl crate::Transform for ProjectionExtraction {
+impl crate::LocalTransform for ProjectionExtraction {
+    /// Transform column references in a `Map` into a `Project`.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        inputs: &mut InputTypeInfo,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl ProjectionExtraction {
-    /// Transform column references in a `Map` into a `Project`.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
-        if let MirRelationExpr::Map { input, scalars } = relation {
+        if let MirRelationExpr::Map { input: _, scalars } = relation {
             if scalars
                 .iter()
                 .any(|s| matches!(s, MirScalarExpr::Column(_)))
             {
-                let input_arity = input.arity();
+                let input_arity = inputs.first().typ.arity();
                 let mut outputs: Vec<_> = (0..input_arity).collect();
                 let mut dropped = 0;
                 scalars.retain(|scalar| {
@@ -57,6 +48,7 @@ impl ProjectionExtraction {
                     for scalar in scalars {
                         scalar.permute(&outputs);
                     }
+                    inputs.prepare_to_prepend(relation);
                     *relation = relation.take_dangerous().project(outputs);
                 }
             }
@@ -101,8 +93,10 @@ impl ProjectionExtraction {
                 }
             }
             if projection.iter().enumerate().any(|(i, p)| i != *p) {
+                inputs.prepare_to_prepend(relation);
                 *relation = relation.take_dangerous().project(projection);
             }
         }
+        Ok(())
     }
 }

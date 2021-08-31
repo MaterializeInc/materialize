@@ -95,6 +95,135 @@ impl fmt::Display for TransformError {
 
 impl Error for TransformError {}
 
+/// Tree-structure containing the type of information of a sub-tree within a `MirRelationExpr`
+/// graph.
+#[derive(Debug)]
+pub struct TypeInfo {
+    typ: repr::RelationType,
+    inputs: InputTypeInfo,
+}
+
+/// Type information of the input expressions
+#[derive(Debug)]
+pub struct InputTypeInfo {
+    input_types: Vec<Box<TypeInfo>>,
+}
+
+impl InputTypeInfo {
+    fn new() -> Self {
+        Self {
+            input_types: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, input: TypeInfo) {
+        self.input_types.push(Box::new(input));
+    }
+
+    fn take_first(&mut self) {
+        let first = self.input_types.drain(0..1).next().unwrap();
+        *self = first.inputs;
+    }
+
+    fn prepare_to_prepend(&mut self, relation: &MirRelationExpr) {
+        let typ = relation.typ();
+        let mut inputs = Self::new();
+        std::mem::swap(self, &mut inputs);
+        let single_input = TypeInfo { typ, inputs };
+        self.input_types.push(Box::new(single_input));
+    }
+
+    fn first<'a>(&'a self) -> &'a TypeInfo {
+        &*self.input_types.first().as_ref().unwrap()
+    }
+}
+
+/// Transformations that can be applied in post-order.
+pub trait LocalTransform: std::fmt::Debug {
+    /// doc me
+    fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        inputs: &mut InputTypeInfo,
+    ) -> Result<(), TransformError>;
+
+    /// A string describing the transform.
+    fn debug(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
+/// A group of post-order transformations applied in a single traversal of the graph.
+#[derive(Debug)]
+pub struct PostOrderTransforms {
+    transforms: Vec<Box<dyn LocalTransform + Send>>,
+}
+
+impl PostOrderTransforms {
+    fn new(transforms: Vec<Box<dyn LocalTransform + Send>>) -> Self {
+        Self { transforms }
+    }
+}
+
+impl Transform for PostOrderTransforms {
+    fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        _: TransformArgs,
+    ) -> Result<(), TransformError> {
+        let mut visitor = PostOrderTransformsVisitor::new(&self.transforms);
+        // note: MirRelationExpr::try_visit_mut now takes an instance of MirRelationExprMutVisitor
+        relation.try_mut_visitor(&mut visitor)?;
+        Ok(())
+    }
+}
+
+macro_rules! local_transforms {
+    ( $( $x:expr ),* ) => {
+        Box::new(PostOrderTransforms::new(vec![$(
+            Box::new($x),
+        )*]))
+    };
+}
+
+/// Visitor type that applies a given list of transforms in post-order.
+struct PostOrderTransformsVisitor<'a> {
+    transforms: &'a Vec<Box<dyn LocalTransform + Send>>,
+    stack: Vec<InputTypeInfo>,
+}
+
+impl<'a> PostOrderTransformsVisitor<'a> {
+    fn new(transforms: &'a Vec<Box<dyn LocalTransform + Send>>) -> Self {
+        Self {
+            transforms,
+            stack: vec![InputTypeInfo::new()],
+        }
+    }
+}
+
+impl<'a> expr::MirRelationExprMutVisitor<TransformError> for PostOrderTransformsVisitor<'a> {
+    fn pre(&mut self, _relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+        self.stack.push(InputTypeInfo::new());
+        Ok(())
+    }
+    fn post(&mut self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+        let mut inputs = self.stack.pop().unwrap();
+        for transform in self.transforms.iter() {
+            // the transform is responsible for updating `input_types` if the layout
+            // of the current relation changes
+            transform.transform(relation, &mut inputs)?;
+        }
+        // note: MirRelationExpr::typ now takes the type of its inputs as a parameter
+        // let typ = relation.typ(input_types.iter().map(|e| e.typ));
+        let typ = relation.typ();
+        self.stack
+            .last_mut()
+            .unwrap()
+            .push(TypeInfo { typ, inputs });
+        Ok(())
+    }
+}
+
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
@@ -159,11 +288,10 @@ impl Default for FuseAndCollapse {
             // (#716) proposes the removal of `InlineLet` and `UpdateLet` as a
             // transforms.
             transforms: vec![
-                Box::new(crate::projection_extraction::ProjectionExtraction),
+                local_transforms!(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting),
-                Box::new(crate::fusion::map::Map),
+                local_transforms!(crate::fusion::map::Map, crate::fusion::filter::Filter),
                 Box::new(crate::fusion::negate::Negate),
-                Box::new(crate::fusion::filter::Filter),
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::inline_let::InlineLet),
@@ -299,16 +427,16 @@ impl Optimizer {
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
-                    Box::new(crate::fusion::filter::Filter),
+                    local_transforms!(crate::fusion::filter::Filter),
                     // fill in the new demand after maps have been shifted
                     // around.
                     Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
-                    Box::new(crate::fusion::map::Map),
+                    local_transforms!(crate::fusion::map::Map),
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
-            Box::new(crate::cse::map::Map),
+            local_transforms!(crate::cse::map::Map),
             Box::new(crate::projection_lifting::ProjectionLifting),
             Box::new(crate::join_implementation::JoinImplementation),
             Box::new(crate::fusion::project::Project),
@@ -330,10 +458,9 @@ impl Optimizer {
             Box::new(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
-            Box::new(crate::fusion::filter::Filter),
-            Box::new(crate::fusion::map::Map),
+            local_transforms!(crate::fusion::filter::Filter, crate::fusion::map::Map),
             Box::new(crate::fusion::negate::Negate),
-            Box::new(crate::projection_extraction::ProjectionExtraction),
+            local_transforms!(crate::projection_extraction::ProjectionExtraction),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::fusion::join::Join),
         ];

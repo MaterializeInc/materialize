@@ -1078,6 +1078,16 @@ impl MirRelationExpr {
         f(self)
     }
 
+    /// doc me
+    pub fn try_mut_visitor<V, E>(&mut self, visitor: &mut V) -> Result<(), E>
+    where
+        V: MirRelationExprMutVisitor<E>,
+    {
+        visitor.pre(self)?;
+        self.try_visit1_mut(|e| e.try_mut_visitor(visitor))?;
+        visitor.post(self)
+    }
+
     /// Post-order infallible visitor for each `MirRelationExpr`.
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
@@ -1369,6 +1379,14 @@ impl MirRelationExpr {
             }
         )
     }
+}
+
+/// doc me
+pub trait MirRelationExprMutVisitor<E> {
+    /// doc me
+    fn pre(&mut self, relation: &mut MirRelationExpr) -> Result<(), E>;
+    /// doc me
+    fn post(&mut self, relation: &mut MirRelationExpr) -> Result<(), E>;
 }
 
 /// Specification for an ordering by a column.
