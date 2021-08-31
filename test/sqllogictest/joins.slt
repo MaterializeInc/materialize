@@ -602,7 +602,7 @@ EOF
 statement ok
 CREATE TABLE join_fail (la date);
 
-query error NATURAL/USING join column "la" cannot be cast to uniform type: integer vs date
+query error NATURAL/USING join column "la" has incompatible types: integer vs date
 SELECT la FROM l JOIN join_fail USING (la)
 
 # test that joins properly handle null keys

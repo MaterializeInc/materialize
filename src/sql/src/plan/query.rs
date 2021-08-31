@@ -1325,7 +1325,7 @@ fn plan_view_select(
             allow_subqueries: true,
         };
         let expr = plan_expr(ecx, &selection)
-            .map_err(|e| anyhow::anyhow!("WHERE clause error: {}", e))?
+            .map_err(|e| anyhow!("WHERE clause error: {}", e))?
             .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
@@ -2315,6 +2315,8 @@ fn plan_using_constraint(
         allow_subqueries: false,
     };
 
+    let eq_impls = func::resolve_op("=").expect("= operator known to exist");
+
     for column_name in column_names {
         let (lhs, _) = left_scope.resolve_column(column_name)?;
         let (mut rhs, _) = right_scope.resolve_column(column_name)?;
@@ -2333,35 +2335,43 @@ fn plan_using_constraint(
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
 
-        // Join keys must be resolved to same type.
-        let mut exprs = coerce_homogeneous_exprs(
-            &format!(
-                "NATURAL/USING join column {}",
-                column_name.as_str().quoted()
-            ),
-            &ecx,
+        // Plan an equality operation; this has the advantage of performing type
+        // coercion and any other scalar operations necessary to enforce
+        // equality, e.g. canonicalization.
+        let eq_expr = func::select_impl(
+            ecx,
+            FuncSpec::Op("="),
+            &eq_impls,
             vec![
                 CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs)),
                 CoercibleScalarExpr::Coerced(HirScalarExpr::Column(rhs)),
             ],
-            None,
-        )?;
-        let (expr1, expr2) = (exprs.remove(0), exprs.remove(0));
+        )
+        .map_err(|_| {
+            anyhow!(
+                "NATURAL/USING join column {} has incompatible types: {} vs {}",
+                column_name.as_str().quoted(),
+                ecx.humanize_scalar_type(&ecx.scalar_type(&HirScalarExpr::Column(lhs))),
+                ecx.humanize_scalar_type(&ecx.scalar_type(&HirScalarExpr::Column(rhs))),
+            )
+        })?;
 
-        let expr1 =
-            canonicalize_scalar_expr(expr1.clone(), &ecx.scalar_type(&expr1)).unwrap_or(expr1);
-        let expr2 =
-            canonicalize_scalar_expr(expr2.clone(), &ecx.scalar_type(&expr2)).unwrap_or(expr2);
-
-        join_exprs.push(HirScalarExpr::CallBinary {
+        if let HirScalarExpr::CallBinary {
+            ref expr1,
+            ref expr2,
             func: BinaryFunc::Eq,
-            expr1: Box::new(expr1.clone()),
-            expr2: Box::new(expr2.clone()),
-        });
-        map_exprs.push(HirScalarExpr::CallVariadic {
-            func: VariadicFunc::Coalesce,
-            exprs: vec![expr1, expr2],
-        });
+        } = eq_expr
+        {
+            map_exprs.push(HirScalarExpr::CallVariadic {
+                func: VariadicFunc::Coalesce,
+                exprs: vec![*expr1.clone(), *expr2.clone()],
+            });
+        } else {
+            panic!("did not plan expected equality operation for join")
+        }
+
+        join_exprs.push(eq_expr);
+
         new_items.push(ScopeItem {
             names,
             expr: None,

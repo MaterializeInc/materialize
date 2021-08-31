@@ -154,7 +154,6 @@ fn canonicalize_list<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let mut canonicalized_datums = Vec::new();
     for el in a.unwrap_list().iter() {
-        // Once you find the datums, apply the canonicalization expression.
         canonicalized_datums.push(canonicalize_expr.eval(&[el], temp_storage)?);
     }
     Ok(temp_storage.make_datum(|packer| packer.push_list(canonicalized_datums)))
