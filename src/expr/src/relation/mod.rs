@@ -23,7 +23,7 @@ use repr::{ColumnType, Datum, Diff, RelationType, Row};
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::{
-    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr, UnaryFunc,
+    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr,
 };
 
 pub mod canonicalize;
@@ -399,36 +399,6 @@ impl MirRelationExpr {
                     .collect::<Vec<_>>();
                 for key_set in &mut input_typ.keys {
                     key_set.retain(|k| !cols_equal_to_literal.contains(&k));
-                }
-                // Augment non-nullability of columns, by observing either
-                // 1. Predicates that explicitly test for null values, and
-                // 2. Columns that if null would make a predicate be null.
-                let mut nonnull_required_columns = HashSet::new();
-                for predicate in predicates {
-                    // Add any columns that being null would force the predicate to be null.
-                    // Should that happen, the row would be discarded.
-                    predicate.non_null_requirements(&mut nonnull_required_columns);
-                    // Test for explicit checks that a column is non-null.
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not,
-                        expr,
-                    } = predicate
-                    {
-                        if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull,
-                            expr,
-                        } = &**expr
-                        {
-                            if let MirScalarExpr::Column(c) = &**expr {
-                                input_typ.column_types[*c].nullable = false;
-                            }
-                        }
-                    }
-                }
-                // Set as nonnull any columns where null values would cause
-                // any predicate to evaluate to null.
-                for column in nonnull_required_columns.into_iter() {
-                    input_typ.column_types[column].nullable = false;
                 }
                 input_typ
             }

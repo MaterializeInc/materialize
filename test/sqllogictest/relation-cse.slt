@@ -1294,11 +1294,9 @@ EXPLAIN SELECT * FROM
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
-| Project (#0)
 
 %1 =
 | Get materialize.public.t2 (u4)
-| Project (#0)
 
 %2 =
 | Union %1 %0
@@ -1309,12 +1307,17 @@ EXPLAIN SELECT * FROM
 | Project (#1)
 
 %4 =
-| Union %3 %0
+| Get %0 (l0)
+| Project (#0)
 
 %5 =
-| Join %2 %4
-| | implementation = Differential %4 %2.()
-| | demand = (#0, #1)
+| Union %3 %4
+
+%6 =
+| Join %2 %5
+| | implementation = Differential %5 %2.()
+| | demand = (#0, #2)
+| Project (#0, #2)
 
 EOF
 
@@ -1387,7 +1390,8 @@ SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE 
 %3 =
 | Join %2 %0
 | | implementation = Differential %0 %2.()
-| | demand = (#0)
+| | demand = ()
+| Map 1
 
 %4 =
 | Get %1 (l1)
@@ -1396,11 +1400,12 @@ SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE 
 %5 =
 | Join %4 %1
 | | implementation = Differential %1 %4.()
-| | demand = (#0)
+| | demand = ()
+| Map 2
 
 %6 =
 | Union %3 %5
-| Project (#0)
+| Project (#4)
 
 EOF
 
