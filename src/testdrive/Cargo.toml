@@ -11,7 +11,7 @@ async-trait = "0.1.51"
 atty = "0.2.0"
 aws-util = { path = "../aws-util" }
 byteorder = "1.4.3"
-bytes = "1.0.1"
+bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }

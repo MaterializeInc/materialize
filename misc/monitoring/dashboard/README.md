@@ -14,18 +14,18 @@ If you would like to import our Grafana dashboard into your grafana instance, yo
 
 ## Updating the dashboard
 
-The source of truth for this dashboard is http://grafana.mz/d/materialize-overview ,
-which we keep up to date as we run load tests and discover better ways to monitor
-ourselves.
+The source of truth for this dashboard is
+http://grafana.i.mtrlz.dev/d/materialize-overview , which we keep up to date as we run
+load tests and discover better ways to monitor ourselves.
 
 If you want to modify the dashboard that we ship to users, you should instead modify the
-"Materialized Overview" dashboard in grafana.mz, and save it, keeping it canonical for
-ourselves.
+"Materialized Overview" dashboard in grafana.i.mtrlz.dev, and save it, keeping it
+canonical for ourselves.
 
 Before releases, or whenever we'd like to update the dashboard we ship to users, we sync
 the dashboard from grafana.mz to this directory, using the following procedure:
 
-* downloading the json model from http://grafana.mz/d/materialize-overview/materialize-overview-load-tests?editview=dashboard_json
+* downloading the json model from http://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?editview=dashboard_json
   into a file. The rest of this guide will assume you used `/tmp/dashboard.json`
 * running the `bin/dashboard-clean` script on that downloaded json to overwrite the
   conf file. Execute this from the root of the repo:

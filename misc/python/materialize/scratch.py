@@ -11,7 +11,6 @@
 
 import asyncio
 import csv
-import json
 import os
 import shlex
 import sys
@@ -70,7 +69,6 @@ def print_instances(ists: List[Instance], format: str) -> None:
         "Launched By",
         "Delete After",
         "State",
-        "Tags",
     ]
     rows = [
         [
@@ -81,7 +79,6 @@ def print_instances(ists: List[Instance], format: str) -> None:
             launched_by(tags),
             delete_after(tags),
             i.state["Name"],
-            json.dumps(tags),
         ]
         for (i, tags) in [(i, tags(i)) for i in ists]
     ]

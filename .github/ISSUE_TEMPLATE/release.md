@@ -86,15 +86,9 @@ production readiness.
   $ gh pr create --web
   ```
 
-- [ ] Collect all PRs in this release using the list-prs command and create a slack post in
-  `#release` with the output:
-
-  ```shell
-  bin/mkrelease list-prs
-  ```
-
-- [ ] Review all PRs in the release that were not reviewed by another engineer
-  prior to being merged into main.
+- [ ] An issue should be automatically created with unreviewed PRs linked inside
+  of it. Review (or get review on) all unreviewed PRs, and link to that issue
+  here.
 
 [gh]: https://cli.github.com/
 

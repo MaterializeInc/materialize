@@ -8,8 +8,8 @@ weight: 1
 ---
 
 Materialize is a streaming database for real-time applications. Materialize
-accepts input data from a variety of streaming sources (e.g. Kafka) and files
-(e.g. CSVs), and lets you query them using SQL.
+accepts input data from a variety of streaming sources (like Kafka), data stores and databases (like S3 and Postgres), and files
+(like CSV and JSON), and lets you query them using SQL.
 
 {{< callout primary_url="https://materialize.com/docs/get-started/" primary_text="Get Started">}}
   # Quickstart
@@ -19,55 +19,33 @@ accepts input data from a variety of streaming sources (e.g. Kafka) and files
 
 {{< multilinkbox >}}
 {{< linkbox icon="bulb" title="Key Concepts" >}}
-- [High-Level Overview](/overview/what-is-materialize)
-- [API Components: Sources, Views, Indexes, Sinks](/overview/api-components)
-- [Materialize Cloud Overview](/cloud/what-is-materialize-cloud)
+- [Materialize overview](/overview/what-is-materialize)
+- [API components](/overview/api-components)
+- [Materialize Cloud overview](/cloud/what-is-materialize-cloud)
 {{</ linkbox >}}
 {{< linkbox icon="touch" title="Demos" >}}
-- [Real-Time Analytics Dashboard](/demos/business-intelligence)
+- [Real-time analytics dashboard](/demos/business-intelligence)
 - [Streaming SQL on server logs](/demos/log-parsing)
-- [A microservice to transform and join two streams of data](/demos/microservice)
+- [Microservices](/demos/microservice)
 {{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
-- [Connect Postgres to Materialize with CDC](/guides/cdc-postgres/)
-- [Use Temporal Filters to Index events within a window of time](/guides/temporal-filters/)
-- [Interact with Materialize from Node.js](/guides/node-js/)
+- [Materialize &amp; Postgres CDC](/guides/cdc-postgres/)
+- [Materialize &amp; Node.js](/guides/node-js/)
+- - [Time-windowed computation](/guides/temporal-filters/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
-- [CREATE SOURCE](/sql/create-source)
-- [CREATE MATERIALIZED VIEW](/sql/create-materialized-view)
-- [SQL Data Types](/sql/types)
-- [SQL Functions](/sql/functions)
+- [`CREATE SOURCE`](/sql/create-source)
+- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
+- [`SQL Data Types`](/sql/types)
+- [`SQL Functions`](/sql/functions)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
-## What does Materialize do?
+## New &amp; updated
 
-Materialize lets you ask questions about your data, and then get low-latency,
-correct answers, even as the underlying data changes.
-
-Why not just use your database's built-in functionality to perform these same
-computations? Because your database often acts as if it's never been asked that
-question before, which means it can take a _long_ time to come up with an
-answer, each and every time you pose the query.
-
-Materialize instead keeps the results of the queries and incrementally updates
-them as new data comes in. So, rather than recalculating the answer each time
-it's asked, Materialize continually updates the answer and gives you the
-answer's current state from memory.
-
-Importantly, Materialize supports incrementally updating a much broader set of
-views than is common in traditional databases (e.g. views over multi-way joins
-with complex aggregations), and can do incremental updates in the presence of
-arbitrary inserts, updates, and deletes in the input streams.
-
-## Why should I use Materialize?
-
-If you perform any OLAP queries over relational data and want to reduce the time
-it takes to refresh answers to common queries, Materialize can make that happen.
-
-For a sense of scale, it can take queries that most teams would run once-per-day
-and instead provide sub-second or single-digit second answers.
+- [Version 0.9.1 Release Notes](release-notes/#v0.9.1)
+- [Change Data Capture with Postgres Guide](/guides/cdc-postgres/)
+- [Kafka Sink Topic Reuse (Exactly-Once) Sinks Guide](/guides/reuse-topic-for-kafka-sink)
 
 ## Learn more
 

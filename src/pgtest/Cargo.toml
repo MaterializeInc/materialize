@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.43"
-bytes = "1.0.1"
+bytes = "1.1.0"
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 ore = { path = "../ore" }
