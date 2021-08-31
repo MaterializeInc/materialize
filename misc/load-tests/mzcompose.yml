@@ -16,34 +16,11 @@ x-port-mappings:
   - &kafka-internal ${KAFKA_PORT:-9092}
   - &kafka-external 9093:9093
   - &schema-registry ${SR_PORT:-8081:8081}
-  - &materialized ${MZ_PORT:-6875}
-  - &materialized-external ${MZ_PORT:-6875:6875}
   - &grafana 3000:3000
   - &prometheus 9090
-  - &perf-metrics ${PERF_METRICS_PORT:-8675}
-  - &perf-dash-web ${PERF_DASH_PORT:-8875:8875}
 
 version: '3.7'
 services:
-  perf-dash-metrics:
-    mzbuild: materialized
-    ports:
-      - *perf-metrics
-    command:
-      - --disable-telemetry
-      - --listen-addr=0.0.0.0:${PERF_METRICS_PORT:-8675}
-      - --logical-compaction-window=1ms
-    environment:
-      - MZ_DEV=1
-  perf-dash-scraper:
-    mzbuild: perf-dash-scraper
-    command: scrape
-  perf-dash-create-views:
-    mzbuild: perf-dash-create-views
-  perf-dash-web:
-    mzbuild: perf-dash-web
-    ports:
-      - *perf-dash-web
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.4
     environment:
@@ -58,7 +35,7 @@ services:
       - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
       - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-confluent}:9093
       - KAFKA_METRIC_REPORTERS=io.confluent.metrics.reporter.ConfluentMetricsReporter
       - KAFKA_BROKER_ID=1
       - KAFKA_LOG_RETENTION_HOURS=-1
