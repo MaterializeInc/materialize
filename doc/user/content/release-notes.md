@@ -60,6 +60,8 @@ Wrap your release notes at the 80 character mark.
   objects with headers {{% gh 7507 %}}, and support CSV with headers in S3. {{%
   gh 7913 %}}
 
+- Fix a bug that caused a panic when computing the `max` of `int2` values.
+
 {{% version-header v0.9.1 %}}
 
 - Change the type of the [`mz_metrics`](/sql/system-catalog#mz_metrics).`time`
