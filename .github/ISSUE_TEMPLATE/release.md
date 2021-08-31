@@ -134,13 +134,31 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 [This commit]: https://github.com/MaterializeInc/infra/commit/fd7f594d6f9fb2fda3a604f21b730f8d401fe81c
 
-- [ ] Find the load tests in https://grafana.i.mtrlz.dev/d/materialize-overview, and link to them
-  in #release, validating that data is present. Note that the default view of that dashboard is of
-  a full day, so it may look like the test started and aborted suddenly:
+- [ ] Create the Grafana links for the load-test results using the `mkrelease
+  dashboard-links` subcommand.
 
-  - [ ] chbench
-  - [ ] billing-demo
-  - [ ] perf-kinesis
+  Verify that each of the load tests started correctly and paste the entire
+  output of the command into slack in the #release channel.
+
+  <details>
+  <summary>Example invocation and usage instructions</summary>
+  The only required argument is the time that the load tests
+  started, so if you started them at 10:00 AM you can enter `10:00` or
+  `2021-08-30T10:00`.
+
+  The `--env` option can also be supplied, if you are running in scratch instead
+  of dev -- the future release process uses scratch, the current infra repo
+  process runs in dev.
+
+  ```console
+  $ bin/mkrelease dashboard-links --env dev 10:00
+  Load tests for release v0.9.2-rc1
+  * chbench: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chbench&var-purpose=load_test&var-env=dev
+  * kinesis: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=kinesis&var-purpose=load_test&var-env=dev
+  * billing-demo: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=billing-demo&var-purpose=load_test&var-env=dev
+  * chaos: https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?orgId=1&from=1630418400000&to=1630512000000&var-test=chaos&var-purpose=chaos&var-env=dev
+  ```
+  </details>
 
 - [ ] **cloud engineer** Let the tests run for at least 24 hours, with the following success
   criteria:
