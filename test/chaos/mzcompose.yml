@@ -161,6 +161,11 @@ mzworkflows:
   start-everything:
     steps:
       - step: start-services
+        services: [zookeeper]
+      - step: wait-for-tcp
+        host: zookeeper
+        port: 2181
+      - step: start-services
         services: [materialized, kafka, schema-registry]
       - step: wait-for-tcp
         host: kafka
