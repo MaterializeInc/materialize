@@ -11,7 +11,7 @@ psutil==5.8.0
 pytest==5.4.2
 requests==2.23.0
 types-PyMYSQL==1.0.2
-types-PyYAML==5.4.6
+types-PyYAML==5.4.10
 types-prettytable==2.1.0
 types-psutil==5.8.0
 types-requests==2.25.6
