@@ -293,7 +293,7 @@ impl Default for FuseAndCollapse {
                 local_transforms!(crate::fusion::map::Map, crate::fusion::filter::Filter),
                 Box::new(crate::fusion::negate::Negate),
                 Box::new(crate::fusion::project::Project),
-                Box::new(crate::fusion::join::Join),
+                local_transforms!(crate::fusion::join::Join),
                 Box::new(crate::inline_let::InlineLet),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
@@ -455,14 +455,14 @@ impl Optimizer {
     /// Simple fusion and elision transformations to render the query readable.
     pub fn pre_optimization() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
-            Box::new(crate::fusion::join::Join),
+            local_transforms!(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
             local_transforms!(crate::fusion::filter::Filter, crate::fusion::map::Map),
             Box::new(crate::fusion::negate::Negate),
             local_transforms!(crate::projection_extraction::ProjectionExtraction),
             Box::new(crate::fusion::project::Project),
-            Box::new(crate::fusion::join::Join),
+            local_transforms!(crate::fusion::join::Join),
         ];
         Self { transforms }
     }

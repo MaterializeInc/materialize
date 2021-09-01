@@ -21,7 +21,7 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
-use crate::TransformArgs;
+use crate::{InputTypeInfo, TypeInfo};
 use expr::{MirRelationExpr, MirScalarExpr};
 use repr::RelationType;
 
@@ -32,22 +32,13 @@ use repr::RelationType;
 #[derive(Debug)]
 pub struct Join;
 
-impl crate::Transform for Join {
+impl crate::LocalTransform for Join {
+    /// Fuses multiple `Join` operators into one `Join` operator.
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        input_types: &mut InputTypeInfo,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-        Ok(())
-    }
-}
-
-impl Join {
-    /// Fuses multiple `Join` operators into one `Join` operator.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
@@ -58,7 +49,7 @@ impl Join {
 
             // We scan through each input, digesting any joins that we find and updating their equivalence classes.
             // We retain any existing equivalence classes, as they are already with respect to the cross product.
-            for input in inputs.drain(..) {
+            for (input, mut type_info) in inputs.drain(..).zip(input_types.input_types.drain(..)) {
                 match input {
                     MirRelationExpr::Join {
                         inputs,
@@ -66,7 +57,7 @@ impl Join {
                         ..
                     } => {
                         // Merge the inputs into the new join being built.
-                        join_builder.add_subjoin(inputs, equivalences, None);
+                        join_builder.add_subjoin(inputs, equivalences, None, type_info.inputs);
                     }
                     MirRelationExpr::Filter { input, predicates } => {
                         if let MirRelationExpr::Join {
@@ -75,23 +66,32 @@ impl Join {
                             ..
                         } = *input
                         {
+                            type_info.inputs.take_first();
                             // Merge the inputs and the predicates into the new join being built.
-                            join_builder.add_subjoin(inputs, equivalences, Some(predicates));
+                            join_builder.add_subjoin(
+                                inputs,
+                                equivalences,
+                                Some(predicates),
+                                type_info.inputs,
+                            );
                         } else {
                             // Retain the input.
                             let input = input.filter(predicates);
-                            join_builder.add_input(input);
+                            join_builder.add_input(input, *type_info);
                         }
                     }
                     _ => {
                         // Retain the input.
-                        join_builder.add_input(input);
+                        join_builder.add_input(input, *type_info);
                     }
                 }
             }
 
-            *relation = join_builder.build();
+            let (r, t) = join_builder.build();
+            *relation = r;
+            *input_types = t;
         }
+        Ok(())
     }
 }
 
@@ -102,6 +102,7 @@ struct JoinBuilder {
     num_columns: usize,
     /// Predicates that will be evaluated on top of the join, if any.
     predicates: Vec<MirScalarExpr>,
+    input_types: InputTypeInfo,
 }
 
 impl JoinBuilder {
@@ -111,10 +112,11 @@ impl JoinBuilder {
             equivalences: equivalences.drain(..).collect(),
             num_columns: 0,
             predicates: Vec::new(),
+            input_types: InputTypeInfo::new(),
         }
     }
 
-    fn add_input(&mut self, input: MirRelationExpr) {
+    fn add_input(&mut self, input: MirRelationExpr, type_info: TypeInfo) {
         // Filter join identities out of the inputs.
         // The join identity is a single 0-ary row constant expression.
         let insert = {
@@ -131,17 +133,17 @@ impl JoinBuilder {
         if insert {
             self.num_columns += input.arity();
             self.inputs.push(input);
+            self.input_types.push(type_info);
         }
     }
 
-    fn add_subjoin<I>(
+    fn add_subjoin(
         &mut self,
-        inputs: I,
+        inputs: Vec<MirRelationExpr>,
         mut equivalences: Vec<Vec<MirScalarExpr>>,
         predicates: Option<Vec<MirScalarExpr>>,
-    ) where
-        I: IntoIterator<Item = MirRelationExpr>,
-    {
+        mut join_input_types: InputTypeInfo,
+    ) {
         // Update and push all of the variables.
         for mut equivalence in equivalences.drain(..) {
             for expr in equivalence.iter_mut() {
@@ -166,12 +168,15 @@ impl JoinBuilder {
         }
 
         // Add all of the inputs.
-        for input in inputs {
-            self.add_input(input);
+        for (input, type_info) in inputs
+            .into_iter()
+            .zip(join_input_types.input_types.drain(..))
+        {
+            self.add_input(input, *type_info);
         }
     }
 
-    fn build(mut self) -> MirRelationExpr {
+    fn build(mut self) -> (MirRelationExpr, InputTypeInfo) {
         expr::canonicalize::canonicalize_equivalences(&mut self.equivalences);
 
         // If `inputs` is now empty or a singleton (without constraints),
@@ -182,6 +187,7 @@ impl JoinBuilder {
                 MirRelationExpr::constant(vec![vec![]], RelationType::empty())
             }
             1 if self.equivalences.is_empty() => {
+                self.input_types.take_first();
                 // if there are constraints, they probably should have
                 // been pushed down by predicate pushdown, but .. let's
                 // not re-write that code here.
@@ -196,8 +202,9 @@ impl JoinBuilder {
         };
 
         if !self.predicates.is_empty() {
+            self.input_types.prepare_to_prepend(&join);
             join = join.filter(self.predicates);
         }
-        join
+        (join, self.input_types)
     }
 }
