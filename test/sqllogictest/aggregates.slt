@@ -285,3 +285,14 @@ SELECT count()
 
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT sum(*)
+
+# Ensure int2 has its own max implementation
+query I
+SELECT max(column1) FROM (VALUES (1::int2), (-1::int2));
+----
+1
+
+query T
+SELECT pg_typeof(max(column1)) FROM (VALUES (1::int2), (-1::int2));
+----
+smallint

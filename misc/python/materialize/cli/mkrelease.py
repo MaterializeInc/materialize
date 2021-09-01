@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -167,6 +167,58 @@ def finish(create_branch: Optional[str], affect_remote: bool) -> None:
     incorporate_inner(
         create_branch, checkout, affect_remote, fetch=False, is_finish=True
     )
+
+
+@cli.command()
+@click.argument("start-time")
+def dashboard_links(start_time: str) -> None:
+    """
+    Create the Grafana dashboard links for the release qualification tests
+
+    START_TIME can be either an HH:MM (in 24 hour time) in which the current
+    day is assumed, or a full datetime specifier with the format YYYY-MM-DDThh:mm
+    """
+    try:
+        start = datetime.strptime(start_time, "%Y-%m-%dT%H:%M")
+    except Exception:
+        today = date.today().isoformat()
+        start_today = f"{today}T{start_time}"
+        try:
+            start = datetime.strptime(start_today, "%Y-%m-%dT%H:%M")
+        except Exception:
+            raise click.BadParameter(
+                "START_TIME must be a string with format HH:MM or YYYY-mm-ddTHH:MM"
+            )
+
+    tag = get_latest_tag(fetch=False)
+
+    end = start + timedelta(hours=26)
+    time_from = int(start.timestamp()) * 1000
+    time_to = int(end.timestamp()) * 1000
+
+    template = (
+        "https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?"
+        + "orgId=1&from={time_from}&to={time_to}&var-test={test}&var-purpose={purpose}"
+        + "&var-env=dev"  # &var-workflow=cloud-load-test
+    )
+    purpose = "load_test"
+
+    tests = []
+    for test in ("chbench", "kinesis", "billing-demo"):
+        url = template.format(
+            time_from=time_from, time_to=time_to, test=test, purpose=purpose
+        )
+        tests.append((test, url))
+
+    purpose = test = "chaos"
+    url = template.format(
+        time_from=time_from, time_to=time_to, test=test, purpose=purpose
+    )
+    tests.append((test, url))
+
+    print(f"Load tests for release v{tag}")
+    for test, url in tests:
+        print(f"* {test}: {url}")
 
 
 def release(
