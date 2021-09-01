@@ -18,13 +18,13 @@ use repr::{Datum, RelationType, ScalarType};
 /// This function:
 /// * ensures the same expression appears in only one equivalence class.
 /// * ensures the equivalence classes are sorted and dedupped.
-/// * simplifies expressions to involve the least number of nodes. This ensures
-///   that we only replace expressions by "even simpler" expressions and that
-///   repeated substitutions reduce the complexity of expressions and a fixed
-///   point is certain to be reached. Without this rule, we might repeatedly
-///   replace a simple expression with an equivalent complex expression
-///   containing that (or another replaceable) simple expression, and repeat
-///   indefinitely.
+/// * simplifies expressions to involve the least number of non-literal nodes.
+///   This ensures that we only replace expressions by "even simpler"
+///   expressions and that repeated substitutions reduce the complexity of
+///   expressions and a fixed point is certain to be reached. Without this
+///   rule, we might repeatedly replace a simple expression with an equivalent
+///   complex expression containing that (or another replaceable) simple
+///   expression, and repeat indefinitely.
 ///
 /// ```rust
 /// use expr::MirScalarExpr;
@@ -127,28 +127,34 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
 /// greater complexity.
 ///
 /// Currently, this method weighs literals as the least complex and weighs all
-/// other expressions by the number of nodes. In the future, we can change how
-/// complexity is ranked so that repeated substitutions would result in
-/// arriving at "better" fixed points. For example, we could try to improve
+/// other expressions by the number of non-literals. In the future, we can
+/// change how complexity is ranked so that repeated substitutions would result
+/// in arriving at "better" fixed points. For example, we could try to improve
 /// performance by ranking expressions by their estimated computation time.
 ///
 /// To ensure we arrive at a fixed point after repeated substitutions, valid
-/// complexity rankings must fulfill two properties:
-/// 1) If expressions `e1` and `e2` are such that
-///    `complexity(e1) <= complexity(e2)` then for all SQL functions `f`,
-///    `complexity(f(e1)) <= complexity(f(e2))`.
-/// 2) For any expression `e`, there does not exist a SQL function `f` such
-///    that `complexity(e) >= complexity(f(e))`.
+/// complexity rankings must fulfill the following property:
+/// For any expression `e`, there does not exist a SQL function `f` such
+/// that `complexity(e) >= complexity(f(e))`.
+///
+/// For ease of intuiting the fixed point that we will arrive at after
+/// repeated substitutions, it is nice but not required that complexity
+/// rankings additionally fulfill the following property:
+/// If expressions `e1` and `e2` are such that
+/// `complexity(e1) < complexity(e2)` then for all SQL functions `f`,
+/// `complexity(f(e1)) < complexity(f(e2))`.
 fn rank_complexity(expr: &MirScalarExpr) -> usize {
     if expr.is_literal() {
         // literals are the least complex
         return 0;
     }
-    let mut node_count = 1;
-    expr.visit(&mut |_| {
-        node_count += 1
+    let mut non_literal_count = 1;
+    expr.visit(&mut |e| {
+        if !e.is_literal() {
+            non_literal_count += 1
+        }
     });
-    node_count
+    non_literal_count
 }
 
 /// Canonicalize predicates of a filter.

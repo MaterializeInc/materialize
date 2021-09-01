@@ -432,3 +432,27 @@ canonicalize-join
 ]]
 ----
 [#0 4 (#1 + 4)]
+
+# functions on literals don't cause cycling
+canonicalize-join
+[
+    [#0 (4 int32)]
+    [(call_unary neg_int32 #0) (call_unary neg_int32 #1) (call_unary neg_int32 (4 int32))]
+    [(call_binary add_int32 #1 (call_unary neg_int32 #1)) #3]
+]
+----
+[#0 4]
+[#3 (#1 + -(4))]
+[-(#1) -(4)]
+
+canonicalize-join
+[
+    [#0 (4 int32)]
+    [(call_unary neg_int32 #0) (call_unary neg_int32 #1)]
+    [(call_unary neg_int32 #1) (call_unary neg_int32 (4 int32))]
+    [(call_binary add_int32 #1 (call_unary neg_int32 #1)) #3]
+]
+----
+[#0 4]
+[#3 (#1 + -(4))]
+[-(#1) -(4)]
