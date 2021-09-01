@@ -9,7 +9,7 @@ body {
 
 @supports (font-variation-settings: normal) {
   body {
-    font-family: "Inter var", sans-serif;
+    font-family: "Inter", sans-serif;
   }
 }
 
@@ -203,7 +203,7 @@ body {
   }
 
   code {
-      font-family: "Fira Code";
+      font-family: 'Fira Code', Courier, monospace;
       font-variant-ligatures: none;
   }
 
