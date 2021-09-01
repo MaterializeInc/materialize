@@ -18,11 +18,13 @@ use repr::{Datum, RelationType, ScalarType};
 /// This function:
 /// * ensures the same expression appears in only one equivalence class.
 /// * ensures the equivalence classes are sorted and dedupped.
-/// * simplifies expressions to involve the least number of function calls
-///   involving one or more arguments. This is to prevent infinite loops/100%
-///   CPU situations where transforms can cause the equivalence class to evolve
-///   from `[A f(A) f(C, A)]` to `[A f(A) g(C, A) g(C, f(A))]` and then to
-///   `[A f(A) g(C, A) g(C, f(A)) g(C, f(f(A)))]` and so on.
+/// * simplifies expressions to involve the least number of nodes. This ensures
+///   that we only replace expressions by "even simpler" expressions and that
+///   repeated substitutions reduce the complexity of expressions and a fixed
+///   point is certain to be reached. Without this rule, we might repeatedly
+///   replace a simple expression with an equivalent complex expression
+///   containing that (or another replaceable) simple expression, and repeat
+///   indefinitely.
 ///
 /// ```rust
 /// use expr::MirScalarExpr;
@@ -124,29 +126,29 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
 /// Gives a relative complexity ranking for an expression. Higher numbers mean
 /// greater complexity.
 ///
-/// This method weighs literals as the least complex and weighs all other
-/// expressions by the number of function calls involving one or more
-/// arguments. Function calls involving one or more arguments are synonymous
-/// with non-leaves in the expression.
+/// Currently, this method weighs literals as the least complex and weighs all
+/// other expressions by the number of nodes. In the future, we can change how
+/// complexity is ranked so that repeated substitutions would result in
+/// arriving at "better" fixed points. For example, we could try to improve
+/// performance by ranking expressions by their estimated computation time.
 ///
-/// As an example, this method will rank `coalesce(a, b, c, d)` as less complex
-/// than `(a + (b + c))` even though both are 5-node expressions.
+/// To ensure we arrive at a fixed point after repeated substitutions, valid
+/// complexity rankings must fulfill two properties:
+/// 1) If expressions `e1` and `e2` are such that
+///    `complexity(e1) <= complexity(e2)` then for all SQL functions `f`,
+///    `complexity(f(e1)) <= complexity(f(e2))`.
+/// 2) For any expression `e`, there does not exist a SQL function `f` such
+///    that `complexity(e) >= complexity(f(e))`.
 fn rank_complexity(expr: &MirScalarExpr) -> usize {
     if expr.is_literal() {
         // literals are the least complex
         return 0;
     }
-    // the number of non-leaves determine complexity of all other expressions.
-    let mut non_leaf_count = 1;
-    expr.visit(&mut |e: &MirScalarExpr| {
-        if e.is_literal() {
-        } else if let MirScalarExpr::Column(_) = e {
-        } else if let MirScalarExpr::CallNullary(_) = e {
-        } else {
-            non_leaf_count += 1
-        }
+    let mut node_count = 1;
+    expr.visit(&mut |_| {
+        node_count += 1
     });
-    non_leaf_count
+    node_count
 }
 
 /// Canonicalize predicates of a filter.
