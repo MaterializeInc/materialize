@@ -453,32 +453,9 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
-
-%1 =
-| Get %0 (l0)
-| Project (#0, #1, #0, #1)
-
-%2 =
-| Get %0 (l0)
-| Negate
-| Map 123, 234
-| Project (#2, #3)
-
-%3 =
-| Get %0 (l0)
-| Map 123, 234
-| Project (#2, #3)
-
-%4 =
-| Union %2 %3
-| Map null, null
-
-%5 =
-| Union %1 %4
-| Project (#0, #1)
 
 EOF
 
@@ -489,32 +466,9 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
-
-%1 =
-| Get %0 (l0)
-| Project (#0, #1, #0, #1)
-
-%2 =
-| Get %0 (l0)
-| Negate
-| Map 123, 234
-| Project (#2, #3)
-
-%3 =
-| Get %0 (l0)
-| Map 123, 234
-| Project (#2, #3)
-
-%4 =
-| Union %2 %3
-| Map null, null
-
-%5 =
-| Union %1 %4
-| Project (#0, #1)
 
 EOF
 

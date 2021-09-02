@@ -26,6 +26,22 @@ impl crate::Transform for UnionBranchCancellation {
     }
 }
 
+enum BranchCmp {
+    Equivalent,
+    Inverse,
+    Distinct,
+}
+
+impl BranchCmp {
+    fn inverse(self) -> Self {
+        match self {
+            BranchCmp::Equivalent => BranchCmp::Inverse,
+            BranchCmp::Inverse => BranchCmp::Equivalent,
+            BranchCmp::Distinct => BranchCmp::Distinct,
+        }
+    }
+}
+
 impl UnionBranchCancellation {
     /// Detects an input being unioned with its negation and cancels them out
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
@@ -34,22 +50,9 @@ impl UnionBranchCancellation {
                                      inputs: &[MirRelationExpr],
                                      start_idx: usize|
              -> Option<usize> {
-                match input {
-                    MirRelationExpr::Negate { input: inner_input } => {
-                        for i in start_idx..inputs.len() {
-                            if inputs[i] == **inner_input {
-                                return Some(i);
-                            }
-                        }
-                    }
-                    _ => {
-                        for i in start_idx..inputs.len() {
-                            if let MirRelationExpr::Negate { input: inner_input } = &inputs[i] {
-                                if *input == **inner_input {
-                                    return Some(i);
-                                }
-                            }
-                        }
+                for i in start_idx..inputs.len() {
+                    if let BranchCmp::Inverse = Self::compare_branches(input, &inputs[i]) {
+                        return Some(i);
                     }
                 }
                 None
@@ -70,5 +73,72 @@ impl UnionBranchCancellation {
             }
         }
         Ok(())
+    }
+
+    fn compare_branches(relation: &MirRelationExpr, other: &MirRelationExpr) -> BranchCmp {
+        match (relation, other) {
+            (
+                MirRelationExpr::Negate { input: input1 },
+                MirRelationExpr::Negate { input: input2 },
+            ) => Self::compare_branches(&*input1, &*input2),
+            (r, MirRelationExpr::Negate { input }) | (MirRelationExpr::Negate { input }, r) => {
+                Self::compare_branches(&*input, r).inverse()
+            }
+            (
+                MirRelationExpr::Map {
+                    input: input1,
+                    scalars: scalars1,
+                },
+                MirRelationExpr::Map {
+                    input: input2,
+                    scalars: scalars2,
+                },
+            ) => {
+                if scalars1 == scalars2 {
+                    Self::compare_branches(&*input1, &*input2)
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+            (
+                MirRelationExpr::Filter {
+                    input: input1,
+                    predicates: predicates1,
+                },
+                MirRelationExpr::Filter {
+                    input: input2,
+                    predicates: predicates2,
+                },
+            ) => {
+                if predicates1 == predicates2 {
+                    Self::compare_branches(&*input1, &*input2)
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+            (
+                MirRelationExpr::Project {
+                    input: input1,
+                    outputs: outputs1,
+                },
+                MirRelationExpr::Project {
+                    input: input2,
+                    outputs: outputs2,
+                },
+            ) => {
+                if outputs1 == outputs2 {
+                    Self::compare_branches(&*input1, &*input2)
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+            _ => {
+                if relation == other {
+                    BranchCmp::Equivalent
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+        }
     }
 }
