@@ -296,46 +296,50 @@ id          name
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-mz_arrangement_sharing
-mz_arrangement_sizes
+mz_arrangement_sharing_internal
+mz_arrangement_batches_internal
+mz_arrangement_records_internal
 mz_dataflow_channels
 mz_dataflow_operator_addresses
-mz_dataflow_operator_reachability
+mz_dataflow_operator_reachability_internal
 mz_dataflow_operators
 mz_kafka_broker_rtt
 mz_kafka_consumer_partitions
 mz_materialization_dependencies
 mz_materializations
-mz_message_counts
+mz_message_counts_received_internal
+mz_message_counts_sent_internal
 mz_peek_active
 mz_peek_durations
-mz_scheduling_elapsed
-mz_scheduling_histogram
-mz_scheduling_parks
+mz_scheduling_elapsed_internal
+mz_scheduling_histogram_internal
+mz_scheduling_parks_internal
 mz_source_info
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
-name                                 type   materialized  volatility  connector_type
-------------------------------------------------------------------------------------
-mz_arrangement_sharing               system true          volatile    local
-mz_arrangement_sizes                 system true          volatile    local
-mz_dataflow_channels                 system true          volatile    local
-mz_dataflow_operator_addresses       system true          volatile    local
-mz_dataflow_operator_reachability    system true          volatile    local
-mz_dataflow_operators                system true          volatile    local
-mz_kafka_broker_rtt                  system true          volatile    local
-mz_kafka_consumer_partitions         system true          volatile    local
-mz_materialization_dependencies      system true          volatile    local
-mz_materializations                  system true          volatile    local
-mz_message_counts                    system true          volatile    local
-mz_peek_active                       system true          volatile    local
-mz_peek_durations                    system true          volatile    local
-mz_scheduling_elapsed                system true          volatile    local
-mz_scheduling_histogram              system true          volatile    local
-mz_scheduling_parks                  system true          volatile    local
-mz_source_info                       system true          volatile    local
-mz_worker_materialization_frontiers  system true          volatile    local
+name                                          type   materialized  volatility  connector_type
+---------------------------------------------------------------------------------------------
+mz_arrangement_sharing_internal               system true          volatile    local
+mz_arrangement_batches_internal               system true          volatile    local
+mz_arrangement_records_internal               system true          volatile    local
+mz_dataflow_channels                          system true          volatile    local
+mz_dataflow_operator_addresses                system true          volatile    local
+mz_dataflow_operator_reachability_internal    system true          volatile    local
+mz_dataflow_operators                         system true          volatile    local
+mz_kafka_broker_rtt                           system true          volatile    local
+mz_kafka_consumer_partitions                  system true          volatile    local
+mz_materialization_dependencies               system true          volatile    local
+mz_materializations                           system true          volatile    local
+mz_message_counts_received_internal           system true          volatile    local
+mz_message_counts_sent_internal               system true          volatile    local
+mz_peek_active                                system true          volatile    local
+mz_peek_durations                             system true          volatile    local
+mz_scheduling_elapsed_internal                system true          volatile    local
+mz_scheduling_histogram_internal              system true          volatile    local
+mz_scheduling_parks_internal                  system true          volatile    local
+mz_source_info                                system true          volatile    local
+mz_worker_materialization_frontiers           system true          volatile    local
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -459,13 +463,17 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-42
+44
 
 > SHOW VIEWS FROM mz_catalog
+mz_arrangement_sharing
+mz_arrangement_sizes
 mz_catalog_names
 mz_dataflow_names
 mz_dataflow_operator_dataflows
+mz_dataflow_operator_reachability
 mz_materialization_frontiers
+mz_message_counts
 mz_objects
 mz_perf_arrangement_records
 mz_perf_dependency_frontiers
@@ -476,13 +484,20 @@ mz_records_per_dataflow
 mz_records_per_dataflow_global
 mz_records_per_dataflow_operator
 mz_relations
+mz_scheduling_elapsed
+mz_scheduling_histogram
+mz_scheduling_parks
 
 > SHOW FULL VIEWS FROM mz_catalog
 name                              type   materialized  volatility
 -----------------------------------------------------------------
+mz_arrangement_sharing            system false         volatile
+mz_arrangement_sizes              system false         volatile
 mz_dataflow_names                 system false         volatile
 mz_dataflow_operator_dataflows    system false         volatile
+mz_dataflow_operator_reachability system false         volatile
 mz_materialization_frontiers      system false         volatile
+mz_message_counts                 system false         volatile
 mz_objects                        system false         volatile
 mz_perf_arrangement_records       system false         volatile
 mz_perf_dependency_frontiers      system false         volatile
@@ -494,6 +509,9 @@ mz_records_per_dataflow_global    system false         volatile
 mz_records_per_dataflow_operator  system false         volatile
 mz_relations                      system false         volatile
 mz_catalog_names                  system false         volatile
+mz_scheduling_elapsed             system false         volatile
+mz_scheduling_histogram           system false         volatile
+mz_scheduling_parks               system false         volatile
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active

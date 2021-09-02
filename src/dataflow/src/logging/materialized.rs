@@ -11,16 +11,20 @@
 
 use std::time::Duration;
 
+use differential_dataflow::collection::AsCollection;
+use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::count::CountTotal;
 use log::error;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
-use timely::dataflow::operators::generic::operator::Operator;
+use timely::dataflow::operators::capture::Replay;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
+use crate::render::datum_vec::DatumVec;
 use expr::{GlobalId, SourceInstanceId};
 use repr::{Datum, Row, Timestamp};
 
@@ -153,16 +157,10 @@ pub fn construct<A: Allocate>(
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: mz logging", move |scope| {
-        use differential_dataflow::collection::AsCollection;
-        use timely::dataflow::operators::capture::Replay;
-        use timely::dataflow::operators::Map;
-
         let logs = Some(linked).replay_core(
             scope,
             Some(Duration::from_nanos(config.granularity_ns as u64)),
         );
-
-        use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
         let mut demux =
             OperatorBuilder::new("Materialize Logging Demux".to_string(), scope.clone());
@@ -174,11 +172,13 @@ pub fn construct<A: Allocate>(
         let (mut kafka_broker_rtt_out, kafka_broker_rtt) = demux.new_output();
         let (mut kafka_consumer_info_out, kafka_consumer_info) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
+        let (mut peek_duration_out, peek_duration) = demux.new_output();
         let (mut source_info_out, source_info) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             let mut active_dataflows = std::collections::HashMap::new();
+            let mut peek_stash = std::collections::HashMap::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
@@ -186,6 +186,7 @@ pub fn construct<A: Allocate>(
                 let mut kafka_broker_rtt = kafka_broker_rtt_out.activate();
                 let mut kafka_consumer_info = kafka_consumer_info_out.activate();
                 let mut peek = peek_out.activate();
+                let mut peek_duration = peek_duration_out.activate();
                 let mut source_info = source_info_out.activate();
 
                 input.for_each(|time, data| {
@@ -197,17 +198,17 @@ pub fn construct<A: Allocate>(
                     let mut kafka_broker_rtt_session = kafka_broker_rtt.session(&time);
                     let mut kafka_consumer_info_session = kafka_consumer_info.session(&time);
                     let mut peek_session = peek.session(&time);
+                    let mut peek_duration_session = peek_duration.session(&time);
                     let mut source_info_session = source_info.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time_ns = time.as_nanos() as Timestamp;
-                        let time_ms = (time_ns / 1_000_000) as Timestamp;
-                        let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
-                        let time_ms = time_ms as Timestamp;
+                        let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
+                            * granularity_ms) as Timestamp;
 
                         match datum {
                             MaterializedEvent::Dataflow(id, is_create) => {
-                                dataflow_session.give((id, worker, is_create, time_ns));
+                                let diff = if is_create { 1 } else { -1 };
+                                dataflow_session.give(((id, worker), time_ms, diff));
 
                                 // For now we know that these always happen in
                                 // the correct order, but it may be necessary
@@ -222,8 +223,11 @@ pub fn construct<A: Allocate>(
                                         Some(sources) => {
                                             for (source, worker) in sources {
                                                 let n = key.0;
-                                                dependency_session
-                                                    .give((n, source, worker, false, time_ns));
+                                                dependency_session.give((
+                                                    (n, source, worker),
+                                                    time_ms,
+                                                    -1,
+                                                ));
                                             }
                                         }
                                         None => error!(
@@ -235,7 +239,7 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             MaterializedEvent::DataflowDependency { dataflow, source } => {
-                                dependency_session.give((dataflow, source, worker, true, time_ns));
+                                dependency_session.give(((dataflow, source, worker), time_ms, 1));
                                 let key = (dataflow, worker);
                                 match active_dataflows.get_mut(&key) {
                                     Some(existing_sources) => {
@@ -318,7 +322,34 @@ pub fn construct<A: Allocate>(
                                 ));
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
-                                peek_session.give((peek, worker, is_install, time_ns))
+                                let key = (worker, peek.conn_id);
+                                if is_install {
+                                    peek_session.give(((peek, worker), time_ms, 1));
+                                    if peek_stash.contains_key(&key) {
+                                        error!(
+                                            "peek already registered: \
+                                             worker={}, connection_id: {}",
+                                            worker, key.1,
+                                        );
+                                    }
+                                    peek_stash.insert(key, time.as_nanos());
+                                } else {
+                                    peek_session.give(((peek, worker), time_ms, -1));
+                                    if let Some(start) = peek_stash.remove(&key) {
+                                        let elapsed_ns = time.as_nanos() - start;
+                                        peek_duration_session.give((
+                                            (key.0, elapsed_ns.next_power_of_two()),
+                                            time_ms,
+                                            1isize,
+                                        ));
+                                    } else {
+                                        error!(
+                                            "peek not yet registered: \
+                                             worker={}, connection_id: {}",
+                                            worker, key.1,
+                                        );
+                                    }
+                                }
                             }
                             MaterializedEvent::SourceInfo {
                                 source_name,
@@ -339,39 +370,24 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        let dataflow_current = dataflow
-            .map(move |(name, worker, is_create, time_ns)| {
-                let time_ms = (time_ns / 1_000_000) as Timestamp;
-                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
-                ((name, worker), time_ms, if is_create { 1 } else { -1 })
-            })
-            .as_collection()
-            .map({
-                move |(name, worker)| {
-                    Row::pack_slice(&[
-                        Datum::String(&name.to_string()),
-                        Datum::Int64(worker as i64),
-                    ])
-                }
-            });
+        let dataflow_current = dataflow.as_collection().map({
+            move |(name, worker)| {
+                Row::pack_slice(&[
+                    Datum::String(&name.to_string()),
+                    Datum::Int64(worker as i64),
+                ])
+            }
+        });
 
-        let dependency_current = dependency
-            .map(move |(dataflow, source, worker, is_create, time_ns)| {
-                let time_ms = (time_ns / 1_000_000) as Timestamp;
-                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
-                let diff = if is_create { 1 } else { -1 };
-                ((dataflow, source, worker), time_ms, diff)
-            })
-            .as_collection()
-            .map({
-                move |(dataflow, source, worker)| {
-                    Row::pack_slice(&[
-                        Datum::String(&dataflow.to_string()),
-                        Datum::String(&source.to_string()),
-                        Datum::Int64(worker as i64),
-                    ])
-                }
-            });
+        let dependency_current = dependency.as_collection().map({
+            move |(dataflow, source, worker)| {
+                Row::pack_slice(&[
+                    Datum::String(&dataflow.to_string()),
+                    Datum::String(&source.to_string()),
+                    Datum::Int64(worker as i64),
+                ])
+            }
+        });
 
         let frontier_current = frontier.as_collection();
 
@@ -420,24 +436,16 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        let peek_current = peek
-            .map(move |(name, worker, is_install, time_ns)| {
-                let time_ms = (time_ns / 1_000_000) as Timestamp;
-                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
-                let time_ms = time_ms as Timestamp;
-                ((name, worker), time_ms, if is_install { 1 } else { -1 })
-            })
-            .as_collection()
-            .map({
-                move |(peek, worker)| {
-                    Row::pack_slice(&[
-                        Datum::String(&format!("{}", peek.conn_id)),
-                        Datum::Int64(worker as i64),
-                        Datum::String(&peek.id.to_string()),
-                        Datum::Int64(peek.time as i64),
-                    ])
-                }
-            });
+        let peek_current = peek.as_collection().map({
+            move |(peek, worker)| {
+                Row::pack_slice(&[
+                    Datum::String(&format!("{}", peek.conn_id)),
+                    Datum::Int64(worker as i64),
+                    Datum::String(&peek.id.to_string()),
+                    Datum::Int64(peek.time as i64),
+                ])
+            }
+        });
 
         let source_info_current = source_info.as_collection().count().map({
             move |((name, id, pid), (offset, timestamp))| {
@@ -453,67 +461,15 @@ pub fn construct<A: Allocate>(
         });
 
         // Duration statistics derive from the non-rounded event times.
-        let peek_duration = peek
-            .unary(
-                timely::dataflow::channels::pact::Pipeline,
-                "Peeks",
-                |_, _| {
-                    let mut map = std::collections::HashMap::new();
-                    let mut vec = Vec::new();
-
-                    move |input, output| {
-                        input.for_each(|time, data| {
-                            data.swap(&mut vec);
-                            let mut session = output.session(&time);
-                            // Collapsing the contained `if` makes its structure
-                            // less clear.
-                            #[allow(clippy::collapsible_if)]
-                            for (peek, worker, is_install, time_ns) in vec.drain(..) {
-                                let key = (worker, peek.conn_id);
-                                if is_install {
-                                    if map.contains_key(&key) {
-                                        error!(
-                                            "peek already registered: \
-                                             worker={}, connection_id: {}",
-                                            worker, peek.conn_id,
-                                        );
-                                    }
-                                    map.insert(key, time_ns);
-                                } else {
-                                    if let Some(start) = map.remove(&key) {
-                                        let elapsed_ns = time_ns - start;
-                                        let time_ms = (time_ns / 1_000_000) as Timestamp;
-                                        let time_ms =
-                                            ((time_ms / granularity_ms) + 1) * granularity_ms;
-                                        session.give((
-                                            (key.0, elapsed_ns.next_power_of_two()),
-                                            time_ms,
-                                            1isize,
-                                        ));
-                                    } else {
-                                        error!(
-                                            "peek not yet registered: \
-                                             worker={}, connection_id: {}",
-                                            worker, peek.conn_id,
-                                        );
-                                    }
-                                }
-                            }
-                        });
-                    }
-                },
-            )
-            .as_collection()
-            .count_total()
-            .map({
-                move |((worker, pow), count)| {
-                    Row::pack_slice(&[
-                        Datum::Int64(worker as i64),
-                        Datum::Int64(pow as i64),
-                        Datum::Int64(count as i64),
-                    ])
-                }
-            });
+        let peek_duration = peek_duration.as_collection().count_total().map({
+            move |((worker, pow), count)| {
+                Row::pack_slice(&[
+                    Datum::Int64(worker as i64),
+                    Datum::Int64(pow as i64),
+                    Datum::Int64(count as i64),
+                ])
+            }
+        });
 
         let logs = vec![
             (
@@ -550,7 +506,6 @@ pub fn construct<A: Allocate>(
             ),
         ];
 
-        use differential_dataflow::operators::arrange::arrangement::Arrange;
         let mut result = std::collections::HashMap::new();
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
@@ -559,13 +514,15 @@ pub fn construct<A: Allocate>(
                 let trace = collection
                     .map({
                         let mut row_packer = Row::default();
+                        let mut datums = DatumVec::new();
                         move |row| {
-                            let datums = row.unpack();
+                            let datums = datums.borrow_with(&row);
                             row_packer.extend(key.iter().map(|k| datums[*k]));
+                            ::std::mem::drop(datums);
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange::<RowSpine<_, _, _, _>>()
+                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }

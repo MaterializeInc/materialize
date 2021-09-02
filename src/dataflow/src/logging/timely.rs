@@ -13,9 +13,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use differential_dataflow::difference::Abelian;
-use differential_dataflow::operators::count::CountTotal;
+use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::operators::join::Join;
+use differential_dataflow::operators::JoinCore;
 use differential_dataflow::{Collection, Data};
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -25,6 +26,7 @@ use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
+use crate::render::datum_vec::DatumVec;
 use dataflow_types::logging::LoggingConfig;
 use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
 
@@ -60,6 +62,7 @@ pub fn construct<A: Allocate>(
         let (mut parks_out, parks) = demux.new_output();
         let (mut messages_sent_out, messages_sent) = demux.new_output();
         let (mut messages_received_out, messages_received) = demux.new_output();
+        let (mut schedules_out, schedules) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -69,6 +72,7 @@ pub fn construct<A: Allocate>(
             let mut operates_data = HashMap::new();
             let mut channels_data = HashMap::new();
             let mut parks_data = HashMap::new();
+            let mut schedules_stash = std::collections::HashMap::new();
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
@@ -76,6 +80,7 @@ pub fn construct<A: Allocate>(
                 let mut parks = parks_out.activate();
                 let mut messages_sent = messages_sent_out.activate();
                 let mut messages_received = messages_received_out.activate();
+                let mut schedules = schedules_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -86,6 +91,7 @@ pub fn construct<A: Allocate>(
                     let mut parks_sesssion = parks.session(&time);
                     let mut messages_sent_session = messages_sent.session(&time);
                     let mut messages_received_session = messages_received.session(&time);
+                    let mut schedules_session = schedules.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos();
@@ -209,22 +215,37 @@ pub fn construct<A: Allocate>(
                             TimelyEvent::Messages(event) => {
                                 if event.is_send {
                                     messages_sent_session.give((
-                                        (
-                                            (event.channel, event.source),
-                                            (event.target, event.length),
-                                        ),
+                                        ((event.channel, event.source), event.target),
                                         time_ms,
-                                        1,
+                                        event.length as isize,
                                     ));
                                 } else {
                                     messages_received_session.give((
-                                        (
-                                            (event.channel, event.target),
-                                            (event.source, event.length),
-                                        ),
+                                        ((event.channel, event.target), event.source),
                                         time_ms,
-                                        1,
+                                        event.length as isize,
                                     ));
+                                }
+                            }
+                            TimelyEvent::Schedule(event) => {
+                                let key = (worker, event.id);
+                                match event.start_stop {
+                                    timely::logging::StartStop::Start => {
+                                        assert!(!schedules_stash.contains_key(&key));
+                                        schedules_stash.insert(key, time_ns);
+                                    }
+                                    timely::logging::StartStop::Stop => {
+                                        assert!(schedules_stash.contains_key(&key));
+                                        let start = schedules_stash
+                                            .remove(&key)
+                                            .expect("start event absent");
+                                        let elapsed_ns = time_ns - start;
+                                        schedules_session.give((
+                                            (key.1, worker),
+                                            time_ms,
+                                            elapsed_ns,
+                                        ));
+                                    }
                                 }
                             }
                             _ => {}
@@ -234,53 +255,8 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        use timely::dataflow::operators::generic::operator::Operator;
-
         // Duration statistics derive from the non-rounded event times.
-        let duration = logs
-            .flat_map(move |(ts, worker, x)| {
-                if let TimelyEvent::Schedule(event) = x {
-                    Some((ts, worker, event))
-                } else {
-                    None
-                }
-            })
-            // TODO: Should probably be an exchange with the correct key ...
-            .unary(
-                timely::dataflow::channels::pact::Pipeline,
-                "Schedules",
-                |_, _| {
-                    let mut map = std::collections::HashMap::new();
-                    let mut vec = Vec::new();
-
-                    move |input, output| {
-                        input.for_each(|time, data| {
-                            data.swap(&mut vec);
-                            let mut session = output.session(&time);
-                            for (ts, worker, event) in vec.drain(..) {
-                                let time_ns = ts.as_nanos();
-                                let key = (worker, event.id);
-                                match event.start_stop {
-                                    timely::logging::StartStop::Start => {
-                                        assert!(!map.contains_key(&key));
-                                        map.insert(key, time_ns);
-                                    }
-                                    timely::logging::StartStop::Stop => {
-                                        assert!(map.contains_key(&key));
-                                        let start = map.remove(&key).expect("start event absent");
-                                        let elapsed_ns = time_ns - start;
-                                        let time_ms = (time_ns / 1_000_000) as Timestamp;
-                                        let time_ms =
-                                            ((time_ms / granularity_ms) + 1) * granularity_ms;
-                                        session.give(((key.1, worker), time_ms, elapsed_ns));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                },
-            );
-
+        let duration = schedules;
         let operates = operates.as_collection();
 
         // Feedback delay for log flushing. This should be large enough that there is not a tight
@@ -288,42 +264,43 @@ pub fn construct<A: Allocate>(
         // of logging data around that we do not need. Effectively, a throughput v memory trade-off.
         let delay = std::time::Duration::from_nanos(10_000_000_000);
 
+        let operates_arranged = operates
+            .map(|(k, _)| (k, ()))
+            .arrange_named::<RowSpine<_, _, _, _>>("ArrangeByKey operates");
+
         // Accumulate the durations of each operator.
         // The first `map` exists so that we can semijoin effectively (it requires a key-val pair).
-        let mut elapsed = duration
+        let elapsed = duration
             .map(|(op_worker, t, d)| ((op_worker, ()), t, d as isize))
             .as_collection();
         // Remove elapsed times for operators not present in `operates`.
-        elapsed = thin_collection(elapsed, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
-        let elapsed = elapsed.map(|(op, ())| op).count_total();
+        let elapsed = thin_collection(elapsed, delay, |c| {
+            c.arrange_named::<RowSpine<_, _, _, _>>("ArrangeByKey elapsed")
+                .join_core(&operates_arranged, |k, v, _| Some((*k, *v)))
+        });
 
         // Accumulate histograms of execution times for each operator.
         let mut histogram = duration
             .map(|(op_worker, t, d)| ((op_worker, d.next_power_of_two()), t, 1isize))
             .as_collection();
         // Remove histogram measurements for operators not present in `operates`.
-        histogram = thin_collection(histogram, delay, |c| c.semijoin(&operates.map(|(k, _)| k)));
-        let histogram = histogram
-            .count_total()
-            .map(|((key, pow), count)| ((key), (pow, count)));
+        histogram = thin_collection(histogram, delay, |c| {
+            c.arrange_named::<RowSpine<_, _, _, _>>("ArrangeByKey histogram")
+                .join_core(&operates_arranged, |k, v, _| Some((*k, *v)))
+        });
 
         let elapsed = elapsed.map({
-            move |((id, worker), cnt)| {
-                Row::pack_slice(&[
-                    Datum::Int64(id as i64),
-                    Datum::Int64(worker as i64),
-                    Datum::Int64(cnt as i64),
-                ])
+            move |((id, worker), ())| {
+                Row::pack_slice(&[Datum::Int64(id as i64), Datum::Int64(worker as i64)])
             }
         });
 
         let histogram = histogram.map({
-            move |((id, worker), (pow, cnt))| {
+            move |((id, worker), pow)| {
                 Row::pack_slice(&[
                     Datum::Int64(id as i64),
                     Datum::Int64(worker as i64),
                     Datum::Int64(pow as i64),
-                    Datum::Int64(cnt as i64),
                 ])
             }
         });
@@ -343,59 +320,44 @@ pub fn construct<A: Allocate>(
 
         let parks = parks
             .map(|(w, d, r, t)| {
-                (
-                    (
-                        w,
-                        d.next_power_of_two(),
-                        r.map(|r| r.as_nanos().next_power_of_two()),
-                    ),
-                    t,
-                    1,
-                )
+                let r = r.map(|r| r.as_nanos().next_power_of_two());
+                let d = (w, d.next_power_of_two(), r);
+                (d, t, 1)
             })
             .as_collection()
-            .count_total()
             .map({
-                move |((w, d, r), c)| {
+                move |(w, d, r)| {
                     Row::pack_slice(&[
                         Datum::Int64(w as i64),
                         Datum::Int64(d as i64),
                         r.map(|r| Datum::Int64(r as i64)).unwrap_or(Datum::Null),
-                        Datum::Int64(c),
                     ])
                 }
             });
 
-        use differential_dataflow::operators::Count;
         let messages_sent = thin_collection(messages_sent.as_collection(), delay, |c| {
             c.semijoin(&channels.map(|(k, _, _, _, _)| k))
-        })
-        .map(|((channel, source), (target, count))| ((channel, source, target), count))
-        .explode(|(key, count)| Some((key, count as isize)))
-        .count();
+        });
 
         let messages_received = thin_collection(messages_received.as_collection(), delay, |c| {
             c.semijoin(&channels.map(|(k, _, _, _, _)| k))
-        })
-        .map(|((channel, target), (source, count))| ((channel, source, target), count))
-        .explode(|(key, count)| Some((key, count as isize)))
-        .count();
+        });
 
-        let messages = messages_received
-            .join_map(&messages_sent, |&key, &sent, &received| {
-                (key, sent, received)
-            })
-            .map({
-                move |((channel, source, target), sent, received)| {
-                    Row::pack_slice(&[
-                        Datum::Int64(channel as i64),
-                        Datum::Int64(source as i64),
-                        Datum::Int64(target as i64),
-                        Datum::Int64(sent as i64),
-                        Datum::Int64(received as i64),
-                    ])
-                }
-            });
+        let messages_received = messages_received.map(move |((channel, source), target)| {
+            Row::pack_slice(&[
+                Datum::Int64(channel as i64),
+                Datum::Int64(source as i64),
+                Datum::Int64(target as i64),
+            ])
+        });
+
+        let messages_sent = messages_sent.map(move |((channel, source), target)| {
+            Row::pack_slice(&[
+                Datum::Int64(channel as i64),
+                Datum::Int64(source as i64),
+                Datum::Int64(target as i64),
+            ])
+        });
 
         let channels = channels.map({
             move |((id, worker), source_node, source_port, target_node, target_port)| {
@@ -410,8 +372,6 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        use differential_dataflow::operators::arrange::arrangement::Arrange;
-
         // Restrict results by those logs that are meant to be active.
         let logs = vec![
             (LogVariant::Timely(TimelyLog::Operates), operates),
@@ -420,7 +380,11 @@ pub fn construct<A: Allocate>(
             (LogVariant::Timely(TimelyLog::Histogram), histogram),
             (LogVariant::Timely(TimelyLog::Addresses), addresses),
             (LogVariant::Timely(TimelyLog::Parks), parks),
-            (LogVariant::Timely(TimelyLog::Messages), messages),
+            (LogVariant::Timely(TimelyLog::MessagesSent), messages_sent),
+            (
+                LogVariant::Timely(TimelyLog::MessagesReceived),
+                messages_received,
+            ),
         ];
 
         let mut result = std::collections::HashMap::new();
@@ -431,13 +395,15 @@ pub fn construct<A: Allocate>(
                 let trace = collection
                     .map({
                         let mut row_packer = Row::default();
+                        let mut datums = DatumVec::new();
                         move |row| {
-                            let datums = row.unpack();
+                            let datums = datums.borrow_with(&row);
                             row_packer.extend(key.iter().map(|k| datums[*k]));
+                            ::std::mem::drop(datums);
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange::<RowSpine<_, _, _, _>>()
+                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }
