@@ -66,6 +66,9 @@ Wrap your release notes at the 80 character mark.
 
 - Fix a bug that prevented upgrading to 0.9.2 if the catalog referenced CSV file sources with headers.
 
+- Support the `USING CONFLUENT SCHEMA REGISTRY` schema option for
+  Protobuf-formatted sources.
+
 {{% version-header v0.9.2 %}}
 
 - The metrics scraping interval to populate
