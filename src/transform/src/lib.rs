@@ -306,7 +306,6 @@ impl Optimizer {
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
             Box::new(crate::cse::mfp::Mfp),
-            Box::new(crate::fusion::project::Project),
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.
             Box::new(crate::cse::relation_cse::RelationCSE),

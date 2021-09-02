@@ -86,6 +86,12 @@ opt
 | Constant
 
 # test that JoinImplementation properly lifts MapFilterProjects
+# The choice of MFP in the test is arbitrary; to ensure that MFP lifting is
+# being correctly tested, make sure that:
+# * the optimized result has at least one Map, one Filter, and one Project
+#   after the join.
+# * the project reorders columns in some way.
+# * the filter has at least one predicate that refers to a mapped column.
 
 opt
 (join
@@ -100,6 +106,7 @@ opt
 ----
 %0 =
 | Get x (u0)
+| Project (#0, #1)
 | Reduce group=(#0)
 | | agg sum(#1)
 | ArrangeBy (#0)
@@ -115,6 +122,8 @@ opt
 | Project (#5, #1, #0, #0, #3, #4)
 ----
 ----
+
+## MFPs don't get lifted if join is not using a pre-existing arrangement on that input.
 
 opt
 (join
@@ -134,6 +143,7 @@ opt
 
 %1 =
 | Get x (u0)
+| Project (#0, #1)
 | Reduce group=(#0)
 | | agg sum(#1)
 | ArrangeBy (#0)
@@ -144,6 +154,8 @@ opt
 | Project (#1, #2, #0, #2, #4)
 ----
 ----
+
+## join equivalence references column created by map being lifted.
 
 opt
 (join
@@ -159,6 +171,7 @@ opt
 ----
 %0 =
 | Get x (u0)
+| Project (#0, #1)
 | Reduce group=(#0)
 | | agg sum(#1)
 | ArrangeBy (#0)
@@ -168,8 +181,9 @@ opt
 
 %2 =
 | Get x (u0)
-| Reduce group=(#1)
-| | agg max(#2)
+| Project (#1, #2)
+| Reduce group=(#0)
+| | agg max(#1)
 | ArrangeBy (#0)
 
 %3 =

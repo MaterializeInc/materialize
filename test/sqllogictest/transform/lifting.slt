@@ -91,7 +91,8 @@ select a, b from t where a = 1 group by a, b
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#0 = 1)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | Map 1
 | Project (#1, #0)
 
@@ -104,6 +105,7 @@ select a, b from t where b = 1 group by a, b
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 1
 
@@ -318,6 +320,7 @@ explain select 123 from (select distinct 234 from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 | Map 123
 
@@ -328,6 +331,7 @@ explain select distinct 123 from (select 234 from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 | Map 123
 
@@ -338,6 +342,7 @@ explain select distinct 123 from (select distinct 234 from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 | Map 123
 
@@ -350,6 +355,7 @@ explain select * from (select distinct 123 from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 | Map 123
 
@@ -360,6 +366,7 @@ explain select distinct * from (select 123 from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 | Map 123
 
@@ -382,6 +389,7 @@ explain select 123 from (select distinct a from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 123
 | Project (#1)
@@ -393,6 +401,7 @@ explain select distinct 123 from (select a from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 | Map 123
 
@@ -403,6 +412,7 @@ explain select distinct 123 from (select distinct a from t);
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 | Map 123
 
@@ -415,6 +425,7 @@ explain select distinct a1.a, a1.literal from (select a, 123 as literal from t) 
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 123
 
@@ -425,6 +436,7 @@ explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) 
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 123
 
@@ -435,6 +447,7 @@ explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) 
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 123
 
@@ -445,6 +458,7 @@ explain select distinct a1.a, a1.literal from (select distinct a, 123 as literal
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 123
 
@@ -457,6 +471,7 @@ explain select distinct a1.a, 123 from (select a from t) as a1;
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 123
 
@@ -467,6 +482,7 @@ explain select distinct a1.a, 123 from (select distinct a from t) as a1;
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 123
 
@@ -479,9 +495,11 @@ explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal fr
 %0 =
 | Get materialize.public.t (u1)
 | Map (#0 + 1)
-| Distinct group=(#2)
+| Project (#2)
+| Distinct group=(#0)
 | Map (#0 + 2)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 
 EOF
 
@@ -491,7 +509,8 @@ explain select distinct a1.a, 123 from (select distinct a+1 as a, 234 as literal
 %0 =
 | Get materialize.public.t (u1)
 | Map (#0 + 1)
-| Distinct group=(#2)
+| Project (#2)
+| Distinct group=(#0)
 | Map 123
 
 EOF
@@ -502,9 +521,11 @@ explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 a
 %0 =
 | Get materialize.public.t (u1)
 | Map (#0 + 1)
-| Distinct group=(#2)
+| Project (#2)
+| Distinct group=(#0)
 | Map (#0 + 2)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | Map 123
 
 EOF
@@ -515,6 +536,7 @@ explain select distinct a1.a, a1.literal + 1 from (select distinct a, 123 as lit
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 124
 
@@ -554,6 +576,7 @@ select a, b, max(2), count(*) from t where b = 1 group by a, b;
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
+| Project (#0)
 | Reduce group=(#0)
 | | agg count(true)
 | Map 1, 2
@@ -568,6 +591,7 @@ select a, b, count(*), max(2) from t where b = 1 group by a, b;
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
+| Project (#0)
 | Reduce group=(#0)
 | | agg count(true)
 | Map 1, 2
@@ -582,6 +606,7 @@ select a, b, min(2), max(3) from t where b = 1 group by a, b;
 %0 =
 | Get materialize.public.t (u1)
 | Filter (#1 = 1)
+| Project (#0)
 | Distinct group=(#0)
 | Map 1, 2, 3
 
@@ -593,6 +618,7 @@ explain select min(1/x) from (select a as y, 0 as x from t);
 ----
 %0 = Let l0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 
 %1 =
@@ -620,6 +646,7 @@ explain select sum(1/x) from (select a as y, 0 as x from t);
 ----
 %0 = Let l0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 
 %1 =
@@ -656,6 +683,7 @@ explain select min(a) from t_pk where a between 38 and 195 and a = (select a fro
 
 %2 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
@@ -669,6 +697,7 @@ explain select min(a) from t_pk where a between 38 and 195 and a = (select a fro
 | Join %1 %3 (= #0 #2)
 | | implementation = Differential %3 %1.(#0)
 | Filter (#0 <= 195), (#0 >= 38)
+| Project (#0)
 | Reduce group=()
 | | agg min(#0)
 
@@ -705,6 +734,7 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 
 %2 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
@@ -717,6 +747,7 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 %4 = Let l1 =
 | Join %1 %3 (= #0 #1)
 | | implementation = Differential %3 %1.(#0)
+| Project (#0)
 | Reduce group=()
 | | agg min(#0)
 
@@ -786,6 +817,7 @@ explain select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) whe
 
 %2 =
 | Get materialize.public.t1 (u5)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)

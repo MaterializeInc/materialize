@@ -249,6 +249,7 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 
 %1 =
 | Get materialize.public.t1 (u1)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
@@ -266,6 +267,7 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 
 %4 =
 | Get %2 (l0)
+| Project ()
 | Distinct group=()
 | Negate
 
@@ -364,6 +366,7 @@ EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 
 %2 =
 | Get materialize.public.t2 (u3)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
@@ -393,6 +396,7 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 
 %2 =
 | Get materialize.public.t2 (u3)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)

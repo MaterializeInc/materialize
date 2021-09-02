@@ -244,6 +244,7 @@ EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 
 %1 =
 | Get materialize.public.t2 (u19)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
@@ -265,6 +266,7 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 
 %2 =
 | Get materialize.public.t2 (u19)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
@@ -292,7 +294,8 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 
 %3 =
 | Get %2 (l0)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %4 =
@@ -304,6 +307,7 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 | | implementation = DeltaQuery
 | |   delta %3 %4.(#0)
 | |   delta %4 %3.(#0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -467,6 +471,7 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
+| Project (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -515,6 +520,7 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
+| Project (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -563,6 +569,7 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Join %1 %2
 | | implementation = Differential %2 %1.()
 | Filter (#0 <= #1)
+| Project (#0)
 | Distinct group=(#0)
 
 %4 =

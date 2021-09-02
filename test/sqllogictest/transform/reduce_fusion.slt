@@ -25,7 +25,8 @@ EXPLAIN SELECT DISTINCT r0 FROM (SELECT DISTINCT f1 + 1 as r0, f0 FROM t)
 %0 =
 | Get materialize.public.t (u1)
 | Map (#1 + 1)
-| Distinct group=(#3)
+| Project (#3)
+| Distinct group=(#0)
 
 EOF
 
@@ -34,7 +35,8 @@ EXPLAIN SELECT DISTINCT f1 FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 
 EOF
 
@@ -43,6 +45,7 @@ EXPLAIN SELECT DISTINCT FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 
 EOF
@@ -52,6 +55,7 @@ EXPLAIN SELECT DISTINCT FROM (SELECT DISTINCT f0 FROM (SELECT DISTINCT f0, f1 FR
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project ()
 | Distinct group=()
 
 EOF
@@ -61,6 +65,7 @@ EXPLAIN SELECT f0 FROM (SELECT f0 FROM t GROUP BY f1 / 10, f0) GROUP BY f0;
 ----
 %0 =
 | Get materialize.public.t (u1)
+| Project (#0)
 | Distinct group=(#0)
 
 EOF
@@ -71,8 +76,10 @@ EXPLAIN SELECT f0 / 20 FROM (SELECT f0 / 10 AS f0 FROM t GROUP BY f0 / 10) GROUP
 %0 =
 | Get materialize.public.t (u1)
 | Map (#0 / 10)
-| Distinct group=(#3)
+| Project (#3)
+| Distinct group=(#0)
 | Map (#0 / 20)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 
 EOF

@@ -153,6 +153,7 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 
 %3 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
@@ -166,8 +167,9 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 | Join %1 %2 %4 (= #0 #3) (= #1 #5)
 | | implementation = Differential %4 %2.(#0) %1.(#0)
 | Filter (1997-08-25 00:00:00 = datetots(#4)), (#1 <= 195), (#1 >= 38)
+| Project (#1)
 | Reduce group=()
-| | agg min(#1)
+| | agg min(#0)
 
 %6 =
 | Get %5 (l1)

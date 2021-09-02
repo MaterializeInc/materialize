@@ -117,6 +117,7 @@ SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 %0 =
 | Get materialize.public.x (u1)
 | Filter (#0 = 3)
+| Project ()
 | Distinct group=()
 | Map 3
 

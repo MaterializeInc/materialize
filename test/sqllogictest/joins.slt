@@ -148,30 +148,31 @@ WHERE l1.la IN (
     )
 )
 ----
-%0 =
-| Get materialize.public.l (u1)
-| Distinct group=(#0)
-| ArrangeBy ()
-
-%1 =
+%0 = Let l0 =
 | Get materialize.public.l (u1)
 | Project (#0)
 
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+%1 =
+| Get %0 (l0)
+| Distinct group=(#0)
+| ArrangeBy ()
+
+%2 = Let l1 =
+| Join %1 %0
+| | implementation = Differential %0 %1.()
 
 %3 =
 | Get materialize.public.l (u1)
 
 %4 =
-| Get %2 (l0)
+| Get %2 (l1)
 | Filter (#0 = (#1 + 1))
 
 %5 =
-| Get %2 (l0)
+| Get %2 (l1)
 | Filter !(isnull(#1))
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %6 =
@@ -182,12 +183,14 @@ WHERE l1.la IN (
 %7 =
 | Join %5 %6 (= #0 (#1 + 1))
 | | implementation = Differential %6 %5.(#0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %8 =
 | Join %4 %7 (= #1 #2)
 | | implementation = Differential %4 %7.(#0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -327,6 +330,7 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -375,6 +379,7 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -421,6 +426,7 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 
 %3 = Let l1 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -544,6 +550,7 @@ EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id
 
 %2 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)

@@ -75,12 +75,14 @@ EXPLAIN PLAN FOR SELECT state, name FROM
 
 %2 =
 | Get %0 (l0)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | Negate
 
 %3 =
 | Get materialize.public.cities (u1)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 
 %4 =
 | Union %2 %3

@@ -165,7 +165,7 @@ build apply=ProjectionPushdown
 ----
 ----
 
-#Query not using the columns newly created by FlatMap
+# Query not using the columns newly created by FlatMap
 
 build apply=ProjectionPushdown
 (project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#1])
@@ -274,6 +274,7 @@ build apply=ProjectionPushdown
 ----
 %0 =
 | Get x (u0)
+| ArrangeBy (#0) (#1)
 | Project (#2)
 
 build apply=ProjectionPushdown
@@ -281,7 +282,7 @@ build apply=ProjectionPushdown
 ----
 %0 =
 | Get x (u0)
-| ArrangeBy (#1)
+| ArrangeBy (#0) (#1)
 | Project (#1)
 
 build apply=ProjectionPushdown
