@@ -186,7 +186,7 @@ LEFT OUTER JOIN managers ON employees.id = managers.manages;
 Right outer joins (also known as right joins) are simply the right-hand-side
 equivalent of left outer joins.
 
-Right outer joins (return all tuples from the right-hand-side table, and all
+Right outer joins return all tuples from the right-hand-side table, and all
 tuples from the left-hand-side table that match the join condition. Tuples on
 from the right-hand table that are not joined with a tuple from the left-hand
 table contain `NULL` wherever the left-hand table is referenced.

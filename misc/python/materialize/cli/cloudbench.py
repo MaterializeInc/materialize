@@ -30,6 +30,7 @@ from materialize.cli.scratch import (
 from materialize.scratch import (
     get_instances_by_tag,
     instance_typedef_tags,
+    name,
     print_instances,
     run_ssm,
 )
@@ -40,13 +41,13 @@ from materialize.scratch import (
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
-    for name, configure, run in [
+    for cmd_name, configure, run in [
         ("start", configure_start, start),
         ("check", configure_check, check),
         #        ("mine", mine.configure_parser, mine.run),
         #        ("destroy", destroy.configure_parser, destroy.run),
     ]:
-        s = subparsers.add_parser(name)
+        s = subparsers.add_parser(cmd_name)
         configure(s)
         s.set_defaults(run=run)
 
@@ -96,7 +97,11 @@ def configure_check(parser: argparse.ArgumentParser) -> None:
 def check(ns: argparse.Namespace) -> None:
     check_required_vars()
     bench_id = ns.bench_id[0]
-    insts = get_instances_by_tag("bench_id", bench_id)
+    insts = [
+        i
+        for i in get_instances_by_tag("bench_id", bench_id)
+        if (name(instance_typedef_tags(i)) or "").endswith("materialized")
+    ]
     if not insts:
         raise RuntimeError(f"No instances found for bench ID {bench_id}")
     results: List[Optional[BenchResult]] = [None for _ in insts]
@@ -160,9 +165,6 @@ def start(ns: argparse.Namespace) -> None:
 
     clusters = itertools.product(range(ns.trials), (git.rev_parse(rev) for rev in revs))
 
-    if ns.profile != "basic":
-        raise RuntimeError(f"Profile {ns.profile} is not implemented yet")
-
     bench_script = ns.bench_script
     script_name = bench_script[0]
     script_args = " ".join((shlex.quote(arg) for arg in bench_script[1:]))
@@ -172,27 +174,53 @@ def start(ns: argparse.Namespace) -> None:
         script_text = f.read()
 
     if script_is_py:
-        launch_script = f"""echo {shlex.quote(script_text)} > misc/python/materialize/cloudbench_script.py
+        mz_launch_script = f"""echo {shlex.quote(script_text)} > misc/python/materialize/cloudbench_script.py
 bin/pyactivate --dev -u -m materialize.cloudbench_script {script_args}
 echo $? > ~/bench_exit_code
 """
     else:
         assert False  # TODO
 
+    if ns.profile == "basic":
+        descs = [
+            scratch.MachineDesc(
+                name="materialized",
+                launch_script=mz_launch_script,
+                instance_type="r5a.4xlarge",
+                ami="ami-0b29b6e62f2343b46",
+                tags={},
+                size_gb=64,
+            ),
+        ]
+    elif ns.profile == "confluent":
+        confluent_launch_script = f"""bin/mzcompose --mz-find load-tests up"""
+        descs = [
+            scratch.MachineDesc(
+                name="materialized",
+                launch_script=mz_launch_script,
+                instance_type="r5a.4xlarge",
+                ami="ami-0b29b6e62f2343b46",
+                tags={},
+                size_gb=64,
+            ),
+            scratch.MachineDesc(
+                name="confluent",
+                launch_script=confluent_launch_script,
+                instance_type="r5a.4xlarge",
+                ami="ami-0b29b6e62f2343b46",
+                tags={},
+                size_gb=1000,
+            ),
+        ]
+    else:
+        raise RuntimeError(f"Profile {ns.profile} is not implemented yet")
+
     bench_id = util.nonce(8)
     # TODO - Do these in parallel
     launched = []
     for (i, rev) in clusters:
-        desc = scratch.MachineDesc(
-            name="materialized",
-            launch_script=launch_script,
-            instance_type="r5ad.4xlarge",
-            ami="ami-0b29b6e62f2343b46",
-            tags={},
-            size_gb=64,
-        )
         launched += scratch.launch_cluster(
-            descs=[desc],
+            descs=descs,
             nonce=f"{bench_id}-{i}-{rev}",
             subnet_id=DEFAULT_SUBNET_ID,
             security_group_id=DEFAULT_SG_ID,
