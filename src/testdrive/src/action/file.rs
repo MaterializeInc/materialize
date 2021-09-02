@@ -63,11 +63,15 @@ fn build_path(cmd: &mut BuiltinCommand) -> Result<String, String> {
 pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
     let path = build_path(&mut cmd)?;
     let compression = build_compression(&mut cmd)?;
+    let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
     cmd.args.done()?;
     let mut contents = vec![];
     for line in cmd.input {
         contents.extend(bytes::unescape(line.as_bytes())?);
         contents.push(b'\n');
+    }
+    if !trailing_newline {
+        contents.pop();
     }
     Ok(AppendAction {
         path,

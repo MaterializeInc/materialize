@@ -49,6 +49,8 @@ Wrap your release notes at the 80 character mark.
 {{% version-header v0.9.3 %}}
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
+- Trailing newline characters of POSIX compliant files will no longer be
+  decoded as an empty byte row {{% gh 8142 %}}
 
 - Support `ORDER BY` in aggregate functions.
 
