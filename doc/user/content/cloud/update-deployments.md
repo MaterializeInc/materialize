@@ -15,8 +15,6 @@ When a new version of Materialize Cloud is available, an **Update available** no
 
 If you haven't updated a deployment to the latest version in two weeks, we will apply the new version automatically.
 
-If the update is unsuccessful, you will see a **Downgrade** button. Click this to restore the previous Materialize version.
-
 ## Related topics
 
 * [Create Deployments](../create-deployments)
