@@ -374,7 +374,7 @@ fn get_decoder(
                     message_name,
                 }) => PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(
                     &descriptors,
-                    &message_name,
+                    message_name,
                 )),
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Text => PreDelimitedFormat::Text,

@@ -125,10 +125,25 @@ fn validate_proto_field_resolved<'a>(
     Ok(())
 }
 
-pub fn decode_descriptors(descriptors: &[u8]) -> Result<Descriptors> {
-    let proto = protobuf::Message::parse_from_bytes(descriptors)
-        .context("parsing encoded protobuf descriptors failed")?;
-    Ok(Descriptors::from_proto(&proto))
+pub fn decode_descriptors(descriptors: &[u8]) -> Result<DecodedDescriptors> {
+    let proto: protobuf::descriptor::FileDescriptorSet =
+        protobuf::Message::parse_from_bytes(descriptors)
+            .context("parsing encoded protobuf descriptors failed")?;
+    let name = proto
+        .file
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow!("file descriptor set must have file"))?
+        .get_message_type()
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow!("proto must have at least one message"))?
+        .get_name()
+        .to_owned();
+    Ok(DecodedDescriptors {
+        descriptors: Descriptors::from_proto(&proto),
+        first_message_name: format!(".{}", name),
+    })
 }
 
 pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
@@ -246,6 +261,18 @@ fn extract_row_into(
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+pub struct DecodedDescriptors {
+    pub descriptors: Descriptors,
+    // Confluent Schema Registry uses the first Message defined in a .proto file
+    // if multiple Messages are present. If the user is using protobuf + CSR,
+    // we should match this behavior.
+    //
+    // Link to internal discussion:
+    // https://materializeinc.slack.com/archives/C01CFKM1QRF/p1629920709406300
+    pub first_message_name: String,
 }
 
 fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {

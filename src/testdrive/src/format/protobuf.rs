@@ -21,6 +21,7 @@ pub enum MessageType {
     Struct,
     Measurement,
     SimpleId,
+    NestedOuter,
 }
 
 impl FromStr for MessageType {
@@ -32,6 +33,7 @@ impl FromStr for MessageType {
             "struct" => Ok(MessageType::Struct),
             "measurement" => Ok(MessageType::Measurement),
             "simpleid" => Ok(MessageType::SimpleId),
+            "nested" => Ok(MessageType::NestedOuter),
             _ => Err(format!(
                 "testdrive: unknown built-in protobuf message: {}",
                 s
