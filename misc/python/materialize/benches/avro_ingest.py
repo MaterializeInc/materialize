@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 from threading import Thread
+from typing import NamedTuple
 
 import psutil
 import psycopg2  # type: ignore
@@ -108,11 +109,21 @@ def mz_proc(cid: str) -> psutil.Process:
     raise RuntimeError("Couldn't find materialized pid")
 
 
-def print_stats(cid: str, wall_time: float) -> None:
+class PrevStats(NamedTuple):
+    wall_time: float
+    user_cpu: float
+    system_cpu: float
+
+
+def print_stats(cid: str, prev: PrevStats) -> PrevStats:
     proc = mz_proc(cid)
     memory = proc.memory_info()  # type: ignore
     cpu = proc.cpu_times()  # type: ignore
-    print(f"{memory.rss},{memory.vms},{cpu.user},{cpu.system},{wall_time}")
+    new_prev = PrevStats(time.time(), cpu.user, cpu.system)
+    print(
+        f"{memory.rss},{memory.vms},{new_prev.user_cpu - prev.user_cpu},{new_prev.system_cpu - prev.system_cpu},{new_prev.wall_time - prev.wall_time}"
+    )
+    return new_prev
 
 
 def main() -> None:
@@ -157,8 +168,8 @@ def main() -> None:
     cur.execute(
         "CREATE SOURCE s FROM KAFKA BROKER 'confluent:9093' TOPIC 'bench_data' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://confluent:8081'"
     )
+    prev = PrevStats(time.time(), 0.0, 0.0)
     for _ in range(ns.trials):
-        start_time = time.time()
         cur.execute("DROP VIEW IF EXISTS ct")
         cur.execute("CREATE MATERIALIZED VIEW ct AS SELECT count(*) FROM s")
         while True:
@@ -170,8 +181,7 @@ def main() -> None:
             except psycopg2.errors.SqlStatementNotYetComplete:
                 pass
             time.sleep(1)
-        done_time = time.time()
-        print_stats(cid, done_time - start_time)
+        prev = print_stats(cid, prev)
 
 
 if __name__ == "__main__":
