@@ -1,10 +1,12 @@
 ---
-title: "Materialize Cloud Quickstart"
-description: "Set up a Materialize Cloud account, create deployments, and connect to data sources."
+title: "Get Started"
+description: "Sign up for Materialize Cloud, create deployments, and connect to data sources."
 menu:
   main:
     parent: "cloud"
     weight: 2
+aliases:
+  - materialize-cloud-quickstart
 ---
 
 {{< cloud-notice >}}
@@ -13,7 +15,7 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 * Signing up for Materialize Cloud
 
-* Creating, and connecting to a Materialize Cloud deployment
+* Creating and connecting to a Materialize Cloud deployment
 
 * Connecting to a streaming data source
 
@@ -21,15 +23,23 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 * Exploring common patterns like joins and time-windowing
 
-## Sign up, deploy, connect
+## Sign up and deploy
 
 1. Sign up for Materialize Cloud at [https://cloud.materialize.com](https://cloud.materialize.com#signup).
 
-1. Once you [log in](https://cloud.materialize.com), you can use the [Deployments](https://cloud.materialize.com/deployments) page to create, upgrade, or destroy deployments, as well as to obtain the TLS certificates you need to install on your local machine to connect.
+    You can create a Materialize Cloud account or sign in with an existing Google or Github acccount. SSO and 2FA are also available for [enterprise accounts](account-limits).
 
-   By default, you can create up to two deployments. If you're interested in more, [let us know](../support)!
+1. If you've been invited to an existing workspace, you'll be taken to its [Deployments](https://cloud.materialize.com/deployments) page and can go directly to the [connection instructions](#connect). Otherwise, a dialog asks you to create a workspace. Enter a name and click **Next**.
 
-1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**. Materialize creates a deployment and assigns it a `name` and `hostname`.
+1. Materialize Cloud asks if you want to invite other users. For the purposes of this demonstration, just click **Skip**. (You can always add other users later.)
+
+1. On the **New deployment** tab, enter the name of your new deployment in the **Title**  field and click **Create**.
+
+    Names must be unique per workspace. By default, deployment size is set to **XSmall**, but as a free user you can also select **Small** from the dropdown. Larger sizes are also available to enterprise users.
+
+    After you create a deployment, you are taken to the [Deployments](https://cloud.materialize.com/deployments) page. When the deployment status message reads `Ready to receive connections`, you can proceed to the next step.
+
+## Connect
 
 {{% cloud-connection-details %}}
 

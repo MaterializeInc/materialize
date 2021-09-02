@@ -1,18 +1,22 @@
 ---
-title: "Destroy Deployments"
-description: "Destroy Materialize Cloud deployments."
+title: "Delete Deployments"
+description: "Delete Materialize Cloud deployments."
 menu:
   main:
     parent: "cloud"
     weight: 5
+aliases:
+  - destroy-deployments
 ---
 
 {{< cloud-notice >}}
 
-Destroying a deployment destroys all data and catalog items. They cannot be restored.
+This functionality is only available to [administrators](administer-workspace).
+
+Deleting a deployment destroys all data and catalog items. They cannot be restored.
 
 1. Go to the [Deployments](https://cloud.materialize.com/deployments) page.
-2. Click **Destroy deployment**.
+2. Click **Delete**.
 3. Enter the confirmation phrase, then click **Yes, destroy my deployment**.
 
 ## Related topics

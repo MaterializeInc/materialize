@@ -9,11 +9,15 @@ menu:
 
 {{< cloud-notice >}}
 
-On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**.
+This functionality is only available to [administrators](administer-workspace).
 
-Materialize creates the deployment and assigns it a name and hostname. This should only take about a minute and a half.
+1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **+New deployment**.
 
-The free version of Materialize Cloud allows two deployments. If you need more, please [contact us](../support).
+1. Select the desired deployment size and click **Create**.
+
+Materialize creates the deployment, automatically assigning it a name and hostname. The deployment should be ready for connections in about a minute and a half.
+
+The free version of Materialize Cloud allows two deployments. The enterprise version is unlimited.
 
 ## Related topics
 
