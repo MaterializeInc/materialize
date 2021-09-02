@@ -48,6 +48,7 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.9.3 %}}
 
+- Fix a bug that caused a panic when computing the `max` of `int2` values.
 
 {{% version-header v0.9.2 %}}
 
@@ -60,7 +61,10 @@ Wrap your release notes at the 80 character mark.
   objects with headers {{% gh 7507 %}}, and support CSV with headers in S3. {{%
   gh 7913 %}}
 
-- Fix a bug that caused a panic when computing the `max` of `int2` values.
+- Add the [`ALTER INDEX <name> SET ENABLED` syntax](/sql/alter-index) to
+  aid troubleshooting and recovery of Materialize instances. {{% gh 8079 %}}
+
+- Improve PostgreSQL catalog compatibility. {{% gh 7962 %}} {{% gh 8032 %}}
 
 {{% version-header v0.9.1 %}}
 
