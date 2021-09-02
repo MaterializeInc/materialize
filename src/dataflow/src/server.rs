@@ -435,8 +435,8 @@ where
                                         update.tracker_id.clone(),
                                         u.0.clone(),
                                         u.1.clone(),
-                                        "source".to_owned(),
-                                        format!("{:?}", u.2),
+                                        true,
+                                        u.2.as_any().downcast_ref::<Timestamp>().cloned(),
                                         u.3.clone() as isize,
                                     );
                                     massaged_source_updates.push((event.0, event.1, massaged));
@@ -448,8 +448,8 @@ where
                                         update.tracker_id.clone(),
                                         u.0.clone(),
                                         u.1.clone(),
-                                        "target".to_owned(),
-                                        format!("{:?}", u.2),
+                                        false,
+                                        u.2.as_any().downcast_ref::<Timestamp>().cloned(),
                                         u.3.clone() as isize,
                                     );
                                     massaged_source_updates.push((event.0, event.1, massaged));

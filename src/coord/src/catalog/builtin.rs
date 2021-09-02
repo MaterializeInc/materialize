@@ -490,34 +490,34 @@ pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3005),
 };
 
-pub const MZ_SCHEDULING_ELAPSED: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_elapsed",
+pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_elapsed_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
     id: GlobalId::System(3006),
     index_id: GlobalId::System(3007),
 };
 
-pub const MZ_SCHEDULING_HISTOGRAM: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_histogram",
+pub const MZ_SCHEDULING_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_histogram_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
     id: GlobalId::System(3008),
     index_id: GlobalId::System(3009),
 };
 
-pub const MZ_SCHEDULING_PARKS: BuiltinLog = BuiltinLog {
-    name: "mz_scheduling_parks",
+pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_scheduling_parks_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
     id: GlobalId::System(3010),
     index_id: GlobalId::System(3011),
 };
 
-pub const MZ_ARRANGEMENT_SIZES: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_sizes",
+pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_batches_internal",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Differential(DifferentialLog::Arrangement),
+    variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
     id: GlobalId::System(3012),
     index_id: GlobalId::System(3013),
 };
@@ -578,12 +578,20 @@ pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3027),
 };
 
-pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
-    name: "mz_message_counts",
+pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts_received_internal",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Timely(TimelyLog::Messages),
+    variant: LogVariant::Timely(TimelyLog::MessagesReceived),
     id: GlobalId::System(3028),
     index_id: GlobalId::System(3029),
+};
+
+pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts_sent_internal",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Timely(TimelyLog::MessagesSent),
+    id: GlobalId::System(3036),
+    index_id: GlobalId::System(3037),
 };
 
 pub const MZ_KAFKA_CONSUMER_PARTITIONS: BuiltinLog = BuiltinLog {
@@ -602,13 +610,23 @@ pub const MZ_KAFKA_BROKER_RTT: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3033),
 };
 
-pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinLog = BuiltinLog {
-    name: "mz_dataflow_operator_reachability",
+pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_dataflow_operator_reachability_internal",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
     id: GlobalId::System(3034),
     index_id: GlobalId::System(3035),
 };
+
+pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_records_internal",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
+    id: GlobalId::System(3038),
+    index_id: GlobalId::System(3039),
+};
+
+// Next id BuiltinLog: 3040
 
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
@@ -1018,18 +1036,29 @@ GROUP BY global_id",
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_operator",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_records_per_dataflow_operator AS SELECT
+    sql: "CREATE VIEW mz_records_per_dataflow_operator AS
+WITH records_cte AS (
+    SELECT
+        operator,
+        worker,
+        pg_catalog.count(*) AS records
+    FROM
+        mz_catalog.mz_arrangement_records_internal
+    GROUP BY
+        operator, worker
+)
+SELECT
     mz_dataflow_operator_dataflows.id,
     mz_dataflow_operator_dataflows.name,
     mz_dataflow_operator_dataflows.worker,
     mz_dataflow_operator_dataflows.dataflow_id,
-    mz_arrangement_sizes.records
+    records_cte.records
 FROM
-    mz_catalog.mz_arrangement_sizes,
+    records_cte,
     mz_catalog.mz_dataflow_operator_dataflows
 WHERE
-    mz_dataflow_operator_dataflows.id = mz_arrangement_sizes.operator AND
-    mz_dataflow_operator_dataflows.worker = mz_arrangement_sizes.worker",
+    mz_dataflow_operator_dataflows.id = records_cte.operator AND
+    mz_dataflow_operator_dataflows.worker = records_cte.worker",
     id: GlobalId::System(5006),
     needs_logs: true,
 };
@@ -1075,10 +1104,21 @@ GROUP BY
 pub const MZ_PERF_ARRANGEMENT_RECORDS: BuiltinView = BuiltinView {
     name: "mz_perf_arrangement_records",
     schema: MZ_CATALOG_SCHEMA,
-    sql:
-        "CREATE VIEW mz_perf_arrangement_records AS SELECT mas.worker, name, records, operator
-FROM mz_catalog.mz_arrangement_sizes mas
-LEFT JOIN mz_catalog.mz_dataflow_operators mdo ON mdo.id = mas.operator AND mdo.worker = mas.worker",
+    sql: "CREATE VIEW mz_perf_arrangement_records AS
+WITH records_cte AS (
+    SELECT
+        operator,
+        worker,
+        pg_catalog.count(*) AS records
+    FROM
+        mz_catalog.mz_arrangement_records_internal
+    GROUP BY
+        operator, worker
+)
+SELECT mas.worker, name, records, operator
+FROM
+    records_cte mas LEFT JOIN mz_catalog.mz_dataflow_operators mdo
+        ON mdo.id = mas.operator AND mdo.worker = mas.worker",
     id: GlobalId::System(5009),
     needs_logs: true,
 };
@@ -1361,6 +1401,135 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
     needs_logs: false,
 };
 
+pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
+    name: "mz_scheduling_elapsed",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_scheduling_elapsed AS SELECT
+    id, worker, pg_catalog.count(*) AS elapsed_ns
+FROM
+    mz_catalog.mz_scheduling_elapsed_internal
+GROUP BY
+    id, worker",
+    id: GlobalId::System(5027),
+    needs_logs: true,
+};
+
+pub const MZ_SCHEDULING_HISTOGRAM: BuiltinView = BuiltinView {
+    name: "mz_scheduling_histogram",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_scheduling_histogram AS SELECT
+    id, worker, duration_ns, pg_catalog.count(*) AS count
+FROM
+    mz_catalog.mz_scheduling_histogram_internal
+GROUP BY
+    id, worker, duration_ns",
+    id: GlobalId::System(5028),
+    needs_logs: true,
+};
+
+pub const MZ_SCHEDULING_PARKS: BuiltinView = BuiltinView {
+    name: "mz_scheduling_parks",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_scheduling_parks AS SELECT
+    worker, slept_for, requested, pg_catalog.count(*) AS count
+FROM
+    mz_catalog.mz_scheduling_parks_internal
+GROUP BY
+    worker, slept_for, requested",
+    id: GlobalId::System(5029),
+    needs_logs: true,
+};
+
+pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
+    name: "mz_message_counts",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_message_counts AS
+WITH sent_cte AS (
+    SELECT
+        channel,
+        source_worker,
+        target_worker,
+        pg_catalog.count(*) AS sent
+    FROM
+        mz_catalog.mz_message_counts_sent_internal
+    GROUP BY
+        channel, source_worker, target_worker
+),
+received_cte AS (
+    SELECT
+        channel,
+        source_worker,
+        target_worker,
+        pg_catalog.count(*) AS received
+    FROM
+        mz_catalog.mz_message_counts_received_internal
+    GROUP BY
+        channel, source_worker, target_worker
+)
+SELECT
+    sent_cte.channel,
+    sent_cte.source_worker,
+    sent_cte.target_worker,
+    sent_cte.sent,
+    received_cte.received
+FROM sent_cte JOIN received_cte USING (channel, source_worker, target_worker)",
+    id: GlobalId::System(5030),
+    needs_logs: true,
+};
+
+pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
+    name: "mz_dataflow_operator_reachability",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_dataflow_operator_reachability AS SELECT
+    address,
+    port,
+    worker,
+    update_type,
+    timestamp,
+    pg_catalog.count(*) as count
+FROM
+    mz_catalog.mz_dataflow_operator_reachability_internal
+GROUP BY address, port, worker, update_type, timestamp",
+    id: GlobalId::System(5031),
+    needs_logs: true,
+};
+
+pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
+    name: "mz_arrangement_sizes",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_arrangement_sizes AS
+WITH batches_cte AS (
+    SELECT
+        operator,
+        worker,
+        pg_catalog.count(*) AS batches
+    FROM
+        mz_catalog.mz_arrangement_batches_internal
+    GROUP BY
+        operator, worker
+),
+records_cte AS (
+    SELECT
+        operator,
+        worker,
+        pg_catalog.count(*) AS records
+    FROM
+        mz_catalog.mz_arrangement_records_internal
+    GROUP BY
+        operator, worker
+)
+SELECT
+    batches_cte.operator,
+    batches_cte.worker,
+    records_cte.records,
+    batches_cte.batches
+FROM batches_cte JOIN records_cte USING (operator, worker)",
+    id: GlobalId::System(5032),
+    needs_logs: true,
+};
+
+// Next id BuiltinView: 5033
+
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
     id: -1,
@@ -1419,24 +1588,26 @@ lazy_static! {
             Builtin::Type(&TYPE_UUID_ARRAY),
             Builtin::Type(&TYPE_VARCHAR),
             Builtin::Type(&TYPE_VARCHAR_ARRAY),
+            Builtin::Log(&MZ_ARRANGEMENT_SHARING),
+            Builtin::Log(&MZ_ARRANGEMENT_BATCHES_INTERNAL),
+            Builtin::Log(&MZ_ARRANGEMENT_RECORDS_INTERNAL),
+            Builtin::Log(&MZ_DATAFLOW_CHANNELS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
-            Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
-            Builtin::Log(&MZ_DATAFLOW_CHANNELS),
-            Builtin::Log(&MZ_SCHEDULING_ELAPSED),
-            Builtin::Log(&MZ_SCHEDULING_HISTOGRAM),
-            Builtin::Log(&MZ_SCHEDULING_PARKS),
-            Builtin::Log(&MZ_ARRANGEMENT_SIZES),
-            Builtin::Log(&MZ_ARRANGEMENT_SHARING),
+            Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
+            Builtin::Log(&MZ_KAFKA_BROKER_RTT),
+            Builtin::Log(&MZ_KAFKA_CONSUMER_PARTITIONS),
             Builtin::Log(&MZ_MATERIALIZATIONS),
             Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
-            Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
+            Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
+            Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
             Builtin::Log(&MZ_PEEK_ACTIVE),
             Builtin::Log(&MZ_PEEK_DURATIONS),
+            Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
+            Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
+            Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
             Builtin::Log(&MZ_SOURCE_INFO),
-            Builtin::Log(&MZ_MESSAGE_COUNTS),
-            Builtin::Log(&MZ_KAFKA_CONSUMER_PARTITIONS),
-            Builtin::Log(&MZ_KAFKA_BROKER_RTT),
+            Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),
@@ -1461,20 +1632,26 @@ lazy_static! {
             Builtin::Table(&MZ_PROMETHEUS_READINGS),
             Builtin::Table(&MZ_PROMETHEUS_HISTOGRAMS),
             Builtin::Table(&MZ_PROMETHEUS_METRICS),
-            Builtin::View(&MZ_RELATIONS),
-            Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),
+            Builtin::View(&MZ_ARRANGEMENT_SIZES),
             Builtin::View(&MZ_DATAFLOW_NAMES),
             Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
-            Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
+            Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
+            Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
+            Builtin::View(&MZ_MESSAGE_COUNTS),
+            Builtin::View(&MZ_OBJECTS),
+            Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
+            Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
+            Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
+            Builtin::View(&MZ_PERF_PEEK_DURATIONS_BUCKET),
+            Builtin::View(&MZ_PERF_PEEK_DURATIONS_CORE),
             Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
             Builtin::View(&MZ_RECORDS_PER_DATAFLOW_GLOBAL),
-            Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
-            Builtin::View(&MZ_PERF_PEEK_DURATIONS_CORE),
-            Builtin::View(&MZ_PERF_PEEK_DURATIONS_BUCKET),
-            Builtin::View(&MZ_PERF_PEEK_DURATIONS_AGGREGATES),
-            Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
-            Builtin::View(&MZ_PERF_DEPENDENCY_FRONTIERS),
+            Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
+            Builtin::View(&MZ_RELATIONS),
+            Builtin::View(&MZ_SCHEDULING_ELAPSED),
+            Builtin::View(&MZ_SCHEDULING_HISTOGRAM),
+            Builtin::View(&MZ_SCHEDULING_PARKS),
             Builtin::View(&PG_NAMESPACE),
             Builtin::View(&PG_CLASS),
             Builtin::View(&PG_DATABASE),

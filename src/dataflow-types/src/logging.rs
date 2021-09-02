@@ -38,13 +38,15 @@ pub enum TimelyLog {
     Histogram,
     Addresses,
     Parks,
-    Messages,
+    MessagesSent,
+    MessagesReceived,
     Reachability,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub enum DifferentialLog {
-    Arrangement,
+    ArrangementBatches,
+    ArrangementRecords,
     Sharing,
 }
 
@@ -95,16 +97,12 @@ impl LogVariant {
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
                 .with_named_column("id", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("elapsed_ns", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_named_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
                 .with_named_column("id", ScalarType::Int64.nullable(false))
                 .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("duration_ns", ScalarType::Int64.nullable(false))
-                .with_named_column("count", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_named_column("duration_ns", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
                 .with_named_column("id", ScalarType::Int64.nullable(false))
@@ -122,17 +120,17 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
                 .with_named_column("worker", ScalarType::Int64.nullable(false))
                 .with_named_column("slept_for", ScalarType::Int64.nullable(false))
-                .with_named_column("requested", ScalarType::Int64.nullable(false))
-                .with_named_column("count", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2]),
+                .with_named_column("requested", ScalarType::Int64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::Messages) => RelationDesc::empty()
+            LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
                 .with_named_column("channel", ScalarType::Int64.nullable(false))
                 .with_named_column("source_worker", ScalarType::Int64.nullable(false))
-                .with_named_column("target_worker", ScalarType::Int64.nullable(false))
-                .with_named_column("sent", ScalarType::Int64.nullable(false))
-                .with_named_column("received", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2]),
+                .with_named_column("target_worker", ScalarType::Int64.nullable(false)),
+
+            LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::empty()
+                .with_named_column("channel", ScalarType::Int64.nullable(false))
+                .with_named_column("source_worker", ScalarType::Int64.nullable(false))
+                .with_named_column("target_worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
                 .with_named_column(
@@ -146,22 +144,13 @@ impl LogVariant {
                 .with_named_column("port", ScalarType::Int64.nullable(false))
                 .with_named_column("worker", ScalarType::Int64.nullable(false))
                 .with_named_column("update_type", ScalarType::String.nullable(false))
-                .with_named_column("timestamp", ScalarType::String.nullable(false))
-                .with_named_column("count", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2, 4]),
+                .with_named_column("timestamp", ScalarType::Int64.nullable(true)),
 
-            LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
+            LogVariant::Differential(DifferentialLog::ArrangementBatches)
+            | LogVariant::Differential(DifferentialLog::ArrangementRecords)
+            | LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
                 .with_named_column("operator", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("records", ScalarType::Int64.nullable(false))
-                .with_named_column("batches", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1]),
-
-            LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
-                .with_named_column("operator", ScalarType::Int64.nullable(false))
-                .with_named_column("worker", ScalarType::Int64.nullable(false))
-                .with_named_column("count", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1]),
+                .with_named_column("worker", ScalarType::Int64.nullable(false)),
 
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationDesc::empty()
                 .with_named_column("name", ScalarType::String.nullable(false))
@@ -259,7 +248,8 @@ impl LogVariant {
                 vec![(0, 0), (1, 1)],
             )],
             LogVariant::Timely(TimelyLog::Parks) => vec![],
-            LogVariant::Timely(TimelyLog::Messages) => vec![
+            LogVariant::Timely(TimelyLog::MessagesReceived)
+            | LogVariant::Timely(TimelyLog::MessagesSent) => vec![
                 (
                     LogVariant::Timely(TimelyLog::Channels),
                     vec![(0, 0), (1, 1)],
@@ -270,11 +260,9 @@ impl LogVariant {
                 ),
             ],
             LogVariant::Timely(TimelyLog::Reachability) => vec![],
-            LogVariant::Differential(DifferentialLog::Arrangement) => vec![(
-                LogVariant::Timely(TimelyLog::Operates),
-                vec![(0, 0), (1, 1)],
-            )],
-            LogVariant::Differential(DifferentialLog::Sharing) => vec![(
+            LogVariant::Differential(DifferentialLog::ArrangementBatches)
+            | LogVariant::Differential(DifferentialLog::ArrangementRecords)
+            | LogVariant::Differential(DifferentialLog::Sharing) => vec![(
                 LogVariant::Timely(TimelyLog::Operates),
                 vec![(0, 0), (1, 1)],
             )],
