@@ -1,28 +1,28 @@
 ---
-title: "Materialize Cloud Account Limits"
-description: "Learn Materialize Cloud's account limits and its differences from the installed version."
+title: "Cloud Account Limits"
+description: "Learn what features Materialize Cloud offers."
 menu:
   main:
     parent: "cloud"
-    weight: 3
+    weight:
 ---
 
 {{< cloud-notice >}}
 
-Materialize Cloud offers two deployment sizes for free trials, with additional processing and RAM available for a premium upgrade. We use AWS as the cloud service provider and the us-east-1 datacenter.
+Materialize Cloud offers two deployment sizes for free trials, with additional processing and memory capacity available for enterprise accounts. We use AWS as the cloud service provider and the us-east-1 datacenter.
 
-Trials last for 30 days or until you max out the available resources for free deployments, whichever comes first. Accounts and deployments will be deleted 14 days after your trial expires unless you have upgraded to a premium version.
+Trials last for 30 days or until you max out the available resources for free deployments, whichever comes first. Accounts and deployments may be deleted 14 days after your trial expires unless you have upgraded to an enterprise account.
 
 ## Materialize Cloud specifications
 
 Deployment Size | XS | S | M | L | XL
 ----------------|----|---|---|---|---
-**Level**  | free  | free  | premium  | premium  |  premium
-**No. deployments** | 2  | 2  | ?? | ??  |  ??
+**Level**  | free  | free  | enterprise  | enterprise  |  enterprise
 **CPUs**  | 4vCPUs  | 8vCPUs  | 16vCPUs  |  32vCPUs  |  64vCPUs
 **RAM**  |  32GB | 64GB  | 128GB  | 256GB  |  512GB
 **R5B instances**  | r5.xlarge   | r5.2xlarge  | r5.4xlarge   | r5.8xlarge   |  r5.16xlarge
-**Auth**  | Github, Google  | Github, Google  | Github, Google, 2FA, SSO  | Github, Google, 2FA, SSO   |  Github, Google, 2FA, SSO
+
+If you already know you need a larger deployment size for your use case, [contact us](../support).
 
 ## Materialize Cloud vs. Materialized installed
 
@@ -45,3 +45,4 @@ Sources | Materialize Cloud | Materialize local install
 
 * [What Is Materialize?](/overview/what-is-materialize)
 * [Connect to Materialize Cloud](../connect-to-materialize-cloud)
+* [Materialize Cloud Support](../support)
