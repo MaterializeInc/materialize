@@ -43,12 +43,17 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 
 ## New &amp; updated
 
+<<<<<<< HEAD
 - [Version 0.9.1 Release Notes](release-notes/#v0.9.1)
+=======
+- [Version 0.9.2 Release Notes](release-notes/#v0.9.2)
+>>>>>>> cloud-account-limits
 - [Change Data Capture with Postgres Guide](/guides/cdc-postgres/)
 - [Kafka Sink Topic Reuse (Exactly-Once) Sinks Guide](/guides/reuse-topic-for-kafka-sink)
 
 ## Learn more
 
 - [**Install Materialize**](./install) to try it out.
-- [**What is Materialize?**](./overview/what-is-materialize) to learn more about what Materialize does and how it works.
+- [**What is Materialize?**](./overview/what-is-materialize) to learn
+more about what Materialize does and how it works.
 - [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.
