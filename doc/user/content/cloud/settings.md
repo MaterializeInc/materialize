@@ -9,7 +9,7 @@ menu:
 
 {{< cloud-notice >}}
 
-The settings enable you to update your personal details and change your password, and enable [administrative users](../adminster-worskpace) to change workspace names and add or remove new users.
+The settings enable you to update your personal details and change your password, and enable [administrative users](../administer-workspace) to change workspace names and add or remove new users.
 
 To go to your Materialize Cloud settings, click on the user icon in the right of the top navbar.
 
