@@ -30,17 +30,21 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 1. Once your account has been created, [log in](https://cloud.materialize.com).
 
-1. If you've been invited to an existing workspace, you'll be taken to its [Deployments](https://cloud.materialize.com/deployments) page and can go directly to the [connection instructions](#connect). Otherwise, a dialog asks you to create a workspace. Enter a name and click **Next**.
+1. If you've been invited to an existing workspace, you can go directly to the [connection instructions](#connect). Otherwise, a dialog asks you to create a workspace. Enter a name and click **Next**.
 
 1. Materialize Cloud asks if you want to invite other users. For the purposes of this demonstration, just click **Skip**. (You can always add other users later.)
 
 1. On the **New deployment** tab, enter the name of your new deployment in the **Title**  field and click **Create**.
 
-    Names must be unique per workspace. By default, deployment size is set to **XSmall**, but as a free user you can also select **Small** from the dropdown. Larger sizes are also available to enterprise users. If you know in advance that you need a larger size for your use case, [contact us](../support) to discuss the details.
+    Names must be unique per workspace. By default, deployment size is set to **XSmall**, but as a free user you can also select **Small** from the dropdown. Larger sizes are also available to enterprise users.
+
+    If you know in advance that you need a larger size for your use case, [contact us](../support) to discuss the details.
 
     After you create a deployment, you are taken to the [Deployments](https://cloud.materialize.com/deployments) page. When the deployment status message reads `Ready to receive connections`, you can proceed to the next step.
 
 ## Connect
+
+To connect to Materialize, you'll need to install TLS certificates on your local machine to connect. You can obtain these on the [Deployments](https://cloud.materialize.com/deployments) page.
 
 {{% cloud-connection-details %}}
 

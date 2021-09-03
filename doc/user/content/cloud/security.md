@@ -1,5 +1,5 @@
 ---
-title: "Materialize Cloud Security"
+title: "Security"
 description: "Learn about Materialize Cloud security options."
 menu:
   main:
@@ -10,7 +10,7 @@ menu:
 {{< cloud-notice >}}
 
 Currently, Materialize Cloud secures your connections by enforcing that clients connect via
-[TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security). In the future, the managed
+[TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security). In the future, the enterprise
 Materialize Cloud product will offer additional security options, such as:
 
 * Two-factor authentication

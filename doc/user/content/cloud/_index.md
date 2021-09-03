@@ -26,6 +26,6 @@ Sign up for Materialize Cloud →
 
 ## Where to go next
 
-* [Get Started](../get-started) - Learn how to create and connect to Materialize Cloud deployments.
-* [Account Limits](../account-limits) - A summary of the default limits for your cloud instance and the differences between Materialize Cloud and the Materialize installed executable version.
-* [What is Materialize?](/overview/what-is-materialize) - An overview of what Materialize does and how it works (not Cloud-specific)
+* [Get Started](./get-started-with-materialize-cloud) - Learn how to create and connect to Materialize Cloud deployments.
+* [Account Limits](./account-limits) - A summary of the default limits for your cloud instance and the differences between Materialize Cloud and the Materialize installed executable version.
+* [What is Materialize?](/overview/what-is-materialize) - An overview of what Materialize does and how it works (not Cloud-specific).

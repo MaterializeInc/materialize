@@ -1,5 +1,5 @@
 ---
-title: "Deployments Page"
+title: "Cloud Deployments"
 description: "View and manage your Materialize Cloud deployments."
 menu:
   main:
