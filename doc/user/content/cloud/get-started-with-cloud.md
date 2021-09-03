@@ -1,12 +1,13 @@
 ---
 title: "Get Started with Cloud"
-description: "Sign up for Materialize Cloud, create deployments, and connect to data sources."
+description: "Connect to Cloud and create dataflows."
 menu:
   main:
     parent: "cloud"
     weight: 2
 aliases:
   - materialize-cloud-quickstart
+  - materialize-cloud-get-started
 ---
 
 {{< cloud-notice >}}
@@ -48,6 +49,8 @@ This guide walks you through getting started with Materialize Cloud, from settin
 Materialize allows you to work with streaming data from multiple external sources using nothing but standard SQL. You write arbitrarily complex queries; Materialize takes care of maintaining the results automatically up to date with very low latency.
 
 We'll start with some sample real-time data from a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) receiving the latest market orders for a given marketplace.
+
+We're working on ways for you to create dataflows inside the Cloud interface, but for now, you'll be working in the Terminal where you're connected to Materialize.
 
 1. Let's create a [PubNub source](/sql/create-source/json-pubnub/#pubnub-source-details) that connects to the market orders channel with a subscribe key:
 

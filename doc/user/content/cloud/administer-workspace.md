@@ -5,10 +5,14 @@ menu:
   main:
     parent: "cloud"
     weight:
+aliases:
+  - edit-deployments
 ---
 
 {{< cloud-notice >}}
 
 Administrative users can set up shared workspaces and add and remove other users.
 
-To make changes to a workspace, click on the profile icon in the top navbar and select **Settings**.
+To change a deployment name or size, click on the dots menu and select **Edit**.
+
+To add users or remove users, click on the profile icon in the top navbar and select **Settings**.

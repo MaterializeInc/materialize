@@ -3,7 +3,7 @@ title: "Create Deployments"
 description: "Create Materialize Cloud deployments."
 menu:
   main:
-    parent: "cloud"
+    parent: 
     weight:
 ---
 

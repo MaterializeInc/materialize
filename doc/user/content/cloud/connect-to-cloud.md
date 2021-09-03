@@ -5,6 +5,8 @@ menu:
   main:
     parent: "cloud"
     weight:
+aliases:
+  - connect-to-materialize-cloud
 ---
 
 {{< cloud-notice >}}
