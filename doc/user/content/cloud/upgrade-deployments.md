@@ -4,7 +4,7 @@ description: "Learn how to perform version upgrades and create and destroy deplo
 menu:
   main:
     parent: "cloud"
-    weight: 6
+    weight: 
 ---
 
 {{< cloud-notice >}}
@@ -16,4 +16,4 @@ If the upgrade is unsuccessful, you will see a **Downgrade** button. Click this 
 ## Related topics
 
 * [Create Deployments](../create-deployments)
-* [Destroy Deployments](../destroy-deployments)
+* [Delete Deployments](../delete-deployments)

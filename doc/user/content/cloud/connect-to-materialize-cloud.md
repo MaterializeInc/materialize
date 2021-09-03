@@ -4,7 +4,7 @@ description: "You can connect Materialize Cloud to streaming data sources."
 menu:
   main:
     parent: "cloud"
-    weight: 4
+    weight:
 ---
 
 {{< cloud-notice >}}

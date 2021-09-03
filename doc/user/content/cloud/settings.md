@@ -1,10 +1,10 @@
 ---
 title: "Cloud Settings"
-description: "Learn about Materialize Cloud security options."
+description: "Change Materialize Cloud profile or password."
 menu:
   main:
     parent: "cloud"
-    weight: 8
+    weight:
 ---
 
 {{< cloud-notice >}}

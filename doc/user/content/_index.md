@@ -21,7 +21,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 {{< linkbox icon="bulb" title="Key Concepts" >}}
 - [Materialize overview](/overview/what-is-materialize)
 - [API components](/overview/api-components)
-- [Materialize Cloud overview](/cloud/what-is-materialize-cloud)
+- [Materialize Cloud overview](/cloud/)
 {{</ linkbox >}}
 {{< linkbox icon="touch" title="Demos" >}}
 - [Real-time analytics dashboard](/demos/business-intelligence)

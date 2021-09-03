@@ -4,7 +4,7 @@ description: "Learn about Materialize Cloud security options."
 menu:
   main:
     parent: "cloud"
-    weight: 7
+    weight:
 ---
 
 {{< cloud-notice >}}

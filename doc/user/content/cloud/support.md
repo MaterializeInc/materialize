@@ -4,7 +4,7 @@ description: "Get help for Materialize Cloud"
 menu:
   main:
     parent: "cloud"
-    weight: 9
+    weight:
 ---
 
 Contact us at <a href="mailto:support@materialize.com">support@materialize.com</a> for help with any of the following:

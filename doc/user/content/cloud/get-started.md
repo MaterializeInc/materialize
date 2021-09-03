@@ -1,5 +1,5 @@
 ---
-title: "Get Started"
+title: "Get Started with Cloud"
 description: "Sign up for Materialize Cloud, create deployments, and connect to data sources."
 menu:
   main:
@@ -27,7 +27,7 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 1. Sign up for Materialize Cloud at [https://cloud.materialize.com](https://cloud.materialize.com#signup).
 
-    You can create a Materialize Cloud account or sign in with an existing Google or Github acccount. SSO and 2FA are also available for [enterprise accounts](account-limits).
+1. Once your account has been created, [log in](https://cloud.materialize.com).
 
 1. If you've been invited to an existing workspace, you'll be taken to its [Deployments](https://cloud.materialize.com/deployments) page and can go directly to the [connection instructions](#connect). Otherwise, a dialog asks you to create a workspace. Enter a name and click **Next**.
 
@@ -35,7 +35,7 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 1. On the **New deployment** tab, enter the name of your new deployment in the **Title**  field and click **Create**.
 
-    Names must be unique per workspace. By default, deployment size is set to **XSmall**, but as a free user you can also select **Small** from the dropdown. Larger sizes are also available to enterprise users.
+    Names must be unique per workspace. By default, deployment size is set to **XSmall**, but as a free user you can also select **Small** from the dropdown. Larger sizes are also available to enterprise users. If you know in advance that you need a larger size for your use case, [contact us](../support) to discuss the details.
 
     After you create a deployment, you are taken to the [Deployments](https://cloud.materialize.com/deployments) page. When the deployment status message reads `Ready to receive connections`, you can proceed to the next step.
 

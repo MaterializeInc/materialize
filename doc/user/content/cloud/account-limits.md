@@ -4,7 +4,7 @@ description: "Learn Materialize Cloud's account limits and its differences from 
 menu:
   main:
     parent: "cloud"
-    weight: 3
+    weight:
 ---
 
 {{< cloud-notice >}}
