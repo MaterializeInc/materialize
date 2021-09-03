@@ -4,7 +4,7 @@ description: "Get help for Materialize Cloud"
 menu:
   main:
     parent: "cloud"
-    weight: 8
+    weight: 
 ---
 
 Join our [community Slack](https://materialize.com/s/chat) for help with troubleshooting problems or to offer feedback or make bug reports or feature requests.
