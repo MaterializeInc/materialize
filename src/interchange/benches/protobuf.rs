@@ -11,7 +11,7 @@ use criterion::{black_box, Criterion, Throughput};
 use protobuf::Message;
 use serde_protobuf::descriptor::Descriptors;
 
-use interchange::protobuf::Decoder;
+use interchange::protobuf::decode::Decoder;
 
 use gen::benchmark::{Connector, Record, Value};
 
