@@ -43,11 +43,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 
 ## New &amp; updated
 
-<<<<<<< HEAD
-- [Version 0.9.1 Release Notes](release-notes/#v0.9.1)
-=======
 - [Version 0.9.2 Release Notes](release-notes/#v0.9.2)
->>>>>>> cloud-account-limits
 - [Change Data Capture with Postgres Guide](/guides/cdc-postgres/)
 - [Kafka Sink Topic Reuse (Exactly-Once) Sinks Guide](/guides/reuse-topic-for-kafka-sink)
 
