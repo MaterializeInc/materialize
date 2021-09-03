@@ -18,4 +18,4 @@ If you haven't updated a deployment to the latest version in two weeks, we will 
 ## Related topics
 
 * [Create Deployments](../create-deployments)
-* [Destroy Deployments](../destroy-deployments)
+* [Destroy Deployments](../delete-deployments)

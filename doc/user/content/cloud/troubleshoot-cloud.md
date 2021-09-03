@@ -30,7 +30,7 @@ These log messages serve several purposes:
     troubleshooting issues
 
 We recommend that you monitor for messages at the [`WARN` or `ERROR`
-levels](#levels). Every message at either of these levels indicates an issue
+levels](/ops/monitoring/#levels). Every message at either of these levels indicates an issue
 that must be investigated and resolved.
 
 For more information, see [Monitoring: Logging](/ops/monitoring/#logging)

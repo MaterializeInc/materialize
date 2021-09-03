@@ -26,7 +26,7 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 ## Sign up and deploy
 
-1. Sign up for Materialize Cloud at [https://cloud.materialize.com](https://cloud.materialize.com#signup).
+1. Sign up for Materialize Cloud at [https://cloud.materialize.com](https://cloud.materialize.com/signup/).
 
 1. Once your account has been created, [log in](https://cloud.materialize.com).
 
@@ -215,7 +215,7 @@ In Materialize, [temporal filters](/guides/temporal-filters/) allow you to defin
 
 That's it! You just got up and running with Materialize Cloud to create your first materialized view and try out some common patterns enabled by SQL on streams. We encourage you to continue exploring the PubNub source using the supported [SQL commands](/sql/), and read through the following resources for a more comprehensive overview:
 
-* [Connect to Materialize Cloud](../connect-to-materialize-cloud)
+* [Connect to Materialize Cloud](../connect-to-cloud)
 * [Materialize Cloud Account Limits](../account-limits)
 * [Materialize Architecture](../../overview/architecture)
 * [`CREATE SOURCE`](../../sql/create-source)

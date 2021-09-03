@@ -23,7 +23,7 @@ This functionality is only available to [administrators](../administer-workspace
 
 ## Related topics
 
-* [Connect to Materialize](../connect-to-materialize-cloud)
+* [Connect to Materialize](../connect-to-cloud)
 * [Delete Deployments](../delete-deployments)
 * [Materialize Cloud Account Limits](../account-limits)
 * [Upgrade Deployments](../upgrade-deployments)

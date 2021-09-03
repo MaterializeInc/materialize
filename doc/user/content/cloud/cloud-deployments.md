@@ -15,6 +15,6 @@ Administrators can also:
 
 * [Create new deployments](../create-deployments)
 * [Delete deployments](../delete-deployments)
-* [Edit deployments](../edit-deployments)
+* [Edit deployments](../administer-workspace)
 * [Update deployments](../update-deployments)
 * [View logs and troubleshoot](../troubleshoot-cloud)

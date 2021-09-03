@@ -44,5 +44,5 @@ Sources | Materialize Cloud | Materialize local install
 ## Related topics
 
 * [What Is Materialize?](/overview/what-is-materialize)
-* [Connect to Materialize Cloud](../connect-to-materialize-cloud)
+* [Connect to Materialize Cloud](../connect-to-cloud)
 * [Materialize Cloud Support](../support)
