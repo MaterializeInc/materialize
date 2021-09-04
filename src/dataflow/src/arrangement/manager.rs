@@ -14,8 +14,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::{OrdKeyBatch, OrdValBatch};
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
+use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::trace::TraceReader;
 use ore::metric;
 use ore::metrics::{
@@ -28,12 +27,13 @@ use dataflow_types::DataflowError;
 use expr::GlobalId;
 use repr::{Diff, Row, Timestamp};
 
-pub type OrdKeySpine<K, T, R, O = usize> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R, O>>>;
-pub type OrdValSpine<K, V, T, R, O = usize> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R, O>>>;
-pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
-pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
-pub type ErrsHandle = TraceKeyHandle<DataflowError, Timestamp, Diff>;
+pub type RowSpine<K, V, T, R, O = usize> = OrdValSpine<K, V, T, R, O>;
+pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
+
+pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
+pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
+pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
+pub type ErrsHandle = TraceErrHandle<DataflowError, Timestamp, Diff>;
 
 use prometheus::core::{AtomicF64, AtomicU64};
 use std::time::Instant;

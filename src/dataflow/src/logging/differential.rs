@@ -18,6 +18,7 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
+use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use repr::{Datum, Row, Timestamp};
 
@@ -114,7 +115,7 @@ pub fn construct<A: Allocate>(
             (LogVariant::Differential(DifferentialLog::Sharing), sharing),
         ];
 
-        use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+        use differential_dataflow::operators::arrange::arrangement::Arrange;
         let mut result = std::collections::HashMap::new();
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
@@ -129,7 +130,7 @@ pub fn construct<A: Allocate>(
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange_by_key()
+                    .arrange::<RowSpine<_, _, _, _>>()
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }

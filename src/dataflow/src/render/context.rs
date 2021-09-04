@@ -13,8 +13,7 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::BatchReader;
@@ -27,28 +26,23 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
+use crate::arrangement::manager::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 use dataflow_types::{DataflowDescription, DataflowError};
 use expr::{GlobalId, Id, MapFilterProject, MirScalarExpr};
 use repr::{Diff, Row, RowArena};
 
-/// A trace handle for key-only data.
-pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
-
-/// A trace handle for key-value data.
-pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-
 // Local type definition to avoid the horror in signatures.
-pub type Arrangement<S, V> = Arranged<S, TraceValHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
+pub type Arrangement<S, V> = Arranged<S, TraceRowHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
 pub type ErrArrangement<S> =
-    Arranged<S, TraceKeyHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
+    Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
 pub type ArrangementImport<S, V, T> = Arranged<
     S,
-    TraceEnter<TraceFrontier<TraceValHandle<V, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
+    TraceEnter<TraceFrontier<TraceRowHandle<V, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
 pub type ErrArrangementImport<S, T> = Arranged<
     S,
     TraceEnter<
-        TraceFrontier<TraceKeyHandle<DataflowError, T, Diff>>,
+        TraceFrontier<TraceErrHandle<DataflowError, T, Diff>>,
         <S as ScopeParent>::Timestamp,
     >,
 >;
@@ -430,10 +424,10 @@ where
                 });
 
                 use differential_dataflow::operators::arrange::Arrange;
-                let oks = oks_keyed.arrange_named::<OrdValSpine<Row, Row, _, _>>(&name);
+                let oks = oks_keyed.arrange_named::<RowSpine<Row, Row, _, _>>(&name);
                 let errs = errs
                     .concat(&errs_keyed)
-                    .arrange_named::<OrdKeySpine<_, _, _>>(&format!("{}-errors", name));
+                    .arrange_named::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
