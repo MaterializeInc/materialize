@@ -314,7 +314,12 @@ async fn publish_kafka_schemas(
     value_schema_type: ccsr::SchemaType,
 ) -> Result<(Option<i32>, i32), CoordError> {
     let value_schema_id = ccsr
-        .publish_schema(&format!("{}-value", topic), value_schema, value_schema_type)
+        .publish_schema(
+            &format!("{}-value", topic),
+            value_schema,
+            value_schema_type,
+            &[],
+        )
         .await
         .context("unable to publish value schema to registry in kafka sink")?;
 
@@ -323,7 +328,7 @@ async fn publish_kafka_schemas(
             CoordError::Unstructured(anyhow!("expected schema type for key schema"))
         })?;
         Some(
-            ccsr.publish_schema(&format!("{}-key", topic), key_schema, key_schema_type)
+            ccsr.publish_schema(&format!("{}-key", topic), key_schema, key_schema_type, &[])
                 .await
                 .context("unable to publish key schema to registry in kafka sink")?,
         )

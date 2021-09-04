@@ -52,12 +52,17 @@ async fn test_client() -> Result<(), anyhow::Error> {
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 0);
 
     let schema_v1_id = client
-        .publish_schema("ccsr-test-schema", schema_v1, SchemaType::Avro)
+        .publish_schema("ccsr-test-schema", schema_v1, SchemaType::Avro, &[])
         .await?;
     assert!(schema_v1_id > 0);
 
     match client
-        .publish_schema("ccsr-test-schema", schema_v2_incompat, SchemaType::Avro)
+        .publish_schema(
+            "ccsr-test-schema",
+            schema_v2_incompat,
+            SchemaType::Avro,
+            &[],
+        )
         .await
     {
         Err(PublishError::IncompatibleSchema) => (),
@@ -71,7 +76,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
     }
 
     let schema_v2_id = client
-        .publish_schema("ccsr-test-schema", schema_v2, SchemaType::Avro)
+        .publish_schema("ccsr-test-schema", schema_v2, SchemaType::Avro, &[])
         .await?;
     assert!(schema_v2_id > 0);
     assert!(schema_v2_id > schema_v1_id);
@@ -79,7 +84,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
     assert_eq!(
         schema_v1_id,
         client
-            .publish_schema("ccsr-test-schema", schema_v1, SchemaType::Avro)
+            .publish_schema("ccsr-test-schema", schema_v1, SchemaType::Avro, &[])
             .await?
     );
 
@@ -101,7 +106,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 1);
 
     client
-        .publish_schema("ccsr-test-another-schema", "\"int\"", SchemaType::Avro)
+        .publish_schema("ccsr-test-another-schema", "\"int\"", SchemaType::Avro, &[])
         .await?;
     assert_eq!(count_schemas(&client, "ccsr-test-").await?, 2);
 
@@ -126,10 +131,10 @@ async fn test_client_errors() -> Result<(), anyhow::Error> {
 
     // Publish-specific errors.
     match client
-        .publish_schema("ccsr-test-schema", "blah", SchemaType::Avro)
+        .publish_schema("ccsr-test-schema", "blah", SchemaType::Avro, &[])
         .await
     {
-        Err(PublishError::InvalidSchema) => (),
+        Err(PublishError::InvalidSchema { .. }) => (),
         res => panic!("expected PublishError::InvalidSchema, got {:?}", res),
     }
 
@@ -154,7 +159,7 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     )?;
 
     match client_graceful
-        .publish_schema("foo", "bar", SchemaType::Avro)
+        .publish_schema("foo", "bar", SchemaType::Avro, &[])
         .await
     {
         Err(PublishError::Server {
@@ -197,7 +202,7 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     )?;
 
     match client_crash
-        .publish_schema("foo", "bar", SchemaType::Avro)
+        .publish_schema("foo", "bar", SchemaType::Avro, &[])
         .await
     {
         Err(PublishError::Server {

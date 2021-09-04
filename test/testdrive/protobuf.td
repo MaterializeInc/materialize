@@ -96,7 +96,7 @@ $ kafka-ingest format=protobuf topic=messages-partitioned message=struct timesta
   WITH (start_offset=[1,0])
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
 
-$ kafka-create-topic topic=tester
+$ kafka-create-topic topic=simple
 
 $ set schema
 syntax = "proto3";
@@ -105,23 +105,64 @@ message SimpleId {
   string id = 1;
 }
 
-$ kafka-ingest topic=tester format=protobuf schema=${schema} message=simpleid publish=true
+$ kafka-ingest topic=simple format=protobuf schema=${schema} message=simpleid publish=true
 {"id": "a"}
 {"id": "b"}
 
-> CREATE MATERIALIZED SOURCE tester
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tester-${testdrive.seed}'
+> CREATE MATERIALIZED SOURCE simple
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-simple-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> SHOW COLUMNS FROM tester
+> SHOW COLUMNS FROM simple
 id         true   text
 mz_offset  false  bigint
 
-> SELECT * FROM tester
+> SELECT * FROM simple
 id   mz_offset
 ------------
 a    1
 b    2
+
+$ kafka-create-topic topic=imported
+
+$ set schema
+syntax = "proto3";
+
+import 'simple.proto';
+
+message Imported {
+    SimpleId id = 1;
+}
+
+$ http-request method=POST url=${testdrive.schema-registry-url}subjects/testdrive-imported-${testdrive.seed}-value/versions content-type=application/json
+{
+    "schema": "syntax = \"proto3\"; import 'simple.proto'; message Imported { SimpleId id = 1; }",
+    "schemaType": "PROTOBUF",
+    "references": [{
+        "name": "simple.proto",
+        "subject": "testdrive-simple-${testdrive.seed}-value",
+        "version": 1
+    }]
+}
+
+$ kafka-ingest topic=imported format=protobuf schema=${schema} message=imported
+{"id": {"id": "a"}}
+{"id": {"id": "b"}}
+
+! CREATE MATERIALIZED SOURCE imported_csr
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+unsupported protobuf schema reference simple.proto
+
+> CREATE MATERIALIZED SOURCE meep
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-imported-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Imported' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+
+> SELECT * FROM meep
+id                  mz_offset
+--------------------------
+"{\"id\":\"a\"}"   1
+"{\"id\":\"b\"}"   2
 
 $ kafka-create-topic topic=nested-proto
 
@@ -165,7 +206,6 @@ message NestedInner {
 
   Binary binary = 11;
 }
-
 
 $ kafka-ingest topic=nested-proto format=protobuf schema=${schema} message=nested publish=true
 {"double": 1.1, "float": 2.2, "int32": -100, "int64": 200, "sint32": 987234, "sint64": 129387981723, "sfixed32": 123, "sfixed64": 567, "bool": true, "string": "hey", "bytes": [102, 111, 111], "binary": "ZERO", "nested": []}
