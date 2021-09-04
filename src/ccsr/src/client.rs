@@ -258,7 +258,7 @@ pub enum PublishError {
     /// requirements.
     IncompatibleSchema,
     /// The provided schema was invalid.
-    InvalidSchema,
+    InvalidSchema { message: String },
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
     /// An internal server error occured.
@@ -271,7 +271,7 @@ impl From<UnhandledError> for PublishError {
             UnhandledError::Transport(err) => PublishError::Transport(err),
             UnhandledError::Api { code, message } => match code {
                 409 => PublishError::IncompatibleSchema,
-                42201 => PublishError::InvalidSchema,
+                42201 => PublishError::InvalidSchema { message },
                 _ => PublishError::Server { code, message },
             },
         }
@@ -282,7 +282,7 @@ impl Error for PublishError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             PublishError::IncompatibleSchema
-            | PublishError::InvalidSchema
+            | PublishError::InvalidSchema { .. }
             | PublishError::Server { .. } => None,
             PublishError::Transport(err) => Some(err),
         }
@@ -298,7 +298,7 @@ impl fmt::Display for PublishError {
                 f,
                 "schema being registered is incompatible with an earlier schema"
             ),
-            PublishError::InvalidSchema => write!(f, "input schema is an invalid avro schema"),
+            PublishError::InvalidSchema { message } => write!(f, "schema: {}", message),
             PublishError::Transport(err) => write!(f, "transport: {}", err),
             PublishError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)
