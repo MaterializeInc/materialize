@@ -1,6 +1,7 @@
 ---
 title: "Cloud Deployments"
 description: "View and manage your Materialize Cloud deployments."
+disable_toc: true
 menu:
   main:
     parent: "cloud"

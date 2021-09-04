@@ -1,6 +1,7 @@
 ---
 title: "Administer a Workspace"
 description: "Add or remove users to a Materialize Cloud workspace and set up workspace security."
+disable_toc: true
 menu:
   main:
     parent: "cloud"

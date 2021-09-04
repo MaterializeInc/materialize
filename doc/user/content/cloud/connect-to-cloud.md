@@ -1,6 +1,7 @@
 ---
 title: "Connect to Cloud"
 description: "You can connect Materialize Cloud to streaming data sources."
+disable_toc: true
 menu:
   main:
     parent: "cloud"

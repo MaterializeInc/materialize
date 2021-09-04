@@ -1,6 +1,8 @@
 ---
 title: "Security"
 description: "Learn about Materialize Cloud security options."
+disable_toc: true
+disable_toc: true
 menu:
   main:
     parent: "cloud"
