@@ -616,6 +616,7 @@ async fn main() -> anyhow::Result<()> {
                     &format!("{}-value", args.topic),
                     &value_schema.to_string(),
                     ccsr::SchemaType::Avro,
+                    &[],
                 )
                 .await?;
             let generator =
@@ -645,6 +646,7 @@ async fn main() -> anyhow::Result<()> {
                     &format!("{}-key", args.topic),
                     &key_schema.to_string(),
                     ccsr::SchemaType::Avro,
+                    &[],
                 )
                 .await?;
             let generator =
