@@ -1,10 +1,7 @@
 ---
 title: "Create Deployments"
 description: "Create Materialize Cloud deployments."
-menu:
-  main:
-    parent:
-    weight:
+hidden: true
 ---
 
 {{< cloud-notice >}}

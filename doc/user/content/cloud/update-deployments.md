@@ -1,10 +1,6 @@
 ---
 title: "Update Deployments"
 description: "Update Materialize Cloud."
-menu:
-  main:
-    parent:
-    weight:
 aliases:
   - /cloud/upgrade-deployments
 ---
