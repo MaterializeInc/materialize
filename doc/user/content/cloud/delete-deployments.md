@@ -3,7 +3,7 @@ title: "Delete Deployments"
 description: "Delete Materialize Cloud deployments."
 menu:
   main:
-    parent: 
+    parent:
     weight:
 aliases:
   - destroy-deployments
