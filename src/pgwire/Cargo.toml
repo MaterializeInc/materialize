@@ -28,4 +28,4 @@ sql = { path = "../sql" }
 tokio = "1.10.1"
 tokio-openssl = "0.6.2"
 tokio-stream = "0.1.7"
-tokio-util = { version = "0.6.7", features = ["codec"] }
+tokio-util = { version = "0.6.8", features = ["codec"] }
