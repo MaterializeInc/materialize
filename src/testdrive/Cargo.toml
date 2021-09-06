@@ -15,7 +15,7 @@ bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
-flate2 = "1.0.20"
+flate2 = "1.0.21"
 futures = "0.3.17"
 interchange = { path = "../interchange" }
 itertools = "0.10.1"
