@@ -1903,9 +1903,9 @@ dependencies = [
 
 [[package]]
 name = "include_dir"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31a924bd335356c7622dff9ee33d06920afcf7f762a1a991236645e08c8a484b"
+checksum = "24b56e147e6187d61e9d0f039f10e070d0c0a887e24fe0bb9ca3f29bfde62cab"
 dependencies = [
  "glob",
  "include_dir_impl",
@@ -1914,9 +1914,9 @@ dependencies = [
 
 [[package]]
 name = "include_dir_impl"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afae3917f781921d7c7813992ccadff7e816f7e6ecb4b70a9ec3e740d51da3d6"
+checksum = "0a0c890c85da4bab7bce4204c707396bbd3c6c8a681716a51c8814cfc2b682df"
 dependencies = [
  "anyhow",
  "proc-macro-hack",
