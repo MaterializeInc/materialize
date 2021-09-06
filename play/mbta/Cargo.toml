@@ -17,6 +17,6 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 reqwest = { version = "0.11.4", features = ["native-tls-vendored"] }
 repr = { path = "../../src/repr" }
 serde_json = "1.0.67"
-structopt = "0.3.22"
+structopt = "0.3.23"
 test-util = { path = "../../test/test-util" }
 tokio = "1.10.1"
