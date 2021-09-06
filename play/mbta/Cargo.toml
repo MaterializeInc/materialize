@@ -19,4 +19,4 @@ repr = { path = "../../src/repr" }
 serde_json = "1.0.67"
 structopt = "0.3.23"
 test-util = { path = "../../test/test-util" }
-tokio = "1.10.1"
+tokio = "1.11.0"
