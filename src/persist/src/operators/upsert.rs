@@ -77,7 +77,7 @@ pub struct PersistentUpsertConfig<K: Codec, V: Codec> {
     read_handle: StreamReadHandle<K, V>,
 
     /// [`StreamWriteHandle`] for the collection that we should persist to.
-    write_handle: StreamWriteHandle<K, V>,
+    pub write_handle: StreamWriteHandle<K, V>,
 }
 
 impl<K: Codec, V: Codec> PersistentUpsertConfig<K, V> {

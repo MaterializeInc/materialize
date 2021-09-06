@@ -191,8 +191,9 @@ where
                     .ts_histories
                     .get(&orig_id)
                     .map(|history| history.clone());
+                let source_name = format!("{}-{}", connector.name(), uid);
                 let source_config = SourceConfig {
-                    name: format!("{}-{}", connector.name(), uid),
+                    name: source_name.clone(),
                     sql_name: src.name.clone(),
                     upstream_name: connector.upstream_name().map(ToOwned::to_owned),
                     id: uid,
@@ -368,12 +369,18 @@ where
                                         errors.pass_through("decode-errors").as_collection();
                                     (stream, Some(errors))
                                 }
-                                SourceEnvelope::Upsert => super::upsert::upsert(
-                                    &results,
-                                    self.as_of_frontier.clone(),
-                                    &mut linear_operators,
-                                    src.bare_desc.typ().arity(),
-                                ),
+                                SourceEnvelope::Upsert => {
+                                    let upsert_operator_name = format!("{}-upsert", source_name);
+
+                                    super::upsert::upsert(
+                                        &upsert_operator_name,
+                                        &results,
+                                        self.as_of_frontier.clone(),
+                                        &mut linear_operators,
+                                        src.bare_desc.typ().arity(),
+                                        None,
+                                    )
+                                }
                                 _ => {
                                     let (stream, errors) = flatten_results(key_envelope, results);
                                     let stream = stream.pass_through("decode-ok").as_collection();
