@@ -10,6 +10,7 @@
 //! Modular Timely Dataflow operators that can persist and seal updates in streams.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use persist_types::Codec;
 
@@ -565,6 +566,81 @@ where
                 });
             },
         )
+    }
+}
+
+/// Extension trait for [`Stream`].
+pub trait RetractFutureUpdates<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
+    /// Passes through each element of the stream and sends retractions to the given
+    /// [`StreamWriteHandle`] for updates that are beyond the given `upper_ts`.
+    ///
+    /// This does wait on writing each retraction before emitting more data (or advancing the
+    /// frontier).
+    fn filter_and_retract_future_updates(
+        &self,
+        name: &str,
+        write: StreamWriteHandle<K, V>,
+        upper_ts: u64,
+    ) -> Stream<G, ((K, V), u64, isize)>;
+}
+
+impl<G, K, V> RetractFutureUpdates<G, K, V> for Stream<G, ((K, V), u64, isize)>
+where
+    G: Scope<Timestamp = u64>,
+    K: TimelyData + Codec + Debug,
+    V: TimelyData + Codec + Debug,
+{
+    // TODO: This operator is not optimized at all. For example, instead of waiting for each write
+    // to succeed, we could do the same thing as the persist() operator and batch a bunch of
+    // futures and only wait on them once the frontier advances.
+    // For now, that should be ok because this only causes restarts to be slightly slower but
+    // doesn't affect the steady-state write path.
+    fn filter_and_retract_future_updates(
+        &self,
+        name: &str,
+        write: StreamWriteHandle<K, V>,
+        upper_ts: u64,
+    ) -> Stream<G, ((K, V), u64, isize)> {
+        let operator_name = format!("retract_future_updates({})", name);
+        let mut persist_op = OperatorBuilder::new(operator_name, self.scope());
+
+        let mut input = persist_op.new_input(&self, Pipeline);
+
+        let (mut data_output, data_output_stream) = persist_op.new_output();
+
+        let mut buffer = Vec::new();
+
+        persist_op.build(move |_capabilities| {
+            move |_frontiers| {
+                let mut data_output = data_output.activate();
+
+                // Write out everything and forward, keeping the write futures.
+                input.for_each(|cap, data| {
+                    data.swap(&mut buffer);
+
+                    let mut session = data_output.session(&cap);
+                    for update in buffer.drain(..) {
+                        if update.1 >= upper_ts {
+                            log::trace!(
+                                "Update {:?} is beyond upper_ts {}, retracting...",
+                                update,
+                                upper_ts
+                            );
+                            let (data, ts, diff) = update;
+                            let anti_update = (data, ts, -diff);
+                            write
+                                .write(&[anti_update])
+                                .recv()
+                                .expect("error persisting retraction");
+                            continue;
+                        }
+                        session.give(update);
+                    }
+                });
+            }
+        });
+
+        data_output_stream
     }
 }
 
