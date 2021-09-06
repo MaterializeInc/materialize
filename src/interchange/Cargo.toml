@@ -19,14 +19,14 @@ ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 dec = "0.4.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.16"
+futures = "0.3.17"
 hex = "0.4.3"
 itertools = "0.10.1"
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
-ordered-float = { version = "2.7.0", features = ["serde"] }
+ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../ore" }
 protobuf = "2.23.0"
 repr = { path = "../repr" }

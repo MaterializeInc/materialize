@@ -26,7 +26,7 @@ itertools = "0.10.1"
 lazy_static = "1.4.0"
 lowertest = { path = "../lowertest"}
 num-traits = "0.2.14"
-ordered-float = { version = "2.7.0", features = ["serde"] }
+ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../ore", features = ["bytes"] }
 persist = { path = "../persist" }
 regex = "1.5.4"
