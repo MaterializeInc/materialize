@@ -38,4 +38,4 @@ uncased = "0.9.6"
 datadriven = "0.6.0"
 expr_test_util = { path = "../expr-test-util"}
 ore = { path = "../ore" }
-proc-macro2 = "1.0.28"
+proc-macro2 = "1.0.29"
