@@ -23,7 +23,7 @@ enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 expr = { path = "../expr" }
 flate2 = "1.0.20"
-futures = "0.3.16"
+futures = "0.3.17"
 globset = "0.4.8"
 inotify = "0.9.3"
 interchange = { path = "../interchange" }
