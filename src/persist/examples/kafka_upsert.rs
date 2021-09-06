@@ -45,10 +45,11 @@ fn main() {
 }
 
 fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
-    if args.len() != 2 {
+    if args.len() < 2 {
         Err(format!("usage: {} <persist_dir>", &args[0]))?;
     }
     let base_dir = PathBuf::from(&args[1]);
+
     let persist = {
         let lock_info = LockInfo::new("kafka_upsert".into(), "nonce".into())?;
         let log = FileLog::new(base_dir.join("log"), lock_info.clone())?;
@@ -62,7 +63,9 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
         )?
     };
 
-    timely::execute_directly(|worker| {
+    let worker_guards = timely::execute_from_args(args.into_iter(), move |worker| {
+        let persist = persist.clone();
+
         worker.dataflow(|scope| {
             let (ok_stream, err_stream) = construct_persistent_upsert_source::<_, KafkaSource>(
                 scope,
@@ -77,7 +80,12 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
             ok_stream.inspect(|d| println!("ok: {:?}", d));
             err_stream.inspect(|d| println!("err: {:?}", d));
         })
-    });
+    })?;
+
+    let _result = worker_guards
+        .join()
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(())
 }
@@ -188,6 +196,9 @@ where
     G: Scope<Timestamp = u64>,
     S: Source + 'static,
 {
+    let num_workers = scope.peers();
+    let worker_index = scope.index();
+
     // Fetch start offsets.
     // - TODO: Don't use collect
     let starting_offsets: Vec<_> = bindings_read
@@ -201,7 +212,13 @@ where
         .map(|((source_timestamp, _assigned_timestamp), _ts, _diff)| source_timestamp)
         .collect();
 
-    let mut source = S::new(starting_offsets, emission_interval_ms, now_fn);
+    let mut source = S::new(
+        starting_offsets,
+        emission_interval_ms,
+        now_fn,
+        worker_index,
+        num_workers,
+    );
 
     let mut source_op = OperatorBuilder::new("read_source".to_string(), scope.clone());
     let activator = scope.activator_for(&source_op.operator_info().address[..]);
@@ -276,6 +293,8 @@ trait Source {
         starting_offsets: Vec<Self::SourceTimestamp>,
         emission_interval_ms: u64,
         now_fn: NowFn,
+        worker_index: usize,
+        num_workers: usize,
     ) -> Self
     where
         Self: Sized;
@@ -290,6 +309,7 @@ struct KafkaSource {
     last_message_time: u64,
     emission_interval_ms: u64,
     now_fn: NowFn,
+    last_partition: usize,
 }
 
 impl Source for KafkaSource {
@@ -301,6 +321,8 @@ impl Source for KafkaSource {
         starting_offsets: Vec<Self::SourceTimestamp>,
         emission_interval_ms: u64,
         now_fn: NowFn,
+        worker_index: usize,
+        num_workers: usize,
     ) -> Self
     where
         Self: Sized,
@@ -317,26 +339,30 @@ impl Source for KafkaSource {
             starting_offsets
         };
 
-        println!("Kafka Source, starting offsets: {:?}", starting_offsets);
-
         let mut current_offsets = HashMap::new();
 
         for SourceTimestamp(partition, offset) in starting_offsets {
-            current_offsets
-                .entry(partition)
-                .and_modify(|current_offset| {
-                    *current_offset = std::cmp::max(*current_offset, offset)
-                })
-                .or_insert(offset);
+            if (partition.hashed() as usize) % num_workers == worker_index {
+                current_offsets
+                    .entry(partition)
+                    .and_modify(|current_offset| {
+                        *current_offset = std::cmp::max(*current_offset, offset)
+                    })
+                    .or_insert(offset);
+            }
         }
 
-        println!("Current offsets: {:?}", current_offsets);
+        println!(
+            "Source(worker = {}/{}): starting offsets: {:?}",
+            worker_index, num_workers, current_offsets
+        );
 
         KafkaSource {
             last_message_time: u64::MIN,
             current_offsets,
             emission_interval_ms,
             now_fn,
+            last_partition: 0,
         }
     }
 
@@ -349,12 +375,21 @@ impl Source for KafkaSource {
         let now = (self.now_fn)();
         let now_clamped = now - (now % self.emission_interval_ms);
 
+        if self.current_offsets.is_empty() {
+            // this sink doesn't have any partitions assigned
+            return None;
+        }
+
         if now_clamped > self.last_message_time {
             self.last_message_time = now_clamped;
 
-            let num_partitions = self.current_offsets.len();
-            let partition =
-                KafkaPartition((self.last_message_time as usize % num_partitions) as u64);
+            // This is not efficient code, don't do this in production!
+            let partitions: Vec<_> = self.current_offsets.keys().cloned().collect();
+            let partition = partitions
+                .get(self.last_partition)
+                .expect("missing partition");
+            self.last_partition = (self.last_partition + 1) % partitions.len();
+
             let current_offset = self
                 .current_offsets
                 .get_mut(&partition)
@@ -364,7 +399,7 @@ impl Source for KafkaSource {
                 format!("k{}", partition.0),
                 format!("v{}", current_offset.0),
             );
-            Some((kv, SourceTimestamp(partition, *current_offset)))
+            Some((kv, SourceTimestamp(partition.clone(), *current_offset)))
         } else {
             None
         }
