@@ -355,7 +355,7 @@ Field          | Type       | Meaning
 
 The `mz_metrics` table contains recordings for each [Prometheus
 metric](/ops/monitoring#prometheus) in the system that is a counter or gauge.
-The values are recorded every second and retained for five minutes.
+The values are recorded every 30 seconds and retained for five minutes.
 
 Field    | Type                         | Meaning
 ---------|------------------------------|--------
@@ -379,8 +379,8 @@ Field    | Type     | Meaning
 
 The `mz_metric_histograms` table contains recordings for each [Prometheus
 metric](/ops/monitoring#prometheus) in the system that is a histogram. The
-values are recorded every second and retained for five minutes. Each row of the
-table represents one bucket of one histogram from one recording. Note that
+values are recorded every 30 seconds and retained for five minutes. Each row of
+the table represents one bucket of one histogram from one recording. Note that
 Prometheus histograms are cumulative.
 
 Field    | Type                 | Meaning
