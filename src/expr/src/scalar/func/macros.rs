@@ -40,6 +40,7 @@
 ///     fn foo(a: Option<bool>) -> Option<bool> {
 ///         unimplemented!()
 ///     }
+/// );
 /// ```
 ///
 ///
