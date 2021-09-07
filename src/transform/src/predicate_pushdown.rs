@@ -77,7 +77,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+use expr::{func, AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use itertools::Itertools;
 use repr::{Datum, ScalarType};
 
@@ -249,14 +249,14 @@ impl PredicatePushdown {
                                             expr1
                                                 .clone()
                                                 .call_unary(UnaryFunc::IsNull)
-                                                .call_unary(UnaryFunc::Not),
+                                                .call_unary(UnaryFunc::Not(func::Not)),
                                         );
                                     } else if expr2.typ(&input_type).nullable {
                                         pred_not_translated.push(
                                             expr2
                                                 .clone()
                                                 .call_unary(UnaryFunc::IsNull)
-                                                .call_unary(UnaryFunc::Not),
+                                                .call_unary(UnaryFunc::Not(func::Not)),
                                         );
                                     }
                                     equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);

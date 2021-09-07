@@ -28,7 +28,7 @@ use std::iter;
 use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use expr::LocalId;
+use expr::{func as expr_func, LocalId};
 use itertools::Itertools;
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
@@ -2363,7 +2363,7 @@ pub fn plan_expr<'a>(
         Expr::Not { expr } => {
             let ecx = ecx.with_name("NOT argument");
             HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not,
+                func: UnaryFunc::Not(expr_func::Not),
                 expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, &ScalarType::Bool)?),
             }
             .into()
@@ -2946,7 +2946,7 @@ fn plan_is_null_expr<'a>(
     };
     if not {
         expr = HirScalarExpr::CallUnary {
-            func: UnaryFunc::Not,
+            func: UnaryFunc::Not(expr_func::Not),
             expr: Box::new(expr),
         }
     }

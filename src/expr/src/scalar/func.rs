@@ -48,8 +48,13 @@ use repr::{strconv, ColumnName, ColumnType, Datum, Row, RowArena, ScalarType};
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
 
+#[macro_use]
+mod macros;
 mod encoding;
 mod format;
+mod impls;
+
+pub use impls::*;
 
 #[derive(
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
@@ -108,10 +113,6 @@ pub fn or<'a>(
             _ => unreachable!(),
         },
     }
-}
-
-fn not<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(!a.unwrap_bool())
 }
 
 fn abs_int16<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -3522,11 +3523,25 @@ fn is_null<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a == Datum::Null)
 }
 
+// This trait will eventualy be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
+trait UnaryFuncTrait {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError>;
+    fn output_type(&self, input_type: ColumnType) -> ColumnType;
+    fn propagates_nulls(&self) -> bool;
+    fn introduces_nulls(&self) -> bool;
+    fn preserves_uniqueness(&self) -> bool;
+}
+
 #[derive(
     Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
 )]
 pub enum UnaryFunc {
-    Not,
+    Not(Not),
     IsNull,
     NegInt16,
     NegInt32,
@@ -3746,8 +3761,10 @@ pub enum UnaryFunc {
     MzRowSize,
 }
 
+derive_unary!(Not);
+
 impl UnaryFunc {
-    pub fn eval<'a>(
+    pub fn eval_manual<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
@@ -3759,7 +3776,7 @@ impl UnaryFunc {
         }
 
         match self {
-            UnaryFunc::Not => Ok(not(a)),
+            UnaryFunc::Not(_) => unreachable!(),
             UnaryFunc::IsNull => Ok(is_null(a)),
             UnaryFunc::NegInt16 => Ok(neg_int16(a)),
             UnaryFunc::NegInt32 => Ok(neg_int32(a)),
@@ -3964,7 +3981,7 @@ impl UnaryFunc {
         }
     }
 
-    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_type_manual(&self, input_type: ColumnType) -> ColumnType {
         use UnaryFunc::*;
         let nullable = if self.introduces_nulls() {
             true
@@ -3974,6 +3991,7 @@ impl UnaryFunc {
             false
         };
         match self {
+            Not(_) => unreachable!(),
             IsNull => ScalarType::Bool.nullable(nullable),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4096,8 +4114,8 @@ impl UnaryFunc {
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(nullable),
 
-            Not | NegInt16 | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegInterval
-            | AbsInt16 | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
+            NegInt16 | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegInterval | AbsInt16
+            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(nullable)
@@ -4145,20 +4163,22 @@ impl UnaryFunc {
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
-    pub fn propagates_nulls(&self) -> bool {
-        !matches!(
-            self,
+    pub fn propagates_nulls_manual(&self) -> bool {
+        match self {
+            UnaryFunc::Not(_) => unreachable!(),
             UnaryFunc::IsNull
             // converts null to jsonnull
-            | UnaryFunc::CastJsonbOrNullToJsonb
-        )
+            | UnaryFunc::CastJsonbOrNullToJsonb => false,
+            _ => true,
+        }
     }
 
     /// Whether the function might return NULL even if none of its inputs are
     /// NULL.
-    pub fn introduces_nulls(&self) -> bool {
+    pub fn introduces_nulls_manual(&self) -> bool {
         use UnaryFunc::*;
         match self {
+            Not(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
             | CastJsonbToFloat32 | CastJsonbToFloat64 | CastJsonbToBool => true,
@@ -4249,8 +4269,8 @@ impl UnaryFunc {
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
-            Not | NegInt16 | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegInterval
-            | AbsInt16 | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => false,
+            NegInt16 | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegInterval | AbsInt16
+            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => false,
             CeilFloat32 | FloorFloat32 | RoundFloat32 => false,
             CeilFloat64 | FloorFloat64 | RoundFloat64 => false,
             Log10 | Ln | Exp | Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot | SqrtFloat64
@@ -4265,44 +4285,42 @@ impl UnaryFunc {
     ///
     /// This is most often the case for methods that promote to types that
     /// can contain all the precision of the input type.
-    pub fn preserves_uniqueness(&self) -> bool {
-        matches!(
-            self,
-            UnaryFunc::Not
-                | UnaryFunc::NegInt16
-                | UnaryFunc::NegInt32
-                | UnaryFunc::NegInt64
-                | UnaryFunc::NegFloat32
-                | UnaryFunc::NegFloat64
-                | UnaryFunc::NegNumeric
-                | UnaryFunc::CastBoolToString
-                | UnaryFunc::CastBoolToStringNonstandard
-                | UnaryFunc::CastCharToString
-                | UnaryFunc::CastVarCharToString
-                | UnaryFunc::CastInt16ToInt32
-                | UnaryFunc::CastInt16ToInt64
-                | UnaryFunc::CastInt16ToString
-                | UnaryFunc::CastInt32ToInt16
-                | UnaryFunc::CastInt32ToInt64
-                | UnaryFunc::CastInt32ToString
-                | UnaryFunc::CastInt64ToString
-                | UnaryFunc::CastFloat32ToFloat64
-                | UnaryFunc::CastFloat32ToString
-                | UnaryFunc::CastFloat64ToString
-                | UnaryFunc::CastStringToBytes
-                | UnaryFunc::CastDateToTimestamp
-                | UnaryFunc::CastDateToTimestampTz
-                | UnaryFunc::CastDateToString
-                | UnaryFunc::CastTimeToInterval
-                | UnaryFunc::CastTimeToString
-        )
-    }
-}
-
-impl fmt::Display for UnaryFunc {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    pub fn preserves_uniqueness_manual(&self) -> bool {
         match self {
-            UnaryFunc::Not => f.write_str("!"),
+            UnaryFunc::Not(_) => unreachable!(),
+            UnaryFunc::NegInt16
+            | UnaryFunc::NegInt32
+            | UnaryFunc::NegInt64
+            | UnaryFunc::NegFloat32
+            | UnaryFunc::NegFloat64
+            | UnaryFunc::NegNumeric
+            | UnaryFunc::CastBoolToString
+            | UnaryFunc::CastBoolToStringNonstandard
+            | UnaryFunc::CastCharToString
+            | UnaryFunc::CastVarCharToString
+            | UnaryFunc::CastInt16ToInt32
+            | UnaryFunc::CastInt16ToInt64
+            | UnaryFunc::CastInt16ToString
+            | UnaryFunc::CastInt32ToInt16
+            | UnaryFunc::CastInt32ToInt64
+            | UnaryFunc::CastInt32ToString
+            | UnaryFunc::CastInt64ToString
+            | UnaryFunc::CastFloat32ToFloat64
+            | UnaryFunc::CastFloat32ToString
+            | UnaryFunc::CastFloat64ToString
+            | UnaryFunc::CastStringToBytes
+            | UnaryFunc::CastDateToTimestamp
+            | UnaryFunc::CastDateToTimestampTz
+            | UnaryFunc::CastDateToString
+            | UnaryFunc::CastTimeToInterval
+            | UnaryFunc::CastTimeToString => true,
+            _ => false,
+        }
+    }
+
+    fn fmt_manual(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            UnaryFunc::Not(_) => unreachable!(),
             UnaryFunc::IsNull => f.write_str("isnull"),
             UnaryFunc::NegInt16 => f.write_str("-"),
             UnaryFunc::NegInt32 => f.write_str("-"),

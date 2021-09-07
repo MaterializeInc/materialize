@@ -21,6 +21,7 @@ use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
+use expr::func;
 use ore::collections::CollectionExt;
 use pgrepr::oid;
 use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
@@ -2303,7 +2304,7 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 1628;
             },
 
@@ -2322,13 +2323,13 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 1210;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar { length })
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
-                        .call_unary(UnaryFunc::Not)
+                        .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }), 1212;
             },
@@ -2358,13 +2359,13 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 642;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar { length })
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not)
+                        .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }), 1056;
             },
@@ -2372,13 +2373,13 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 1229;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar { length })
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not)
+                        .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }), 1235;
             },

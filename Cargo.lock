@@ -1320,6 +1320,7 @@ dependencies = [
  "num_enum",
  "ordered-float",
  "ore",
+ "paste",
  "pdqselect",
  "pgrepr",
  "proc-macro2",

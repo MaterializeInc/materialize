@@ -36,7 +36,7 @@ use dataflow_types::{
     PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
     SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
 };
-use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
+use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
@@ -241,7 +241,7 @@ fn plan_dbz_flatten_one(
         input: Box::new(HirRelationExpr::Filter {
             input: Box::new(input),
             predicates: vec![HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not,
+                func: UnaryFunc::Not(func::Not),
                 expr: Box::new(HirScalarExpr::CallUnary {
                     func: UnaryFunc::IsNull,
                     expr: Box::new(HirScalarExpr::Column(ColumnRef {

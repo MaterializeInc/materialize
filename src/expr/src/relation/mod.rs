@@ -23,7 +23,8 @@ use repr::{ColumnType, Datum, Diff, RelationType, Row};
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::{
-    DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr, UnaryFunc,
+    func as scalar_func, DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId,
+    MirScalarExpr, UnaryFunc,
 };
 
 pub mod canonicalize;
@@ -410,7 +411,7 @@ impl MirRelationExpr {
                     predicate.non_null_requirements(&mut nonnull_required_columns);
                     // Test for explicit checks that a column is non-null.
                     if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not,
+                        func: UnaryFunc::Not(scalar_func::Not),
                         expr,
                     } = predicate
                     {
