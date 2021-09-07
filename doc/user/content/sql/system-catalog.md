@@ -62,8 +62,8 @@ Field          | Type       | Meaning
 
 ### `mz_arrangement_sharing`
 
-The `mz_arrangement_sharing` source describes how times each [arrangement] in
-the system is used.
+The `mz_arrangement_sharing` source describes how many times each [arrangement]
+in the system is used.
 
 Field      | Type       | Meaning
 -----------|------------|--------
@@ -128,7 +128,7 @@ Field  | Type       | Meaning
 ### `mz_dataflow_channels`
 
 The `mz_dataflow_channels` source describes the communication channels between
-[dataflow] operators. A communication channel connects one of the the outputs of a
+[dataflow] operators. A communication channel connects one of the outputs of a
 source operator to one of the inputs of a target operator.
 
 Field         | Type       | Meaning
@@ -209,7 +209,7 @@ Field        | Type        | Meaning
 `oid`        | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the index.
 `name`       | [`text`]    | The name of the index.
 `on_id`      | [`text`]    | The ID of the relation on which the index is built.
-`volatility` | [`text`]    | Whether the the index is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
+`volatility` | [`text`]    | Whether the index is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 `enabled`    | [`bool`]    | Whether or not the index represents an [arrangement](/overview/arrangements/). `false` only in the case of [Disabling user indexes](/cli/#disable-user-indexes).
 
 ### `mz_index_columns`
@@ -355,7 +355,7 @@ Field          | Type       | Meaning
 
 The `mz_metrics` table contains recordings for each [Prometheus
 metric](/ops/monitoring#prometheus) in the system that is a counter or gauge.
-The values are recorded every second and retained for five minutes.
+The values are recorded every 30 seconds and retained for five minutes.
 
 Field    | Type                         | Meaning
 ---------|------------------------------|--------
@@ -379,8 +379,8 @@ Field    | Type     | Meaning
 
 The `mz_metric_histograms` table contains recordings for each [Prometheus
 metric](/ops/monitoring#prometheus) in the system that is a histogram. The
-values are recorded every second and retained for five minutes. Each row of the
-table represents one bucket of one histogram from one recording. Note that
+values are recorded every 30 seconds and retained for five minutes. Each row of
+the table represents one bucket of one histogram from one recording. Note that
 Prometheus histograms are cumulative.
 
 Field    | Type                 | Meaning
