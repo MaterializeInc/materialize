@@ -106,8 +106,7 @@ impl JoinImplementation {
             let mut available_arrangements = vec![Vec::new(); inputs.len()];
             for index in 0..inputs.len() {
                 // We can work around mfps, as we can lift the mfps into the join execution.
-                let (mfp, input) =
-                    MapFilterProject::extract_non_errors_from_expression(&inputs[index]);
+                let (mfp, input) = MapFilterProject::extract_non_errors_from_expr(&inputs[index]);
                 let (_, _, project) = mfp.as_map_filter_project();
                 // Get and ArrangeBy expressions contribute arrangements.
                 match input {
@@ -378,7 +377,7 @@ fn implement_arrangements<'a>(
                 .iter()
                 .all(|key| available_arrangements[index].contains(key))
         {
-            lifted_mfps[index] = Some(MapFilterProject::extract_from_expression_mut(
+            lifted_mfps[index] = Some(MapFilterProject::extract_non_errors_from_expr_mut(
                 &mut inputs[index],
             ));
         }

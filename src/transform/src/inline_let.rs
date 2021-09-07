@@ -70,7 +70,7 @@ impl InlineLet {
             });
 
             let stripped_value = if self.inline_mfp {
-                expr::MapFilterProject::extract_non_errors_from_expression(&**value).1
+                expr::MapFilterProject::extract_non_errors_from_expr(&**value).1
             } else {
                 &**value
             };
