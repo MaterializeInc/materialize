@@ -49,6 +49,9 @@ struct Args {
     /// Path to sqllogictest script to run.
     #[structopt(value_name = "PATH", required = true)]
     paths: Vec<String>,
+    /// Stop on first failure.
+    #[structopt(long)]
+    fail_fast: bool,
 }
 
 #[tokio::main]
@@ -64,6 +67,7 @@ async fn main() {
         verbosity: args.verbosity,
         workers: args.workers,
         no_fail: args.no_fail,
+        fail_fast: args.fail_fast,
     };
 
     if args.rewrite_results {

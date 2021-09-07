@@ -922,6 +922,7 @@ pub struct RunConfig<'a> {
     pub verbosity: usize,
     pub workers: usize,
     pub no_fail: bool,
+    pub fail_fast: bool,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -974,6 +975,10 @@ pub async fn run_string(
         outcomes.0[outcome.code()] += 1;
 
         if let Outcome::Bail { .. } = outcome {
+            break;
+        }
+
+        if config.fail_fast && !outcome.success() {
             break;
         }
     }
