@@ -38,7 +38,7 @@ use crate::unreliable::UnreliableHandle;
 // without graceful shutdown) and reimplement Direct using Indexed.
 pub struct Direct {
     start_fn: Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient, Error>>,
-    persister: RuntimeClient,
+    pub persister: RuntimeClient,
     worker: Worker<Thread>,
     unreliable: UnreliableHandle,
     streams: HashMap<

@@ -252,6 +252,16 @@ impl MemBlob {
         core.lock()?.open(lock_info)?;
         Ok(Self { core })
     }
+
+    #[cfg(test)]
+    pub fn all_blobs(&self) -> Result<Vec<(String, Vec<u8>)>, Error> {
+        let core = self.core.lock()?;
+        Ok(core
+            .dataz
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    }
 }
 
 impl Drop for MemBlob {
@@ -309,7 +319,8 @@ impl MemRegistry {
         }
     }
 
-    fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
+    /// Opens the [MemBlob] associated with `path`.
+    pub fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
         if let Some(blob) = self.blob_by_path.get(path) {
             MemBlob::open(blob.clone(), lock_info)
         } else {

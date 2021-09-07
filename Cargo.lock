@@ -2959,6 +2959,7 @@ dependencies = [
  "ore",
  "rand 0.8.4",
  "serde",
+ "serde_json",
  "tempfile",
  "timely",
  "tokio",
