@@ -1768,12 +1768,15 @@ ORDER BY
 ----
 %0 =
 | Get materialize.public.customer (u15)
-| Filter ((((((("13" = substr(chartostr(#4), 1, 2)) || ("31" = substr(chartostr(#4), 1, 2))) || ("23" = substr(chartostr(#4), 1, 2))) || ("29" = substr(chartostr(#4), 1, 2))) || ("30" = substr(chartostr(#4), 1, 2))) || ("18" = substr(chartostr(#4), 1, 2))) || ("17" = substr(chartostr(#4), 1, 2)))
+| Map substr(chartostr(#4), 1, 2)
+| Filter (((((((#8 = "13") || (#8 = "31")) || (#8 = "23")) || (#8 = "29")) || (#8 = "30")) || (#8 = "18")) || (#8 = "17"))
 | Project (#0, #4, #5)
 
 %1 =
 | Get materialize.public.customer (u15)
-| Filter ((((((("13" = substr(chartostr(#4), 1, 2)) || ("31" = substr(chartostr(#4), 1, 2))) || ("23" = substr(chartostr(#4), 1, 2))) || ("29" = substr(chartostr(#4), 1, 2))) || ("30" = substr(chartostr(#4), 1, 2))) || ("18" = substr(chartostr(#4), 1, 2))) || ("17" = substr(chartostr(#4), 1, 2))), (#5 > 0)
+| Filter (#5 > 0)
+| Map substr(chartostr(#4), 1, 2)
+| Filter (((((((#8 = "13") || (#8 = "31")) || (#8 = "23")) || (#8 = "29")) || (#8 = "30")) || (#8 = "18")) || (#8 = "17"))
 | Project (#5)
 | Reduce group=()
 | | agg sum(#0)

@@ -1349,7 +1349,9 @@ WHERE (
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| Filter (("^.*c$" ~(padchar(#14)) && (((#2 = 1) || (#2 = 5)) || (#2 = 3))) || (("^.*a$" ~(padchar(#14)) && (((#2 = 1) || (#2 = 2)) || (#2 = 3))) || ("^.*b$" ~(padchar(#14)) && (((#2 = 1) || (#2 = 2)) || (#2 = 4))))), (#7 <= 10), (#13 <= 400000), (#7 >= 1), (#13 >= 1)
+| Filter (#7 <= 10), (#13 <= 400000), (#7 >= 1), (#13 >= 1)
+| Map padchar(#14), (#2 = 1), (#2 = 3), (#16 || (#2 = 2))
+| Filter (("^.*c$" ~(#15) && (#17 || (#16 || (#2 = 5)))) || (("^.*a$" ~(#15) && (#17 || #18)) || ("^.*b$" ~(#15) && (#18 || (#2 = 4)))))
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
@@ -1558,12 +1560,15 @@ ORDER BY substr(c_state, 1, 1)
 ----
 %0 =
 | Get materialize.public.customer (u6)
-| Filter ((((((("1" = substr(chartostr(#11), 1, 1)) || ("2" = substr(chartostr(#11), 1, 1))) || ("3" = substr(chartostr(#11), 1, 1))) || ("4" = substr(chartostr(#11), 1, 1))) || ("5" = substr(chartostr(#11), 1, 1))) || ("6" = substr(chartostr(#11), 1, 1))) || ("7" = substr(chartostr(#11), 1, 1)))
+| Map substr(chartostr(#11), 1, 1)
+| Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
 | Project (#0..#2, #9, #16)
 
 %1 =
 | Get materialize.public.customer (u6)
-| Filter ((((((("1" = substr(chartostr(#11), 1, 1)) || ("2" = substr(chartostr(#11), 1, 1))) || ("3" = substr(chartostr(#11), 1, 1))) || ("4" = substr(chartostr(#11), 1, 1))) || ("5" = substr(chartostr(#11), 1, 1))) || ("6" = substr(chartostr(#11), 1, 1))) || ("7" = substr(chartostr(#11), 1, 1))), (#16 > 0)
+| Filter (#16 > 0)
+| Map substr(chartostr(#11), 1, 1)
+| Filter (((((((#22 = "1") || (#22 = "2")) || (#22 = "3")) || (#22 = "4")) || (#22 = "5")) || (#22 = "6")) || (#22 = "7"))
 | Project (#16)
 | Reduce group=()
 | | agg sum(#0)

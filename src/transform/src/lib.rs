@@ -29,6 +29,7 @@ use expr::MirRelationExpr;
 use expr::MirScalarExpr;
 use expr::{GlobalId, IdGen};
 
+pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
@@ -306,7 +307,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
-            Box::new(crate::cse::mfp::Mfp),
+            Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.
             Box::new(crate::cse::relation_cse::RelationCSE),

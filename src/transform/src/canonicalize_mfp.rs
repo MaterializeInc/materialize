@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Normalizes MFPs and performs common sub-expression elimination.
+//! Canonicalizes MFPs and performs common sub-expression elimination.
 //!
 //! This transform takes a sequence of Maps, Filters, and Projects and
-//! normalizes it to a sequence like this:
+//! canonicalizes it to a sequence like this:
 //! | Filter
 //! | Map
 //! | Filter
@@ -18,16 +18,15 @@
 //! The filters before the map are those that can be
 //! pushed down through a map according the rules of
 //! [crate::projection_pushdown::ProjectionPushdown.push_filters_through_map()].
-//! TODO: It would be nice to normalize it to just an MFP, but currently
+//! TODO: It would be nice to canonicalize it to just an MFP, but currently
 //! putting a filter after instead of before a Map can result in the loss of
 //! nullability information.
 //!
-//! This transform identifies common `ScalarExpr` expressions across
-//! and within expressions that are arguments to 1) `Map` operators,
-//! 2) `Filter` operators that come directly after the `Map`, and 3) `Project`
-//! operators that come directly after the map. It reforms the `Map` operator
-//! to build each distinct expression at most once
-//! and to re-use expressions instead of re-evaluating them.
+//! After canonicalizing, this transform looks at the Map-Filter-Project
+//! subsequence and identifies common `ScalarExpr` expressions across and within
+//! expressions that are arguments to the Map-Filter-Project. It reforms the
+//! `Map-Filter-Project` subsequence to build each distinct expression at most
+//! once and to re-use expressions instead of re-evaluating them.
 //!
 //! The re-use policy at the moment is severe and re-uses everything.
 //! It may be worth considering relations of this if it results in more
@@ -38,11 +37,11 @@ use crate::TransformArgs;
 use expr::canonicalize::canonicalize_predicates;
 use expr::MirRelationExpr;
 
-/// Normalizes MFPs and performs common sub-expression elimination.
+/// Canonicalizes MFPs and performs common sub-expression elimination.
 #[derive(Debug)]
-pub struct Mfp;
+pub struct CanonicalizeMfp;
 
-impl crate::Transform for Mfp {
+impl crate::Transform for CanonicalizeMfp {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -55,10 +54,11 @@ impl crate::Transform for Mfp {
     }
 }
 
-impl Mfp {
+impl CanonicalizeMfp {
     fn action(&self, relation: &mut MirRelationExpr) {
         let mut mfp = expr::MapFilterProject::extract_from_expression_mut(relation);
         relation.visit1_mut(|e| self.action(e));
+        mfp.optimize();
         if !mfp.is_identity() {
             let (map, mut filter, project) = mfp.as_map_filter_project();
             if !filter.is_empty() {
