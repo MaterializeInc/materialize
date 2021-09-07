@@ -194,7 +194,7 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %0.(#0) %1.(#0) %2.(#0)
-| Filter !(isnull(#0)), !(isnull(#2)), !(isnull(#3)), !(isnull(#4))
+| Filter !(isnull(#0)), !(isnull(#3))
 | Project (#0, #5)
 
 EOF
@@ -281,7 +281,7 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
 | | implementation = Differential %2.(#0) %0.((#0 + 4)) %1.(#0)
-| Filter !(isnull(#0)), !(isnull(#2)), !(isnull(#4))
+| Filter !(isnull(#0)), !(isnull(#4))
 | Project (#3, #1, #5)
 
 EOF

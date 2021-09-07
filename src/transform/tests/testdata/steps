@@ -41,7 +41,7 @@ Applied Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting
 | Union %0 %0
 
 ====
-No change: Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, LiteralLifting], limit: 100 }, ReductionPushdown, Mfp
+No change: Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Mfp
 ====
 Applied RelationCSE:
 %0 = Let l0 =
@@ -102,7 +102,7 @@ Applied Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge,
 ====
 No change: Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, ProjectionPushdown, UpdateLet, FoldConstants { limit: Some(10000) }] }], limit: 100 }
 ====
-Applied Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, LiteralLifting], limit: 100 }:
+Applied Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Demand, LiteralLifting], limit: 100 }:
 (Join [(ArrangeBy (get u210) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]]))
 ====
 No change: ReductionPushdown, Mfp

@@ -301,6 +301,7 @@ impl Optimizer {
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                    Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
                 ],
             }),

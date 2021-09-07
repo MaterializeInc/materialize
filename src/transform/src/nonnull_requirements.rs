@@ -159,7 +159,7 @@ impl NonNullRequirements {
 
                 let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
 
-                let mut new_columns = input_mapper.split_column_set_by_input(&columns);
+                let mut new_columns = input_mapper.split_column_set_by_input(columns.iter());
 
                 // `variable` smears constraints around.
                 // Also, any non-nullable columns impose constraints on their equivalence class.
