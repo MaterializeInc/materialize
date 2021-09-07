@@ -723,7 +723,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
 #[cfg(test)]
 mod tests {
-    use crate::mem::{MemBlob, MemLog, MemRegistry};
+    use crate::mem::{MemMultiRegistry, MemRegistry};
 
     use super::*;
 
@@ -734,9 +734,7 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let log = MemLog::new_no_reentrance("runtime");
-        let blob = MemBlob::new_no_reentrance("runtime");
-        let mut runtime = start(log, blob, &MetricsRegistry::new())?;
+        let mut runtime = MemRegistry::new().runtime_no_reentrance()?;
 
         let (write, meta) = runtime.create_or_load("0")?;
         write.write(&data).recv()?;
@@ -758,9 +756,7 @@ mod tests {
             (("key2".to_string(), "val2".to_string()), 1, 1),
         ];
 
-        let log = MemLog::new_no_reentrance("concurrent");
-        let blob = MemBlob::new_no_reentrance("concurrent");
-        let client1 = start(log, blob, &MetricsRegistry::new())?;
+        let client1 = MemRegistry::new().runtime_no_reentrance()?;
         let _ = client1.create_or_load::<String, String>("0")?;
 
         // Everything is still running after client1 is dropped.
@@ -785,14 +781,14 @@ mod tests {
 
         // Shutdown happens if we explicitly call stop, unlocking the log and
         // blob and allowing them to be reused in the next Indexed.
-        let mut persister = registry.open("path", "restart-1")?;
+        let mut persister = registry.runtime_no_reentrance()?;
         let (write, _) = persister.create_or_load("0")?;
         write.write(&data[0..1]).recv()?;
         assert_eq!(persister.stop(), Ok(()));
 
         // Shutdown happens if all handles are dropped, even if we don't call
         // stop.
-        let persister = registry.open("path", "restart-2")?;
+        let persister = registry.runtime_no_reentrance()?;
         let (write, _) = persister.create_or_load("0")?;
         write.write(&data[1..2]).recv()?;
         drop(write);
@@ -800,7 +796,7 @@ mod tests {
 
         // We can read back what we previously wrote.
         {
-            let persister = registry.open("path", "restart-1")?;
+            let persister = registry.runtime_no_reentrance()?;
             let (_, meta) = persister.create_or_load("0")?;
             assert_eq!(meta.snapshot()?.read_to_end_flattened()?, data);
         }
@@ -815,7 +811,7 @@ mod tests {
             (("key2".to_string(), ()), 1, 1),
         ];
 
-        let mut registry = MemRegistry::new();
+        let mut registry = MemMultiRegistry::new();
         let client1 = registry.open("1", "multi")?;
         let client2 = registry.open("2", "multi")?;
 
@@ -869,8 +865,7 @@ mod tests {
 
     #[test]
     fn codec_mismatch() -> Result<(), Error> {
-        let mut registry = MemRegistry::new();
-        let client = registry.open("", "lock 1")?;
+        let client = MemRegistry::new().runtime_no_reentrance()?;
 
         let _ = client.create_or_load::<(), String>("stream")?;
 

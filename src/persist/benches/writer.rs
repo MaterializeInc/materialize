@@ -12,7 +12,7 @@
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 
 use persist::file::FileLog;
-use persist::mem::MemLog;
+use persist::mem::MemRegistry;
 use persist::storage::{LockInfo, Log};
 
 fn bench_write_sync<L: Log>(writer: &mut L, data: Vec<u8>, b: &mut Bencher) {
@@ -26,7 +26,9 @@ fn bench_write_sync<L: Log>(writer: &mut L, data: Vec<u8>, b: &mut Bencher) {
 pub fn bench_writes(c: &mut Criterion) {
     let data = "entry0".as_bytes().to_vec();
 
-    let mut mem_log = MemLog::new(LockInfo::new_no_reentrance("mem_log_bench".to_owned()));
+    let mut mem_log = MemRegistry::new()
+        .log_no_reentrance()
+        .expect("creating a MemLog cannot fail");
     c.bench_function("mem_write_sync", |b| {
         bench_write_sync(&mut mem_log, data.clone(), b)
     });

@@ -1093,7 +1093,7 @@ mod tests {
 
     use crate::error::Error as IndexedError;
     use crate::future::Future;
-    use crate::mem::{MemBlob, MemLog};
+    use crate::mem::MemRegistry;
 
     use super::*;
 
@@ -1120,11 +1120,7 @@ mod tests {
             (("2".into(), "".into()), 2, 1),
         ];
 
-        let mut i = Indexed::new(
-            MemLog::new_no_reentrance("single_stream"),
-            MemBlob::new_no_reentrance("single_stream"),
-            Metrics::default(),
-        )?;
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
         let id = block_on(|res| i.register("0", "()", "()", res))?;
 
         // Empty things are empty.
@@ -1221,11 +1217,7 @@ mod tests {
             (("2".into(), "".into()), 1, 1),
         ];
 
-        let mut i = Indexed::new(
-            MemLog::new_no_reentrance("batch_sorting"),
-            MemBlob::new_no_reentrance("batch_sorting"),
-            Metrics::default(),
-        )?;
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
         // Write the data and move it into the unsealed part of the index, which
@@ -1256,11 +1248,7 @@ mod tests {
             (("1".into(), "".into()), 1, 1),
         ];
 
-        let mut i = Indexed::new(
-            MemLog::new_no_reentrance("batch_consolidation"),
-            MemBlob::new_no_reentrance("batch_consolidation"),
-            Metrics::default(),
-        )?;
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
         // Write the data and move it into the unsealed part of the index, which
@@ -1294,11 +1282,7 @@ mod tests {
 
     #[test]
     fn batch_unsealed_empty() -> Result<(), Box<dyn Error>> {
-        let mut i = Indexed::new(
-            MemLog::new_no_reentrance("batch_unsealed_empty"),
-            MemBlob::new_no_reentrance("batch_unsealed_empty"),
-            Metrics::default(),
-        )?;
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
         // Write an empty set of updates and try to move it into the unsealed part
@@ -1324,11 +1308,7 @@ mod tests {
     // non-adjacent seqno boundaries (which violates our invariants).
     #[test]
     fn regression_non_sequential_unsealed_batches() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(
-            MemLog::new_no_reentrance("lock"),
-            MemBlob::new_no_reentrance("lock"),
-            Metrics::default(),
-        )?;
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
 
         // First is some stream is registered, written to, and step'd, moving
         // seqno 0..X into unsealed. Then a second stream is registered, written
@@ -1360,11 +1340,7 @@ mod tests {
 
     #[test]
     fn test_destroy() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(
-            MemLog::new_no_reentrance("destroy"),
-            MemBlob::new_no_reentrance("destroy"),
-            Metrics::default(),
-        )?;
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
 
         let _ = block_on(|res| i.register("stream", "", "", res))?;
 
@@ -1395,11 +1371,7 @@ mod tests {
 
     #[test]
     fn codec_mismatch() -> Result<(), IndexedError> {
-        let mut i = Indexed::new(
-            MemLog::new_no_reentrance("codec_mismatch"),
-            MemBlob::new_no_reentrance("codec_mismatch"),
-            Metrics::default(),
-        )?;
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
 
         let _ = block_on(|res| i.register("stream", "key", "val", res))?;
 

@@ -15,7 +15,7 @@ use ore::metrics::MetricsRegistry;
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, StreamReadHandle};
-use persist::mem::{MemBlob, MemLog};
+use persist::mem::MemRegistry;
 use persist::storage::LockInfo;
 use persist::Codec;
 
@@ -77,15 +77,7 @@ where
 }
 
 pub fn bench_mem_snapshots(c: &mut Criterion) {
-    bench_runtime_snapshots(c, "mem", |path| {
-        let name = format!("snapshot_bench_{}", path);
-        let lock_info = LockInfo::new_no_reentrance(name);
-        runtime::start(
-            MemLog::new(lock_info.clone()),
-            MemBlob::new(lock_info),
-            &MetricsRegistry::new(),
-        )
-    });
+    bench_runtime_snapshots(c, "mem", |_path| MemRegistry::new().runtime_no_reentrance());
 }
 
 pub fn bench_file_snapshots(c: &mut Criterion) {
