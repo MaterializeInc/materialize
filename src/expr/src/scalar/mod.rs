@@ -985,7 +985,9 @@ impl fmt::Display for MirScalarExpr {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
+)]
 pub enum EvalError {
     DivisionByZero,
     FloatOverflow,
