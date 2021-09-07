@@ -1944,7 +1944,7 @@ SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('b', 2), ('a', 1))
 query T
 SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('a', 1), ('a', 2))
 ----
-{"a":1}
+{"a":2}
 
 query T
 SELECT jsonb_object_agg(null, null)

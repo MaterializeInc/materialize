@@ -296,3 +296,105 @@ query T
 SELECT pg_typeof(max(column1)) FROM (VALUES (1::int2), (-1::int2));
 ----
 smallint
+
+# ORDER BY
+
+query TTTT
+WITH
+    v (a, b)
+        AS (
+            VALUES
+                ('a', 1),
+                ('b', 2),
+                ('c', 0),
+                ('d', 2)
+        )
+SELECT
+    list_agg(a ORDER BY a DESC)::text AS a_desc,
+    list_agg(a ORDER BY b)::text AS b,
+    list_agg(a ORDER BY b, a ASC)::text AS b_a_asc,
+    list_agg(a ORDER BY b, a DESC)::text AS b_a_desc
+FROM
+    v
+----
+{d,c,b,a}  {c,a,b,d}  {c,a,b,d}  {c,a,d,b}
+
+query TTTT
+WITH
+    v (a, b)
+        AS (
+            VALUES
+                ('a', 1),
+                ('b', 2),
+                ('c', 0),
+                ('d', 2)
+        )
+SELECT
+    array_agg(a ORDER BY a DESC)::text AS a_desc,
+    array_agg(a ORDER BY b)::text AS b,
+    array_agg(a ORDER BY b, a ASC)::text AS b_a_asc,
+    array_agg(a ORDER BY b, a DESC)::text AS b_a_desc
+FROM
+    v
+----
+{d,c,b,a}  {c,a,b,d}  {c,a,b,d}  {c,a,d,b}
+
+query TTTT
+WITH
+    v (a, b)
+        AS (
+            VALUES
+                ('a', 1),
+                ('b', 2),
+                ('c', 0),
+                ('d', 2)
+        )
+SELECT
+    string_agg(a, '-' ORDER BY a DESC)::text AS a_desc,
+    string_agg(a, '-' ORDER BY b)::text AS b,
+    string_agg(a, '-' ORDER BY b, a ASC)::text AS b_a_asc,
+    string_agg(a, '-' ORDER BY b, a DESC)::text AS b_a_desc
+FROM
+    v
+----
+d-c-b-a c-a-b-d c-a-b-d c-a-d-b
+
+query TTTT
+WITH
+    v (a, b)
+        AS (
+            VALUES
+                ('a', 1),
+                ('b', 2),
+                ('c', 0),
+                ('d', 2)
+        )
+SELECT
+    jsonb_agg(a ORDER BY a DESC)::text AS a_desc,
+    jsonb_agg(a ORDER BY b)::text AS b,
+    jsonb_agg(a ORDER BY b, a ASC)::text AS b_a_asc,
+    jsonb_agg(a ORDER BY b, a DESC)::text AS b_a_desc
+FROM
+    v
+----
+["d","c","b","a"]  ["c","a","b","d"]  ["c","a","b","d"]  ["c","a","d","b"]
+
+query TTTT
+WITH
+    v (a, b)
+        AS (
+            VALUES
+                ('a', 1),
+                ('b', 2),
+                ('c', 0),
+                ('d', 2)
+        )
+SELECT
+    jsonb_object_agg(b, a ORDER BY a DESC)::text AS a_desc,
+    jsonb_object_agg(b, a ORDER BY b)::text AS b,
+    jsonb_object_agg(b, a ORDER BY b, a ASC)::text AS b_a_asc,
+    jsonb_object_agg(b, a ORDER BY b, a DESC)::text AS b_a_desc
+FROM
+    v
+----
+{"0":"c","1":"a","2":"b"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"b"}

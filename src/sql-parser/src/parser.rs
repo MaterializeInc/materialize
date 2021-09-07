@@ -531,7 +531,7 @@ impl<'a> Parser<'a> {
                 format!("Cannot specify both ALL and DISTINCT in function: {}", name)
             );
         }
-        let args = self.parse_optional_args()?;
+        let args = self.parse_optional_args(true)?;
         let filter = if self.parse_keyword(FILTER) {
             self.expect_token(&Token::LParen)?;
             self.expect_keyword(WHERE)?;
@@ -703,7 +703,7 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
             name: UnresolvedObjectName::unqualified("date_part"),
-            args: FunctionArgs::Args(vec![Expr::Value(Value::String(field)), expr]),
+            args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
             distinct: false,
@@ -752,7 +752,7 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
             name: UnresolvedObjectName::unqualified(name),
-            args: FunctionArgs::Args(exprs),
+            args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
             distinct: false,
@@ -770,7 +770,7 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
             name: UnresolvedObjectName::unqualified("position"),
-            args: FunctionArgs::Args(vec![needle, haystack]),
+            args: FunctionArgs::args(vec![needle, haystack]),
             filter: None,
             over: None,
             distinct: false,
@@ -992,7 +992,7 @@ impl<'a> Parser<'a> {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
                         name: UnresolvedObjectName(vec!["timezone".into()]),
-                        args: FunctionArgs::Args(vec![self.parse_subexpr(precedence)?, expr]),
+                        args: FunctionArgs::args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
                         distinct: false,
@@ -3622,7 +3622,7 @@ impl<'a> Parser<'a> {
                 self.expect_token(&Token::LParen)?;
                 return Ok(TableFactor::Function {
                     name,
-                    args: self.parse_optional_args()?,
+                    args: self.parse_optional_args(false)?,
                     alias: self.parse_optional_table_alias()?,
                 });
             }
@@ -3704,7 +3704,7 @@ impl<'a> Parser<'a> {
             if self.consume_token(&Token::LParen) {
                 Ok(TableFactor::Function {
                     name,
-                    args: self.parse_optional_args()?,
+                    args: self.parse_optional_args(false)?,
                     alias: self.parse_optional_table_alias()?,
                 })
             } else {
@@ -3792,16 +3792,27 @@ impl<'a> Parser<'a> {
         Ok(Assignment { id, value })
     }
 
-    fn parse_optional_args(&mut self) -> Result<FunctionArgs<Raw>, ParserError> {
+    fn parse_optional_args(
+        &mut self,
+        allow_order_by: bool,
+    ) -> Result<FunctionArgs<Raw>, ParserError> {
         if self.consume_token(&Token::Star) {
             self.expect_token(&Token::RParen)?;
             Ok(FunctionArgs::Star)
         } else if self.consume_token(&Token::RParen) {
-            Ok(FunctionArgs::Args(vec![]))
+            Ok(FunctionArgs::args(vec![]))
         } else {
             let args = self.parse_comma_separated(Parser::parse_expr)?;
+            // ORDER BY can only appear after at least one argument, and not after a
+            // star. We can ignore checking for it in the other branches. See:
+            // https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-AGGREGATES
+            let order_by = if allow_order_by && self.parse_keywords(&[ORDER, BY]) {
+                self.parse_comma_separated(Parser::parse_order_by_expr)?
+            } else {
+                vec![]
+            };
             self.expect_token(&Token::RParen)?;
-            Ok(FunctionArgs::Args(args))
+            Ok(FunctionArgs::Args { args, order_by })
         }
     }
 

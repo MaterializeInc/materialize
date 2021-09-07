@@ -177,9 +177,12 @@ pub fn create_statement(
 
             match &mut func.args {
                 FunctionArgs::Star => (),
-                FunctionArgs::Args(args) => {
+                FunctionArgs::Args { args, order_by } => {
                     for arg in args {
                         self.visit_expr_mut(arg);
+                    }
+                    for expr in order_by {
+                        self.visit_order_by_expr_mut(expr);
                     }
                 }
             }
@@ -208,9 +211,12 @@ pub fn create_statement(
 
                     match args {
                         FunctionArgs::Star => (),
-                        FunctionArgs::Args(args) => {
+                        FunctionArgs::Args { args, order_by } => {
                             for expr in args {
                                 self.visit_expr_mut(expr);
+                            }
+                            for expr in order_by {
+                                self.visit_order_by_expr_mut(expr);
                             }
                         }
                     }

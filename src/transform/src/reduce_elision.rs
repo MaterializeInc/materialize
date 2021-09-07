@@ -83,7 +83,7 @@ impl ReduceElision {
                             .call_unary(UnaryFunc::CastInt64ToNumeric(Some(0))),
 
                         // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
-                        AggregateFunc::JsonbAgg => MirScalarExpr::CallVariadic {
+                        AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
                             func: VariadicFunc::JsonbBuildArray,
                             exprs: vec![a.expr.clone()],
                         },

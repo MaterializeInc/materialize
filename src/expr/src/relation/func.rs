@@ -14,7 +14,6 @@ use std::iter;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
-use itertools::Itertools;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use regex::Regex;
@@ -27,6 +26,7 @@ use repr::adt::numeric;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
+use crate::relation::{compare_columns, ColumnOrder};
 use crate::scalar::func::jsonb_stringify;
 use crate::EvalError;
 
@@ -418,12 +418,13 @@ where
         })
 }
 
-fn string_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+fn string_agg<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     const EMPTY_SEP: &'static str = "";
 
+    let datums = order_aggregate_datums(datums, order_by);
     let mut sep_value_pairs = datums.into_iter().filter_map(|d| {
         if d.is_null() {
             return None;
@@ -453,48 +454,91 @@ where
     Datum::String(temp_storage.push_string(s))
 }
 
-fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let datums = order_aggregate_datums(datums, order_by);
     temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().filter(|d| !d.is_null()));
     })
 }
 
-fn jsonb_object_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+fn jsonb_object_agg<'a, I>(
+    datums: I,
+    temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let datums = order_aggregate_datums(datums, order_by);
     temp_storage.make_datum(|packer| {
-        packer.push_dict(
-            datums
-                .into_iter()
-                .filter_map(|d| {
-                    if d.is_null() {
-                        return None;
-                    }
-                    let mut list = d.unwrap_list().iter();
-                    let key = list.next().unwrap();
-                    let val = list.next().unwrap();
-                    if key.is_null() {
-                        // TODO(benesch): this should produce an error, but
-                        // aggregate functions cannot presently produce errors.
-                        None
-                    } else {
-                        Some((key.unwrap_str(), val))
-                    }
-                })
-                .sorted_by_key(|(k, _v)| *k)
-                .dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2),
-        );
+        let mut datums: Vec<_> = datums
+            .into_iter()
+            .filter_map(|d| {
+                if d.is_null() {
+                    return None;
+                }
+                let mut list = d.unwrap_list().iter();
+                let key = list.next().unwrap();
+                let val = list.next().unwrap();
+                if key.is_null() {
+                    // TODO(benesch): this should produce an error, but
+                    // aggregate functions cannot presently produce errors.
+                    None
+                } else {
+                    Some((key.unwrap_str(), val))
+                }
+            })
+            .collect();
+        // datums are ordered by any ORDER BY clause now, and we want to preserve
+        // the last entry for each key, but we also need to present unique and sorted
+        // keys to push_dict. Use sort_by here, which is stable, and so will preserve
+        // the ORDER BY order. Then reverse and dedup to retain the last of each
+        // key. Reverse again so we're back in push_dict order.
+        datums.sort_by_key(|(k, _v)| *k);
+        datums.reverse();
+        datums.dedup_by_key(|(k, _v)| *k);
+        datums.reverse();
+        packer.push_dict(datums);
     })
 }
 
-fn array_concat<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+// Assuming datums is a List, sort them by the 2nd through Nth elements
+// corresponding to order_by, then return the 1st element.
+fn order_aggregate_datums<'a, I>(
+    datums: I,
+    order_by: &[ColumnOrder],
+) -> impl Iterator<Item = Datum<'a>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let mut rows: Vec<(Datum, Row)> = datums
+        .into_iter()
+        .filter_map(|d| {
+            let list = d.unwrap_list();
+            let expr = list.iter().next().unwrap();
+            let order_row = Row::pack(list.iter().skip(1));
+            Some((expr, order_row))
+        })
+        .collect();
+    let mut sort_by = |left: &(_, Row), right: &(_, Row)| {
+        let left = &left.1;
+        let right = &right.1;
+        compare_columns(&order_by, &left.unpack(), &right.unpack(), || {
+            left.cmp(&right)
+        })
+    };
+    rows.sort_by(&mut sort_by);
+    rows.into_iter().map(|(expr, _order_row)| expr)
+}
+
+fn array_concat<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let datums = order_aggregate_datums(datums, order_by);
     let datums: Vec<_> = datums
         .into_iter()
         .map(|d| d.unwrap_array().elements().iter())
@@ -509,10 +553,11 @@ where
     })
 }
 
-fn list_concat<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+fn list_concat<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let datums = order_aggregate_datums(datums, order_by);
     temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().map(|d| d.unwrap_list().iter()).flatten());
     })
@@ -551,23 +596,37 @@ pub enum AggregateFunc {
     Count,
     Any,
     All,
-    /// Accumulates JSON-typed `Datum`s into a JSON list.
+    /// Accumulates `Datum::List`s whose first element is a JSON-typed `Datum`s
+    /// into a JSON list. The other elements are columns used by `order_by`.
     ///
     /// WARNING: Unlike the `jsonb_agg` function that is exposed by the SQL
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
-    JsonbAgg,
-    /// Zips JSON-typed `Datum`s into a JSON map.
+    JsonbAgg {
+        order_by: Vec<ColumnOrder>,
+    },
+    /// Zips `Datum::List`s whose first element is a JSON-typed `Datum`s into a
+    /// JSON map. The other elements are columns used by `order_by`.
     ///
     /// WARNING: Unlike the `jsonb_object_agg` function that is exposed by the SQL
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
-    JsonbObjectAgg,
-    /// Accumulates `Datum::Array`s into a single `Datum::Array`.
-    ArrayConcat,
-    /// Accumulates `Datum::List`s into a single `Datum::List`.
-    ListConcat,
-    StringAgg,
+    JsonbObjectAgg {
+        order_by: Vec<ColumnOrder>,
+    },
+    /// Accumulates `Datum::List`s whose first element is a `Datum::Array` into a
+    /// single `Datum::Array`. The other elements are columns used by `order_by`.
+    ArrayConcat {
+        order_by: Vec<ColumnOrder>,
+    },
+    /// Accumulates `Datum::List`s whose first element is a `Datum::List` into a
+    /// single `Datum::List`. The other elements are columns used by `order_by`.
+    ListConcat {
+        order_by: Vec<ColumnOrder>,
+    },
+    StringAgg {
+        order_by: Vec<ColumnOrder>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -612,11 +671,13 @@ impl AggregateFunc {
             AggregateFunc::Count => count(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
-            AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
-            AggregateFunc::JsonbObjectAgg => jsonb_object_agg(datums, temp_storage),
-            AggregateFunc::ArrayConcat => array_concat(datums, temp_storage),
-            AggregateFunc::ListConcat => list_concat(datums, temp_storage),
-            AggregateFunc::StringAgg => string_agg(datums, temp_storage),
+            AggregateFunc::JsonbAgg { order_by } => jsonb_agg(datums, temp_storage, order_by),
+            AggregateFunc::JsonbObjectAgg { order_by } => {
+                jsonb_object_agg(datums, temp_storage, order_by)
+            }
+            AggregateFunc::ArrayConcat { order_by } => array_concat(datums, temp_storage, order_by),
+            AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
+            AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -640,8 +701,8 @@ impl AggregateFunc {
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
-            AggregateFunc::ArrayConcat => Datum::empty_array(),
-            AggregateFunc::ListConcat => Datum::empty_list(),
+            AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
+            AggregateFunc::ListConcat { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -656,15 +717,19 @@ impl AggregateFunc {
             AggregateFunc::Count => ScalarType::Int64,
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
-            AggregateFunc::JsonbAgg => ScalarType::Jsonb,
-            AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
+            AggregateFunc::JsonbAgg { .. } => ScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg { .. } => ScalarType::Jsonb,
             AggregateFunc::SumInt16 => ScalarType::Int64,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Numeric { scale: Some(0) },
-            // Inputs are coerced to the correct container type, so the input_type is
-            // already correct.
-            AggregateFunc::ArrayConcat | AggregateFunc::ListConcat => input_type.scalar_type,
-            AggregateFunc::StringAgg => ScalarType::String,
+            AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
+                match input_type.scalar_type {
+                    // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
+                    ScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
+                    _ => unreachable!(),
+                }
+            }
+            AggregateFunc::StringAgg { .. } => ScalarType::String,
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -713,7 +778,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
-            | AggregateFunc::StringAgg => true,
+            | AggregateFunc::StringAgg { .. } => true,
             // Count is never null
             AggregateFunc::Count => false,
             _ => false,
@@ -843,11 +908,11 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
-            AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
-            AggregateFunc::JsonbObjectAgg => f.write_str("jsonb_object_agg"),
-            AggregateFunc::ArrayConcat => f.write_str("array_agg"),
-            AggregateFunc::ListConcat => f.write_str("list_agg"),
-            AggregateFunc::StringAgg => f.write_str("string_agg"),
+            AggregateFunc::JsonbAgg { .. } => f.write_str("jsonb_agg"),
+            AggregateFunc::JsonbObjectAgg { .. } => f.write_str("jsonb_object_agg"),
+            AggregateFunc::ArrayConcat { .. } => f.write_str("array_agg"),
+            AggregateFunc::ListConcat { .. } => f.write_str("list_agg"),
+            AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

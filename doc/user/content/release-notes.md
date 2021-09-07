@@ -50,6 +50,8 @@ Wrap your release notes at the 80 character mark.
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
 
+- Support `ORDER BY` in aggregate functions.
+
 {{% version-header v0.9.2 %}}
 
 - The metrics scraping interval to populate

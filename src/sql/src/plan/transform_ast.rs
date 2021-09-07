@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, Query, Raw, Select, SelectItem, TableAlias, TableFactor,
-    TableWithJoins, UnresolvedObjectName, Value,
+    Expr, Function, FunctionArgs, Ident, OrderByExpr, Query, Raw, Select, SelectItem, TableAlias,
+    TableFactor, TableWithJoins, UnresolvedObjectName, Value,
 };
 
 use crate::normalize;
@@ -96,12 +96,16 @@ impl<'a> FuncRewriter<'a> {
     fn plan_agg(
         name: UnresolvedObjectName,
         expr: Expr<Raw>,
+        order_by: Vec<OrderByExpr<Raw>>,
         filter: Option<Box<Expr<Raw>>>,
         distinct: bool,
     ) -> Expr<Raw> {
         Expr::Function(Function {
             name,
-            args: FunctionArgs::Args(vec![expr]),
+            args: FunctionArgs::Args {
+                args: vec![expr],
+                order_by,
+            },
             filter,
             over: None,
             distinct,
@@ -112,6 +116,7 @@ impl<'a> FuncRewriter<'a> {
         let sum = Self::plan_agg(
             UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
             expr.clone(),
+            vec![],
             filter.clone(),
             distinct,
         )
@@ -119,6 +124,7 @@ impl<'a> FuncRewriter<'a> {
         let count = Self::plan_agg(
             UnresolvedObjectName::qualified(&["pg_catalog", "count"]),
             expr,
+            vec![],
             filter,
             distinct,
         );
@@ -150,12 +156,14 @@ impl<'a> FuncRewriter<'a> {
         let sum_squares = Self::plan_agg(
             UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
             expr_squared,
+            vec![],
             filter.clone(),
             distinct,
         );
         let sum = Self::plan_agg(
             UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
             expr.clone(),
+            vec![],
             filter.clone(),
             distinct,
         );
@@ -163,6 +171,7 @@ impl<'a> FuncRewriter<'a> {
         let count = Self::plan_agg(
             UnresolvedObjectName::qualified(&["pg_catalog", "count"]),
             expr,
+            vec![],
             filter,
             distinct,
         );
@@ -189,7 +198,7 @@ impl<'a> FuncRewriter<'a> {
         match expr {
             Expr::Function(Function {
                 name,
-                args: FunctionArgs::Args(args),
+                args: FunctionArgs::Args { args, order_by: _ },
                 filter,
                 distinct,
                 over: None,
@@ -378,7 +387,7 @@ impl Desugarer {
                                 Ident::new("mz_catalog"),
                                 Ident::new("unnest"),
                             ]),
-                            args: FunctionArgs::Args(vec![right.take()]),
+                            args: FunctionArgs::args(vec![right.take()]),
                             alias: Some(TableAlias {
                                 name: Ident::new("_"),
                                 columns: vec![binding.clone()],
