@@ -119,8 +119,8 @@ select * from (select 1, a+1 from t), t;
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#0 + 1), 1
-| Project (#2, #3)
+| Map (#0 + 1)
+| Project (#2)
 | ArrangeBy ()
 
 %1 =
@@ -129,7 +129,8 @@ select * from (select 1, a+1 from t), t;
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| Project (#1, #0, #2, #3)
+| Map 1
+| Project (#3, #0..#2)
 
 EOF
 
@@ -139,8 +140,8 @@ select * from (select b+1, 2, 1, a+1 from t), t;
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#1 + 1), (#0 + 1), 2, 1
-| Project (#2..#5)
+| Map (#1 + 1), (#0 + 1)
+| Project (#2, #3)
 | ArrangeBy ()
 
 %1 =
@@ -149,7 +150,8 @@ select * from (select b+1, 2, 1, a+1 from t), t;
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| Project (#0, #2, #3, #1, #4, #5)
+| Map 2, 1
+| Project (#0, #4, #5, #1..#3)
 
 EOF
 
@@ -159,8 +161,8 @@ select * from (select 3, b+1, 2, a+2, 1, a+1 from t), t;
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#1 + 1), (#0 + 2), (#0 + 1), 3, 2, 1
-| Project (#2..#7)
+| Map (#1 + 1), (#0 + 2), (#0 + 1)
+| Project (#2..#4)
 | ArrangeBy ()
 
 %1 =
@@ -169,7 +171,8 @@ select * from (select 3, b+1, 2, a+2, 1, a+1 from t), t;
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| Project (#3, #0, #4, #1, #5, #2, #6, #7)
+| Map 3, 2, 1
+| Project (#5, #0, #6, #1, #7, #2..#4)
 
 EOF
 
@@ -495,12 +498,8 @@ explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal fr
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#0 + 1)
-| Project (#2)
-| Distinct group=(#0)
-| Map (#0 + 2)
-| Project (#1)
-| Distinct group=(#0)
+| Project (#0)
+| Distinct group=(((#0 + 1) + 2))
 
 EOF
 
@@ -509,9 +508,8 @@ explain select distinct a1.a, 123 from (select distinct a+1 as a, 234 as literal
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#0 + 1)
-| Project (#2)
-| Distinct group=(#0)
+| Project (#0)
+| Distinct group=((#0 + 1))
 | Map 123
 
 EOF
@@ -521,12 +519,8 @@ explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 a
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#0 + 1)
-| Project (#2)
-| Distinct group=(#0)
-| Map (#0 + 2)
-| Project (#1)
-| Distinct group=(#0)
+| Project (#0)
+| Distinct group=(((#0 + 1) + 2))
 | Map 123
 
 EOF
@@ -676,13 +670,16 @@ explain select min(a) from t_pk where a between 38 and 195 and a = (select a fro
 %0 = Let l0 =
 | Get materialize.public.t (u1)
 | Filter (#0 = 1308)
-| Project (#0)
 
 %1 =
 | Get materialize.public.t_pk (u3)
 | ArrangeBy (#0)
 
 %2 =
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
 | Get %0 (l0)
 | Project ()
 | Reduce group=()
@@ -691,31 +688,31 @@ explain select min(a) from t_pk where a between 38 and 195 and a = (select a fro
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%3 =
-| Union %0 %2
+%4 =
+| Union %2 %3
 
-%4 = Let l1 =
-| Join %1 %3 (= #0 #2)
-| | implementation = Differential %3 %1.(#0)
+%5 = Let l1 =
+| Join %1 %4 (= #0 #2)
+| | implementation = Differential %4 %1.(#0)
 | Filter (#0 <= 195), (#0 >= 38)
 | Project (#0)
 | Reduce group=()
 | | agg min(#0)
 
-%5 =
-| Get %4 (l1)
+%6 =
+| Get %5 (l1)
 | Project ()
 | Negate
 
-%6 =
+%7 =
 | Constant ()
 
-%7 =
-| Union %5 %6
+%8 =
+| Union %6 %7
 | Map null
 
-%8 =
-| Union %4 %7
+%9 =
+| Union %5 %8
 
 EOF
 
@@ -725,7 +722,6 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 %0 = Let l0 =
 | Get materialize.public.t (u1)
 | Filter (#0 = 1308)
-| Project (#0)
 
 %1 =
 | Get materialize.public.t (u1)
@@ -735,6 +731,10 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 
 %2 =
 | Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get %0 (l0)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -742,30 +742,30 @@ explain select min(a) from t where a between 38 and 195 and a = (select a from t
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%3 =
-| Union %0 %2
+%4 =
+| Union %2 %3
 
-%4 = Let l1 =
-| Join %1 %3 (= #0 #1)
-| | implementation = Differential %3 %1.(#0)
+%5 = Let l1 =
+| Join %1 %4 (= #0 #1)
+| | implementation = Differential %4 %1.(#0)
 | Project (#0)
 | Reduce group=()
 | | agg min(#0)
 
-%5 =
-| Get %4 (l1)
+%6 =
+| Get %5 (l1)
 | Project ()
 | Negate
 
-%6 =
+%7 =
 | Constant ()
 
-%7 =
-| Union %5 %6
+%8 =
+| Union %6 %7
 | Map null
 
-%8 =
-| Union %4 %7
+%9 =
+| Union %5 %8
 
 EOF
 

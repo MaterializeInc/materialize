@@ -112,9 +112,10 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 
 %4 =
 | Get %3 (l1)
-| Map 123
-| Project (#3, #1)
+| Project (#1)
 | Negate
+| Map 123
+| Project (#1, #0)
 
 %5 =
 | Get %0 (l0)
@@ -477,9 +478,10 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 2
 
 %4 =
 | Get %3 (l1)
-| Map 123
-| Project (#3, #1)
+| Project (#1)
 | Negate
+| Map 123
+| Project (#1, #0)
 
 %5 =
 | Get %0 (l0)

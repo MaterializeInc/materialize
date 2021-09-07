@@ -586,10 +586,8 @@ impl MirRelationExpr {
                         if let MirRelationExpr::Map { input, .. } = &inputs[0] {
                             if let MirRelationExpr::Union { base, inputs } = &**input {
                                 if inputs.len() == 1 {
-                                    if let MirRelationExpr::Negate { input } = &**base {
-                                        if let MirRelationExpr::Project { input, outputs } =
-                                            &**input
-                                        {
+                                    if let MirRelationExpr::Project { input, outputs } = &**base {
+                                        if let MirRelationExpr::Negate { input } = &**input {
                                             if let MirRelationExpr::Get {
                                                 id: second_id,
                                                 typ: _,

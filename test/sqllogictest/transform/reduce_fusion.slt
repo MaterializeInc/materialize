@@ -24,9 +24,8 @@ EXPLAIN SELECT DISTINCT r0 FROM (SELECT DISTINCT f1 + 1 as r0, f0 FROM t)
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#1 + 1)
-| Project (#3)
-| Distinct group=(#0)
+| Project (#1)
+| Distinct group=((#0 + 1))
 
 EOF
 
@@ -75,11 +74,7 @@ EXPLAIN SELECT f0 / 20 FROM (SELECT f0 / 10 AS f0 FROM t GROUP BY f0 / 10) GROUP
 ----
 %0 =
 | Get materialize.public.t (u1)
-| Map (#0 / 10)
-| Project (#3)
-| Distinct group=(#0)
-| Map (#0 / 20)
-| Project (#1)
-| Distinct group=(#0)
+| Project (#0)
+| Distinct group=(((#0 / 10) / 20))
 
 EOF

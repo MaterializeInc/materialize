@@ -139,7 +139,6 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 %0 = Let l0 =
 | Get materialize.public.lineitem (u15)
 | Filter (#0 = 38)
-| Project (#0)
 
 %1 =
 | Get materialize.public.lineitem (u15)
@@ -153,6 +152,10 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 
 %3 =
 | Get %0 (l0)
+| Project (#0)
+
+%4 =
+| Get %0 (l0)
 | Project ()
 | Reduce group=()
 | | agg count(true)
@@ -160,31 +163,31 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 | Project ()
 | Map (err: more than one record produced in subquery)
 
-%4 =
-| Union %0 %3
+%5 =
+| Union %3 %4
 
-%5 = Let l1 =
-| Join %1 %2 %4 (= #0 #3) (= #1 #5)
-| | implementation = Differential %4 %2.(#0) %1.(#0)
+%6 = Let l1 =
+| Join %1 %2 %5 (= #0 #3) (= #1 #5)
+| | implementation = Differential %5 %2.(#0) %1.(#0)
 | Filter (1997-08-25 00:00:00 = datetots(#4)), (#1 <= 195), (#1 >= 38)
 | Project (#1)
 | Reduce group=()
 | | agg min(#0)
 
-%6 =
-| Get %5 (l1)
+%7 =
+| Get %6 (l1)
 | Project ()
 | Negate
 
-%7 =
+%8 =
 | Constant ()
 
-%8 =
-| Union %6 %7
+%9 =
+| Union %7 %8
 | Map null
 
-%9 =
-| Union %5 %8
+%10 =
+| Union %6 %9
 
 EOF
 

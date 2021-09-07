@@ -30,9 +30,9 @@ steps
 | Union %0 %1
 
 ====
-No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, ProjectionPushdown, UpdateLet, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, ProjectionPushdown, UpdateLet, FoldConstants { limit: Some(10000) }] }], limit: 100 }
+No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }
 ====
-Applied Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, ProjectionPushdown, UpdateLet, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
+Applied Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet { inline_mfp: false }, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
 %0 = Let l0 =
 | Get x (u0)
 | Filter #0
@@ -41,7 +41,22 @@ Applied Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting
 | Union %0 %0
 
 ====
-No change: Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Mfp
+No change: ProjectionPushdown, UpdateLet
+====
+Applied InlineLet { inline_mfp: true }:
+%0 =
+| Get x (u0)
+| Filter #0
+
+%1 =
+| Get x (u0)
+| Filter #0
+
+%2 =
+| Union %0 %1
+
+====
+No change: Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, CanonicalizeMfp
 ====
 Applied RelationCSE:
 %0 = Let l0 =
@@ -58,7 +73,7 @@ Applied RelationCSE:
 | Get %2 (l2)
 
 ====
-Applied InlineLet:
+Applied InlineLet { inline_mfp: false }:
 %0 = Let l1 =
 | Get x (u0)
 | Filter #0
@@ -95,22 +110,22 @@ steps in=json format=test
 ----
 (Filter (Join [(get u210) (get x)] [] null Unimplemented) [(CallBinary Or (CallBinary And (CallUnary IsNull #0) (CallUnary IsNull #2)) (CallBinary Eq #0 (CallBinary AddInt64 #2 (1 Int64))))])
 ====
-No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, ProjectionPushdown, UpdateLet, FoldConstants { limit: Some(10000) }] }], limit: 100 }
+No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }
 ====
-Applied Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, ProjectionPushdown, UpdateLet, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
+Applied Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
 (Join [(get u210) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null Unimplemented)
 ====
-No change: Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, ProjectionPushdown, UpdateLet, FoldConstants { limit: Some(10000) }] }], limit: 100 }
+No change: Fixpoint { transforms: [ReductionPushdown, ReduceElision, LiteralLifting, RelationCSE, InlineLet { inline_mfp: false }, UpdateLet, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Negate, Filter, Project, Join, InlineLet { inline_mfp: false }, Reduce, Union, UnionBranchCancellation, UpdateLet, RedundantJoin, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, UpdateLet, InlineLet { inline_mfp: true }
 ====
 Applied Fixpoint { transforms: [JoinImplementation, ColumnKnowledge, FoldConstants { limit: Some(10000) }, Demand, LiteralLifting], limit: 100 }:
 (Join [(ArrangeBy (get u210) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]]))
 ====
-No change: ReductionPushdown, Mfp
+No change: ReductionPushdown, CanonicalizeMfp
 ====
 Applied RelationCSE:
 (let l0 (get u210) (let l1 (ArrangeBy (get l0) [[#0]]) (let l2 (get x) (let l3 (Join [(get l1) (get l2)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]])) (get l3)))))
 ====
-Applied InlineLet:
+Applied InlineLet { inline_mfp: false }:
 (Join [(ArrangeBy (get u210) [[#0]]) (get x)] [[#0 (CallBinary AddInt64 #2 (1 Int64))]] null (Differential [1 null] [[0 [#0]]]))
 ====
 No change: UpdateLet, FoldConstants { limit: Some(10000) }

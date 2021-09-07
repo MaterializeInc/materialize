@@ -168,7 +168,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::filter::Filter),
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
-                Box::new(crate::inline_let::InlineLet),
+                Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
@@ -186,8 +186,6 @@ impl Default for FuseAndCollapse {
                 // no longer works against redundant join, check if it is still
                 // necessary to run RedundantJoin here.
                 Box::new(crate::redundant_join::RedundantJoin),
-                Box::new(crate::projection_pushdown::ProjectionPushdown),
-                Box::new(crate::update_let::UpdateLet),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
@@ -278,7 +276,7 @@ impl Optimizer {
                     // Identifies common relation subexpressions.
                     // Must be followed by let inlining, to keep under control.
                     Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet),
+                    Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
                     Box::new(crate::update_let::UpdateLet),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
@@ -296,6 +294,14 @@ impl Optimizer {
     pub fn for_dataflow() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
+            Box::new(crate::projection_pushdown::ProjectionPushdown),
+            // Types need to be updates after ProjectionPushdown
+            // because the width of local values may have changed.
+            Box::new(crate::update_let::UpdateLet),
+            // Inline Let expressions whose values are just Maps, Filters, and
+            // Projects around a Get because JoinImplementation cannot lift them
+            // through a Let expression.
+            Box::new(crate::inline_let::InlineLet { inline_mfp: true }),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
@@ -311,7 +317,7 @@ impl Optimizer {
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.
             Box::new(crate::cse::relation_cse::RelationCSE),
-            Box::new(crate::inline_let::InlineLet),
+            Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
             Box::new(crate::update_let::UpdateLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
@@ -324,7 +330,7 @@ impl Optimizer {
     pub fn pre_optimization() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             Box::new(crate::fusion::join::Join),
-            Box::new(crate::inline_let::InlineLet),
+            Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
