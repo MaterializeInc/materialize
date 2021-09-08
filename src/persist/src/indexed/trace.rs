@@ -360,11 +360,14 @@ pub struct TraceSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
+        &mut self,
+        buf: &mut E,
+    ) -> Result<bool, Error> {
         if let Some(batch) = self.updates.pop() {
             buf.extend(batch.updates.iter().cloned());
         }
-        !self.updates.is_empty()
+        Ok(!self.updates.is_empty())
     }
 }
 
@@ -527,7 +530,7 @@ mod tests {
         assert_eq!(snapshot.since, Antichain::from_elem(3));
         assert_eq!(snapshot.ts_upper, Antichain::from_elem(9));
 
-        let updates = snapshot.read_to_end();
+        let updates = snapshot.read_to_end()?;
 
         assert_eq!(
             updates,
@@ -582,7 +585,7 @@ mod tests {
         assert_eq!(snapshot.since, Antichain::from_elem(10));
         assert_eq!(snapshot.ts_upper, Antichain::from_elem(10));
 
-        let updates = snapshot.read_to_end();
+        let updates = snapshot.read_to_end()?;
 
         assert_eq!(
             updates,

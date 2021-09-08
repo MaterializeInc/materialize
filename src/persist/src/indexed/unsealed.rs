@@ -312,7 +312,10 @@ pub struct UnsealedSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
+        &mut self,
+        buf: &mut E,
+    ) -> Result<bool, Error> {
         if let Some(batch) = self.updates.pop() {
             let updates = batch
                 .updates
@@ -321,7 +324,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
                 .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
             buf.extend(updates);
         }
-        !self.updates.is_empty()
+        Ok(!self.updates.is_empty())
     }
 }
 
@@ -387,7 +390,7 @@ mod tests {
     ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
         let hi = hi.map_or_else(|| Antichain::new(), |e| Antichain::from_elem(e));
         let snapshot = unsealed.snapshot(Antichain::from_elem(lo), hi, &blob)?;
-        let updates = snapshot.read_to_end();
+        let updates = snapshot.read_to_end()?;
         Ok(updates)
     }
 
