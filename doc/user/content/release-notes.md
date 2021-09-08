@@ -52,6 +52,8 @@ Wrap your release notes at the 80 character mark.
 
 - Support `ORDER BY` in aggregate functions.
 
+- Fix a bug that prevented creating Avro sinks on old versions of Confluent Platform
+
 {{% version-header v0.9.2 %}}
 
 - The metrics scraping interval to populate
