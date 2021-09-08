@@ -54,6 +54,15 @@ invalid input syntax for type double precision
 > SELECT * FROM t ORDER BY i
 4 6 be
 
+> CREATE TABLE o (i int);
+> INSERT INTO o VALUES (1), (2), (3), (4);
+
+# Support subqueries
+> UPDATE t SET t = 'xy' WHERE i IN (SELECT i FROM o)
+
+> SELECT * FROM t
+4 6 xy
+
 > CREATE VIEW v AS SELECT 1 a;
 
 ! UPDATE v SET a = 1
@@ -106,7 +115,7 @@ cannot be run inside a transaction block
 > COMMIT
 
 > SELECT * FROM t ORDER BY i
-4 6 be
+4 6 xy
 <null> <null> <null>
 <null> <null> <null>
 

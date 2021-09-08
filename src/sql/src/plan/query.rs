@@ -720,7 +720,7 @@ pub fn plan_mutation_query(
                 ),
                 relation_type: &RelationType::new(desc.iter_types().cloned().collect()),
                 allow_aggregates: false,
-                allow_subqueries: false,
+                allow_subqueries: true,
             };
             let expr = plan_expr(&ecx, &expr)?.type_as(&ecx, &ScalarType::Bool)?;
             HirRelationExpr::Filter {
