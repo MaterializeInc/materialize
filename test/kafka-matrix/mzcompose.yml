@@ -25,10 +25,10 @@ mzworkflows:
         workflow: kafka-6_0_2
 
       - step: workflow
-        workflow: kafka-5_5_3
+        workflow: kafka-5_0_0
 
       - step: workflow
-        workflow: kafka-5_4_3
+        workflow: kafka-4_0_0
 
   kafka-latest:
     env:
@@ -59,16 +59,16 @@ mzworkflows:
       - step: workflow
         workflow: test-kafka
 
-  kafka-5_5_3:
+  kafka-5_0_0:
     env:
-      KAFKA_VERSION: 5.5.4
+      KAFKA_VERSION: 5.0.0
     steps:
       - step: workflow
         workflow: test-kafka
 
-  kafka-5_4_3:
+  kafka-4_0_0:
     env:
-      KAFKA_VERSION: 5.4.3
+      KAFKA_VERSION: 4.0.0
     steps:
       - step: workflow
         workflow: test-kafka
