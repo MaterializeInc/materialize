@@ -162,7 +162,7 @@ def finish(create_branch: Optional[str], affect_remote: bool) -> None:
         affect_remote=affect_remote,
     )
 
-    update_upgrade_tests_inner(new_version)
+    update_upgrade_tests_inner(new_version, force=False)
     checkout = None
     incorporate_inner(
         create_branch, checkout, affect_remote, fetch=False, is_finish=True
@@ -326,19 +326,26 @@ def update_versions_list(released_version: Version) -> None:
 
 @cli.command()
 @click.argument("released_version", type=Version.parse, default=None)
-def update_upgrade_tests(released_version: Optional[Version]) -> None:
+@click.option(
+    "--force",
+    default=False,
+    is_flag=True,
+    help="Always update list of possible upgrade tests, "
+    "whether or not there are any current_source files to rename",
+)
+def update_upgrade_tests(released_version: Optional[Version], force: bool) -> None:
     """
     Update the test/upgrade/mzcompose.yml file
 
     This is done automatically as part of the 'finish' step, this command only
-    exists in case things go wrong.
+    exists for testing or in case things go wrong.
     """
     if released_version is None:
         released_version = get_latest_tag(fetch=False)
-    update_upgrade_tests_inner(released_version)
+    update_upgrade_tests_inner(released_version, force=force)
 
 
-def update_upgrade_tests_inner(released_version: Version) -> None:
+def update_upgrade_tests_inner(released_version: Version, force: bool = False) -> None:
     if released_version.prerelease is not None:
         say("Not updating upgrade tests for prerelease")
         return
@@ -349,7 +356,7 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
     need_upgrade = [
         str(p) for p in upgrade_dir.glob("*current_source*") if "example" not in str(p)
     ]
-    if not need_upgrade:
+    if not need_upgrade and not force:
         return
     for path in need_upgrade:
         spawn.runv(["git", "mv", path, path.replace("current_source", version)])
