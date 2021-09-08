@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 mod test {
-    use expr::canonicalize::canonicalize_predicates;
+    use expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
     use expr::{MapFilterProject, MirScalarExpr};
     use expr_test_util::*;
     use lowertest::{deserialize, tokenize};
@@ -69,6 +69,18 @@ mod test {
         Ok(mfp)
     }
 
+    fn test_canonicalize_equiv(s: &str) -> Result<Vec<Vec<MirScalarExpr>>, String> {
+        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut equivalences: Vec<Vec<MirScalarExpr>> = deserialize(
+            &mut input_stream,
+            "Vec<Vec<MirScalarExpr>>",
+            &RTI,
+            &mut MirScalarExprDeserializeContext::default(),
+        )?;
+        canonicalize_equivalences(&mut equivalences);
+        Ok(equivalences)
+    }
+
     #[test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
@@ -95,6 +107,21 @@ mod test {
                                 separated(" ", map.iter()),
                                 separated(" ", filter.iter()),
                                 separated(" ", project.iter())
+                            )
+                        }
+                        Err(err) => format!("error: {}\n", err),
+                    },
+                    "canonicalize-join" => match test_canonicalize_equiv(&s.input) {
+                        Ok(equivalences) => {
+                            format!(
+                                "{}\n",
+                                separated(
+                                    "\n",
+                                    equivalences.iter().map(|e| format!(
+                                        "[{}]",
+                                        separated(" ", e.iter().map(|expr| format!("{}", expr)))
+                                    ))
+                                )
                             )
                         }
                         Err(err) => format!("error: {}\n", err),

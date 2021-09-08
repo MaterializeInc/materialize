@@ -15,8 +15,16 @@ use repr::{Datum, RelationType, ScalarType};
 
 /// Canonicalize equivalence classes of a join.
 ///
-/// This function makes it so that the same expression appears in only one
-/// equivalence class. It also sorts and dedups the equivalence classes.
+/// This function:
+/// * ensures the same expression appears in only one equivalence class.
+/// * ensures the equivalence classes are sorted and dedupped.
+/// * simplifies expressions to involve the least number of non-literal nodes.
+///   This ensures that we only replace expressions by "even simpler"
+///   expressions and that repeated substitutions reduce the complexity of
+///   expressions and a fixed point is certain to be reached. Without this
+///   rule, we might repeatedly replace a simple expression with an equivalent
+///   complex expression containing that (or another replaceable) simple
+///   expression, and repeat indefinitely.
 ///
 /// ```rust
 /// use expr::MirScalarExpr;
@@ -38,6 +46,64 @@ use repr::{Datum, RelationType, ScalarType};
 /// assert_eq!(expected, equivalences)
 /// ````
 pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
+    // Calculate the number of non-leaves for each expression.
+    let mut to_reduce = equivalences
+        .drain(..)
+        .filter_map(|mut cls| {
+            let mut result = cls
+                .drain(..)
+                .map(|expr| (rank_complexity(&expr), expr))
+                .collect::<Vec<_>>();
+            result.sort();
+            result.dedup();
+            if result.len() > 1 {
+                Some(result)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut expressions_rewritten = true;
+    while expressions_rewritten {
+        expressions_rewritten = false;
+        for i in 0..to_reduce.len() {
+            // `to_reduce` will be borrowed as immutable, so in order to modify
+            // elements of `to_reduce[i]`, we are going to pop them out of
+            // `to_reduce[i]` and put the modified version in `new_equivalence`,
+            // which will then replace `to_reduce[i]`.
+            let mut new_equivalence = Vec::with_capacity(to_reduce[i].len());
+            while let Some((_, mut popped_expr)) = to_reduce[i].pop() {
+                popped_expr.visit_mut(&mut |e: &mut MirScalarExpr| {
+                    // If a simpler expression can be found that is equivalent
+                    // to e,
+                    if let Some(simpler_e) = to_reduce.iter().find_map(|cls| {
+                        if cls.iter().skip(1).position(|(_, expr)| e == expr).is_some() {
+                            Some(cls[0].1.clone())
+                        } else {
+                            None
+                        }
+                    }) {
+                        // Replace e with the simpler expression.
+                        *e = simpler_e;
+                        expressions_rewritten = true;
+                    }
+                });
+                new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
+            }
+            new_equivalence.sort();
+            new_equivalence.dedup();
+            to_reduce[i] = new_equivalence;
+        }
+    }
+
+    // Map away the complexity rating.
+    *equivalences = to_reduce
+        .drain(..)
+        .map(|mut cls| cls.drain(..).map(|(_, expr)| expr).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+
+    // Fuse equivalence classes containing the same exprssion.
     for index in 1..equivalences.len() {
         for inner in 0..index {
             if equivalences[index]
@@ -57,11 +123,45 @@ pub fn canonicalize_equivalences(equivalences: &mut Vec<Vec<MirScalarExpr>>) {
     equivalences.sort();
 }
 
+/// Gives a relative complexity ranking for an expression. Higher numbers mean
+/// greater complexity.
+///
+/// Currently, this method weighs literals as the least complex and weighs all
+/// other expressions by the number of non-literals. In the future, we can
+/// change how complexity is ranked so that repeated substitutions would result
+/// in arriving at "better" fixed points. For example, we could try to improve
+/// performance by ranking expressions by their estimated computation time.
+///
+/// To ensure we arrive at a fixed point after repeated substitutions, valid
+/// complexity rankings must fulfill the following property:
+/// For any expression `e`, there does not exist a SQL function `f` such
+/// that `complexity(e) >= complexity(f(e))`.
+///
+/// For ease of intuiting the fixed point that we will arrive at after
+/// repeated substitutions, it is nice but not required that complexity
+/// rankings additionally fulfill the following property:
+/// If expressions `e1` and `e2` are such that
+/// `complexity(e1) < complexity(e2)` then for all SQL functions `f`,
+/// `complexity(f(e1)) < complexity(f(e2))`.
+fn rank_complexity(expr: &MirScalarExpr) -> usize {
+    if expr.is_literal() {
+        // literals are the least complex
+        return 0;
+    }
+    let mut non_literal_count = 1;
+    expr.visit(&mut |e| {
+        if !e.is_literal() {
+            non_literal_count += 1
+        }
+    });
+    non_literal_count
+}
+
 /// Canonicalize predicates of a filter.
 ///
 /// This function reduces and canonicalizes the structure of each individual
 /// predicate. Then, it transforms predicates of the form "A and B" into two: "A"
-/// and "B". Aftewards, it reduces predicates based on information from other
+/// and "B". Afterwards, it reduces predicates based on information from other
 /// predicates in the set. Finally, it sorts and deduplicates the predicates.
 ///
 /// Additionally, it also removes IS NOT NULL predicates if there is another

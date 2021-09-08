@@ -268,34 +268,34 @@ CREATE INDEX bar_idx3 on bar(a + 4);
 query T multiline
 EXPLAIN PLAN FOR
 select foo.b, bar.b, baz.b
-FROM foo, bar, baz
+FROM bar, foo, baz
 where foo.a = bar.a
   and bar.a + 4 = baz.a
 ----
 %0 =
-| Get materialize.public.foo (u1)
-| ArrangeBy (#0)
-
-%1 =
 | Get materialize.public.bar (u3)
 | ArrangeBy ((#0 + 4))
+
+%1 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.baz (u9)
 | ArrangeBy (#0)
 
 %3 =
-| Join %0 %1 %2 (= #0 #2) (= #4 (#2 + 4))
-| | implementation = Differential %2.(#0) %1.((#0 + 4)) %0.(#0)
+| Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
+| | implementation = Differential %2.(#0) %0.((#0 + 4)) %1.(#0)
 | | demand = (#0, #1, #3..#5)
 | Filter !(isnull(#0)), !(isnull(#4))
-| Project (#1, #3, #5)
+| Project (#3, #1, #5)
 
 EOF
 
 query III
 select foo.b, bar.b, baz.b
-FROM foo, bar, baz
+FROM bar, foo, baz
 where foo.a = bar.a
   and bar.a + 4 = baz.a
 ----
@@ -364,3 +364,51 @@ and bar.b - foo.b = foo.a / bar.a
 ----
 4
 3
+
+statement ok
+DROP INDEX baz_idx
+
+# materialize#8002: it would be nice if this join used the indexes on foo(a)
+# and bar(a+4)
+
+query T multiline
+EXPLAIN PLAN FOR
+select foo.b, bar.b, baz.b
+FROM foo, bar, baz
+where foo.a = bar.a
+  and foo.a + 4 = baz.a
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter !(isnull(#0))
+| ArrangeBy ((#0 + 4))
+
+%1 =
+| Get materialize.public.bar (u3)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.baz (u9)
+| Filter !(isnull(#0))
+
+%3 =
+| Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
+| | implementation = Differential %2 %0.((#0 + 4)) %1.(#0)
+| | demand = (#1, #3, #5)
+| Project (#1, #3, #5)
+
+EOF
+
+query III
+select foo.b, bar.b, baz.b
+FROM bar, foo, baz
+where foo.a = bar.a
+  and bar.a + 4 = baz.a
+----
+4
+NULL
+0
+2
+3
+2
