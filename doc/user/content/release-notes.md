@@ -48,7 +48,9 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.9.3 %}}
 
-- Fix a bug that prevented creating Avro sinks on old versions of Confluent Platform.
+- Fix a bug that prevented creating Avro sinks on older versions of Confluent Platform.
+
+- Fix a bug that prevented upgrading to 0.9.2 if the catalog referenced CSV file sources with headers.
 
 {{% version-header v0.9.2 %}}
 
