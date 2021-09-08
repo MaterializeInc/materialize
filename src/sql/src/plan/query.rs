@@ -3058,21 +3058,24 @@ fn plan_aggregate(
             (args, order_by.clone())
         }
     };
-    let (order_by_exprs, map_exprs) = plan_order_by_exprs(ecx, &order_by)?;
 
-    // order_by contains column indexes for the containing scope, and we need to
-    // map them into the expected Record format (first element is the aggregate
-    // datum, further elements are the keys to order by).
-    let func_order_by = order_by_exprs
-        .iter()
-        .enumerate()
-        .map(|(idx, co)| ColumnOrder {
-            column: idx,
-            desc: co.desc,
-        })
-        .collect();
-    let (mut expr, func) =
-        func::select_impl(ecx, FuncSpec::Func(&name), impls, args, func_order_by)?;
+    let mut order_by_exprs = vec![];
+    let mut col_orders = vec![];
+    {
+        for (i, obe) in order_by.iter().enumerate() {
+            // Unlike `SELECT ... ORDER BY` clauses, function `ORDER BY` clauses
+            // do not support ordinal references in PostgreSQL. So we use
+            // `plan_expr` directly rather than `plan_order_by_or_distinct_expr`.
+            let expr = plan_expr(ecx, &obe.expr)?.type_as_any(ecx)?;
+            order_by_exprs.push(expr);
+            col_orders.push(ColumnOrder {
+                column: i,
+                desc: !obe.asc.unwrap_or(true),
+            });
+        }
+    }
+
+    let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, col_orders)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -3107,22 +3110,15 @@ fn plan_aggregate(
             "aggregate functions that refer exclusively to outer columns"
         );
     }
+
     // If a function supports ORDER BY (even if there was no ORDER BY specified),
     // map the needed expressions into the aggregate datum.
     if func.is_order_sensitive() {
-        if !map_exprs.is_empty() {
-            bail!("unsupported: ORDER BY must specify unmodified columns");
-        }
         let field_names = iter::repeat(ColumnName::from(""))
             .take(1 + order_by_exprs.len())
             .collect();
         let mut exprs = vec![expr];
-        exprs.extend(order_by_exprs.into_iter().map(|co| {
-            HirScalarExpr::Column(ColumnRef {
-                column: co.column,
-                level: 0,
-            })
-        }));
+        exprs.extend(order_by_exprs);
         expr = HirScalarExpr::CallVariadic {
             func: VariadicFunc::RecordCreate { field_names },
             exprs,
