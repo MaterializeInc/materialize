@@ -375,12 +375,12 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
 
     tests = None
     new_workflow_location = None
-    found = False
+    found = 0
     for i, line in enumerate(contents):
         if "TESTS:" in line:
             tests = line.split(":")[1].strip()
 
-        if "upgrade-from-current-source:" in line:
+        if "upgrade-from-latest:" in line:
             new_workflow_location = i - 1
             workflow = f"""
   upgrade-from-{workflow_version}:
@@ -396,17 +396,21 @@ def update_upgrade_tests_inner(released_version: Version) -> None:
             if tests is None:
                 _mzcompose_confused(readme)
                 return
-            latest_tests = line.split("|")
-            latest_tests.insert(-1, version)
-            contents[i] = "|".join(latest_tests)
-            contents.insert(new_workflow_location, workflow)
-            found = True
-            break
+            latest_tests = line.rstrip().split("|")
+            if "current_source" in latest_tests:
+                latest_tests.insert(-1, version)
+            else:
+                latest_tests.append(version)
+            contents[i] = "|".join(latest_tests) + "\n"
+            found += 1
+            if found == 2:
+                contents.insert(new_workflow_location, workflow)
+                break
 
     with mzcompose.open("w") as fh:
         fh.write("".join(contents))
 
-    if not found:
+    if found != 2:
         _mzcompose_confused(readme)
         return
 
