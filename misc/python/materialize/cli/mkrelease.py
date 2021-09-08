@@ -373,7 +373,7 @@ def update_upgrade_tests_inner(released_version: Version, force: bool = False) -
     found = False
     for i, line in enumerate(contents):
         if "mkrelease.py will place new versions here" in line:
-            contents.insert(i - 2, step)
+            contents.insert(i - 1, step)
             found = True
             break
     if not found:
