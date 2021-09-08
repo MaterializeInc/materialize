@@ -17,6 +17,15 @@
 
 use crate::display::DisplayExt;
 
+/// Error wrapper that conveys severity information
+#[derive(Debug)]
+pub enum Severity<E> {
+    /// A recoverable error
+    Recoverable(E),
+    /// A fatal error
+    Fatal(E),
+}
+
 /// Extension methods for [`std::result::Result`].
 pub trait ResultExt<T, E> {
     /// Applies [`Into::into`] to a contained [`Err`] value, leaving an [`Ok`]
@@ -37,6 +46,12 @@ pub trait ResultExt<T, E> {
     fn map_err_to_string(self) -> Result<T, String>
     where
         E: std::fmt::Display;
+
+    /// Mark an error as recoverable
+    fn recoverable(self) -> Result<T, Severity<E>>;
+
+    /// Mark an error as fatal
+    fn fatal(self) -> Result<T, Severity<E>>;
 }
 
 impl<T, E> ResultExt<T, E> for Result<T, E> {
@@ -59,6 +74,14 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         E: std::fmt::Display,
     {
         self.map_err(|e| DisplayExt::to_string_alt(&e))
+    }
+
+    fn recoverable(self) -> Result<T, Severity<E>> {
+        self.map_err(Severity::Recoverable)
+    }
+
+    fn fatal(self) -> Result<T, Severity<E>> {
+        self.map_err(Severity::Fatal)
     }
 }
 
