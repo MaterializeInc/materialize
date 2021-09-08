@@ -46,13 +46,17 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.9.3 %}}
+{{% version-header v0.9.4 %}}
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
 
 - Support `ORDER BY` in aggregate functions.
 
+{{% version-header v0.9.3 %}}
+
 - Fix a bug that prevented creating Avro sinks on old versions of Confluent Platform
+
+- Fix a bug that prevented upgrading to 0.9.2 if the catalog referenced CSV file sources with headers.
 
 {{% version-header v0.9.2 %}}
 
