@@ -30,12 +30,15 @@
 3 2 a
 4 4 b
 
-# TODO(mjibson): Support implict type casts.
-> UPDATE t SET f = 5::FLOAT, t = t || 'e'
+# Check for assignment, implicit casts
+> UPDATE t SET i = i::bigint, f = 5, t = t || 'e'
 
 > SELECT * FROM t ORDER BY i
 3 5 ae
 4 5 be
+
+! UPDATE t SET i = '4'::text
+SET clause does not support casting from text to integer
 
 > DELETE FROM t WHERE i < 4
 

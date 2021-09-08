@@ -752,7 +752,12 @@ pub fn plan_mutation_query(
                         allow_aggregates: false,
                         allow_subqueries: false,
                     };
-                    let expr = plan_expr(&ecx, &expr)?.type_as(&ecx, &typ.scalar_type)?;
+                    let expr = plan_expr(&ecx, &expr)?.cast_to(
+                        "SET clause",
+                        ecx,
+                        CastContext::Assignment,
+                        &typ.scalar_type,
+                    )?;
 
                     if sets.insert(idx, expr).is_some() {
                         bail!("column {} set twice", name)
