@@ -20,6 +20,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
+use crate::future::Future;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{TraceBatchMeta, TraceMeta};
 use crate::indexed::{BlobTraceBatch, Id, Snapshot};
@@ -226,18 +227,18 @@ impl Trace {
     }
 
     /// Returns a consistent read of all the updates contained in this trace.
-    pub fn snapshot<B: Blob>(&self, blob: &BlobCache<B>) -> Result<TraceSnapshot, Error> {
+    pub fn snapshot<B: Blob>(&self, blob: &BlobCache<B>) -> TraceSnapshot {
         let ts_upper = self.ts_upper();
         let since = self.since();
-        let mut updates = Vec::with_capacity(self.batches.len());
+        let mut batches = Vec::with_capacity(self.batches.len());
         for meta in self.batches.iter() {
-            updates.push(blob.get_trace_batch(&meta.key)?);
+            batches.push(blob.get_trace_batch_async(&meta.key));
         }
-        Ok(TraceSnapshot {
+        TraceSnapshot {
             ts_upper,
             since,
-            updates,
-        })
+            batches,
+        }
     }
 
     /// Merge two batches into one, forwarding all updates not beyond the current
@@ -267,8 +268,20 @@ impl Trace {
 
         let mut updates = vec![];
 
-        updates.extend(blob.get_trace_batch(&first.key)?.updates.iter().cloned());
-        updates.extend(blob.get_trace_batch(&second.key)?.updates.iter().cloned());
+        updates.extend(
+            blob.get_trace_batch_async(&first.key)
+                .recv()?
+                .updates
+                .iter()
+                .cloned(),
+        );
+        updates.extend(
+            blob.get_trace_batch_async(&second.key)
+                .recv()?
+                .updates
+                .iter()
+                .cloned(),
+        );
 
         for ((_, _), t, _) in updates.iter_mut() {
             for since_ts in self.since.elements().iter() {
@@ -356,7 +369,7 @@ pub struct TraceSnapshot {
     /// All updates not at times greater than this frontier must be advanced
     /// to a time that is equivalent to this frontier.
     pub since: Antichain<u64>,
-    updates: Vec<Arc<BlobTraceBatch>>,
+    batches: Vec<Future<Arc<BlobTraceBatch>>>,
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
@@ -364,10 +377,11 @@ impl Snapshot<Vec<u8>, Vec<u8>> for TraceSnapshot {
         &mut self,
         buf: &mut E,
     ) -> Result<bool, Error> {
-        if let Some(batch) = self.updates.pop() {
+        if let Some(batch) = self.batches.pop() {
+            let batch = batch.recv()?;
             buf.extend(batch.updates.iter().cloned());
         }
-        Ok(!self.updates.is_empty())
+        Ok(!self.batches.is_empty())
     }
 }
 
@@ -526,7 +540,7 @@ mod tests {
             ]
         );
 
-        let snapshot = t.snapshot(&blob)?;
+        let snapshot = t.snapshot(&blob);
         assert_eq!(snapshot.since, Antichain::from_elem(3));
         assert_eq!(snapshot.ts_upper, Antichain::from_elem(9));
 
@@ -581,7 +595,7 @@ mod tests {
             ]
         );
 
-        let snapshot = t.snapshot(&blob)?;
+        let snapshot = t.snapshot(&blob);
         assert_eq!(snapshot.since, Antichain::from_elem(10));
         assert_eq!(snapshot.ts_upper, Antichain::from_elem(10));
 

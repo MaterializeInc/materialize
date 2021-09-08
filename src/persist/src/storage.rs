@@ -67,7 +67,7 @@ pub trait Log {
 ///
 /// - Invariant: Implementations are responsible for ensuring that they are
 ///   exclusive writers to this location.
-pub trait Blob {
+pub trait Blob: Send + 'static {
     /// Returns a reference to the value corresponding to the key.
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error>;
 

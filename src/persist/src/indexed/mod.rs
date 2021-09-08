@@ -984,7 +984,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let seal_frontier = trace.get_seal();
-        let trace = trace.snapshot(&self.blob)?;
+        let trace = trace.snapshot(&self.blob);
         let unsealed = unsealed.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
         Ok(IndexedSnapshot(
