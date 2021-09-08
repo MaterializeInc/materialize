@@ -206,6 +206,9 @@ mod tests {
             )),
             "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
             "ReductionPushdown" => Ok(Box::new(transform::reduction_pushdown::ReductionPushdown)),
+            "UnionBranchCancellation" => {
+                Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
+            }
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

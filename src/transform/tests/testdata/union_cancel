@@ -1,0 +1,388 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test that the test runner can properly construct sources with keys
+# and report on key information in plans
+
+cat
+(defsource x [int64 int64])
+----
+ok
+
+# equivalent branches can't be cancelled
+
+build apply=UnionBranchCancellation
+(union [(negate (get x)) (negate (get x))])
+----
+----
+%0 =
+| Get x (u0)
+| Negate
+
+%1 =
+| Get x (u0)
+| Negate
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(get x) (get x)])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(project (get x) [0]) (project (get x) [0])])
+----
+----
+%0 =
+| Get x (u0)
+| Project (#0)
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (get x) [#0]) (project (get x) [#0])])
+----
+----
+%0 =
+| Get x (u0)
+| Map #0
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(filter (get x) [#0]) (project (get x) [#0])])
+----
+----
+%0 =
+| Get x (u0)
+| Filter #0
+
+%1 =
+| Get x (u0)
+| Project (#0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(negate (filter (get x) [#0])) (project (negate (get x)) [#0])])
+----
+----
+%0 =
+| Get x (u0)
+| Filter #0
+| Negate
+
+%1 =
+| Get x (u0)
+| Negate
+| Project (#0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+# negated branches
+
+build apply=UnionBranchCancellation
+(union [(get x) (negate (get x))])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(project (get x) [0]) (project (negate (get x)) [0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(project (negate (get x)) [0]) (project (get x) [0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (get x) [#0]) (map (negate (get x)) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (negate (get x)) [#0]) (map (get x) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(filter (get x) [#0]) (filter (negate (get x)) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(filter (negate (get x)) [#0]) (filter (get x) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (get x) [#0]) (map (negate (get x)) [#1])])
+----
+----
+%0 =
+| Get x (u0)
+| Map #0
+
+%1 =
+| Get x (u0)
+| Negate
+| Map #1
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (filter (get x) [#0]) [#0]) (map (filter (negate (get x)) [#0]) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (filter (negate (get x)) [#0]) [#0]) (map (filter (get x) [#0]) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+# map -> filter in the same order, but with a Negate in between
+build apply=UnionBranchCancellation
+(union [(map (filter (get x) [#0]) [#0]) (map (negate (filter (get x) [#0])) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (negate (filter (get x) [#0])) [#0]) (map (filter (get x) [#0]) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Union %0 %1
+----
+----
+
+# map -> filter in different order, branches can't be cancelled
+build apply=UnionBranchCancellation
+(union [(filter (map (get x) [#0]) [#0]) (map (filter (negate (get x)) [#0]) [#0])])
+----
+----
+%0 =
+| Get x (u0)
+| Map #0
+| Filter #0
+
+%1 =
+| Get x (u0)
+| Negate
+| Filter #0
+| Map #0
+
+%2 =
+| Union %0 %1
+----
+----
+
+# first two branches cancel each other, but not the third one
+build apply=UnionBranchCancellation
+(union [(map (negate (get x)) [#0]) (map (get x) [#0]) (map (negate (get x)) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Get x (u0)
+| Negate
+| Map #0
+
+%3 =
+| Union %0 %1 %2
+----
+----
+
+build apply=UnionBranchCancellation
+(union [(map (negate (get x)) [#0]) (map (get x) [#0]) (map (get x) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Constant
+
+%2 =
+| Get x (u0)
+| Map #0
+
+%3 =
+| Union %0 %1 %2
+----
+----
+
+# first and third cancel each other
+build apply=UnionBranchCancellation
+(union [(map (negate (get x)) [#0]) (map (negate (get x)) [#0]) (map (get x) [#0])])
+----
+----
+%0 =
+| Constant
+
+%1 =
+| Get x (u0)
+| Negate
+| Map #0
+
+%2 =
+| Constant
+
+%3 =
+| Union %0 %1 %2
+----
+----

@@ -26,6 +26,31 @@ impl crate::Transform for UnionBranchCancellation {
     }
 }
 
+/// Result of the comparison of two branches of a union for cancellation
+/// purposes.
+enum BranchCmp {
+    /// The two branches are equivalent in the sense the the produce the
+    /// same exact results.
+    Equivalent,
+    /// The two branches are equivalent, but one of them produces negated
+    /// row count values, and hence, they cancel each other.
+    Inverse,
+    /// The two branches are not equivalent in any way.
+    Distinct,
+}
+
+impl BranchCmp {
+    /// Modify the result of the comparison when a Negate operator is
+    /// found at the top of one the branches just compared.
+    fn inverse(self) -> Self {
+        match self {
+            BranchCmp::Equivalent => BranchCmp::Inverse,
+            BranchCmp::Inverse => BranchCmp::Equivalent,
+            BranchCmp::Distinct => BranchCmp::Distinct,
+        }
+    }
+}
+
 impl UnionBranchCancellation {
     /// Detects an input being unioned with its negation and cancels them out
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
@@ -34,22 +59,9 @@ impl UnionBranchCancellation {
                                      inputs: &[MirRelationExpr],
                                      start_idx: usize|
              -> Option<usize> {
-                match input {
-                    MirRelationExpr::Negate { input: inner_input } => {
-                        for i in start_idx..inputs.len() {
-                            if inputs[i] == **inner_input {
-                                return Some(i);
-                            }
-                        }
-                    }
-                    _ => {
-                        for i in start_idx..inputs.len() {
-                            if let MirRelationExpr::Negate { input: inner_input } = &inputs[i] {
-                                if *input == **inner_input {
-                                    return Some(i);
-                                }
-                            }
-                        }
+                for i in start_idx..inputs.len() {
+                    if let BranchCmp::Inverse = Self::compare_branches(input, &inputs[i]) {
+                        return Some(i);
                     }
                 }
                 None
@@ -70,5 +82,76 @@ impl UnionBranchCancellation {
             }
         }
         Ok(())
+    }
+
+    /// Compares two branches to check whether they produce the same results but
+    /// with negated row count values, ie. one of them contains an extra Negate operator.
+    /// Negate operators may appear interleaved with Map, Filter and Project
+    /// operators, but these operators must appear in the same order in both branches.
+    fn compare_branches(relation: &MirRelationExpr, other: &MirRelationExpr) -> BranchCmp {
+        match (relation, other) {
+            (
+                MirRelationExpr::Negate { input: input1 },
+                MirRelationExpr::Negate { input: input2 },
+            ) => Self::compare_branches(&*input1, &*input2),
+            (r, MirRelationExpr::Negate { input }) | (MirRelationExpr::Negate { input }, r) => {
+                Self::compare_branches(&*input, r).inverse()
+            }
+            (
+                MirRelationExpr::Map {
+                    input: input1,
+                    scalars: scalars1,
+                },
+                MirRelationExpr::Map {
+                    input: input2,
+                    scalars: scalars2,
+                },
+            ) => {
+                if scalars1 == scalars2 {
+                    Self::compare_branches(&*input1, &*input2)
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+            (
+                MirRelationExpr::Filter {
+                    input: input1,
+                    predicates: predicates1,
+                },
+                MirRelationExpr::Filter {
+                    input: input2,
+                    predicates: predicates2,
+                },
+            ) => {
+                if predicates1 == predicates2 {
+                    Self::compare_branches(&*input1, &*input2)
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+            (
+                MirRelationExpr::Project {
+                    input: input1,
+                    outputs: outputs1,
+                },
+                MirRelationExpr::Project {
+                    input: input2,
+                    outputs: outputs2,
+                },
+            ) => {
+                if outputs1 == outputs2 {
+                    Self::compare_branches(&*input1, &*input2)
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+            _ => {
+                if relation == other {
+                    BranchCmp::Equivalent
+                } else {
+                    BranchCmp::Distinct
+                }
+            }
+        }
     }
 }
