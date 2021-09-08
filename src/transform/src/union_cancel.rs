@@ -26,13 +26,22 @@ impl crate::Transform for UnionBranchCancellation {
     }
 }
 
+/// Result of the comparison of two branches of a union for cancellation
+/// purposes.
 enum BranchCmp {
+    /// The two branches are equivalent in the sense the the produce the
+    /// same exact results.
     Equivalent,
+    /// The two branches are equivalent, but one of them produces negated
+    /// row count values, and hence, they cancel each other.
     Inverse,
+    /// The two branches are not equivalent in any way.
     Distinct,
 }
 
 impl BranchCmp {
+    /// Modify the result of the comparison when a Negate operator is
+    /// found at the top of one the branches just compared.
     fn inverse(self) -> Self {
         match self {
             BranchCmp::Equivalent => BranchCmp::Inverse,
@@ -75,6 +84,10 @@ impl UnionBranchCancellation {
         Ok(())
     }
 
+    /// Compares two branches to check whether they produce the same results but
+    /// with negated row count values, ie. one of them contains an extra Negate operator.
+    /// Negate operators may appear interleaved with Map, Filter and Project
+    /// operators, but these operators must appear in the same order in both branches.
     fn compare_branches(relation: &MirRelationExpr, other: &MirRelationExpr) -> BranchCmp {
         match (relation, other) {
             (
