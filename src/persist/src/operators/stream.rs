@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn persist() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        let p = registry.open("1", "persisted_stream 1")?;
+        let p = registry.runtime_no_reentrance()?;
 
         timely::execute_directly(move |worker| {
             let (mut input, probe) = worker.dataflow(|scope| {
@@ -115,7 +115,7 @@ mod tests {
         // Execute a second dataflow and reuse the previous in-memory state.
         // This exists to simulate what would happen after a restart in a Persister
         // that was actually backed by persistent storage
-        let p = registry.open("1", "persisted_stream 2")?;
+        let p = registry.runtime_no_reentrance()?;
         let recv = timely::execute_directly(move |worker| {
             let (mut input, recv) = worker.dataflow(|scope| {
                 let token = p.create_or_load("1").unwrap();
@@ -144,9 +144,8 @@ mod tests {
 
     #[test]
     fn error_stream() -> Result<(), Error> {
-        let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
+        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
         let token = p.create_or_load::<(), ()>("error_stream").unwrap();
         unreliable.make_unavailable();
 

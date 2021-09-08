@@ -62,7 +62,7 @@ fn write_and_bench_read<M: Measurement>(
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let nonce = variant_name.to_string();
     let collection_name = "4b_keys".to_string();
-    let runtime = create_runtime(temp_dir.path(), &nonce).expect("missing runtime");
+    let mut runtime = create_runtime(temp_dir.path(), &nonce).expect("missing runtime");
 
     let (mut write, _read) = runtime
         .create_or_load(&collection_name)
@@ -76,6 +76,8 @@ fn write_and_bench_read<M: Measurement>(
         &mut write,
     )
     .expect("error writing data");
+
+    runtime.stop().expect("runtime shut down cleanly");
 
     group.bench_function(format!("end_to_end_{}", variant_name), move |b| {
         bench_read_persisted_source(
@@ -103,7 +105,8 @@ fn bench_read_persisted_source<M: Measurement>(
         let collection_id = collection_id.clone();
 
         let guards = timely::execute(Config::process(num_workers), move |worker| {
-            let runtime = create_runtime(&persistence_base_path, &nonce).expect("missing runtime");
+            let mut runtime =
+                create_runtime(&persistence_base_path, &nonce).expect("missing runtime");
 
             let (_write, read) = runtime
                 .create_or_load::<Vec<u8>, Vec<u8>>(&collection_id)
@@ -130,6 +133,8 @@ fn bench_read_persisted_source<M: Measurement>(
             while probe.less_than(&expected_input_frontier) {
                 worker.step();
             }
+
+            runtime.stop().expect("runtime shut down cleanly")
         })
         .unwrap();
 

@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::{Arc, Mutex};
-
 use ore::metrics::MetricsRegistry;
 use ore::test::init_logging;
 use serde::{Deserialize, Serialize};
@@ -20,7 +18,7 @@ use crate::mem::{MemBlob, MemRegistry};
 use crate::nemesis::direct::Direct;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::{Input, Runtime};
-use crate::storage::{Blob, LockInfo};
+use crate::storage::Blob;
 use crate::unreliable::UnreliableBlob;
 
 /// A test to catch changes in any part of the end-to-end persist encoding.
@@ -143,12 +141,10 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
 }
 
 fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
-    let reg = Arc::new(Mutex::new(MemRegistry::new()));
+    let reg = MemRegistry::new();
     let runtime_reg = reg.clone();
     let mut persist = Direct::new(move |unreliable| {
-        let blob = runtime_reg
-            .lock()?
-            .blob("", LockInfo::new_no_reentrance("".into()))?;
+        let blob = runtime_reg.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
         runtime::start(ErrorLog, blob, &MetricsRegistry::new())
     })?;
@@ -158,9 +154,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
     let persist_state = PersistState::slurp_from(&persist.persister)?;
     persist.finish();
 
-    let mut blob = reg
-        .lock()?
-        .blob("", LockInfo::new_no_reentrance("".into()))?;
+    let mut blob = reg.blob_no_reentrance()?;
     let raw_blobs = Blobs::serialize_from(&blob)?;
     blob.close()?;
     Ok((persist_state, raw_blobs))
