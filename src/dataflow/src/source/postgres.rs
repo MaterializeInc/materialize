@@ -22,13 +22,14 @@ use postgres_protocol::message::backend::{
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
-use tokio_postgres::error::{DbError, Severity, SqlState};
+use tokio_postgres::error::{DbError, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use dataflow_types::{PostgresSourceConnector, SourceErrorDetails};
+use ore::result::*;
 use repr::{Datum, Row};
 
 lazy_static! {
@@ -45,75 +46,45 @@ pub struct PostgresSourceReader {
     lsn: PgLsn,
 }
 
-trait ErrorExt {
-    fn is_recoverable(&self) -> bool;
-}
-
-impl ErrorExt for tokio_postgres::Error {
-    fn is_recoverable(&self) -> bool {
-        match self.source() {
-            Some(err) => {
-                match err.downcast_ref::<DbError>() {
-                    Some(db_err) => {
-                        use Severity::*;
-                        // Connection and non-fatal errors
-                        db_err.code() == &SqlState::CONNECTION_EXCEPTION
-                            || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
-                            || db_err.code() == &SqlState::CONNECTION_FAILURE
-                            || db_err.code() == &SqlState::TOO_MANY_CONNECTIONS
-                            || db_err.code() == &SqlState::CANNOT_CONNECT_NOW
-                            || db_err.code() == &SqlState::ADMIN_SHUTDOWN
-                            || db_err.code() == &SqlState::CRASH_SHUTDOWN
-                            || !matches!(
-                                db_err.parsed_severity(),
-                                Some(Error) | Some(Fatal) | Some(Panic)
-                            )
-                    }
-                    // IO errors
-                    None => err.is::<std::io::Error>(),
+/// Free standing function that converts a tokio_postgres error into a Severity level.
+///
+/// This cannot be a [From] implementation due to Rust's orphan rules
+fn into_severity(e: tokio_postgres::Error) -> Severity<anyhow::Error> {
+    let recoverable = match e.source() {
+        Some(err) => {
+            match err.downcast_ref::<DbError>() {
+                Some(db_err) => {
+                    use tokio_postgres::error::Severity::*;
+                    // Connection and non-fatal errors
+                    db_err.code() == &SqlState::CONNECTION_EXCEPTION
+                        || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
+                        || db_err.code() == &SqlState::CONNECTION_FAILURE
+                        || db_err.code() == &SqlState::TOO_MANY_CONNECTIONS
+                        || db_err.code() == &SqlState::CANNOT_CONNECT_NOW
+                        || db_err.code() == &SqlState::ADMIN_SHUTDOWN
+                        || db_err.code() == &SqlState::CRASH_SHUTDOWN
+                        || !matches!(
+                            db_err.parsed_severity(),
+                            Some(Error) | Some(Fatal) | Some(Panic)
+                        )
                 }
+                // IO errors
+                None => err.is::<std::io::Error>(),
             }
-            // We have no information about what happened, it might be a fatal error or
-            // it might not. Unexpected errors can happen if the upstream crashes for
-            // example in which case we should retry.
-            //
-            // Therefore, we adopt a "recoverable unless proven otherwise" policy and
-            // keep retrying in the event of unexpected errors.
-            None => true,
         }
-    }
-}
-
-enum ReplicationError {
-    Recoverable(anyhow::Error),
-    Fatal(anyhow::Error),
-}
-
-impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
-    fn from(err: E) -> Self {
-        if err.is_recoverable() {
-            Self::Recoverable(err.into())
-        } else {
-            Self::Fatal(err.into())
-        }
-    }
-}
-
-macro_rules! try_fatal {
-    ($expr:expr $(,)?) => {
-        match $expr {
-            Ok(val) => val,
-            Err(err) => return Err(ReplicationError::Fatal(err.into())),
-        }
+        // We have no information about what happened, it might be a fatal error or
+        // it might not. Unexpected errors can happen if the upstream crashes for
+        // example in which case we should retry.
+        //
+        // Therefore, we adopt a "recoverable unless proven otherwise" policy and
+        // keep retrying in the event of unexpected errors.
+        None => true,
     };
-}
-macro_rules! try_recoverable {
-    ($expr:expr $(,)?) => {
-        match $expr {
-            Ok(val) => val,
-            Err(err) => return Err(ReplicationError::Recoverable(err.into())),
-        }
-    };
+    if recoverable {
+        Severity::Recoverable(e.into())
+    } else {
+        Severity::Fatal(e.into())
+    }
 }
 
 impl PostgresSourceReader {
@@ -134,9 +105,10 @@ impl PostgresSourceReader {
         &mut self,
         snapshot_tx: &mut SourceTransaction<'_>,
         buffer: &mut W,
-    ) -> Result<(), ReplicationError> {
-        let client =
-            try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
+    ) -> Result<(), Severity<anyhow::Error>> {
+        let client = postgres_util::connect_replication(&self.connector.conn)
+            .await
+            .recoverable()?;
 
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
@@ -148,17 +120,18 @@ impl PostgresSourceReader {
             .await;
 
         // Get all the relevant tables for this publication
-        let publication_tables = try_recoverable!(
+        let publication_tables =
             postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
                 .await
-        );
+                .recoverable()?;
 
         // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
         // identical.
         client
             .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
-            .await?;
+            .await
+            .map_err(into_severity)?;
 
         let slot_query = format!(
             r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
@@ -166,26 +139,26 @@ impl PostgresSourceReader {
         );
         let slot_row = client
             .simple_query(&slot_query)
-            .await?
+            .await
+            .map_err(into_severity)?
             .into_iter()
             .next()
             .and_then(|msg| match msg {
                 SimpleQueryMessage::Row(row) => Some(row),
                 _ => None,
             })
-            .ok_or_else(|| {
-                ReplicationError::Recoverable(anyhow!(
-                    "empty result after creating replication slot"
-                ))
-            })?;
+            .ok_or_else(|| anyhow!("empty result after creating replication slot"))
+            .recoverable()?;
 
         // Store the lsn at which we will need to start the replication stream from
-        let consistent_point = try_recoverable!(slot_row
+        let consistent_point = slot_row
             .get("consistent_point")
-            .ok_or_else(|| anyhow!("missing expected column: `consistent_point`")));
-        self.lsn = try_fatal!(consistent_point
+            .ok_or_else(|| anyhow!("missing expected column: `consistent_point`"))
+            .recoverable()?;
+        self.lsn = consistent_point
             .parse()
-            .or_else(|_| Err(anyhow!("invalid lsn"))));
+            .or_else(|_| Err(anyhow!("invalid lsn")))
+            .fatal()?;
 
         for info in publication_tables {
             // TODO(petrosagg): use a COPY statement here for more efficient network transfer
@@ -194,7 +167,8 @@ impl PostgresSourceReader {
                     "SELECT * FROM {:?}.{:?}",
                     info.namespace, info.name
                 ))
-                .await?;
+                .await
+                .map_err(into_severity)?;
             for msg in data {
                 if let SimpleQueryMessage::Row(row) = msg {
                     let mut mz_row = Row::default();
@@ -204,12 +178,19 @@ impl PostgresSourceReader {
                         let a: Datum = row.get(n).into();
                         a
                     }));
-                    try_recoverable!(snapshot_tx.insert(mz_row.clone()).await);
-                    try_fatal!(buffer.write(&try_fatal!(bincode::serialize(&mz_row))).await);
+                    snapshot_tx.insert(mz_row.clone()).await.recoverable()?;
+                    buffer
+                        .write(&bincode::serialize(&mz_row).map_err(|e| e.into()).fatal()?)
+                        .await
+                        .map_err(|e| e.into())
+                        .fatal()?;
                 }
             }
         }
-        client.simple_query("COMMIT;").await?;
+        client
+            .simple_query("COMMIT;")
+            .await
+            .map_err(into_severity)?;
         Ok(())
     }
 
@@ -258,11 +239,10 @@ impl PostgresSourceReader {
     async fn produce_replication(
         &mut self,
         timestamper: &Timestamper,
-    ) -> Result<(), ReplicationError> {
-        use ReplicationError::*;
-
-        let client =
-            try_recoverable!(postgres_util::connect_replication(&self.connector.conn).await);
+    ) -> Result<(), Severity<anyhow::Error>> {
+        let client = postgres_util::connect_replication(&self.connector.conn)
+            .await
+            .recoverable()?;
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
@@ -271,7 +251,10 @@ impl PostgresSourceReader {
             lsn = self.lsn.to_string(),
             publication = self.connector.publication
         );
-        let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
+        let copy_stream = client
+            .copy_both_simple(&query)
+            .await
+            .map_err(into_severity)?;
 
         let stream = LogicalReplicationStream::new(copy_stream);
         tokio::pin!(stream);
@@ -279,7 +262,7 @@ impl PostgresSourceReader {
         let mut last_keepalive = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
-        while let Some(item) = stream.try_next().await? {
+        while let Some(item) = stream.try_next().await.map_err(into_severity)? {
             use ReplicationMessage::*;
             // The upstream will periodically request keepalive responses by setting the reply field
             // to 1. However, we cannot rely on these messages arriving on time. For example, when
@@ -298,12 +281,11 @@ impl PostgresSourceReader {
                     .try_into()
                     .expect("software more than 200k years old, consider updating");
 
-                try_recoverable!(
-                    stream
-                        .as_mut()
-                        .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
-                        .await
-                );
+                stream
+                    .as_mut()
+                    .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
+                    .await
+                    .map_err(into_severity)?;
                 last_keepalive = Instant::now();
             }
             match item {
@@ -313,34 +295,36 @@ impl PostgresSourceReader {
                     match xlog_data.data() {
                         Begin(_) => {
                             if !inserts.is_empty() || !deletes.is_empty() {
-                                return Err(Fatal(anyhow!(
+                                return Err(Severity::Fatal(anyhow!(
                                     "got BEGIN statement after uncommitted data"
                                 )));
                             }
                         }
                         Insert(insert) => {
                             let rel_id = insert.rel_id();
-                            let row = try_fatal!(self.row_from_tuple(rel_id, insert.tuple()));
+                            let row = self.row_from_tuple(rel_id, insert.tuple()).fatal()?;
                             inserts.push(row);
                         }
                         Update(update) => {
                             let rel_id = update.rel_id();
-                            let old_tuple = try_fatal!(update
+                            let old_tuple = update
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from update")));
-                            let old_row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
+                                .ok_or_else(|| anyhow!("full row missing from update"))
+                                .fatal()?;
+                            let old_row = self.row_from_tuple(rel_id, old_tuple).fatal()?;
                             deletes.push(old_row);
 
                             let new_row =
-                                try_fatal!(self.row_from_tuple(rel_id, update.new_tuple()));
+                                self.row_from_tuple(rel_id, update.new_tuple()).fatal()?;
                             inserts.push(new_row);
                         }
                         Delete(delete) => {
                             let rel_id = delete.rel_id();
-                            let old_tuple = try_fatal!(delete
+                            let old_tuple = delete
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from delete")));
-                            let row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
+                                .ok_or_else(|| anyhow!("full row missing from delete"))
+                                .fatal()?;
+                            let row = self.row_from_tuple(rel_id, old_tuple).fatal()?;
                             deletes.push(row);
                         }
                         Commit(commit) => {
@@ -349,26 +333,32 @@ impl PostgresSourceReader {
                             let tx = timestamper.start_tx().await;
 
                             for row in deletes.drain(..) {
-                                try_fatal!(tx.delete(row).await);
+                                tx.delete(row).await.fatal()?;
                             }
                             for row in inserts.drain(..) {
-                                try_fatal!(tx.insert(row).await);
+                                tx.insert(row).await.fatal()?;
                             }
                         }
                         Origin(_) | Relation(_) | Type(_) => (),
-                        Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
+                        Truncate(_) => {
+                            return Err(Severity::Fatal(anyhow!("source table got truncated")))
+                        }
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
-                        _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
+                        _ => {
+                            return Err(Severity::Fatal(anyhow!(
+                                "unexpected logical replication message"
+                            )))
+                        }
                     }
                 }
                 // Handled above
                 PrimaryKeepAlive(_) => {}
                 // The enum is marked non_exaustive, better be conservative
-                _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
+                _ => return Err(Severity::Fatal(anyhow!("Unexpected replication message"))),
             }
         }
-        Err(Recoverable(anyhow!("replication stream ended")))
+        Err(Severity::Recoverable(anyhow!("replication stream ended")))
     }
 }
 
@@ -395,7 +385,7 @@ impl SimpleSource for PostgresSourceReader {
                         );
                         break;
                     }
-                    Err(ReplicationError::Recoverable(e)) => {
+                    Err(Severity::Recoverable(e)) => {
                         writer.flush().await.map_err(|e| SourceError {
                             source_name: self.source_name.clone(),
                             error: SourceErrorDetails::Initialization(e.to_string()),
@@ -413,7 +403,7 @@ impl SimpleSource for PostgresSourceReader {
                                 error: SourceErrorDetails::FileIO(e.to_string()),
                             })?;
                     }
-                    Err(ReplicationError::Fatal(e)) => {
+                    Err(Severity::Fatal(e)) => {
                         return Err(SourceError {
                             source_name: self.source_name,
                             error: SourceErrorDetails::Initialization(e.to_string()),
@@ -428,14 +418,14 @@ impl SimpleSource for PostgresSourceReader {
 
         loop {
             match self.produce_replication(timestamper).await {
-                Err(ReplicationError::Recoverable(e)) => {
+                Err(Severity::Recoverable(e)) => {
                     log::warn!(
                         "replication for source {} interrupted, retrying: {}",
                         &self.source_name,
                         e
                     )
                 }
-                Err(ReplicationError::Fatal(e)) => {
+                Err(Severity::Fatal(e)) => {
                     return Err(SourceError {
                         source_name: self.source_name,
                         error: SourceErrorDetails::FileIO(e.to_string()),
