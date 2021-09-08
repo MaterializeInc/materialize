@@ -110,46 +110,34 @@ build
 build
 (top_k (get y) [1] [0] 5 1)
 ----
-----
 %0 =
 | Get y (u1)
 | TopK group=(#1) order=(#0 asc) limit=5 offset=1
-----
-----
 
 build
 (top_k (get y) [0 1] [(2 true)] )
 ----
-----
 %0 =
 | Get y (u1)
 | TopK group=(#0, #1) order=(#2 desc) offset=0
-----
-----
 
 build
 (reduce (get y)
     [(call_unary cast_int32_to_int64 #0)]
     [(max_int64 #1) (sum_int32 #2 true)])
 ----
-----
 %0 =
 | Get y (u1)
 | Reduce group=(i32toi64(#0))
 | | agg max(#1)
 | | agg sum(distinct #2)
-----
-----
 
 build
 (reduce (get y) [#2] [])
 ----
-----
 %0 =
 | Get y (u1)
 | Distinct group=(#2)
-----
-----
 
 build
 (union [(map (get x) [(null int32)]) (get y)])
@@ -166,3 +154,38 @@ build
 | Union %0 %1
 ----
 ----
+
+build
+(filter
+  (get x)
+  [(err multiple_rows_from_subquery)])
+----
+%0 =
+| Get x (u0)
+| Filter (err: more than one record produced in subquery)
+
+build format=types
+(map
+  (get x)
+  [(err multiple_rows_from_subquery)])
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?)
+| | keys = ()
+| Map (err: more than one record produced in subquery)
+| | types = (Int32?, Int64?, Bool)
+| | keys = ()
+
+build format=types
+(map
+  (get x)
+  [(err multiple_rows_from_subquery int64)])
+----
+%0 =
+| Get x (u0)
+| | types = (Int32?, Int64?)
+| | keys = ()
+| Map (err: more than one record produced in subquery)
+| | types = (Int32?, Int64?, Int64)
+| | keys = ()

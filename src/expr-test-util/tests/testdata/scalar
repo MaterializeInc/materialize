@@ -51,3 +51,43 @@ build-scalar
 ("1999-12-31 23:42:23.342" timestamp)
 ----
 1999-12-31 23:42:23.342
+
+build-scalar
+(err division_by_zero)
+----
+(err: division by zero)
+
+build-scalar
+(err float_overflow)
+----
+(err: value out of range: overflow)
+
+build-scalar
+(ok true)
+----
+true
+
+build-scalar
+(ok "1999-12-31 23:42:23.342" timestamp)
+----
+1999-12-31 23:42:23.342
+
+build-scalar
+(ok "1999-12-31 23:42:23.342")
+----
+"1999-12-31 23:42:23.342"
+
+build-scalar
+(ok)
+----
+error: expected literal after Ident(ok)
+
+build-scalar
+(ok (ok true))
+----
+error: expected literal after Ident(ok)
+
+build-scalar
+(err)
+----
+error: Empty spec for type EvalError
