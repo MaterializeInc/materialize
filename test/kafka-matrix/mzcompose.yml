@@ -140,6 +140,8 @@ services:
       --data-directory=/share/mzdata
       -w1 --experimental
       --disable-telemetry
+      --retain-prometheus-metrics 1s
+      --metrics-scraping-interval 1s
     ports:
       - 6875
     environment:
