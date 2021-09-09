@@ -28,8 +28,9 @@ mzworkflows:
   #
   # Specify the `TD_TEST` environment variable to select a specific test to run.
   # Otherwise, this workflow runs against the test files in this directory that
-  # use a Kafka action but do *not* use `kafka-add-partition`, as Redpanda does
-  # not yet support dynamically adding partitions to a topic.
+  # use a Kafka action but do *not* use:
+  # - `kafka-add-partition`(Redpanda does not yet support dynamically adding partitions to a topic)
+  # - `format=protobuf` with `publish=true` (Redpanda does not support schema publication for protobuf/json)
   testdrive-redpanda:
     steps:
       - step: start-services
@@ -52,7 +53,7 @@ mzworkflows:
           --kafka-addr=redpanda:9092
           --schema-registry-url=http://redpanda:8081
           --materialized-url=postgres://materialize@materialized:6875
-          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -LF '$ kafka-add-partitions' *.td))}
+          ${TD_TEST:-$(grep -lF '$ kafka' $(grep -LF '$ kafka-add-partitions' $(grep -L '$ kafka-ingest.\+format=protobuf.\+publish=true' *.td)))}
 
   # Run tests, requires AWS credentials to be present. See guide-testing for
   # details.
