@@ -992,6 +992,7 @@ dependencies = [
  "kafka-util",
  "log",
  "ore",
+ "persist-types",
  "regex",
  "repr",
  "rusoto_core",

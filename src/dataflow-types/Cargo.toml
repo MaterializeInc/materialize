@@ -12,6 +12,7 @@ ccsr = { path = "../ccsr" }
 expr = { path = "../expr" }
 globset = { version = "0.4.8", features = ["serde1"] }
 interchange = { path = "../interchange" }
+persist-types = { path = "../persist-types" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.13"
 ore = { path = "../ore" }
@@ -20,10 +21,8 @@ repr = { path = "../repr" }
 rusoto_core = "0.47.0"
 serde = { version = "1.0.130", features = ["derive"] }
 serde_regex = "1.1.0"
+serde_json = "1.0.68"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.12.0"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
-
-[dev-dependencies]
-serde_json = "1.0.68"
