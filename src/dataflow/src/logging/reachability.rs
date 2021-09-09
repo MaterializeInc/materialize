@@ -12,16 +12,18 @@
 use std::convert::TryFrom;
 use std::time::Duration;
 
-use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, TimelyLog};
+use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
-use crate::render::datum_vec::DatumVec;
+use crate::logging::ConsolidateBuffer;
 use dataflow_types::logging::LoggingConfig;
-use repr::{Datum, Row, Timestamp};
+use ore::iter::IteratorExt;
+use repr::{Datum, Row, RowArena, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -33,7 +35,10 @@ pub fn construct<A: Allocate>(
             (
                 Duration,
                 WorkerIdentifier,
-                (Vec<usize>, usize, usize, bool, Option<Timestamp>, isize),
+                (
+                    Vec<usize>,
+                    Vec<(usize, usize, bool, Option<Timestamp>, isize)>,
+                ),
             ),
         >,
     >,
@@ -52,68 +57,79 @@ pub fn construct<A: Allocate>(
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-        let mut flatten = OperatorBuilder::new(
-            "Timely Reachability Logging Flatten ".to_string(),
-            scope.clone(),
-        );
+        let construct_reachability = |key: Vec<_>| {
+            let mut flatten = OperatorBuilder::new(
+                "Timely Reachability Logging Flatten ".to_string(),
+                scope.clone(),
+            );
 
-        use timely::dataflow::channels::pact::Pipeline;
-        let mut input = flatten.new_input(&logs, Pipeline);
+            use timely::dataflow::channels::pact::Pipeline;
+            let mut input = flatten.new_input(&logs, Pipeline);
 
-        let (mut updates_out, updates) = flatten.new_output();
+            let (mut updates_out, updates) = flatten.new_output();
 
-        let mut buffer = Vec::new();
-        flatten.build(move |_capability| {
+            let mut buffer = Vec::new();
+            flatten.build(move |_capability| {
+                move |_frontiers| {
+                    let updates = updates_out.activate();
+                    let mut updates_session = ConsolidateBuffer::new(updates, 0);
+
+                    input.for_each(|cap, data| {
+                        data.swap(&mut buffer);
+
+                        for (time, worker, (addr, massaged)) in buffer.drain(..) {
+                            let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
+                                * granularity_ms)
+                                as Timestamp;
+                            for (source, port, update_type, ts, diff) in massaged {
+                                updates_session.give(
+                                    &cap,
+                                    (
+                                        (update_type, addr.clone(), source, port, worker, ts),
+                                        time_ms,
+                                        diff,
+                                    ),
+                                );
+                            }
+                        }
+                    });
+                }
+            });
+
             let mut row_packer = Row::default();
-            move |_frontiers| {
-                let mut updates = updates_out.activate();
-
-                input.for_each(|time, data| {
-                    data.swap(&mut buffer);
-
-                    let mut updates_session = updates.session(&time);
-
-                    for (time, worker, (mut addr, source, port, update_type, ts, diff)) in
-                        buffer.drain(..)
-                    {
-                        let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
-                            * granularity_ms) as Timestamp;
-                        let update_type = if update_type { "source" } else { "target" };
-
-                        addr.push(source);
-                        row_packer.push_list(addr.into_iter().map(|id| Datum::Int64(id as i64)));
-                        row_packer.push(Datum::Int64(port as i64));
-                        row_packer.push(Datum::Int64(worker as i64));
-                        row_packer.push(Datum::String(&update_type));
-                        row_packer.push(Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())));
-                        updates_session.give((row_packer.finish_and_reuse(), time_ms, diff));
-                    }
-                });
-            }
-        });
-
-        let updates = updates.as_collection();
+            updates
+                .as_collection()
+                .map(move |(update_type, addr, source, port, worker, ts)| {
+                    let row_arena = RowArena::default();
+                    let update_type = if update_type { "source" } else { "target" };
+                    row_packer.push_list(
+                        addr.iter()
+                            .chain_one(&source)
+                            .map(|id| Datum::Int64(*id as i64)),
+                    );
+                    let datums = &[
+                        row_arena.push_unary_row(row_packer.finish_and_reuse()),
+                        Datum::Int64(port as i64),
+                        Datum::Int64(worker as i64),
+                        Datum::String(&update_type),
+                        Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
+                    ];
+                    row_packer.extend(key.iter().map(|k| datums[*k]));
+                    let key_row = row_packer.finish_and_reuse();
+                    (key_row, Row::pack_slice(datums))
+                })
+        };
 
         // Restrict results by those logs that are meant to be active.
-        let logs = vec![(LogVariant::Timely(TimelyLog::Reachability), updates)];
+        let logs = vec![(LogVariant::Timely(TimelyLog::Reachability))];
 
         let mut result = std::collections::HashMap::new();
-        for (variant, collection) in logs {
+        for variant in logs {
             if config.active_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
-                let trace = collection
-                    .map({
-                        let mut row_packer = Row::default();
-                        let mut datums = DatumVec::new();
-                        move |row| {
-                            let datums = datums.borrow_with(&row);
-                            row_packer.extend(key.iter().map(|k| datums[*k]));
-                            ::std::mem::drop(datums);
-                            (row_packer.finish_and_reuse(), row)
-                        }
-                    })
-                    .arrange_by_key_named(&format!("ArrangeByKey {:?}", variant))
+                let trace = construct_reachability(key.clone())
+                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }
