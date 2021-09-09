@@ -232,6 +232,75 @@ impl MapFilterProject {
         }
     }
 
+    /// Extracts an error-free MapFilterProject at the root of the expression.
+    ///
+    /// The expression will be modified to extract maps, filters, and projects
+    /// from the root of the expression, which will be returned as `Self`. The
+    /// extraction will halt if a Map or Filter containing a literal error is
+    /// reached. Otherwise, the method will return an identity operator.
+    ///
+    /// This method is meant to be used during optimization, where it is
+    /// necessary to avoid moving around maps and filters with errors.
+    pub fn extract_non_errors_from_expr(expr: &MirRelationExpr) -> (Self, &MirRelationExpr) {
+        match expr {
+            MirRelationExpr::Map { input, scalars }
+                if scalars.iter().all(|s| !s.is_literal_err()) =>
+            {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.map(scalars.iter().cloned()), expr)
+            }
+            MirRelationExpr::Filter { input, predicates }
+                if predicates.iter().all(|p| !p.is_literal_err()) =>
+            {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.filter(predicates.iter().cloned()), expr)
+            }
+            MirRelationExpr::Project { input, outputs } => {
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.project(outputs.iter().cloned()), expr)
+            }
+            x => (Self::new(x.arity()), x),
+        }
+    }
+
+    /// Removes an error-free MapFilterProject from the root of the expression.
+    ///
+    /// The expression will be modified to extract maps, filters, and projects
+    /// from the root of the expression, which will be returned as `Self`. The
+    /// extraction will halt if a Map or Filter containing a literal error is
+    /// reached. Otherwise, the method will return an
+    /// identity operator, and the expression will remain unchanged.
+    ///
+    /// This method is meant to be used during optimization, where it is
+    /// necessary to avoid moving around maps and filters with errors.
+    pub fn extract_non_errors_from_expr_mut(expr: &mut MirRelationExpr) -> Self {
+        match expr {
+            MirRelationExpr::Map { input, scalars }
+                if scalars.iter().all(|s| !s.is_literal_err()) =>
+            {
+                let mfp =
+                    Self::extract_non_errors_from_expr_mut(input).map(scalars.iter().cloned());
+                *expr = input.take_dangerous();
+                mfp
+            }
+            MirRelationExpr::Filter { input, predicates }
+                if predicates.iter().all(|p| !p.is_literal_err()) =>
+            {
+                let mfp = Self::extract_non_errors_from_expr_mut(input)
+                    .filter(predicates.iter().cloned());
+                *expr = input.take_dangerous();
+                mfp
+            }
+            MirRelationExpr::Project { input, outputs } => {
+                let mfp =
+                    Self::extract_non_errors_from_expr_mut(input).project(outputs.iter().cloned());
+                *expr = input.take_dangerous();
+                mfp
+            }
+            x => Self::new(x.arity()),
+        }
+    }
+
     /// Extracts temporal predicates into their own `Self`.
     ///
     /// Expressions that are used by the temporal predicates are exposed by `self.projection`,

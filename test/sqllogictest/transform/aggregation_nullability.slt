@@ -25,19 +25,22 @@ EXPLAIN select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group b
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 = Let l0 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0)
+| Project (#0)
 
-%3 =
+%3 = Let l1 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 
 %4 =
 | Get %2 (l0)
@@ -45,27 +48,23 @@ EXPLAIN select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group b
 | ArrangeBy (#0)
 
 %5 =
-| Join %3 %4 (= #0 #2)
+| Join %3 %4 (= #0 #1)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0)
+| Project (#0)
 | Negate
-| Project (#0, #1)
 
 %6 =
-| Get materialize.public.t1 (u1)
+| Union %5 %3
+| Map null
 
 %7 =
-| Union %5 %6
-| Map null, null
+| Get %2 (l0)
+| Project (#0, #0)
 
 %8 =
-| Get %2 (l0)
-| Project (#0, #1, #0, #3)
-
-%9 =
-| Union %7 %8
+| Union %6 %7
 | Reduce group=(#0)
-| | agg count(#2)
+| | agg count(#1)
 | Filter (#1 >= 0)
 
 EOF
@@ -83,16 +82,18 @@ EXPLAIN select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by 
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0)
+| Project (#0)
 | Reduce group=(#0)
 | | agg sum(#0)
 | Filter (#1 >= 0)
@@ -115,37 +116,38 @@ EXPLAIN select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1)
+| Project (#0, #1)
 
 %3 =
 | Get materialize.public.t1 (u1)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #0 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.t1 (u1)
 
 %7 =
 | Union %5 %6
-| Map null, null
+| Map null
 
 %8 =
 | Get %2 (l0)
-| Project (#0, #1, #0, #3)
+| Project (#0, #1, #0)
 
 %9 =
 | Union %7 %8
@@ -172,37 +174,38 @@ EXPLAIN select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1)
+| Project (#0, #1)
 
 %3 =
 | Get materialize.public.t1 (u1)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #0 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.t1 (u1)
 
 %7 =
 | Union %5 %6
-| Map null, null
+| Map null
 
 %8 =
 | Get %2 (l0)
-| Project (#0, #1, #0, #3)
+| Project (#0, #1, #0)
 
 %9 =
 | Union %7 %8
@@ -230,37 +233,38 @@ EXPLAIN select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1)
+| Project (#0, #1)
 
 %3 =
 | Get materialize.public.t1 (u1)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #0 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.t1 (u1)
 
 %7 =
 | Union %5 %6
-| Map null, null
+| Map null
 
 %8 =
 | Get %2 (l0)
-| Project (#0, #1, #0, #3)
+| Project (#0, #1, #0)
 
 %9 =
 | Union %7 %8
@@ -306,16 +310,18 @@ EXPLAIN select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0)
+| Project (#0)
 | Reduce group=(#0)
 | | agg sum(#0)
 | | agg max(#0)
@@ -330,16 +336,18 @@ EXPLAIN select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0)
+| Project (#0)
 | Reduce group=(#0)
 | | agg sum(#0)
 | | agg max(#0)
@@ -354,6 +362,7 @@ EXPLAIN select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
@@ -361,41 +370,39 @@ EXPLAIN select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 | Filter !(isnull(#0))
 
 %2 = Let l0 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #3)
+| Project (#0, #2)
 
-%3 =
+%3 = Let l1 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
-| Join %3 %4 (= #0 #2)
+| Join %3 %4 (= #0 #1)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0)
+| Project (#0)
 | Negate
-| Project (#0, #1)
 
 %6 =
-| Get materialize.public.t1 (u1)
-
-%7 =
-| Union %5 %6
+| Union %5 %3
 | Map null, null
 
-%8 =
+%7 =
 | Get %2 (l0)
-| Project (#0, #1, #0, #3)
+| Project (#0, #0, #1)
 
-%9 =
-| Union %7 %8
+%8 =
+| Union %6 %7
 | Reduce group=(#0)
-| | agg sum(#3)
-| | agg max(#2)
+| | agg sum(#2)
+| | agg max(#1)
 | Filter (#2 >= 0)
 
 EOF
@@ -407,6 +414,7 @@ EXPLAIN select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
@@ -414,11 +422,11 @@ EXPLAIN select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.
 | Filter !(isnull(#0))
 
 %2 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #3)
+| Project (#0, #2)
 | Reduce group=(#0)
-| | agg sum((#0 + #3))
+| | agg sum((#0 + #1))
 | | agg max(#0)
 | Filter (#2 >= 0)
 
@@ -431,16 +439,18 @@ EXPLAIN select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0)
+| Project (#0)
 | Reduce group=(#0)
 | | agg sum((#0 + #0))
 | | agg max(#0)
@@ -455,19 +465,22 @@ EXPLAIN select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %2 = Let l0 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0)
+| Project (#0)
 
-%3 =
+%3 = Let l1 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 
 %4 =
 | Get %2 (l0)
@@ -475,28 +488,24 @@ EXPLAIN select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.
 | ArrangeBy (#0)
 
 %5 =
-| Join %3 %4 (= #0 #2)
+| Join %3 %4 (= #0 #1)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0)
+| Project (#0)
 | Negate
-| Project (#0, #1)
 
 %6 =
-| Get materialize.public.t1 (u1)
+| Union %5 %3
+| Map null
 
 %7 =
-| Union %5 %6
-| Map null, null
+| Get %2 (l0)
+| Project (#0, #0)
 
 %8 =
-| Get %2 (l0)
-| Project (#0, #1, #0, #3)
-
-%9 =
-| Union %7 %8
+| Union %6 %7
 | Reduce group=(#0)
 | | agg sum(#0)
-| | agg max(#2)
+| | agg max(#1)
 | Filter (#2 >= 0)
 
 EOF
@@ -508,6 +517,7 @@ EXPLAIN select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group b
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
@@ -515,36 +525,34 @@ EXPLAIN select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group b
 | Filter !(isnull(#0))
 
 %2 = Let l0 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #3)
+| Project (#0, #2)
 
-%3 =
+%3 = Let l1 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
-| Join %3 %4 (= #0 #2)
+| Join %3 %4 (= #0 #1)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0)
+| Project (#0)
 | Negate
-| Project (#0, #1)
 
 %6 =
-| Get materialize.public.t1 (u1)
+| Union %5 %3
+| Map null
 
 %7 =
-| Union %5 %6
-| Map null, null
-
-%8 =
-| Union %7 %2
+| Union %6 %2
 | Reduce group=(#0)
-| | agg count(#3)
+| | agg count(#1)
 
 EOF
 
@@ -555,6 +563,7 @@ EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
@@ -562,37 +571,35 @@ EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t
 | Filter !(isnull(#0))
 
 %2 = Let l0 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #3)
+| Project (#0, #2)
 
-%3 =
+%3 = Let l1 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
-| Join %3 %4 (= #0 #2)
+| Join %3 %4 (= #0 #1)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0)
+| Project (#0)
 | Negate
-| Project (#0, #1)
 
 %6 =
-| Get materialize.public.t1 (u1)
+| Union %5 %3
+| Map null
 
 %7 =
-| Union %5 %6
-| Map null, null
-
-%8 =
-| Union %7 %2
+| Union %6 %2
 | Reduce group=(#0)
-| | agg count(#3)
-| | agg max(#3)
+| | agg count(#1)
+| | agg max(#1)
 
 EOF
 
@@ -603,6 +610,7 @@ EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 | ArrangeBy (#0)
 
 %1 =
@@ -610,12 +618,12 @@ EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t
 | Filter !(isnull(#0))
 
 %2 =
-| Join %0 %1 (= #0 #2)
+| Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #3)
+| Project (#0, #2)
 | Reduce group=(#0)
-| | agg count(#3)
-| | agg max(#3)
+| | agg count(#1)
+| | agg max(#1)
 | Filter (#2 > 0)
 
 EOF
@@ -636,10 +644,10 @@ EXPLAIN select t1.f1, max(t1.f1 + t2.f2), sum(t1.f2 + t2.f2) from t1 LEFT JOIN t
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1, #3)
+| Project (#0, #1, #3)
 | Reduce group=(#0)
-| | agg max((#0 + #3))
-| | agg sum((#1 + #3))
+| | agg max((#0 + #2))
+| | agg sum((#1 + #2))
 | Filter (#1 > 0)
 
 EOF
@@ -688,35 +696,35 @@ explain select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t
 %2 = Let l0 =
 | Join %0 %1 (= #1 #2)
 | | implementation = Differential %1 %0.(#1)
-| | demand = (#0, #1, #3)
+| Project (#0, #1, #3)
 
 %3 =
 | Get materialize.public.t1 (u5)
 
 %4 =
 | Get %2 (l0)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #1 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.t1 (u5)
 
 %7 =
 | Union %5 %6
-| Map null, null
+| Map null
 
 %8 =
 | Union %7 %2
 | Reduce group=(#0)
 | | agg count(#1)
-| | agg max(#3)
+| | agg max(#2)
 
 EOF
 
@@ -735,35 +743,35 @@ explain select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t
 %2 = Let l0 =
 | Join %0 %1 (= #1 #2)
 | | implementation = Differential %1 %0.(#1)
-| | demand = (#0, #1, #3)
+| Project (#0, #1, #3)
 
 %3 =
 | Get materialize.public.t1 (u5)
 
 %4 =
 | Get %2 (l0)
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #1 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.t1 (u5)
 
 %7 =
 | Union %5 %6
-| Map null, null
+| Map null
 
 %8 =
 | Union %7 %2
 | Reduce group=(#0)
 | | agg count(#1)
-| | agg max(#3)
+| | agg max(#2)
 | Filter (#2 > 0)
 
 EOF
@@ -784,9 +792,9 @@ explain select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by 
 %2 =
 | Join %0 %1 (= #1 #2)
 | | implementation = Differential %1 %0.(#1)
-| | demand = (#0, #3)
+| Project (#0, #3)
 | Reduce group=(#0)
-| | agg max(#3)
+| | agg max(#1)
 | Filter (#1 > 0)
 
 EOF
@@ -806,6 +814,7 @@ EXPLAIN SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS
 ----
 %0 =
 | Get materialize.public.t1 (u9)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
@@ -816,7 +825,6 @@ EXPLAIN SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0)
 | Map 123, 0
 | Project (#1, #2, #0)
 
@@ -877,57 +885,62 @@ WHERE t1.f2 = derived.agg2;
 ----
 %0 =
 | Get materialize.public.t2 (u13)
+| Project (#1)
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.t3 (u15)
 | Filter (#1 = 6)
+| Project (#0)
 
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#1, #2)
 
 %3 =
 | Get materialize.public.t1 (u11)
+| Project (#1)
 
 %4 =
 | Get %2 (l0)
-| Distinct group=(#2)
+| Project (#0)
+
+%5 =
+| Get %2 (l0)
+| Project (#1)
+| Distinct group=(#0)
 | Negate
 | Map 6
 
-%5 =
+%6 =
 | Get materialize.public.t3 (u15)
 | Distinct group=(#0, #1)
 
-%6 =
-| Union %4 %5
-
 %7 =
+| Union %5 %6
+
+%8 =
 | Get materialize.public.t3 (u15)
 | ArrangeBy (#0, #1)
 
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %6 %7.(#0, #1)
-| | demand = ()
-| Map null, null
-| Project (#4, #5, #0, #1)
-
 %9 =
-| Union %2 %8
+| Join %7 %8 (= #0 #2) (= #1 #3)
+| | implementation = Differential %7 %8.(#0, #1)
+| Map null
+| Project (#4)
+
+%10 =
+| Union %4 %9
 | Reduce group=()
 | | agg count(true)
-| | agg max(#1)
+| | agg max(#0)
 | Filter !(isnull(#1))
 | ArrangeBy (#1)
 
-%10 =
-| Join %3 %9 (= #1 #3)
-| | implementation = Differential %3 %9.(#1)
-| | demand = (#2)
-| Project (#2)
+%11 =
+| Join %3 %10 (= #0 #2)
+| | implementation = Differential %3 %10.(#1)
+| Project (#1)
 
 EOF
 
@@ -970,11 +983,11 @@ HAVING SUM(t1.f1 + t2.f1) > 0;
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0, #1)
 | Filter (#1 < #0)
 
 %3 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | Negate
 
@@ -992,7 +1005,6 @@ HAVING SUM(t1.f1 + t2.f1) > 0;
 %7 =
 | Join %5 %6 (= #0 #1)
 | | implementation = Differential %5 %6.(#0)
-| | demand = (#0)
 | Map null
 | Project (#0, #2)
 

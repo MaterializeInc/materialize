@@ -244,13 +244,13 @@ EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 
 %1 =
 | Get materialize.public.t2 (u19)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
 %2 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| | demand = (#0)
 
 EOF
 
@@ -266,13 +266,13 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 
 %2 =
 | Get materialize.public.t2 (u19)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
 %3 =
 | Join %0 %1 %2 (= #0 #1)
 | | implementation = Differential %1 %2.() %0.(#0)
-| | demand = (#0, #2)
 | Project (#0, #0, #2)
 
 EOF
@@ -290,11 +290,12 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 %2 = Let l0 =
 | Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #2)
+| Project (#0, #2)
 
 %3 =
 | Get %2 (l0)
-| Distinct group=(#2)
+| Project (#1)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %4 =
@@ -306,15 +307,14 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 | | implementation = DeltaQuery
 | |   delta %3 %4.(#0)
 | |   delta %4 %3.(#0)
-| | demand = (#0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %6 =
-| Join %2 %5 (= #2 #3)
+| Join %2 %5 (= #1 #2)
 | | implementation = Differential %2 %5.(#0)
-| | demand = (#0, #2)
-| Project (#0, #0, #2)
+| Project (#0, #0, #1)
 
 EOF
 
@@ -346,9 +346,8 @@ SELECT age, ascii_num * 2 as result FROM (
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#1, #3)
-| Map replace(#1, "o", "i"), substr(#4, 2, 1), ascii(#5), (#6 * 2)
-| Project (#3, #7)
+| Map (ascii(substr(replace(#1, "o", "i"), 2, 1)) * 2)
+| Project (#3, #4)
 
 EOF
 
@@ -472,7 +471,7 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
-| | demand = (#0)
+| Project (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -497,7 +496,6 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 %9 =
 | Join %4 %8 (= #0 #1)
 | | implementation = Differential %8 %4.(#0)
-| | demand = (#2)
 | Project (#2)
 
 EOF
@@ -522,7 +520,7 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | | implementation = DeltaQuery
 | |   delta %1 %2.(#0)
 | |   delta %2 %1.(#0)
-| | demand = (#0)
+| Project (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -547,7 +545,6 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 %9 =
 | Join %4 %8 (= #0 #1)
 | | implementation = Differential %8 %4.(#0)
-| | demand = (#2)
 | Map !(#2)
 | Project (#3)
 
@@ -571,8 +568,8 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 %3 = Let l1 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
-| | demand = (#0, #1)
 | Filter (#0 <= #1)
+| Project (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -597,7 +594,6 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 %9 =
 | Join %4 %8 (= #0 #1)
 | | implementation = Differential %8 %4.(#0)
-| | demand = (#2)
 | Map !(#2)
 | Project (#3)
 

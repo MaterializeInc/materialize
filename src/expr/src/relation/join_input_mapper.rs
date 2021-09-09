@@ -204,11 +204,14 @@ impl JoinInputMapper {
     /// Takes a HashSet of columns in the global context and splits it into
     /// a `Vec` containing `self.total_inputs()` HashSets, each containing
     /// the localized columns that belong to the particular input.
-    pub fn split_column_set_by_input(&self, columns: &HashSet<usize>) -> Vec<HashSet<usize>> {
+    pub fn split_column_set_by_input<'a, I>(&self, columns: I) -> Vec<HashSet<usize>>
+    where
+        I: Iterator<Item = &'a usize>,
+    {
         let mut new_columns = vec![HashSet::new(); self.total_inputs()];
-        for column in columns.iter() {
+        for column in columns {
             let (new_col, input) = self.map_column_to_local(*column);
-            new_columns[input].insert(new_col);
+            new_columns[input].extend(std::iter::once(new_col));
         }
         new_columns
     }

@@ -78,7 +78,6 @@ explain plan for select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#5)
 
 EOF
 

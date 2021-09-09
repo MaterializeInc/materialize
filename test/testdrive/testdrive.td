@@ -55,7 +55,6 @@ $ set-regex match=u\d+ replacement=UID
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#5)
 
 ! SELECT * FROM u1234;
 unknown catalog item 'UID'

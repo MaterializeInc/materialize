@@ -8,6 +8,4 @@
 // by the Apache License, Version 2.0.
 
 //! Common subexpression elimination.
-
-pub mod map;
 pub mod relation_cse;

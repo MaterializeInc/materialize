@@ -39,7 +39,6 @@ EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2;
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -60,7 +59,6 @@ EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3;
 %2 =
 | Join %0 %0 %1
 | | implementation = Differential %1 %0.() %0.()
-| | demand = (#0..#5)
 
 EOF
 
@@ -78,7 +76,6 @@ EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 1;
 %2 =
 | Join %1 %0
 | | implementation = Differential %0 %1.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -96,7 +93,6 @@ EXPLAIN SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3 WHERE a1.f1 = 1 AND a2.f1 = 
 %2 =
 | Join %1 %1 %0
 | | implementation = Differential %0 %1.() %1.()
-| | demand = (#0..#5)
 
 EOF
 
@@ -109,46 +105,45 @@ EXPLAIN SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1) WHERE a1.f1 = 1 AND
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy (#0)
 
-%2 = Let l1 =
-| Join %1 %0 (= #0 #2)
-| | implementation = Differential %0 %1.(#0)
-| | demand = (#0, #1, #3)
+%1 = Let l1 =
+| Join %0 %0 (= #0 #2)
+| | implementation = DeltaQuery
+| |   delta %0 %0.(#0)
+| |   delta %0 %0.(#0)
+| Filter !(isnull(#0))
+| Project (#0, #1, #3)
+
+%2 =
+| Get %1 (l1)
+| Project (#0, #1, #0, #2)
 
 %3 =
-| Get %2 (l1)
-| Project (#0, #1, #0, #3)
-
-%4 =
-| Get %2 (l1)
+| Get %1 (l1)
+| Project (#0, #1)
 | Distinct group=(#0, #1)
 | Negate
 
-%5 =
+%4 =
 | Get materialize.public.t1 (u1)
 | Distinct group=(#0, #1)
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 
-%7 =
+%6 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0, #1)
 
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %6 %7.(#0, #1)
-| | demand = (#0, #1)
+%7 =
+| Join %5 %6 (= #0 #2) (= #1 #3)
+| | implementation = Differential %5 %6.(#0, #1)
 | Map null, null
 | Project (#0, #1, #4, #5)
 
-%9 =
-| Union %3 %8
+%8 =
+| Union %2 %7
 | Map coalesce(#0, #2)
 | Filter (#4 = 1)
 | Project (#4, #1, #3)
@@ -169,11 +164,12 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM
 
 %1 =
 | Get materialize.public.t1 (u1)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %2 = Let l0 =
 | Union %0 %1
@@ -190,7 +186,6 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM
 %5 =
 | Join %3 %4 %2 (= #0 #2) (= #1 #3)
 | | implementation = Differential %2 %3.(#1) %4.(#0)
-| | demand = (#0, #1)
 | Project (#0, #1)
 
 EOF
@@ -208,11 +203,12 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (S
 
 %2 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %3 = Let l1 =
 | Union %1 %2
@@ -229,7 +225,6 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (S
 %6 =
 | Join %4 %5 %3 (= #0 #2) (= #1 #3)
 | | implementation = Differential %3 %4.(#1) %5.(#0)
-| | demand = (#0, #1)
 | Project (#0, #1)
 
 EOF
@@ -239,36 +234,36 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FR
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
+| Project ()
 
 %1 =
-| Get %0 (l0)
+| Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
 
 %2 =
-| Get %0 (l0)
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0))
 | Project (#0)
 
 %3 =
-| Get materialize.public.t1 (u1)
+| Get %0 (l0)
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %4 =
 | Union %2 %3
 
 %5 =
-| Get materialize.public.t1 (u1)
+| Get %0 (l0)
 | Distinct group=()
 | ArrangeBy ()
 
 %6 =
 | Join %1 %4 %5 (= #0 #2)
 | | implementation = Differential %4 %5.() %1.(#0)
-| | demand = (#0, #1)
 | Project (#0, #1)
 
 EOF
@@ -282,17 +277,19 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM 
 
 %1 =
 | Get materialize.public.t1 (u1)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %2 = Let l0 =
 | Union %0 %1
 
 %3 =
 | Get %2 (l0)
+| Project ()
 | Distinct group=()
 | Negate
 
@@ -317,7 +314,6 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM 
 %9 =
 | Join %7 %8 %6
 | | implementation = Differential %6 %7.() %8.()
-| | demand = (#0..#3)
 | Filter ((#0 = #2) || (#1 = #3))
 | Project (#0, #1)
 
@@ -344,7 +340,6 @@ ON TRUE
 %2 =
 | Join %1 %0
 | | implementation = Differential %0 %1.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -366,7 +361,6 @@ AND a2.f2 = 2
 %2 =
 | Join %1 %0
 | | implementation = Differential %0 %1.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -390,7 +384,6 @@ AND a2.f2 = 3
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -416,10 +409,11 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UN
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
+| Project (#1)
 
 %1 =
 | Union %0 %0 %0
-| Distinct group=(#1)
+| Distinct group=(#0)
 | Map 1
 | Project (#1, #0)
 
@@ -442,17 +436,19 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 
 
 %2 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %3 = Let l1 =
 | Union %1 %2
 
 %4 =
 | Get %3 (l1)
+| Project ()
 | Distinct group=()
 | Negate
 
@@ -468,6 +464,7 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 
 
 %8 =
 | Get materialize.public.t1 (u1)
+| Project ()
 | ArrangeBy ()
 
 %9 =
@@ -477,8 +474,6 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 
 %10 =
 | Join %8 %9 %7
 | | implementation = Differential %7 %8.() %9.()
-| | demand = (#2, #3)
-| Project (#2, #3)
 
 EOF
 
@@ -495,17 +490,19 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 
 %2 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %3 = Let l1 =
 | Union %1 %2
 
 %4 =
 | Get %3 (l1)
+| Project ()
 | Distinct group=()
 | Negate
 
@@ -521,6 +518,7 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 
 %8 =
 | Get materialize.public.t1 (u1)
+| Project ()
 | ArrangeBy ()
 
 %9 =
@@ -530,15 +528,14 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHE
 %10 = Let l3 =
 | Join %8 %9 %7
 | | implementation = Differential %7 %8.() %9.()
-| | demand = (#2, #3)
 | Reduce group=()
-| | agg min(#2)
-| | agg max(#3)
+| | agg min(#0)
+| | agg max(#1)
 
 %11 =
 | Get %10 (l3)
-| Negate
 | Project ()
+| Negate
 
 %12 =
 | Constant ()
@@ -563,50 +560,54 @@ EXPLAIN SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
 
-%1 =
+%1 = Let l1 =
 | Get %0 (l0)
-| Project (#0)
+| Project ()
 
 %2 =
 | Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get %1 (l1)
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
-%3 = Let l1 =
-| Union %1 %2
-
-%4 =
-| Get materialize.public.t1 (u1)
-| ArrangeBy ()
+%4 = Let l2 =
+| Union %2 %3
 
 %5 =
-| Get %0 (l0)
-| Distinct group=()
+| Get materialize.public.t1 (u1)
+| Project ()
 | ArrangeBy ()
 
 %6 =
-| Get %3 (l1)
+| Get %1 (l1)
+| Distinct group=()
+| ArrangeBy ()
+
+%7 =
+| Get %4 (l2)
+| Project ()
 | Distinct group=()
 | Negate
 
-%7 =
+%8 =
 | Constant ()
 
-%8 =
-| Union %6 %7
+%9 =
+| Union %7 %8
 | Map null
 
-%9 =
-| Union %3 %8
-
 %10 =
-| Join %4 %5 %9
-| | implementation = Differential %9 %5.() %4.()
-| | demand = (#2)
-| Project (#2)
+| Union %4 %9
+
+%11 =
+| Join %5 %6 %10
+| | implementation = Differential %10 %6.() %5.()
 
 EOF
 
@@ -625,21 +626,24 @@ SELECT f1 FROM t1 WHERE f1 = 1
 
 %2 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %3 = Let l2 =
 | Union %1 %2
 
 %4 =
 | Get materialize.public.t1 (u1)
+| Project ()
 | ArrangeBy ()
 
 %5 =
 | Get %3 (l2)
+| Project ()
 | Distinct group=()
 | Negate
 
@@ -656,8 +660,6 @@ SELECT f1 FROM t1 WHERE f1 = 1
 %9 =
 | Join %4 %8
 | | implementation = Differential %8 %4.()
-| | demand = (#2)
-| Project (#2)
 
 %10 =
 | Union %9 %1
@@ -688,7 +690,6 @@ SELECT * FROM t1 AS a1, t1 AS a2
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 %3 =
 | Union %2 %2
@@ -703,51 +704,51 @@ SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy (#0)
 
-%2 = Let l1 =
-| Join %1 %0 (= #0 #2)
-| | implementation = Differential %0 %1.(#0)
-| | demand = (#0, #1, #3)
+%1 = Let l1 =
+| Join %0 %0 (= #0 #2)
+| | implementation = DeltaQuery
+| |   delta %0 %0.(#0)
+| |   delta %0 %0.(#0)
+| Filter !(isnull(#0))
+| Project (#0, #1, #3)
+
+%2 =
+| Get %1 (l1)
+| Project (#0, #1, #0, #2)
 
 %3 =
-| Get %2 (l1)
-| Project (#0, #1, #0, #3)
-
-%4 =
-| Get %2 (l1)
+| Get %1 (l1)
+| Project (#0, #1)
 | Distinct group=(#0, #1)
 | Negate
 
-%5 =
+%4 =
 | Get materialize.public.t1 (u1)
 | Distinct group=(#0, #1)
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 
-%7 =
+%6 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0, #1)
 
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %6 %7.(#0, #1)
-| | demand = (#0, #1)
+%7 =
+| Join %5 %6 (= #0 #2) (= #1 #3)
+| | implementation = Differential %5 %6.(#0, #1)
 | Map null, null
 | Project (#0, #1, #4, #5)
 
-%9 = Let l2 =
-| Union %3 %8
+%8 = Let l2 =
+| Union %2 %7
 | Map coalesce(#0, #2)
+| Project (#1, #3, #4)
+| Project (#2, #0, #1)
 
-%10 =
-| Union %9 %9
-| Project (#4, #1, #3)
+%9 =
+| Union %8 %8
 
 EOF
 
@@ -759,59 +760,57 @@ SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) W
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy (#0)
 
-%2 = Let l1 =
-| Join %1 %0 (= #0 #2)
-| | implementation = Differential %0 %1.(#0)
-| | demand = (#0, #1)
+%1 = Let l1 =
+| Join %0 %0 (= #0 #2)
+| | implementation = DeltaQuery
+| |   delta %0 %0.(#0)
+| |   delta %0 %0.(#0)
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+%2 =
+| Get %1 (l1)
+| Project (#0, #0)
 
 %3 =
-| Get %2 (l1)
-| Project (#0, #1, #0, #3)
-
-%4 =
-| Get %2 (l1)
+| Get %1 (l1)
 | Distinct group=(#0, #1)
 | Negate
 
-%5 =
+%4 =
 | Get materialize.public.t1 (u1)
 | Distinct group=(#0, #1)
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 
-%7 =
+%6 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0, #1)
 
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %6 %7.(#0, #1)
-| | demand = (#0)
-| Map null, null
-| Project (#0, #1, #4, #5)
+%7 =
+| Join %5 %6 (= #0 #2) (= #1 #3)
+| | implementation = Differential %5 %6.(#0, #1)
+| Map null
+| Project (#0, #4)
 
-%9 = Let l2 =
-| Union %3 %8
-| Map coalesce(#0, #2)
+%8 = Let l2 =
+| Union %2 %7
+| Map coalesce(#0, #1)
+| Project (#2)
+
+%9 =
+| Get %8 (l2)
+| Filter (#0 = 1)
 
 %10 =
-| Get %9 (l2)
-| Filter (#4 = 1)
+| Get %8 (l2)
+| Filter (#0 = 2)
 
 %11 =
-| Get %9 (l2)
-| Filter (#4 = 2)
-
-%12 =
-| Union %10 %11
-| Project (#4)
+| Union %9 %10
 
 EOF
 
@@ -824,58 +823,55 @@ WHERE s1.f1 = 1 AND s2.f1 = 1
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy (#0)
 
-%2 = Let l1 =
-| Join %1 %0 (= #0 #2)
-| | implementation = Differential %0 %1.(#0)
-| | demand = (#0, #1)
+%1 = Let l1 =
+| Join %0 %0 (= #0 #2)
+| | implementation = DeltaQuery
+| |   delta %0 %0.(#0)
+| |   delta %0 %0.(#0)
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+%2 =
+| Get %1 (l1)
+| Project (#0, #0)
 
 %3 =
-| Get %2 (l1)
-| Project (#0, #1, #0, #3)
-
-%4 =
-| Get %2 (l1)
+| Get %1 (l1)
 | Distinct group=(#0, #1)
 | Negate
 
-%5 =
+%4 =
 | Get materialize.public.t1 (u1)
 | Distinct group=(#0, #1)
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 
-%7 =
+%6 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0, #1)
 
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %6 %7.(#0, #1)
-| | demand = (#0)
-| Map null, null
-| Project (#0, #1, #4, #5)
+%7 =
+| Join %5 %6 (= #0 #2) (= #1 #3)
+| | implementation = Differential %5 %6.(#0, #1)
+| Map null
+| Project (#0, #4)
 
-%9 = Let l2 =
-| Union %3 %8
-| Map coalesce(#0, #2)
-| Filter (#4 = 1)
+%8 = Let l2 =
+| Union %2 %7
+| Map coalesce(#0, #1)
+| Filter (#2 = 1)
+| Project (#2)
 
-%10 =
-| Get %9 (l2)
+%9 =
+| Get %8 (l2)
 | ArrangeBy ()
 
-%11 =
-| Join %10 %9
-| | implementation = Differential %9 %10.()
-| | demand = (#4, #9)
-| Project (#4, #9)
+%10 =
+| Join %9 %8
+| | implementation = Differential %8 %9.()
 
 EOF
 
@@ -888,62 +884,59 @@ WHERE s1.f1 = 1 AND s2.f1 = 2
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Filter !(isnull(#0))
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy (#0)
 
-%2 = Let l1 =
-| Join %1 %0 (= #0 #2)
-| | implementation = Differential %0 %1.(#0)
-| | demand = (#0, #1)
+%1 = Let l1 =
+| Join %0 %0 (= #0 #2)
+| | implementation = DeltaQuery
+| |   delta %0 %0.(#0)
+| |   delta %0 %0.(#0)
+| Filter !(isnull(#0))
+| Project (#0, #1)
+
+%2 =
+| Get %1 (l1)
+| Project (#0, #0)
 
 %3 =
-| Get %2 (l1)
-| Project (#0, #1, #0, #3)
-
-%4 =
-| Get %2 (l1)
+| Get %1 (l1)
 | Distinct group=(#0, #1)
 | Negate
 
-%5 =
+%4 =
 | Get materialize.public.t1 (u1)
 | Distinct group=(#0, #1)
 
-%6 =
-| Union %4 %5
+%5 =
+| Union %3 %4
 
-%7 =
+%6 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0, #1)
 
-%8 =
-| Join %6 %7 (= #0 #2) (= #1 #3)
-| | implementation = Differential %6 %7.(#0, #1)
-| | demand = (#0)
-| Map null, null
-| Project (#0, #1, #4, #5)
+%7 =
+| Join %5 %6 (= #0 #2) (= #1 #3)
+| | implementation = Differential %5 %6.(#0, #1)
+| Map null
+| Project (#0, #4)
 
-%9 = Let l2 =
-| Union %3 %8
-| Map coalesce(#0, #2)
+%8 = Let l2 =
+| Union %2 %7
+| Map coalesce(#0, #1)
+| Project (#2)
 
-%10 =
-| Get %9 (l2)
-| Filter (#4 = 1)
+%9 =
+| Get %8 (l2)
+| Filter (#0 = 1)
 | ArrangeBy ()
 
-%11 =
-| Get %9 (l2)
-| Filter (#4 = 2)
+%10 =
+| Get %8 (l2)
+| Filter (#0 = 2)
 
-%12 =
-| Join %10 %11
-| | implementation = Differential %11 %10.()
-| | demand = (#4, #9)
-| Project (#4, #9)
+%11 =
+| Join %9 %10
+| | implementation = Differential %10 %9.()
 
 EOF
 
@@ -1001,13 +994,13 @@ SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
 %1 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| | demand = (#0, #1)
 
 %3 =
 | Union %2 %2
@@ -1034,11 +1027,12 @@ SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 
 %3 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %4 =
 | Union %2 %3
@@ -1046,11 +1040,10 @@ SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 %5 = Let l1 =
 | Join %1 %4 (= #0 #2)
 | | implementation = Differential %4 %1.(#0)
-| | demand = (#0, #1)
+| Project (#0, #1)
 
 %6 =
 | Union %5 %5
-| Project (#0, #1)
 
 EOF
 
@@ -1066,11 +1059,11 @@ SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
-| Map (#0 + 2), (#2 + 1)
+| Map ((#0 + 2) + 1)
+| Project (#2)
 
 %1 =
 | Union %0 %0
-| Project (#3)
 
 EOF
 
@@ -1086,13 +1079,14 @@ SELECT MIN(f1) FROM t1;
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 | Reduce group=()
 | | agg min(#0)
 
 %1 =
 | Get %0 (l0)
-| Negate
 | Project ()
+| Negate
 
 %2 =
 | Constant ()
@@ -1114,6 +1108,7 @@ SELECT DISTINCT f1 FROM t1
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 | Distinct group=(#0)
 
 %1 =
@@ -1129,6 +1124,7 @@ SELECT f1, COUNT(*) FROM t1 GROUP BY f1
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 | Reduce group=(#0)
 | | agg count(true)
 
@@ -1149,10 +1145,10 @@ SELECT f1 + f1 + f1 + f1 FROM t1
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Map (((#0 + #0) + #0) + #0)
+| Project (#2)
 
 %1 =
 | Union %0 %0
-| Project (#2)
 
 EOF
 
@@ -1165,10 +1161,10 @@ SELECT ABS(f1) FROM t1
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Map abs(#0)
+| Project (#2)
 
 %1 =
 | Union %0 %0
-| Project (#2)
 
 EOF
 
@@ -1203,13 +1199,13 @@ UNION ALL
 %1 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| | demand = (#0, #1)
 
 %3 =
 | Union %2 %2
@@ -1232,13 +1228,13 @@ UNION ALL
 %1 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
 %2 = Let l0 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
-| | demand = (#0, #1)
 
 %3 =
 | Get %2 (l0)
@@ -1262,6 +1258,7 @@ UNION ALL
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 1)
+| Project ()
 | Distinct group=()
 | ArrangeBy ()
 
@@ -1271,7 +1268,6 @@ UNION ALL
 %2 =
 | Join %1 %0
 | | implementation = Differential %1 %0.()
-| | demand = (#0, #1)
 
 %3 =
 | Get materialize.public.t2 (u4)
@@ -1279,7 +1275,6 @@ UNION ALL
 %4 =
 | Join %3 %0
 | | implementation = Differential %3 %0.()
-| | demand = (#0, #1)
 
 %5 =
 | Union %2 %4
@@ -1314,7 +1309,6 @@ EXPLAIN SELECT * FROM
 %5 =
 | Join %2 %4
 | | implementation = Differential %4 %2.()
-| | demand = (#0, #1)
 
 EOF
 
@@ -1362,7 +1356,6 @@ EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 2
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -1382,25 +1375,32 @@ SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE 
 
 %2 =
 | Get %0 (l0)
+| Project (#0)
 | ArrangeBy ()
 
 %3 =
-| Join %2 %0
-| | implementation = Differential %0 %2.()
-| | demand = (#0)
+| Get %0 (l0)
+| Project ()
 
 %4 =
-| Get %1 (l1)
-| ArrangeBy ()
+| Join %2 %3
+| | implementation = Differential %3 %2.()
 
 %5 =
-| Join %4 %1
-| | implementation = Differential %1 %4.()
-| | demand = (#0)
+| Get %1 (l1)
+| Project (#0)
+| ArrangeBy ()
 
 %6 =
-| Union %3 %5
-| Project (#0)
+| Get %1 (l1)
+| Project ()
+
+%7 =
+| Join %5 %6
+| | implementation = Differential %6 %5.()
+
+%8 =
+| Union %4 %7
 
 EOF
 
@@ -1431,40 +1431,44 @@ SELECT MAX(f1) FROM t1
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
+
+%1 = Let l1 =
+| Get %0 (l0)
 | Reduce group=()
 | | agg min(#0)
 
-%1 = Let l1 =
-| Get materialize.public.t1 (u1)
+%2 = Let l2 =
+| Get %0 (l0)
 | Reduce group=()
 | | agg max(#0)
 
-%2 =
-| Get %0 (l0)
-| Negate
-| Project ()
-
 %3 =
-| Constant ()
+| Get %1 (l1)
+| Project ()
+| Negate
 
 %4 =
-| Union %2 %3
-| Map null
-
-%5 =
-| Get %1 (l1)
-| Negate
-| Project ()
-
-%6 =
 | Constant ()
 
-%7 =
-| Union %5 %6
+%5 =
+| Union %3 %4
 | Map null
 
+%6 =
+| Get %2 (l2)
+| Project ()
+| Negate
+
+%7 =
+| Constant ()
+
 %8 =
-| Union %0 %4 %1 %7
+| Union %6 %7
+| Map null
+
+%9 =
+| Union %1 %5 %2 %8
 
 EOF
 
@@ -1476,18 +1480,20 @@ SELECT MIN(f2) FROM t1
 ----
 %0 = Let l0 =
 | Get materialize.public.t1 (u1)
+| Project (#0)
 | Reduce group=()
 | | agg min(#0)
 
 %1 = Let l1 =
 | Get materialize.public.t1 (u1)
+| Project (#1)
 | Reduce group=()
-| | agg min(#1)
+| | agg min(#0)
 
 %2 =
 | Get %0 (l0)
-| Negate
 | Project ()
+| Negate
 
 %3 =
 | Constant ()
@@ -1498,8 +1504,8 @@ SELECT MIN(f2) FROM t1
 
 %5 =
 | Get %1 (l1)
-| Negate
 | Project ()
+| Negate
 
 %6 =
 | Constant ()
