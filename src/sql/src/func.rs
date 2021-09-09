@@ -1268,8 +1268,8 @@ lazy_static! {
                 params!(Int32) => UnaryFunc::AbsInt32, 1397;
                 params!(Int64) => UnaryFunc::AbsInt64, 1396;
                 params!(Numeric) => UnaryFunc::AbsNumeric, 1705;
-                params!(Float32) => UnaryFunc::AbsFloat32, 1394;
-                params!(Float64) => UnaryFunc::AbsFloat64, 1395;
+                params!(Float32) => UnaryFunc::AbsFloat32(func::AbsFloat32), 1394;
+                params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64), 1395;
             },
             "array_in" => Scalar {
                 params!(String, Oid, Int32) => Operation::unary(|_ecx, _e| bail_unsupported!("array_in")), 750;
@@ -2284,8 +2284,8 @@ lazy_static! {
                 params!(Int16) => UnaryFunc::NegInt32, 559;
                 params!(Int32) => UnaryFunc::NegInt32, 558;
                 params!(Int64) => UnaryFunc::NegInt64, 484;
-                params!(Float32) => UnaryFunc::NegFloat32, 584;
-                params!(Float64) => UnaryFunc::NegFloat64, 585;
+                params!(Float32) => UnaryFunc::NegFloat32(func::NegFloat32), 584;
+                params!(Float64) => UnaryFunc::NegFloat64(func::NegFloat64), 585;
                 params!(Numeric) => UnaryFunc::NegNumeric, 17510;
                 params!(Interval) => UnaryFunc::NegInterval, 1336;
                 params!(Int32, Int32) => SubInt32, 555;

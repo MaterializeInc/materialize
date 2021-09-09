@@ -133,14 +133,6 @@ fn abs_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Numeric(a)
 }
 
-fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().abs())
-}
-
-fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().abs())
-}
-
 fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_bool() {
         true => Datum::from("true"),
@@ -314,10 +306,6 @@ fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else {
         Err(EvalError::Int64OutOfRange)
     }
-}
-
-fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_float32()))
 }
 
 fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -1577,14 +1565,6 @@ fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn neg_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_int64())
-}
-
-fn neg_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_float32())
-}
-
-fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_float64())
 }
 
 fn neg_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -3546,8 +3526,8 @@ pub enum UnaryFunc {
     NegInt16,
     NegInt32,
     NegInt64,
-    NegFloat32,
-    NegFloat64,
+    NegFloat32(NegFloat32),
+    NegFloat64(NegFloat64),
     NegNumeric,
     NegInterval,
     SqrtFloat64,
@@ -3556,8 +3536,8 @@ pub enum UnaryFunc {
     AbsInt16,
     AbsInt32,
     AbsInt64,
-    AbsFloat32,
-    AbsFloat64,
+    AbsFloat32(AbsFloat32),
+    AbsFloat64(AbsFloat64),
     AbsNumeric,
     CastBoolToString,
     CastBoolToStringNonstandard,
@@ -3590,7 +3570,7 @@ pub enum UnaryFunc {
     CastFloat32ToInt16,
     CastFloat32ToInt32,
     CastFloat32ToInt64,
-    CastFloat32ToFloat64,
+    CastFloat32ToFloat64(CastFloat32ToFloat64),
     CastFloat32ToString,
     CastFloat32ToNumeric(Option<u8>),
     CastFloat64ToNumeric(Option<u8>),
@@ -3761,7 +3741,14 @@ pub enum UnaryFunc {
     MzRowSize,
 }
 
-derive_unary!(Not);
+derive_unary!(
+    Not,
+    NegFloat32,
+    NegFloat64,
+    AbsFloat32,
+    AbsFloat64,
+    CastFloat32ToFloat64
+);
 
 impl UnaryFunc {
     pub fn eval_manual<'a>(
@@ -3777,20 +3764,21 @@ impl UnaryFunc {
 
         use UnaryFunc::*;
         match self {
-            Not(_) => unreachable!(),
+            Not(_)
+            | NegFloat32(_)
+            | NegFloat64(_)
+            | AbsFloat32(_)
+            | AbsFloat64(_)
+            | CastFloat32ToFloat64(_) => unreachable!(),
             IsNull => Ok(is_null(a)),
             NegInt16 => Ok(neg_int16(a)),
             NegInt32 => Ok(neg_int32(a)),
             NegInt64 => Ok(neg_int64(a)),
-            NegFloat32 => Ok(neg_float32(a)),
-            NegFloat64 => Ok(neg_float64(a)),
             NegNumeric => Ok(neg_numeric(a)),
             NegInterval => Ok(neg_interval(a)),
             AbsInt16 => Ok(abs_int16(a)),
             AbsInt32 => Ok(abs_int32(a)),
             AbsInt64 => Ok(abs_int64(a)),
-            AbsFloat32 => Ok(abs_float32(a)),
-            AbsFloat64 => Ok(abs_float64(a)),
             AbsNumeric => Ok(abs_numeric(a)),
             CastBoolToString => Ok(cast_bool_to_string(a)),
             CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
@@ -3825,7 +3813,6 @@ impl UnaryFunc {
             CastFloat32ToInt16 => cast_float32_to_int16(a),
             CastFloat32ToInt32 => cast_float32_to_int32(a),
             CastFloat32ToInt64 => cast_float32_to_int64(a),
-            CastFloat32ToFloat64 => Ok(cast_float32_to_float64(a)),
             CastFloat32ToString => Ok(cast_float32_to_string(a, temp_storage)),
             CastFloat64ToInt16 => cast_float64_to_int16(a),
             CastFloat64ToInt32 => cast_float64_to_int32(a),
@@ -3974,7 +3961,12 @@ impl UnaryFunc {
             false
         };
         match self {
-            Not(_) => unreachable!(),
+            Not(_)
+            | NegFloat32(_)
+            | NegFloat64(_)
+            | AbsFloat32(_)
+            | AbsFloat64(_)
+            | CastFloat32ToFloat64(_) => unreachable!(),
             IsNull => ScalarType::Bool.nullable(nullable),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4022,7 +4014,7 @@ impl UnaryFunc {
             }
 
             CastStringToFloat64 | CastInt16ToFloat64 | CastInt32ToFloat64 | CastInt64ToFloat64
-            | CastFloat32ToFloat64 | CastNumericToFloat64 => ScalarType::Float64.nullable(nullable),
+            | CastNumericToFloat64 => ScalarType::Float64.nullable(nullable),
 
             CastStringToInt16 | CastInt32ToInt16 | CastInt64ToInt16 | CastFloat32ToInt16
             | CastFloat64ToInt16 | CastNumericToInt16 => ScalarType::Int16.nullable(nullable),
@@ -4097,8 +4089,9 @@ impl UnaryFunc {
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(nullable),
 
-            NegInt16 | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegInterval | AbsInt16
-            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
+            NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => {
+                input_type
+            }
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(nullable)
@@ -4161,7 +4154,12 @@ impl UnaryFunc {
     pub fn introduces_nulls_manual(&self) -> bool {
         use UnaryFunc::*;
         match self {
-            Not(_) => unreachable!(),
+            Not(_)
+            | NegFloat32(_)
+            | NegFloat64(_)
+            | AbsFloat32(_)
+            | AbsFloat64(_)
+            | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
             | CastJsonbToFloat32 | CastJsonbToFloat64 | CastJsonbToBool => true,
@@ -4215,7 +4213,7 @@ impl UnaryFunc {
             CastStringToFloat32 | CastFloat64ToFloat32 | CastInt32ToFloat32
             | CastInt16ToFloat32 | CastInt64ToFloat32 | CastNumericToFloat32 => false,
             CastStringToFloat64 | CastInt32ToFloat64 | CastInt16ToFloat64 | CastInt64ToFloat64
-            | CastFloat32ToFloat64 | CastNumericToFloat64 => false,
+            | CastNumericToFloat64 => false,
             CastStringToInt16 | CastInt32ToInt16 | CastInt64ToInt16 | CastFloat32ToInt16
             | CastFloat64ToInt16 | CastNumericToInt16 => false,
             CastBoolToInt32 | CastStringToInt32 | CastInt16ToInt32 | CastInt64ToInt32
@@ -4252,8 +4250,7 @@ impl UnaryFunc {
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
-            NegInt16 | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegInterval | AbsInt16
-            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => false,
+            NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => false,
             CeilFloat32 | FloorFloat32 | RoundFloat32 => false,
             CeilFloat64 | FloorFloat64 | RoundFloat64 => false,
             Log10 | Ln | Exp | Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot | SqrtFloat64
@@ -4271,12 +4268,15 @@ impl UnaryFunc {
     pub fn preserves_uniqueness_manual(&self) -> bool {
         use UnaryFunc::*;
         match self {
-            Not(_) => unreachable!(),
+            Not(_)
+            | NegFloat32(_)
+            | NegFloat64(_)
+            | AbsFloat32(_)
+            | AbsFloat64(_)
+            | CastFloat32ToFloat64(_) => unreachable!(),
             NegInt16
             | NegInt32
             | NegInt64
-            | NegFloat32
-            | NegFloat64
             | NegNumeric
             | CastBoolToString
             | CastBoolToStringNonstandard
@@ -4289,7 +4289,6 @@ impl UnaryFunc {
             | CastInt32ToInt64
             | CastInt32ToString
             | CastInt64ToString
-            | CastFloat32ToFloat64
             | CastFloat32ToString
             | CastFloat64ToString
             | CastStringToBytes
@@ -4305,21 +4304,22 @@ impl UnaryFunc {
     fn fmt_manual(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use UnaryFunc::*;
         match self {
-            Not(_) => unreachable!(),
+            Not(_)
+            | NegFloat32(_)
+            | NegFloat64(_)
+            | AbsFloat32(_)
+            | AbsFloat64(_)
+            | CastFloat32ToFloat64(_) => unreachable!(),
             IsNull => f.write_str("isnull"),
             NegInt16 => f.write_str("-"),
             NegInt32 => f.write_str("-"),
             NegInt64 => f.write_str("-"),
-            NegFloat32 => f.write_str("-"),
-            NegFloat64 => f.write_str("-"),
             NegNumeric => f.write_str("-"),
             NegInterval => f.write_str("-"),
             AbsInt16 => f.write_str("abs"),
             AbsInt32 => f.write_str("abs"),
             AbsInt64 => f.write_str("abs"),
             AbsNumeric => f.write_str("abs"),
-            AbsFloat32 => f.write_str("abs"),
-            AbsFloat64 => f.write_str("abs"),
             CastBoolToString => f.write_str("booltostr"),
             CastBoolToStringNonstandard => f.write_str("booltostrns"),
             CastBoolToInt32 => f.write_str("booltoi32"),
@@ -4349,7 +4349,6 @@ impl UnaryFunc {
             CastInt64ToFloat64 => f.write_str("i64tof64"),
             CastInt64ToString => f.write_str("i64tostr"),
             CastFloat32ToInt64 => f.write_str("f32toi64"),
-            CastFloat32ToFloat64 => f.write_str("f32tof64"),
             CastFloat32ToString => f.write_str("f32tostr"),
             CastFloat32ToInt16 => f.write_str("f32toi16"),
             CastFloat32ToInt32 => f.write_str("f32toi32"),
