@@ -15,18 +15,10 @@
 
 package io.materialize.tb;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.Properties;
-
 import io.debezium.embedded.Connect;
 import io.debezium.engine.DebeziumEngine;
-import io.debezium.engine.format.ChangeEventFormat;
 import io.debezium.engine.RecordChangeEvent;
+import io.debezium.engine.format.ChangeEventFormat;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
@@ -36,12 +28,17 @@ import org.apache.log4j.BasicConfigurator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.materialize.tb.ChangeWriter;
-import io.materialize.tb.ExplodingRunnable;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Properties;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
-* Command-line interface for the "tail-binlog" (TB) program.
-*/
+ * Command-line interface for the "tail-binlog" (TB) program.
+ */
 public class TB {
     private static final Logger logger = LoggerFactory.getLogger(TB.class);
 
@@ -66,7 +63,7 @@ public class TB {
             .setDefault("tb");
         parser.addArgument("--whitelist")
             .help("A csv-separated list of tables to monitor, like so: " +
-                  "--whitelist schemaName1.databaseName1,schemaName2.databaseName2");
+                "--whitelist schemaName1.databaseName1,schemaName2.databaseName2");
         Namespace ns;
         try {
             ns = parser.parseArgs(args);
@@ -87,9 +84,9 @@ public class TB {
         config.setProperty("database.server.name", "tb");
         config.setProperty("database.history", "io.debezium.relational.history.FileDatabaseHistory");
 
-        config.setProperty("database.allowPublicKeyRetrieval", "true");
-        config.setProperty("log_bin", "mysql-bin");
-        config.setProperty("binlog_format", "row");
+        if (ns.getString("type").equals("mysql")) {
+            config.setProperty("database.allowPublicKeyRetrieval", "true");
+        }
 
         config.setProperty("database.history.file.filename", ns.getString("save_file") + ".history");
         config.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
@@ -111,7 +108,8 @@ public class TB {
         String type = ns.getString("type");
         if (type.equals("mysql")) {
             config.setProperty("connector.class", "io.debezium.connector.mysql.MySqlConnector");
-            config.setProperty("name", "mysql-connector");;
+            config.setProperty("name", "mysql-connector");
+            ;
         } else if (type.equals("postgres")) {
             config.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
             config.setProperty("name", "postgres-connector");
