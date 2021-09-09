@@ -825,7 +825,6 @@ EXPLAIN SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0)
 | Map 0, 123
 | Project (#2, #1, #0)
 

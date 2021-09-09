@@ -235,7 +235,6 @@ where nullif(foo.a, 0) = -bar.a
 | | implementation = DeltaQuery
 | |   delta %0 %1.(-(#0))
 | |   delta %1 %0.(if (#0 = 0) then {null} else {#0})
-| | demand = (#1..#3)
 | Filter !(isnull(#2))
 | Project (#1, #3)
 
@@ -280,6 +279,10 @@ where foo.a = bar.a
 | ArrangeBy (#0)
 
 %3 =
+| Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
+| | implementation = Differential %2.(#0) %0.((#0 + 4)) %1.(#0)
+| Filter !(isnull(#0)), !(isnull(#4))
+| Project (#3, #1, #5)
 
 EOF
 

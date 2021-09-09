@@ -79,7 +79,7 @@ impl PredicateKnowledge {
                         .map(|(index, _ct)| {
                             MirScalarExpr::column(index)
                                 .call_unary(UnaryFunc::IsNull)
-                                .call_unary(UnaryFunc::Not)
+                                .call_unary(UnaryFunc::Not(expr::func::Not))
                         })
                         .collect()
                 })
@@ -129,7 +129,7 @@ impl PredicateKnowledge {
                             predicates.push(
                                 MirScalarExpr::column(column)
                                     .call_unary(UnaryFunc::IsNull)
-                                    .call_unary(UnaryFunc::Not),
+                                    .call_unary(UnaryFunc::Not(expr::func::Not)),
                             );
                         }
                     }
@@ -319,7 +319,7 @@ impl PredicateKnowledge {
                             predicates.push(
                                 MirScalarExpr::column(column)
                                     .call_unary(UnaryFunc::IsNull)
-                                    .call_unary(UnaryFunc::Not),
+                                    .call_unary(UnaryFunc::Not(expr::func::Not)),
                             );
                         }
                     } else {
@@ -335,7 +335,7 @@ impl PredicateKnowledge {
                             predicates.push(
                                 MirScalarExpr::column(column)
                                     .call_unary(UnaryFunc::IsNull)
-                                    .call_unary(UnaryFunc::Not),
+                                    .call_unary(UnaryFunc::Not(expr::func::Not)),
                             );
                         } else {
                             // TODO: Something more sophisticated using `input_knowledge` too.
@@ -343,7 +343,7 @@ impl PredicateKnowledge {
                                 predicates.push(
                                     MirScalarExpr::column(column)
                                         .call_unary(UnaryFunc::IsNull)
-                                        .call_unary(UnaryFunc::Not),
+                                        .call_unary(UnaryFunc::Not(expr::func::Not)),
                                 );
                             }
                         }
@@ -562,7 +562,7 @@ impl<'a> PredicateStructure<'a> {
                 }
                 MirScalarExpr::CallUnary {
                     expr,
-                    func: UnaryFunc::Not,
+                    func: UnaryFunc::Not(expr::func::Not),
                 } => {
                     structured.known_false.insert(expr);
                 }
