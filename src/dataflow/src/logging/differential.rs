@@ -25,6 +25,7 @@ use timely::logging::WorkerIdentifier;
 use super::{DifferentialLog, LogVariant};
 use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
+use crate::logging::ConsolidateBuffer;
 use crate::render::datum_vec::DatumVec;
 use repr::{Datum, Row, Timestamp};
 
@@ -53,16 +54,17 @@ pub fn construct<A: Allocate>(
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             move |_frontiers| {
-                let mut arrangement_batches = arrangement_batches_out.activate();
-                let mut arrangement_records = arrangement_records_out.activate();
-                let mut sharing = sharing_out.activate();
+                let arrangement_batches = arrangement_batches_out.activate();
+                let arrangement_records = arrangement_records_out.activate();
+                let sharing = sharing_out.activate();
+                let mut arrangement_batches_session =
+                    ConsolidateBuffer::new(arrangement_batches, 0);
+                let mut arrangement_records_session =
+                    ConsolidateBuffer::new(arrangement_records, 1);
+                let mut sharing_session = ConsolidateBuffer::new(sharing, 2);
 
-                input.for_each(|time, data| {
+                input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
-
-                    let mut arrangement_batches_session = arrangement_batches.session(&time);
-                    let mut arrangement_records_session = arrangement_records.session(&time);
-                    let mut sharing_session = sharing.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
@@ -70,51 +72,35 @@ pub fn construct<A: Allocate>(
 
                         match datum {
                             DifferentialEvent::Batch(event) => {
-                                arrangement_batches_session.give((
-                                    (event.operator, worker),
-                                    time_ms,
-                                    1,
-                                ));
-                                arrangement_records_session.give((
-                                    (event.operator, worker),
-                                    time_ms,
-                                    event.length as isize,
-                                ));
+                                arrangement_batches_session
+                                    .give(&cap, ((event.operator, worker), time_ms, 1));
+                                arrangement_records_session.give(
+                                    &cap,
+                                    ((event.operator, worker), time_ms, event.length as isize),
+                                );
                             }
                             DifferentialEvent::Merge(event) => {
                                 if let Some(done) = event.complete {
-                                    arrangement_batches_session.give((
-                                        (event.operator, worker),
-                                        time_ms,
-                                        -1,
-                                    ));
-                                    arrangement_records_session.give((
-                                        (event.operator, worker),
-                                        time_ms,
-                                        (done as isize)
-                                            - ((event.length1 + event.length2) as isize),
-                                    ));
+                                    arrangement_batches_session
+                                        .give(&cap, ((event.operator, worker), time_ms, -1));
+                                    let diff = (done as isize)
+                                        - ((event.length1 + event.length2) as isize);
+                                    arrangement_records_session
+                                        .give(&cap, ((event.operator, worker), time_ms, diff));
                                 }
                             }
                             DifferentialEvent::Drop(event) => {
-                                arrangement_batches_session.give((
-                                    (event.operator, worker),
-                                    time_ms,
-                                    -1,
-                                ));
-                                arrangement_records_session.give((
-                                    (event.operator, worker),
-                                    time_ms,
-                                    -(event.length as isize),
-                                ));
+                                arrangement_batches_session
+                                    .give(&cap, ((event.operator, worker), time_ms, -1));
+                                arrangement_records_session.give(
+                                    &cap,
+                                    ((event.operator, worker), time_ms, -(event.length as isize)),
+                                );
                             }
                             DifferentialEvent::MergeShortfall(_) => {}
                             DifferentialEvent::TraceShare(event) => {
-                                sharing_session.give((
-                                    (event.operator, worker),
-                                    time_ms,
-                                    event.diff,
-                                ));
+                                sharing_session
+                                    .give(&cap, ((event.operator, worker), time_ms, event.diff));
                             }
                         }
                     }
