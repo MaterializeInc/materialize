@@ -9,7 +9,6 @@
 
 use timely::dataflow::Scope;
 
-use dataflow_types::*;
 use expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use repr::{Row, RowArena};
 
@@ -20,21 +19,22 @@ use crate::render::datum_vec::DatumVec;
 
 impl<G> Context<G, Row, repr::Timestamp>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
 {
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(
         &mut self,
-        input: CollectionBundle<G, Row, G::Timestamp>,
+        input: CollectionBundle<G, Row, repr::Timestamp>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
-    ) -> CollectionBundle<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, repr::Timestamp> {
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_collection();
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
             let mut datums = DatumVec::new();
-            move |(input_row, time, diff)| {
+            move |(input_row, mut time, diff)| {
                 let temp_storage = RowArena::new();
                 // Unpack datums and capture its length (to rewind MFP eval).
                 let mut datums_local = datums.borrow_with(&input_row);
@@ -56,6 +56,9 @@ where
                 let temp_storage = &temp_storage;
                 let mfp_plan = &mfp_plan;
                 let output_rows_vec: Vec<_> = output_rows.collect();
+
+                use crate::render::RenderTimestamp;
+                let event_time = time.event_time().clone();
                 output_rows_vec
                     .iter()
                     .flat_map(move |(output_row, r)| {
@@ -64,8 +67,21 @@ where
                         // Extend datums with additional columns, replace some with dummy values.
                         datums_local.extend(output_row.iter());
                         mfp_plan
-                            .evaluate(&mut datums_local, temp_storage, time, diff * *r)
-                            .map(|x| x.map_err(|(e, t, r)| (DataflowError::from(e), t, r)))
+                            .evaluate(&mut datums_local, temp_storage, event_time, diff * *r)
+                            .map(|x| match x {
+                                Ok((row, event_time, diff)) => {
+                                    // Copy the whole time, and re-populate event time.
+                                    let mut time = time.clone();
+                                    *time.event_time() = event_time;
+                                    Ok((row, time, diff))
+                                }
+                                Err((e, event_time, diff)) => {
+                                    // Copy the whole time, and re-populate event time.
+                                    let mut time = time.clone();
+                                    *time.event_time() = event_time;
+                                    Err((e.into(), time, diff))
+                                }
+                            })
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>()

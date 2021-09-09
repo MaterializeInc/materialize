@@ -154,13 +154,14 @@ pub struct BasicTopKPlan {
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G, Row, repr::Timestamp>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
 {
     pub fn render_topk(
         &mut self,
-        input: CollectionBundle<G, Row, G::Timestamp>,
+        input: CollectionBundle<G, Row, repr::Timestamp>,
         top_k_plan: TopKPlan,
-    ) -> CollectionBundle<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, repr::Timestamp> {
         let (ok_input, err_input) = input.as_collection();
 
         // We create a new region to compartmentalize the topk logic.
@@ -187,8 +188,12 @@ where
                     // stage.
                     use differential_dataflow::operators::iterate::Variable;
                     let delay = std::time::Duration::from_nanos(10_000_000_000);
-                    let retractions =
-                        Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
+                    let retractions = Variable::new(
+                        &mut ok_input.scope(),
+                        <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
+                            delay.as_millis() as u64,
+                        ),
+                    );
                     let thinned = ok_input.concat(&retractions.negate());
                     let result = build_topk(thinned, group_key, order_key, 0, limit, arity);
                     retractions.set(&ok_input.concat(&result.negate()));

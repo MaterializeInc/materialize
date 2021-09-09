@@ -572,7 +572,7 @@ fn flatten_results<G>(
     timely::dataflow::Stream<G, DataflowError>,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope,
 {
     match key_envelope {
         KeyEnvelope::None => results

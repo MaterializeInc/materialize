@@ -106,13 +106,13 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::rc::Weak;
 
-use differential_dataflow::AsCollection;
+use differential_dataflow::{lattice::Lattice, AsCollection};
 use persist::indexed::runtime::RuntimeClient;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
+use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
@@ -120,7 +120,7 @@ use expr::{GlobalId, Id};
 use itertools::Itertools;
 use ore::collections::CollectionExt as _;
 use ore::now::NowFn;
-use repr::{Row, Timestamp};
+use repr::Row;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::metrics::Metrics;
@@ -157,7 +157,7 @@ pub struct RenderState {
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<repr::Timestamp>>>>,
     /// Metrics reported by all dataflows.
     pub metrics: Metrics,
     /// Handle to the persistence runtime. None if disabled.
@@ -182,6 +182,41 @@ pub struct RelevantTokens {
     pub additional_tokens: HashMap<GlobalId, Vec<Rc<dyn Any>>>,
     /// Tokens for CDCv2 capture sources that have been built in this context.
     pub cdc_tokens: HashMap<GlobalId, Rc<dyn Any>>,
+}
+
+pub trait RenderTimestamp: Timestamp + Lattice + Refines<repr::Timestamp> {
+    /// The system timestamp component of the timestamp.
+    ///
+    /// This is useful for manipulating the system time, as when delaying
+    /// updates for subsequent cancellation, as with monotonic reduction.
+    fn system_time(&mut self) -> &mut repr::Timestamp;
+    /// Effects a system delay in terms of the timestamp summary.
+    fn system_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary;
+    /// The event timestamp component of the timestamp.
+    fn event_time(&mut self) -> &mut repr::Timestamp;
+    /// Effects an event delay in terms of the timestamp summary.
+    fn event_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary;
+    /// Steps the timestamp back so that logical compaction to the output will
+    /// not conflate `self` with any historical times.
+    fn step_back(&self) -> Self;
+}
+
+impl RenderTimestamp for repr::Timestamp {
+    fn system_time(&mut self) -> &mut repr::Timestamp {
+        self
+    }
+    fn system_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary {
+        delay
+    }
+    fn event_time(&mut self) -> &mut repr::Timestamp {
+        self
+    }
+    fn event_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary {
+        delay
+    }
+    fn step_back(&self) -> Self {
+        self.saturating_sub(1)
+    }
 }
 
 /// Build a dataflow from a description.
@@ -267,16 +302,19 @@ pub fn build_dataflow<A: Allocate>(
     })
 }
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
+// This implementation block allows child timestamps to vary from parent timestamps,
+// but requires the parent timestamp to be `repr::Timestamp`.
+impl<'g, G, T> Context<Child<'g, G, T>, Row, repr::Timestamp>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = repr::Timestamp>,
+    T: Refines<G::Timestamp> + Lattice + RenderTimestamp,
 {
     fn import_index(
         &mut self,
         render_state: &mut RenderState,
         tokens: &mut RelevantTokens,
         scope: &mut G,
-        region: &mut Child<'g, G, G::Timestamp>,
+        region: &mut Child<'g, G, T>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
@@ -317,17 +355,28 @@ where
             );
         }
     }
+}
 
-    fn build_object(
-        &mut self,
-        scope: &mut Child<'g, G, G::Timestamp>,
-        object: BuildDesc<plan::Plan>,
-    ) {
+// This implementation block allows child timestamps to vary from parent timestamps.
+
+impl<G> Context<G, Row, repr::Timestamp>
+where
+    G: Scope,
+    G::Timestamp: Refines<repr::Timestamp> + Lattice + RenderTimestamp,
+{
+    fn build_object(&mut self, scope: &mut G, object: BuildDesc<plan::Plan>) {
         // First, transform the relation expression into a render plan.
         let bundle = self.render_plan(object.view, scope, scope.index());
         self.insert_id(Id::Global(object.id), bundle);
     }
+}
 
+// This implementation block requires the scopes have the same timestamp as the trace manager.
+// That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, G::Timestamp>
+where
+    G: Scope<Timestamp = repr::Timestamp>,
+{
     fn export_index(
         &mut self,
         render_state: &mut RenderState,
@@ -383,9 +432,10 @@ where
     }
 }
 
-impl<G> Context<G, Row, Timestamp>
+impl<G> Context<G, Row, repr::Timestamp>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope,
+    G::Timestamp: Refines<repr::Timestamp> + Lattice + RenderTimestamp,
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
@@ -396,31 +446,45 @@ where
         plan: plan::Plan,
         scope: &mut G,
         worker_index: usize,
-    ) -> CollectionBundle<G, Row, G::Timestamp> {
+    ) -> CollectionBundle<G, Row, repr::Timestamp> {
         use plan::Plan;
         match plan {
             Plan::Constant { rows } => {
                 // Determine what this worker will contribute.
                 let locally = if worker_index == 0 { rows } else { Ok(vec![]) };
                 // Produce both rows and errs to avoid conditional dataflow construction.
-                let (mut rows, errs) = match locally {
+                let (rows, errs) = match locally {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
 
                 // We should advance times in constant collections to start from `as_of`.
-                use differential_dataflow::lattice::Lattice;
-                for (_, time, _) in rows.iter_mut() {
-                    time.advance_by(self.as_of_frontier.borrow());
-                }
-                let mut error_time: G::Timestamp = timely::progress::Timestamp::minimum();
+                let as_of_frontier = self.as_of_frontier.clone();
+                let ok_collection = rows
+                    .into_iter()
+                    .map(move |(row, mut time, diff)| {
+                        time.advance_by(as_of_frontier.borrow());
+                        (
+                            row,
+                            <G::Timestamp as Refines<repr::Timestamp>>::to_inner(time),
+                            diff,
+                        )
+                    })
+                    .to_stream(scope)
+                    .as_collection();
+
+                // Determine which time to use for errors.
+                let mut error_time: repr::Timestamp = Timestamp::minimum();
                 error_time.advance_by(self.as_of_frontier.borrow());
-
-                let ok_collection = rows.into_iter().to_stream(scope).as_collection();
-
                 let err_collection = errs
                     .into_iter()
-                    .map(move |e| (DataflowError::from(e), error_time, 1))
+                    .map(move |e| {
+                        (
+                            DataflowError::from(e),
+                            <G::Timestamp as Refines<repr::Timestamp>>::to_inner(error_time),
+                            1,
+                        )
+                    })
                     .to_stream(scope)
                     .as_collection();
 

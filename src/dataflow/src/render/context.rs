@@ -70,15 +70,14 @@ where
     /// without affecting the results. We *should* apply it, to sources and
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
-    pub as_of_frontier: Antichain<repr::Timestamp>,
+    pub as_of_frontier: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
 
-impl<S: Scope, V: Data, T> Context<S, V, T>
+impl<S: Scope, V: Data> Context<S, V, repr::Timestamp>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    S::Timestamp: Lattice + Refines<repr::Timestamp>,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow<Plan>(dataflow: &DataflowDescription<Plan>, dataflow_id: usize) -> Self {
@@ -94,7 +93,13 @@ where
             bindings: BTreeMap::new(),
         }
     }
+}
 
+impl<S: Scope, V: Data, T> Context<S, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
     /// Insert a collection bundle by an identifier.
     ///
     /// This is expected to be used to install external collections (sources, indexes, other views),
@@ -436,9 +441,12 @@ where
     }
 }
 
-impl<S> CollectionBundle<S, repr::Row, repr::Timestamp>
+impl<S, T> CollectionBundle<S, repr::Row, T>
 where
-    S: Scope<Timestamp = repr::Timestamp>,
+    T: timely::progress::Timestamp + Lattice,
+    S: Scope,
+    S::Timestamp:
+        Refines<T> + Lattice + timely::progress::Timestamp + crate::render::RenderTimestamp,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -463,11 +471,27 @@ where
             let (stream, errors) = self.flat_map(key_val, {
                 let mut datums = crate::render::datum_vec::DatumVec::new();
                 move |data, time, diff| {
+                    use crate::render::RenderTimestamp;
                     let temp_storage = repr::RowArena::new();
                     let mut datums_local = datums.borrow_with(&data);
+                    let time = time.clone();
+                    let event_time: repr::Timestamp = *time.clone().event_time();
                     mfp_plan
-                        .evaluate(&mut datums_local, &temp_storage, time.clone(), diff.clone())
-                        .map(|x| x.map_err(|(e, t, d)| (e.into(), t, d)))
+                        .evaluate(&mut datums_local, &temp_storage, event_time, diff.clone())
+                        .map(move |x| match x {
+                            Ok((row, event_time, diff)) => {
+                                // Copy the whole time, and re-populate event time.
+                                let mut time: S::Timestamp = time.clone();
+                                *time.event_time() = event_time;
+                                Ok((row, time, diff))
+                            }
+                            Err((e, event_time, diff)) => {
+                                // Copy the whole time, and re-populate event time.
+                                let mut time: S::Timestamp = time.clone();
+                                *time.event_time() = event_time;
+                                Err((e.into(), time, diff))
+                            }
+                        })
                 }
             });
 
