@@ -84,10 +84,6 @@ public class TB {
         config.setProperty("database.server.name", "tb");
         config.setProperty("database.history", "io.debezium.relational.history.FileDatabaseHistory");
 
-        if (ns.getString("type").equals("mysql")) {
-            config.setProperty("database.allowPublicKeyRetrieval", "true");
-        }
-
         config.setProperty("database.history.file.filename", ns.getString("save_file") + ".history");
         config.setProperty("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore");
         config.setProperty("offset.storage.file.filename", ns.getString("save_file") + ".offsets");
@@ -109,7 +105,7 @@ public class TB {
         if (type.equals("mysql")) {
             config.setProperty("connector.class", "io.debezium.connector.mysql.MySqlConnector");
             config.setProperty("name", "mysql-connector");
-            ;
+            config.setProperty("database.allowPublicKeyRetrieval", "true"); // required for MySql8 if connection does not have SSL
         } else if (type.equals("postgres")) {
             config.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
             config.setProperty("name", "postgres-connector");
