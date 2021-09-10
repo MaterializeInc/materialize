@@ -13,14 +13,11 @@ We're working on other monitoring tools, but for now there are a few tools you c
 
 * Logs
 * Catalog-only mode
-* Metrics integrations
+* Monitoring integrations
 
 ## Logs
 
-Materialize periodically emits messages to its [log file](/cli/#log-filter). You can view these logs in two ways:
-
-* On the [Deployments](https://cloud.materialize.com/deployments) page, click the dots icon for a deployment and select **View logs**.
-* Double-click on a deployment to view the deployment details and go to the **Logs** tab.
+Materialize periodically emits messages to its [log file](/cli/#log-filter). You can view these logs in the [Deployments](https://cloud.materialize.com/deployments) page, click on the deployment card and select **View logs** in the bottom right corner.
 
 These log messages serve several purposes:
 
@@ -41,7 +38,7 @@ The system catalog contains metadata about a Materialize instance. If a deployme
 
 For more information, see [System Catalog](/sql/system-catalog).
 
-## Third-party metrics tools
+## Third-party monitoring tools
 
 Materialize supports integrations with [Datadog](/ops/monitoring/#datadog), [Grafana](/ops/monitoring/#grafana), and [Prometheus](/ops/monitoring/#prometheus).
 
