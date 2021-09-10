@@ -22,7 +22,6 @@ use dataflow_types::{AvroOcfSinkConnector, SinkDesc};
 use expr::GlobalId;
 use interchange::avro::{encode_datums_as_avro, AvroSchemaGenerator};
 use repr::{Diff, RelationDesc, Row, Timestamp};
-use timely::dataflow::scopes::Child;
 
 use crate::render::sinks::SinkRender;
 use crate::render::RenderState;
@@ -58,7 +57,7 @@ where
         _render_state: &mut RenderState,
         _sink: &SinkDesc,
         sink_id: GlobalId,
-        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         _metrics: &SinkBaseMetrics,
     ) -> Option<Box<dyn Any>>
     where
