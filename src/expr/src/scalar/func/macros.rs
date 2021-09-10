@@ -69,7 +69,7 @@ macro_rules! sqlfunc {
         #[propagates_nulls = $propagates_nulls:literal]
         #[introduces_nulls = $introduces_nulls:literal]
         #[preserves_uniqueness = $preserves_uniqueness:literal]
-        fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Option<$ret_ty:ty>
+        fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Result<Option<$ret_ty:ty>, EvalError>
             $body:block
     ) => {
         paste::paste! {
@@ -95,7 +95,7 @@ macro_rules! sqlfunc {
                         a: &'a MirScalarExpr,
                     ) -> Result<Datum<'a>, EvalError> {
                         // Define the provided function privately
-                        fn $fn_name($param_name: Option<$param_ty>) -> Option<$ret_ty> {
+                        fn $fn_name($param_name: Option<$param_ty>) -> Result<Option<$ret_ty>, EvalError> {
                             $body
                         }
 
@@ -107,7 +107,7 @@ macro_rules! sqlfunc {
                             .try_into()
                             .expect("expression already typechecked");
 
-                        Ok($fn_name(a).into())
+                        $fn_name(a).map(|r| r.into())
                     }
 
                     fn output_type(&self, input_type: ColumnType) -> ColumnType {
@@ -155,11 +155,37 @@ macro_rules! sqlfunc {
             fn $fn_name $($tail)*
         );
     };
+    // Then, make the function fallible if it wasn't
+    (
+        #[sqlname = $name:expr]
+        fn $fn_name:ident $params:tt -> $ret_ty:tt
+            $body:block
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            fn $fn_name $params -> Result<$ret_ty, EvalError> {
+                Ok($body)
+            }
+        );
+    };
+    (
+        #[sqlname = $name:expr]
+        fn $fn_name:ident $params:tt -> Option<$ret_ty:tt>
+            $body:block
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            fn $fn_name $params -> Result<Option<$ret_ty>, EvalError> {
+                Ok($body)
+            }
+        );
+    };
+
 
     // Then, check if omitting the attributes is ok
     (
         #[sqlname = $name:expr]
-        fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Option<$ret_ty:ty>
+        fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Result<Option<$ret_ty:ty>, EvalError>
             $body:block
     ) => {
         compile_error!(
@@ -172,7 +198,7 @@ macro_rules! sqlfunc {
     // propagate nulls
     (
         #[sqlname = $name:expr]
-        fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> $ret_ty:ty
+        fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Result<$ret_ty:ty, EvalError>
             $body:block
     ) => {
         sqlfunc!(
@@ -180,8 +206,8 @@ macro_rules! sqlfunc {
             #[propagates_nulls = false]
             #[introduces_nulls = false]
             #[preserves_uniqueness = false]
-            fn $fn_name($param_name: Option<$param_ty>) -> Option<$ret_ty> {
-                Some($body)
+            fn $fn_name($param_name: Option<$param_ty>) -> Result<Option<$ret_ty>, EvalError> {
+                ($body).map(Some)
             }
         );
     };
@@ -190,7 +216,7 @@ macro_rules! sqlfunc {
     // nulls and introduces nulls too
     (
         #[sqlname = $name:expr]
-        fn $fn_name:ident($param_name:ident: $param_ty:ty) -> Option<$ret_ty:ty>
+        fn $fn_name:ident($param_name:ident: $param_ty:ty) -> Result<Option<$ret_ty:ty>, EvalError>
             $body:block
     ) => {
         sqlfunc!(
@@ -198,8 +224,11 @@ macro_rules! sqlfunc {
             #[propagates_nulls = true]
             #[introduces_nulls = true]
             #[preserves_uniqueness = false]
-            fn $fn_name($param_name: Option<$param_ty>) -> Option<$ret_ty> {
-                let $param_name = $param_name?;
+            fn $fn_name($param_name: Option<$param_ty>) -> Result<Option<$ret_ty>, EvalError> {
+                let $param_name = match $param_name {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
                 $body
             }
         );
@@ -209,7 +238,7 @@ macro_rules! sqlfunc {
     // nulls but doesn't introduce them
     (
         #[sqlname = $name:expr]
-        fn $fn_name:ident($param_name:ident: $param_ty:ty) -> $ret_ty:ty
+        fn $fn_name:ident($param_name:ident: $param_ty:ty) -> Result<$ret_ty:ty, EvalError>
             $body:block
     ) => {
         sqlfunc!(
@@ -217,9 +246,12 @@ macro_rules! sqlfunc {
             #[propagates_nulls = true]
             #[introduces_nulls = false]
             #[preserves_uniqueness = false]
-            fn $fn_name($param_name: Option<$param_ty>) -> Option<$ret_ty> {
-                let $param_name = $param_name?;
-                Some($body)
+            fn $fn_name($param_name: Option<$param_ty>) -> Result<Option<$ret_ty>, EvalError> {
+                let $param_name = match $param_name {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                ($body).map(Some)
             }
         );
     };
