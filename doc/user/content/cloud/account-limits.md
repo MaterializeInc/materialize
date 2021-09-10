@@ -20,7 +20,6 @@ Deployment Size | XS | S | M | L | XL
 **Level**  | free  | free  | enterprise  | enterprise  |  enterprise
 **CPUs**  | 4vCPUs  | 8vCPUs  | 16vCPUs  |  32vCPUs  |  64vCPUs
 **RAM**  |  32GB | 64GB  | 128GB  | 256GB  |  512GB
-**R5B instances**  | r5.xlarge   | r5.2xlarge  | r5.4xlarge   | r5.8xlarge   |  r5.16xlarge
 
 If you already know you need a larger deployment size for your use case, [contact us](../support).
 
@@ -28,9 +27,9 @@ If you already know you need a larger deployment size for your use case, [contac
 
 For the most part, Materialize Cloud offers the same functionality as the installed version. The major exceptions are:
 
-* Materialize Cloud doesn't currently support using files as sources or sinks; you can only use streaming sources or sinks.
+* Materialize Cloud doesn't support using local files as sources; you can use any other supported [source type](/sql/create-source/#types-of-sources).
 * Materialize installation deployment limits depend solely on your hardware.
-* We reserve the right to terminate a session on your deployment. This may happen after prolonged inactivity or if we need to upgrade Materialize Cloud. Catalog items persist across sessions.
+* We reserve the right to terminate a session on your deployment. This may happen after prolonged inactivity or if we need to perform maintenance work on Materialize Cloud. Catalog items persist across sessions.
 
 Sources | Materialize Cloud | Materialize local install
 --------|-------------------|--------------------------
@@ -39,7 +38,7 @@ Sources | Materialize Cloud | Materialize local install
 **Postgres**  | Yes | Yes
 **PubNub**  | Yes | Yes
 **S3**  |  Yes | Yes
-**Files**  |  Yes |  No
+**Files**  |  No |  Yes
 
 ## Related topics
 

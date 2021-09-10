@@ -17,9 +17,7 @@ Materialize Cloud product will offer additional security options, such as:
 
 * Two-factor authentication
 * Encryption at rest
-* Connection over VPC and VPN
+* Secure network ingress and egress
 * Single sign-on integration (SSO)
 
 If you're interested in implementing any of these security features, please [let us know](../support).
-
-<!-- Are all of these managed, or will some of them be available to the free product? -->
