@@ -921,14 +921,6 @@ fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Time(t)
 }
 
-fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().ceil())
-}
-
-fn ceil_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().ceil())
-}
-
 fn ceil_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
     let mut d = a.unwrap_numeric();
     // ceil will be nop if has no fractional digits.
@@ -940,14 +932,6 @@ fn ceil_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
     cx.round(&mut d.0);
     numeric::munge_numeric(&mut d.0).unwrap();
     Datum::Numeric(d)
-}
-
-fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().floor())
-}
-
-fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().floor())
 }
 
 fn floor_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -3578,11 +3562,11 @@ pub enum UnaryFunc {
     CastInPlace {
         return_ty: ScalarType,
     },
-    CeilFloat32,
-    CeilFloat64,
+    CeilFloat32(CeilFloat32),
+    CeilFloat64(CeilFloat64),
     CeilNumeric,
-    FloorFloat32,
-    FloorFloat64,
+    FloorFloat32(FloorFloat32),
+    FloorFloat64(FloorFloat64),
     FloorNumeric,
     Ascii,
     BitLengthBytes,
@@ -3645,14 +3629,18 @@ derive_unary!(
     AbsFloat64,
     RoundFloat32,
     RoundFloat64,
+    CeilFloat32,
+    CeilFloat64,
+    FloorFloat32,
+    FloorFloat64,
     CastFloat32ToInt16,
     CastFloat32ToInt32,
     CastFloat32ToInt64,
     CastFloat64ToInt16,
     CastFloat64ToInt32,
     CastFloat64ToInt64,
-    CastFloat64ToFloat32,
-    CastFloat32ToFloat64
+    CastFloat32ToFloat64,
+    CastFloat64ToFloat32
 );
 
 impl UnaryFunc {
@@ -3676,6 +3664,10 @@ impl UnaryFunc {
             | AbsFloat64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
+            | CeilFloat32(_)
+            | CeilFloat64(_)
+            | FloorFloat32(_)
+            | FloorFloat64(_)
             | CastFloat32ToInt16(_)
             | CastFloat32ToInt32(_)
             | CastFloat32ToInt64(_)
@@ -3798,11 +3790,7 @@ impl UnaryFunc {
             | CastMapToString { ty } => Ok(cast_collection_to_string(a, ty, temp_storage)),
             CastList1ToList2 { cast_expr, .. } => cast_list1_to_list2(a, &*cast_expr, temp_storage),
             CastInPlace { .. } => Ok(a),
-            CeilFloat32 => Ok(ceil_float32(a)),
-            CeilFloat64 => Ok(ceil_float64(a)),
             CeilNumeric => Ok(ceil_numeric(a)),
-            FloorFloat32 => Ok(floor_float32(a)),
-            FloorFloat64 => Ok(floor_float64(a)),
             FloorNumeric => Ok(floor_numeric(a)),
             SqrtFloat64 => sqrt_float64(a),
             SqrtNumeric => sqrt_numeric(a),
@@ -3873,6 +3861,10 @@ impl UnaryFunc {
             | AbsFloat64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
+            | CeilFloat32(_)
+            | CeilFloat64(_)
+            | FloorFloat32(_)
+            | FloorFloat64(_)
             | CastFloat32ToInt16(_)
             | CastFloat32ToInt32(_)
             | CastFloat32ToInt64(_)
@@ -3998,9 +3990,6 @@ impl UnaryFunc {
                 ScalarType::VarChar { length: *length }.nullable(nullable)
             }
 
-            CeilFloat32 | FloorFloat32 => ScalarType::Float32.nullable(nullable),
-            CeilFloat64 | FloorFloat64 => ScalarType::Float64.nullable(nullable),
-
             NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => {
                 input_type
             }
@@ -4073,6 +4062,10 @@ impl UnaryFunc {
             | AbsFloat64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
+            | CeilFloat32(_)
+            | CeilFloat64(_)
+            | FloorFloat32(_)
+            | FloorFloat64(_)
             | CastFloat32ToInt16(_)
             | CastFloat32ToInt32(_)
             | CastFloat32ToInt64(_)
@@ -4170,8 +4163,6 @@ impl UnaryFunc {
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
             NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => false,
-            CeilFloat32 | FloorFloat32 => false,
-            CeilFloat64 | FloorFloat64 => false,
             Log10 | Ln | Exp | Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot | SqrtFloat64
             | CbrtFloat64 => false,
             PgColumnSize | MzRowSize => false,
@@ -4194,6 +4185,10 @@ impl UnaryFunc {
             | AbsFloat64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
+            | CeilFloat32(_)
+            | CeilFloat64(_)
+            | FloorFloat32(_)
+            | FloorFloat64(_)
             | CastFloat32ToInt16(_)
             | CastFloat32ToInt32(_)
             | CastFloat32ToInt64(_)
@@ -4239,6 +4234,10 @@ impl UnaryFunc {
             | AbsFloat64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
+            | CeilFloat32(_)
+            | CeilFloat64(_)
+            | FloorFloat32(_)
+            | FloorFloat64(_)
             | CastFloat32ToInt16(_)
             | CastFloat32ToInt32(_)
             | CastFloat32ToInt64(_)
@@ -4348,11 +4347,7 @@ impl UnaryFunc {
             CastList1ToList2 { .. } => f.write_str("list1tolist2"),
             CastMapToString { .. } => f.write_str("maptostr"),
             CastInPlace { .. } => f.write_str("castinplace"),
-            CeilFloat32 => f.write_str("ceilf32"),
-            CeilFloat64 => f.write_str("ceilf64"),
             CeilNumeric => f.write_str("ceilnumeric"),
-            FloorFloat32 => f.write_str("floorf32"),
-            FloorFloat64 => f.write_str("floorf64"),
             FloorNumeric => f.write_str("floornumeric"),
             SqrtFloat64 => f.write_str("sqrtf64"),
             SqrtNumeric => f.write_str("sqrtnumeric"),

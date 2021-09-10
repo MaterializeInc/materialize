@@ -1310,8 +1310,8 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::CbrtFloat64, 1345;
             },
             "ceil" => Scalar {
-                params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID;
-                params!(Float64) => UnaryFunc::CeilFloat64, 2308;
+                params!(Float32) => UnaryFunc::CeilFloat32(func::CeilFloat32), oid::FUNC_CEIL_F32_OID;
+                params!(Float64) => UnaryFunc::CeilFloat64(func::CeilFloat64), 2308;
                 params!(Numeric) => UnaryFunc::CeilNumeric, 1711;
             },
             "char_length" => Scalar {
@@ -1391,8 +1391,8 @@ lazy_static! {
                 params!(Numeric) => UnaryFunc::ExpNumeric, 1732;
             },
             "floor" => Scalar {
-                params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
-                params!(Float64) => UnaryFunc::FloorFloat64, 2309;
+                params!(Float32) => UnaryFunc::FloorFloat32(func::FloorFloat32), oid::FUNC_FLOOR_F32_OID;
+                params!(Float64) => UnaryFunc::FloorFloat64(func::FloorFloat64), 2309;
                 params!(Numeric) => UnaryFunc::FloorNumeric, 1712;
             },
             "format_type" => Scalar {

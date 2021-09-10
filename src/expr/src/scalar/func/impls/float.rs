@@ -38,13 +38,6 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "f32tof64"]
-    fn cast_float32_to_float64(a: f32) -> f64 {
-        a.into()
-    }
-);
-
-sqlfunc!(
     #[sqlname = "roundf32"]
     fn round_float32(a: f32) -> f32 {
         // f32::round violates IEEE 754 by rounding ties away from zero rather than
@@ -67,6 +60,34 @@ sqlfunc!(
             fn rint(f: f64) -> f64;
         }
         unsafe { rint(a) }
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "ceilf32"]
+    fn ceil_float32(a: f32) -> f32 {
+        a.ceil()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "ceilf64"]
+    fn ceil_float64(a: f64) -> f64 {
+        a.ceil()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "floorf32"]
+    fn floor_float32(a: f32) -> f32 {
+        a.floor()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "floorf64"]
+    fn floor_float64(a: f64) -> f64 {
+        a.floor()
     }
 );
 
@@ -169,5 +190,12 @@ sqlfunc!(
         } else {
             Ok(result)
         }
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "f32tof64"]
+    fn cast_float32_to_float64(a: f32) -> f64 {
+        a.into()
     }
 );
