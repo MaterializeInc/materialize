@@ -140,6 +140,10 @@ struct Args {
     #[structopt(long, hidden = true, default_value)]
     persist_storage: String,
 
+    /// Enable persistent Kafka UPSERT source. Has to be used with --experimental.
+    #[structopt(long, hidden = true)]
+    persistent_kafka_upsert_source: bool,
+
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
     #[structopt(short, long, env = "MZ_WORKERS", value_name = "N", default_value)]
@@ -645,6 +649,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             false
         };
         let system_table_enabled = !args.disable_persistent_system_tables_test;
+
         let storage = if args.persist_storage.is_empty() {
             PersistStorage::File(PersistFileStorage {
                 blob_path: data_directory.join("persist").join("blob"),
@@ -654,6 +659,16 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         } else {
             PersistStorage::try_from(args.persist_storage)?
         };
+
+        let kafka_upsert_source_enabled =
+            if args.experimental && args.persistent_kafka_upsert_source {
+                true
+            } else if args.persistent_kafka_upsert_source {
+                bail!("cannot specify --persistent-kafka-upsert-source without --experimental");
+            } else {
+                false
+            };
+
         let lock_info = format!(
             "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
             mz_version = materialized::BUILD_INFO.human_version(),
@@ -674,6 +689,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
             storage,
             user_table_enabled,
             system_table_enabled,
+            kafka_upsert_source_enabled,
             lock_info,
             min_step_interval,
         }

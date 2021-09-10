@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use dataflow_types::{ExternalSourceConnector, SourceConnector, SourceEnvelope};
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
 use persist::indexed::encoding::Id;
@@ -96,6 +97,9 @@ pub struct PersistConfig {
     /// extremely experimental and should not even be tried by users. It's
     /// initially here for end-to-end testing.
     pub system_table_enabled: bool,
+    /// Whether to make Kafka Upserts persistent for fast restarts. This is
+    /// extremely experimental and should not even be tried by users.
+    pub kafka_upsert_source_enabled: bool,
     /// Unstructured information stored in the "lock" files created by the
     /// log and blob to ensure that they are exclusive writers to those
     /// locations. This should contain whatever information might be useful to
@@ -112,6 +116,7 @@ impl PersistConfig {
             storage: PersistStorage::File(PersistFileStorage::default()),
             user_table_enabled: false,
             system_table_enabled: false,
+            kafka_upsert_source_enabled: false,
             lock_info: Default::default(),
             min_step_interval: Duration::default(),
         }
@@ -125,7 +130,10 @@ impl PersistConfig {
         catalog_id: Uuid,
         reg: &MetricsRegistry,
     ) -> Result<PersisterWithConfig, Error> {
-        let persister = if self.user_table_enabled || self.system_table_enabled {
+        let persister = if self.user_table_enabled
+            || self.system_table_enabled
+            || self.kafka_upsert_source_enabled
+        {
             let lock_reentrance_id = catalog_id.to_string();
             let lock_info = LockInfo::new(lock_reentrance_id, self.lock_info.clone())?;
             let log = ErrorLog;
@@ -208,6 +216,27 @@ impl PersisterWithConfig {
             stream_name,
             write_handle,
         }))
+    }
+
+    pub fn source_stream_name(
+        &self,
+        id: GlobalId,
+        connector: &SourceConnector,
+        pretty: &str,
+    ) -> Option<String> {
+        match connector {
+            SourceConnector::External {
+                connector: ExternalSourceConnector::Kafka(_),
+                envelope: SourceEnvelope::Upsert,
+                ..
+            } if self.config.kafka_upsert_source_enabled => {
+                // NB: This gets written down in the catalog, so it should be
+                // safe to change the naming, if necessary. See
+                // Catalog::deserialize_item.
+                Some(format!("user-source-{}-{}", id, pretty))
+            }
+            _ => None,
+        }
     }
 }
 
