@@ -1,6 +1,6 @@
 ---
 title: "Get Started with Cloud"
-description: "Connect to Cloud and create dataflows."
+description: "Connect to Cloud and create Materialize deployments."
 menu:
   main:
     parent: "cloud"
@@ -24,27 +24,27 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 * Exploring common patterns like joins and time-windowing
 
-## Sign up and deploy
+## Sign up
 
 1. Sign up for Materialize Cloud at [https://cloud.materialize.com](https://cloud.materialize.com/signup/).
 
 1. Once your account has been created, [log in](https://cloud.materialize.com).
 
-1. If you've been invited to an existing workspace, you can go directly to the [connection instructions](#connect). Otherwise, a dialog asks you to create a workspace. Enter a name and click **Next**.
+1. If you've been invited to an existing workspace, jump directly to [Deploy and Connect](#deploy-and-connect). Otherwise, a dialog will ask you to create a workspace.
 
-1. Materialize Cloud asks if you want to invite other users. For the purposes of this demonstration, just click **Skip**. (You can always add other users later.)
+    Enter a name, and click **Next**.
 
-1. On the **New deployment** tab, enter the name of your new deployment in the **Title**  field and click **Create**.
+## Deploy and connect
 
-    Names must be unique per workspace. By default, deployment size is set to **XSmall**, but as a free user you can also select **Small** from the dropdown. Larger sizes are also available to enterprise users.
+1. In the deployments page, click [**Create deployment**](../create-deployments) in the upper right corner. Enter a unique **Name** (or use the default) and choose **Extra small** (XS) as the deployment size.
 
-    If you know in advance that you need a larger size for your use case, [contact us](../support) to discuss the details.
+    Then, click **Create**.
 
-    After you create a deployment, you are taken to the [Deployments](https://cloud.materialize.com/deployments) page. When the deployment status message reads `Ready to receive connections`, you can proceed to the next step.
+    **Note:** The size of new deployments is set to Extra small (XS) by default, which is enough to run this walkthrough. For more information on deployment sizes, check [Account Limits](../account-limits).
 
-## Connect
+1. Once the status message reads `HEALTHY`, the deployment is ready for connections!
 
-To connect to Materialize, you'll need to install TLS certificates on your local machine to connect. You can obtain these on the [Deployments](https://cloud.materialize.com/deployments) page.
+    Before you can connect, though, you need to install some TLS certificates on your local machine.
 
 {{% cloud-connection-details %}}
 
@@ -53,8 +53,6 @@ To connect to Materialize, you'll need to install TLS certificates on your local
 Materialize allows you to work with streaming data from multiple external sources using nothing but standard SQL. You write arbitrarily complex queries; Materialize takes care of maintaining the results automatically up to date with very low latency.
 
 We'll start with some sample real-time data from a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) receiving the latest market orders for a given marketplace.
-
-We're working on ways for you to create dataflows inside the Cloud interface, but for now, you'll be working in the Terminal where you're connected to Materialize.
 
 1. Let's create a [PubNub source](/sql/create-source/json-pubnub/#pubnub-source-details) that connects to the market orders channel with a subscribe key:
 

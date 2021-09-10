@@ -12,11 +12,7 @@ aliases:
 
 {{< cloud-notice >}}
 
-Materialize is a streaming database for real-time applications. Materialize
-accepts input data from a variety of streaming sources (like Kafka), data stores and databases (like S3 and Postgres), and files
-(like CSV and JSON), and lets you query them using SQL.
-
-Materialize Cloud hosts and maintains Materialize deployments for you. You can set up an account in less than 30 seconds and then try out Materialize with your own streaming data or with a streaming data source that we maintain. We recommend that you start with development and testing workloads for now and do not rely on the beta version for handling production tasks.
+Materialize Cloud hosts and maintains [Materialize](/overview/what-is-materialize) deployments for you, **automating administration tasks** like hardware provisioning, database setup, upgrades, and backups. You can sign up for an account in less than 30 seconds and try out Materialize with your own streaming (and historical) data sources.
 
 {{< cta href="https://cloud.materialize.com/signup" >}}
 Sign up for Materialize Cloud →
@@ -24,7 +20,9 @@ Sign up for Materialize Cloud →
 
 **Trial period**
 
-You can use Materialize Cloud for free during a 30-day trial period. Once this period is over, you'll have the option to upgrade to an enterprise account. For more information on hardware specifications and account limits, jump to [Account Limits](./account-limits).
+You can use Materialize Cloud for **free** during a limited trial period. Once this period is over, you'll have the option to upgrade to an enterprise account. For more information on hardware provisioning and account limits, see [Account Limits](./account-limits).
+
+We recommend that you get started in development or testing environments, and do not rely on the beta version for handling production workloads _just yet_. Feedback, bug reports and feature requests are much appreciated as we work on improving and refining the product!
 
 ## Where to go next
 

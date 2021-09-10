@@ -8,15 +8,17 @@ hidden: true
 
 This functionality is only available to [administrators](../administer-workspace).
 
-1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **+New deployment**.
+1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**.
 
-1. The default deployment size is **XS**. If you want a larger size, select one from the dropdown.
-
-    Free users can only use **S** or **XS**. If you know in advance that you need a larger size for your use case, [contact us](../support) to discuss the details.
+    The default deployment size is **Extra small** (XS). In the trial period, you can go up to **Small** (S) deployment sizes. If you know in advance the resources your use case requires, [reach out to us](../support) to discuss the details.
 
 1. Click **Create**.
 
-    The deployment should be ready for connections in about a minute and a half. The free version of Materialize Cloud is limited to two deployments.
+    The deployment will be ready to accept connections as soon as the status message reads `HEALTHY`.
+
+**Trial period**
+
+The trial period lasts for **30 days** or **until you max out the available resources** (whichever comes first), and is limited to **two** deployments. Once the trial expires, your account and deployments may be deleted within 14 days, unless you have upgraded to an enterprise account.
 
 ## Related topics
 

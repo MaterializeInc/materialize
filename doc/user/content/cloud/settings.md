@@ -4,7 +4,7 @@ description: "Change Materialize Cloud profile or password."
 menu:
   main:
     parent: "cloud"
-    weight:
+    weight: 4
 ---
 
 {{< cloud-notice >}}
