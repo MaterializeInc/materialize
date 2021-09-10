@@ -298,6 +298,7 @@ pub struct Source {
     pub connector: SourceConnector,
     pub bare_desc: RelationDesc,
     pub desc: RelationDesc,
+    pub persist_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -715,6 +716,7 @@ impl Catalog {
                             },
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
+                            persist_name: None,
                         }),
                     );
                     let oid = catalog.allocate_oid()?;
@@ -1974,7 +1976,7 @@ impl Catalog {
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
                 eval_env: None,
-                persist_name: None,
+                persist_name: source.persist_name.clone(),
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
@@ -2041,6 +2043,7 @@ impl Catalog {
                     connector: source.connector,
                     bare_desc: source.bare_desc,
                     desc: transformed_desc,
+                    persist_name,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
@@ -2330,6 +2333,16 @@ impl Catalog {
 
     pub fn persist_multi_details(&self) -> Option<&PersistMultiDetails> {
         self.by_id.persist_multi_details()
+    }
+
+    pub fn source_persist_name(
+        &self,
+        id: GlobalId,
+        connector: &SourceConnector,
+        name: &FullName,
+    ) -> Option<String> {
+        self.persist
+            .source_stream_name(id, connector, &name.to_string())
     }
 }
 

@@ -2132,15 +2132,22 @@ impl Coordinator {
             } = plan;
             let optimized_expr = self.view_optimizer.optimize(source.expr)?;
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
+
+            let source_id = self.catalog.allocate_id()?;
+            let source_oid = self.catalog.allocate_oid()?;
+
+            let persist_name =
+                self.catalog
+                    .source_persist_name(source_id, &source.connector, &name);
+
             let source = catalog::Source {
                 create_sql: source.create_sql,
                 optimized_expr,
                 connector: source.connector,
                 bare_desc: source.bare_desc,
                 desc: transformed_desc,
+                persist_name,
             };
-            let source_id = self.catalog.allocate_id()?;
-            let source_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,

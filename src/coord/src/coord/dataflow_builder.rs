@@ -114,7 +114,7 @@ impl<'a> DataflowBuilder<'a> {
                                 connector: source.connector.clone(),
                                 operators: None,
                                 bare_desc: source.bare_desc.clone(),
-                                persisted_name: None,
+                                persisted_name: source.persist_name.clone(),
                             },
                             *id,
                         );
@@ -129,7 +129,7 @@ impl<'a> DataflowBuilder<'a> {
                                 connector: source.connector.clone(),
                                 operators: None,
                                 bare_desc: source.bare_desc.clone(),
-                                persisted_name: None,
+                                persisted_name: source.persist_name.clone(),
                             },
                             *id,
                         );
