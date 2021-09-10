@@ -64,7 +64,11 @@ impl CanonicalizeMfp {
             if !filter.is_empty() {
                 // Push down the predicates that can be pushed down, removing
                 // them from the mfp object to be optimized.
-                canonicalize_predicates(&mut filter, &relation.typ());
+                let mut relation_type = relation.typ();
+                for expr in map.iter() {
+                    relation_type.column_types.push(expr.typ(&relation_type));
+                }
+                canonicalize_predicates(&mut filter, &relation_type);
                 let all_errors = filter.iter().all(|p| p.is_literal_err());
                 let (retained, pushdown) = crate::predicate_pushdown::PredicatePushdown
                     .push_filters_through_map(&map, &mut filter, mfp.input_arity, all_errors);
