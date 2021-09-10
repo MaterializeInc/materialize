@@ -73,7 +73,11 @@ macro_rules! sqlfunc {
             $body:block
     ) => {
         paste::paste! {
-            mod $fn_name {
+            pub fn $fn_name($param_name: Option<$param_ty>) -> Result<Option<$ret_ty>, crate::EvalError> {
+                $body
+            }
+
+            mod [<__ $fn_name _impl>] {
                 use std::convert::TryInto;
                 use std::fmt;
 
@@ -94,11 +98,6 @@ macro_rules! sqlfunc {
                         temp_storage: &'a RowArena,
                         a: &'a MirScalarExpr,
                     ) -> Result<Datum<'a>, EvalError> {
-                        // Define the provided function privately
-                        fn $fn_name($param_name: Option<$param_ty>) -> Result<Option<$ret_ty>, EvalError> {
-                            $body
-                        }
-
                         // Evaluate the argument and convert it to the concrete type that the
                         // implementation expects. This cannot fail here because the expression is
                         // already typechecked.
@@ -107,7 +106,7 @@ macro_rules! sqlfunc {
                             .try_into()
                             .expect("expression already typechecked");
 
-                        $fn_name(a).map(|r| r.into())
+                        super::$fn_name(a).map(|r| r.into())
                     }
 
                     fn output_type(&self, input_type: ColumnType) -> ColumnType {
@@ -142,7 +141,7 @@ macro_rules! sqlfunc {
                     }
                 }
             }
-            pub use $fn_name::[<$fn_name:camel>];
+            pub use [<__ $fn_name _impl>]::[<$fn_name:camel>];
         }
     };
 
