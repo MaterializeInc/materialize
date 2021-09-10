@@ -72,75 +72,77 @@ macro_rules! sqlfunc {
         fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Option<$ret_ty:ty>
             $body:block
     ) => {
-        use std::convert::TryInto;
-        use std::fmt;
+        paste::paste! {
+            mod $fn_name {
+                use std::convert::TryInto;
+                use std::fmt;
 
-        use paste::paste;
-        use repr::{ColumnType, Datum, FromTy, RowArena, ScalarType};
-        use serde::{Deserialize, Serialize};
-        use lowertest::MzStructReflect;
+                use repr::{ColumnType, Datum, FromTy, RowArena, ScalarType};
+                use serde::{Deserialize, Serialize};
+                use lowertest::MzStructReflect;
 
-        use crate::scalar::func::UnaryFuncTrait;
-        use crate::{EvalError, MirScalarExpr};
+                use crate::scalar::func::UnaryFuncTrait;
+                use crate::{EvalError, MirScalarExpr};
 
-        paste! {
-            #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
-            pub struct [<$fn_name:camel>];
+                #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
+                pub struct [<$fn_name:camel>];
 
-            impl UnaryFuncTrait for [<$fn_name:camel>] {
-                fn eval<'a>(
-                    &'a self,
-                    datums: &[Datum<'a>],
-                    temp_storage: &'a RowArena,
-                    a: &'a MirScalarExpr,
-                ) -> Result<Datum<'a>, EvalError> {
-                    // Define the provided function privately
-                    fn $fn_name($param_name: Option<$param_ty>) -> Option<$ret_ty> {
-                        $body
+                impl UnaryFuncTrait for [<$fn_name:camel>] {
+                    fn eval<'a>(
+                        &'a self,
+                        datums: &[Datum<'a>],
+                        temp_storage: &'a RowArena,
+                        a: &'a MirScalarExpr,
+                    ) -> Result<Datum<'a>, EvalError> {
+                        // Define the provided function privately
+                        fn $fn_name($param_name: Option<$param_ty>) -> Option<$ret_ty> {
+                            $body
+                        }
+
+                        // Evaluate the argument and convert it to the concrete type that the
+                        // implementation expects. This cannot fail here because the expression is
+                        // already typechecked.
+                        let a: Option<$param_ty> = a
+                            .eval(datums, temp_storage)?
+                            .try_into()
+                            .expect("expression already typechecked");
+
+                        Ok($fn_name(a).into())
                     }
 
-                    // Evaluate the argument and convert it to the concrete type that the
-                    // implementation expects. This cannot fail here because the expression is
-                    // already typechecked.
-                    let a: Option<$param_ty> = a
-                        .eval(datums, temp_storage)?
-                        .try_into()
-                        .expect("expression already typechecked");
+                    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+                        // Use the FromTy trait to convert the Rust type into our runtime type
+                        // representation
+                        <ScalarType as FromTy<$ret_ty>>::from_ty()
+                            .nullable($propagates_nulls && input_type.nullable || $introduces_nulls)
+                    }
 
-                    Ok($fn_name(a).into())
+                    fn propagates_nulls(&self) -> bool {
+                        $propagates_nulls
+                    }
+
+                    fn introduces_nulls(&self) -> bool {
+                        $introduces_nulls
+                    }
+
+                    fn preserves_uniqueness(&self) -> bool {
+                        $preserves_uniqueness
+                    }
                 }
 
-                fn output_type(&self, input_type: ColumnType) -> ColumnType {
-                    // Use the FromTy trait to convert the Rust type into our runtime type
-                    // representation
-                    <ScalarType as FromTy<$ret_ty>>::from_ty()
-                        .nullable($propagates_nulls && input_type.nullable || $introduces_nulls)
+                impl From<[<$fn_name:camel>]> for crate::UnaryFunc {
+                    fn from(variant: [<$fn_name:camel>]) -> Self {
+                        Self::[<$fn_name:camel>](variant)
+                    }
                 }
 
-                fn propagates_nulls(&self) -> bool {
-                    $propagates_nulls
-                }
-
-                fn introduces_nulls(&self) -> bool {
-                    $introduces_nulls
-                }
-
-                fn preserves_uniqueness(&self) -> bool {
-                    $preserves_uniqueness
-                }
-            }
-
-            impl From<[<$fn_name:camel>]> for crate::UnaryFunc {
-                fn from(variant: [<$fn_name:camel>]) -> Self {
-                    Self::[<$fn_name:camel>](variant)
+                impl fmt::Display for [<$fn_name:camel>] {
+                    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                        f.write_str($name)
+                    }
                 }
             }
-
-            impl fmt::Display for [<$fn_name:camel>] {
-                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                    f.write_str($name)
-                }
-            }
+            pub use $fn_name::[<$fn_name:camel>];
         }
     };
 
