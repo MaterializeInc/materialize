@@ -15,11 +15,15 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use persist::operators::source::PersistedSource;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, OkErr, ToStream};
+use timely::dataflow::operators::{Concat, Inspect, OkErr, ToStream};
 use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::Scope;
+
+use persist::indexed::runtime::StreamReadHandle;
+use persist::operators::source::PersistedSource;
+use persist::operators::stream::Seal;
+use persist::operators::upsert::PersistentUpsertConfig;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
@@ -38,12 +42,12 @@ use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
-use crate::source::DecodeResult;
-use crate::source::SourceConfig;
 use crate::source::{
     self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, S3SourceReader,
 };
+use crate::source::{AssignedTimestamp, SourceConfig, SourceTimestamp};
+use crate::source::{DecodeResult, PersistentSourceConfig};
 
 impl<G> Context<G, Row, Timestamp>
 where
@@ -167,6 +171,14 @@ where
                     dataflow_id: self.dataflow_id,
                 };
 
+                let (source_persist_config, upsert_persist_config) =
+                    match get_persist_configs(&uid, src.persisted_name, &render_state) {
+                        Some((bindings_config, data_config)) => {
+                            (Some(bindings_config), Some(data_config))
+                        }
+                        _ => (None, None),
+                    };
+
                 // All sources should push their various error streams into this vector,
                 // whose contents will be concatenated and inserted along the collection.
                 let mut error_collections = Vec::<Collection<_, _>>::new();
@@ -245,31 +257,33 @@ where
                 } else {
                     let is_connector_delimited = connector.is_delimited();
 
-                    let ((ok_source, _ts_bindings, err_source), capability) = match connector {
-                        ExternalSourceConnector::Kafka(_) => source::create_source::<
-                            _,
-                            KafkaSourceReader,
-                        >(
-                            source_config, &connector, None
-                        ),
-                        ExternalSourceConnector::Kinesis(_) => source::create_source::<
-                            _,
-                            KinesisSourceReader,
-                        >(
-                            source_config, &connector, None
-                        ),
+                    let ((ok_source, ts_bindings, err_source), capability) = match connector {
+                        ExternalSourceConnector::Kafka(_) => {
+                            source::create_source::<_, KafkaSourceReader>(
+                                source_config,
+                                &connector,
+                                source_persist_config.clone(),
+                            )
+                        }
+                        ExternalSourceConnector::Kinesis(_) => {
+                            source::create_source::<_, KinesisSourceReader>(
+                                source_config,
+                                &connector,
+                                source_persist_config.clone(),
+                            )
+                        }
                         ExternalSourceConnector::S3(_) => {
                             source::create_source::<_, S3SourceReader>(
                                 source_config,
                                 &connector,
-                                None,
+                                source_persist_config.clone(),
                             )
                         }
                         ExternalSourceConnector::File(_) | ExternalSourceConnector::AvroOcf(_) => {
                             source::create_source::<_, FileSourceReader>(
                                 source_config,
                                 &connector,
-                                None,
+                                source_persist_config.clone(),
                             )
                         }
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
@@ -384,14 +398,40 @@ where
                                 SourceEnvelope::Upsert => {
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
-                                    super::upsert::upsert(
+                                    let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
                                         &results,
                                         self.as_of_frontier.clone(),
                                         &mut linear_operators,
                                         src.bare_desc.typ().arity(),
-                                        None,
-                                    )
+                                        upsert_persist_config.clone(),
+                                    );
+
+                                    // When persistence is enable we need to seal up both the
+                                    // timestamp bindings and the upsert state. Otherwise, just
+                                    // pass through.
+                                    let upsert_ok = if let (
+                                        Some(source_persist_config),
+                                        Some(upsert_persist_config),
+                                    ) =
+                                        (source_persist_config, upsert_persist_config)
+                                    {
+                                        let (sealed_upsert_ok, upsert_seal_err) = upsert_ok
+                                            .conditional_seal(
+                                                &source_name,
+                                                &ts_bindings,
+                                                upsert_persist_config.write_handle,
+                                                source_persist_config.write_handle,
+                                            );
+
+                                        upsert_seal_err.inspect(|e| log::error!("{:?}", e));
+
+                                        sealed_upsert_ok
+                                    } else {
+                                        upsert_ok
+                                    };
+
+                                    (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
                                 _ => {
                                     let (stream, errors) = flatten_results(key_envelope, results);
@@ -548,6 +588,73 @@ where
                     .push(Rc::downgrade(&token));
             }
         }
+    }
+}
+
+fn get_persist_configs(
+    source_id: &SourceInstanceId,
+    persisted_name: Option<String>,
+    render_state: &RenderState,
+) -> Option<(
+    PersistentSourceConfig<SourceTimestamp, AssignedTimestamp>,
+    PersistentUpsertConfig<Result<Row, DecodeError>, Result<Row, DecodeError>>,
+)> {
+    if persisted_name.is_none() {
+        return None;
+    }
+    let persisted_name = persisted_name.expect("known to exist");
+
+    // TODO: Ensure that we only render one materialized source when persistence is enabled.
+    let persist_bindings_name = format!("{}-timestamp-bindings", persisted_name);
+    let persist_data_name = format!("{}", persisted_name);
+
+    render_state.persist.as_ref().map(|persist_client| {
+        let (bindings_write, bindings_read) = persist_client
+            .create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name)
+            .expect("creating source collections");
+
+        let (data_write, data_read) = persist_client
+            .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(
+                &persist_data_name,
+            )
+            .expect("creating upsert collections");
+
+        let bindings_seal_ts = sealed_ts(&bindings_read).expect("missing bindings seal timestamp");
+        let data_seal_ts = sealed_ts(&data_read).expect("missing data seal timestamp");
+
+        log::debug!(
+            "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+            source_id,
+            persist_bindings_name,
+            persist_data_name,
+            bindings_seal_ts,
+            data_seal_ts,
+        );
+
+        (
+            PersistentSourceConfig::new(
+                bindings_seal_ts,
+                data_seal_ts,
+                bindings_read,
+                bindings_write,
+            ),
+            PersistentUpsertConfig::new(data_seal_ts, data_read, data_write),
+        )
+    })
+}
+
+// TODO: This should be a method on StreamReadHandle that actually queries the
+// runtime. Maybe?
+fn sealed_ts<K: persist_types::Codec, V: persist_types::Codec>(
+    read: &StreamReadHandle<K, V>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let seal_ts = read.snapshot()?.get_seal();
+
+    if let Some(sealed) = seal_ts.first() {
+        Ok(*sealed)
+    } else {
+        // TODO: is `0` correct here?
+        Ok(0)
     }
 }
 
