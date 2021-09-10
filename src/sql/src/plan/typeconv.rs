@@ -175,9 +175,9 @@ lazy_static! {
             (RegProc,Oid) => Implicit: CastRegProcToOid,
 
             // FLOAT32
-            (Float32, Int16) => Assignment: CastFloat32ToInt16,
-            (Float32, Int32) => Assignment: CastFloat32ToInt32,
-            (Float32, Int64) => Assignment: CastFloat32ToInt64,
+            (Float32, Int16) => Assignment: CastFloat32ToInt16(func::CastFloat32ToInt16),
+            (Float32, Int32) => Assignment: CastFloat32ToInt32(func::CastFloat32ToInt32),
+            (Float32, Int64) => Assignment: CastFloat32ToInt64(func::CastFloat32ToInt64),
             (Float32, Float64) => Implicit: CastFloat32ToFloat64(func::CastFloat32ToFloat64),
             (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
@@ -186,10 +186,10 @@ lazy_static! {
             (Float32, String) => Assignment: CastFloat32ToString,
 
             // FLOAT64
-            (Float64, Int16) => Assignment: CastFloat64ToInt16,
-            (Float64, Int32) => Assignment: CastFloat64ToInt32,
-            (Float64, Int64) => Assignment: CastFloat64ToInt64,
-            (Float64, Float32) => Assignment: CastFloat64ToFloat32,
+            (Float64, Int16) => Assignment: CastFloat64ToInt16(func::CastFloat64ToInt16),
+            (Float64, Int32) => Assignment: CastFloat64ToInt32(func::CastFloat64ToInt32),
+            (Float64, Int64) => Assignment: CastFloat64ToInt64(func::CastFloat64ToInt64),
+            (Float64, Float32) => Assignment: CastFloat64ToFloat32(func::CastFloat64ToFloat32),
             (Float64, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(s)))

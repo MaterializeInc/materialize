@@ -1594,8 +1594,8 @@ lazy_static! {
                 params!(String, Int32) => BinaryFunc::Right, 3061;
             },
             "round" => Scalar {
-                params!(Float32) => UnaryFunc::RoundFloat32, oid::FUNC_ROUND_F32_OID;
-                params!(Float64) => UnaryFunc::RoundFloat64, 1342;
+                params!(Float32) => UnaryFunc::RoundFloat32(func::RoundFloat32), oid::FUNC_ROUND_F32_OID;
+                params!(Float64) => UnaryFunc::RoundFloat64(func::RoundFloat64), 1342;
                 params!(Numeric) => UnaryFunc::RoundNumeric, 1708;
                 params!(Numeric, Int32) => BinaryFunc::RoundNumeric, 1707;
             },

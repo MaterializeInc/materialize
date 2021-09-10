@@ -888,6 +888,24 @@ impl FromTy<f64> for ScalarType {
     }
 }
 
+impl FromTy<i16> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Int16
+    }
+}
+
+impl FromTy<i32> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Int32
+    }
+}
+
+impl FromTy<i64> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Int64
+    }
+}
+
 impl<'a> ScalarType {
     /// Returns the contained numeric scale.
     ///
