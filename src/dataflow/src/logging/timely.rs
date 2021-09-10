@@ -19,6 +19,7 @@ use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::JoinCore;
 use differential_dataflow::{Collection, Data};
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::Scope;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
@@ -262,31 +263,50 @@ pub fn construct<A: Allocate>(
         // Feedback delay for log flushing. This should be large enough that there is not a tight
         // feedback loop that prevents high-throughput work, but not so large that we leave volumes
         // of logging data around that we do not need. Effectively, a throughput v memory trade-off.
-        let delay = std::time::Duration::from_nanos(10_000_000_000);
+        let delay = std::time::Duration::from_nanos(1_000_000_000);
 
         let operates_arranged = operates
             .map(|(k, _)| (k, ()))
-            .arrange_named::<RowSpine<_, _, _, _>>("ArrangeByKey operates");
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w), ()), _, _): &(((usize, usize), ()), _, _)| *w as u64),
+                "Arrange operates",
+            );
 
         // Accumulate the durations of each operator.
         // The first `map` exists so that we can semijoin effectively (it requires a key-val pair).
         let elapsed = duration
             .map(|(op_worker, t, d)| ((op_worker, ()), t, d as isize))
-            .as_collection();
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w), _), _, _)| *w as u64),
+                "Arrange elapsed",
+            )
+            .as_collection(|k, v| (*k, *v));
         // Remove elapsed times for operators not present in `operates`.
         let elapsed = thin_collection(elapsed, delay, |c| {
-            c.arrange_named::<RowSpine<_, _, _, _>>("ArrangeByKey elapsed")
-                .join_core(&operates_arranged, |k, v, _| Some((*k, *v)))
+            c.arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w), ()), _, _)| *w as u64),
+                "Arrange elapsed joined",
+            )
+            .join_core(&operates_arranged, |k, v, _| Some((*k, *v)))
         });
 
         // Accumulate histograms of execution times for each operator.
         let mut histogram = duration
             .map(|(op_worker, t, d)| ((op_worker, d.next_power_of_two()), t, 1isize))
-            .as_collection();
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w), _), _, _)| *w as u64),
+                "Arrange histogram",
+            )
+            .as_collection(|k, v| (*k, *v));
         // Remove histogram measurements for operators not present in `operates`.
         histogram = thin_collection(histogram, delay, |c| {
-            c.arrange_named::<RowSpine<_, _, _, _>>("ArrangeByKey histogram")
-                .join_core(&operates_arranged, |k, v, _| Some((*k, *v)))
+            c.arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w), _), _, _)| *w as u64),
+                "Arrange histogram joined",
+            )
+            .join_core(&operates_arranged, |k, v, _| Some((*k, *v)))
         });
 
         let elapsed = elapsed.map({
