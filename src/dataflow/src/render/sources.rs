@@ -15,10 +15,14 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
-use persist::operators::source::PersistedSource;
-use timely::dataflow::operators::{Concat, OkErr};
+use persist_types::Codec;
+use timely::dataflow::operators::{Concat, Inspect, OkErr, ToStream};
 use timely::dataflow::operators::{Map, UnorderedInput};
 use timely::dataflow::Scope;
+
+use persist::operators::source::PersistedSource;
+use persist::operators::stream::Seal;
+use persist::operators::upsert::PersistentUpsertConfig;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
@@ -37,12 +41,13 @@ use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
-use crate::source::DecodeResult;
+use crate::source::timestamp::{AssignedTimestamp, SourceTimestamp};
 use crate::source::SourceConfig;
 use crate::source::{
     self, metrics::SourceBaseMetrics, FileSourceReader, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, S3SourceReader,
 };
+use crate::source::{DecodeResult, PersistentTimestampBindingsConfig};
 
 impl<G> Context<G, Row, Timestamp>
 where
@@ -167,6 +172,42 @@ where
                 // whose contents will be concatenated and inserted along the collection.
                 let mut error_collections = Vec::<Collection<_, _>>::new();
 
+                let source_persist_config =
+                    match (src.persisted_name, render_state.persist.as_mut()) {
+                        (Some(persisted_name), Some(persist)) => {
+                            let mut persist_errs = Vec::new();
+
+                            let source_persist_config =
+                                get_persist_config(&uid, persisted_name, persist);
+
+                            if let Err(ref e) = source_persist_config {
+                                let err = SourceError::new(
+                                    src.name.clone(),
+                                    SourceErrorDetails::Persistence(e.to_string()),
+                                );
+                                persist_errs.push(err);
+                            }
+
+                            // Make sure to always create and push an error stream, even if there
+                            // are no errors. This ensures that the shape of the operator graph is
+                            // consistent across all timely workers.
+                            //
+                            // TODO: The error collections are not the right place for surfacing
+                            // persistence errors, since they are not deterministic/definite. We
+                            // don't have a better place right now, though.
+                            error_collections.push(
+                                persist_errs
+                                    .to_stream(scope)
+                                    .map(DataflowError::SourceError)
+                                    .pass_through("source-persist-errors")
+                                    .as_collection(),
+                            );
+
+                            source_persist_config.ok()
+                        }
+                        _ => None,
+                    };
+
                 let fast_forwarded = match &connector {
                     ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         start_offsets, ..
@@ -241,31 +282,41 @@ where
                 } else {
                     let is_connector_delimited = connector.is_delimited();
 
-                    let ((ok_source, _ts_bindings, err_source), capability) = match connector {
-                        ExternalSourceConnector::Kafka(_) => source::create_source::<
-                            _,
-                            KafkaSourceReader,
-                        >(
-                            source_config, &connector, None
-                        ),
-                        ExternalSourceConnector::Kinesis(_) => source::create_source::<
-                            _,
-                            KinesisSourceReader,
-                        >(
-                            source_config, &connector, None
-                        ),
+                    let ((ok_source, ts_bindings, err_source), capability) = match connector {
+                        ExternalSourceConnector::Kafka(_) => {
+                            source::create_source::<_, KafkaSourceReader>(
+                                source_config,
+                                &connector,
+                                source_persist_config
+                                    .as_ref()
+                                    .map(|config| config.bindings_config.clone()),
+                            )
+                        }
+                        ExternalSourceConnector::Kinesis(_) => {
+                            source::create_source::<_, KinesisSourceReader>(
+                                source_config,
+                                &connector,
+                                source_persist_config
+                                    .as_ref()
+                                    .map(|config| config.bindings_config.clone()),
+                            )
+                        }
                         ExternalSourceConnector::S3(_) => {
                             source::create_source::<_, S3SourceReader>(
                                 source_config,
                                 &connector,
-                                None,
+                                source_persist_config
+                                    .as_ref()
+                                    .map(|config| config.bindings_config.clone()),
                             )
                         }
                         ExternalSourceConnector::File(_) | ExternalSourceConnector::AvroOcf(_) => {
                             source::create_source::<_, FileSourceReader>(
                                 source_config,
                                 &connector,
-                                None,
+                                source_persist_config
+                                    .as_ref()
+                                    .map(|config| config.bindings_config.clone()),
                             )
                         }
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
@@ -380,14 +431,39 @@ where
                                 SourceEnvelope::Upsert => {
                                     let upsert_operator_name = format!("{}-upsert", source_name);
 
-                                    super::upsert::upsert(
+                                    let (upsert_ok, upsert_err) = super::upsert::upsert(
                                         &upsert_operator_name,
                                         &results,
                                         self.as_of_frontier.clone(),
                                         &mut linear_operators,
                                         src.bare_desc.typ().arity(),
-                                        None,
-                                    )
+                                        source_persist_config
+                                            .as_ref()
+                                            .map(|config| config.upsert_config.clone()),
+                                    );
+
+                                    // When persistence is enable we need to seal up both the
+                                    // timestamp bindings and the upsert state. Otherwise, just
+                                    // pass through.
+                                    let upsert_ok = if let Some(source_persist_config) =
+                                        source_persist_config
+                                    {
+                                        let (sealed_upsert_ok, upsert_seal_err) = upsert_ok
+                                            .conditional_seal(
+                                                &source_name,
+                                                &ts_bindings,
+                                                source_persist_config.upsert_config.write_handle,
+                                                source_persist_config.bindings_config.write_handle,
+                                            );
+
+                                        upsert_seal_err.inspect(|e| log::error!("{:?}", e));
+
+                                        sealed_upsert_ok
+                                    } else {
+                                        upsert_ok
+                                    };
+
+                                    (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                                 }
                                 _ => {
                                     let (stream, errors) = flatten_results(key_envelope, results);
@@ -545,6 +621,80 @@ where
             }
         }
     }
+}
+
+/// Configuration for persistent sources.
+///
+/// Note: This is quite tailored to Kafka Upsert sources for now, but we can change/extend before
+/// we add new types of sources/envelopes.
+///
+/// `ST` is the source timestamp, while `AT` is the timestamp that is assigned based on timestamp
+/// bindings.
+#[derive(Clone)]
+pub struct PersistentSourceConfig<K: Codec, V: Codec, ST: Codec, AT: Codec> {
+    bindings_config: PersistentTimestampBindingsConfig<ST, AT>, // wrong ordering... AT-ST
+    upsert_config: PersistentUpsertConfig<K, V>,
+}
+
+impl<K: Codec, V: Codec, ST: Codec, AT: Codec> PersistentSourceConfig<K, V, ST, AT> {
+    /// Creates a new [`PersistentSourceConfig`] from the given parts.
+    pub fn new(
+        bindings_config: PersistentTimestampBindingsConfig<ST, AT>,
+        upsert_config: PersistentUpsertConfig<K, V>,
+    ) -> Self {
+        PersistentSourceConfig {
+            bindings_config,
+            upsert_config,
+        }
+    }
+}
+
+fn get_persist_config(
+    source_id: &SourceInstanceId,
+    persisted_name: String,
+    persist_client: &mut persist::indexed::runtime::RuntimeClient,
+) -> Result<
+    PersistentSourceConfig<
+        Result<Row, DecodeError>,
+        Result<Row, DecodeError>,
+        SourceTimestamp,
+        AssignedTimestamp,
+    >,
+    persist::error::Error,
+> {
+    // TODO: Ensure that we only render one materialized source when persistence is enabled. We can
+    // use https://github.com/MaterializeInc/materialize/pull/8522, which has most of the plumbing.
+    let persist_bindings_name = format!("{}-timestamp-bindings", persisted_name);
+    let persist_data_name = format!("{}", persisted_name);
+
+    let (bindings_write, bindings_read) = persist_client
+        .create_or_load::<SourceTimestamp, AssignedTimestamp>(&persist_bindings_name)?;
+
+    let (data_write, data_read) = persist_client
+        .create_or_load::<Result<Row, DecodeError>, Result<Row, DecodeError>>(&persist_data_name)?;
+
+    use persist::indexed::runtime::sealed_ts;
+    let bindings_seal_ts = sealed_ts(&bindings_read)?;
+    let data_seal_ts = sealed_ts(&data_read)?;
+
+    log::debug!(
+            "Persistent collections for source {}: {:?} and {:?}. Upper seal timestamps: (bindings: {}, data: {}).",
+            source_id,
+            persist_bindings_name,
+            persist_data_name,
+            bindings_seal_ts,
+            data_seal_ts,
+        );
+
+    let bindings_config = PersistentTimestampBindingsConfig::new(
+        bindings_seal_ts,
+        data_seal_ts,
+        bindings_read,
+        bindings_write,
+    );
+    let upsert_config = PersistentUpsertConfig::new(data_seal_ts, data_read, data_write);
+
+    Ok(PersistentSourceConfig::new(bindings_config, upsert_config))
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
