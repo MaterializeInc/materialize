@@ -19,7 +19,6 @@ use differential_dataflow::Collection;
 use itertools::Itertools;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
@@ -66,7 +65,7 @@ where
         render_state: &mut RenderState,
         sink: &SinkDesc,
         sink_id: GlobalId,
-        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         _metrics: &SinkBaseMetrics,
     ) -> Option<Box<dyn Any>>
     where
@@ -86,7 +85,7 @@ where
 }
 
 fn tail<G>(
-    sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+    sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     sink_id: GlobalId,
     connector: TailSinkConnector,
     tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,

@@ -19,8 +19,7 @@ use persist::operators::source::PersistedSource;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::{Concat, OkErr, ToStream};
 use timely::dataflow::operators::{Map, UnorderedInput};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, ScopeParent};
+use timely::dataflow::Scope;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, SourceInstanceId};
@@ -29,7 +28,6 @@ use ore::now::NowFn;
 use repr::RelationDesc;
 use repr::ScalarType;
 use repr::{Datum, Row, Timestamp};
-use timely::progress::timestamp::Refines;
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -47,7 +45,7 @@ use crate::source::{
     PostgresSourceReader, PubNubSourceReader, S3SourceReader,
 };
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
+impl<G> Context<G, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -56,7 +54,7 @@ where
         &mut self,
         render_state: &mut RenderState,
         tokens: &mut RelevantTokens,
-        scope: &mut Child<'g, G, G::Timestamp>,
+        scope: &mut G,
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
         mut src: SourceDesc,
@@ -566,16 +564,15 @@ where
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
-fn flatten_results<G, T>(
+fn flatten_results<G>(
     key_envelope: KeyEnvelope,
-    results: timely::dataflow::Stream<Child<G, T>, DecodeResult>,
+    results: timely::dataflow::Stream<G, DecodeResult>,
 ) -> (
-    timely::dataflow::Stream<Child<G, T>, Row>,
-    timely::dataflow::Stream<Child<G, T>, DataflowError>,
+    timely::dataflow::Stream<G, Row>,
+    timely::dataflow::Stream<G, DataflowError>,
 )
 where
-    G: ScopeParent,
-    T: Refines<<G as ScopeParent>::Timestamp>,
+    G: Scope<Timestamp = Timestamp>,
 {
     match key_envelope {
         KeyEnvelope::None => results

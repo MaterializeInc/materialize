@@ -16,7 +16,6 @@ use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{Collection, Hashable};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use dataflow_types::*;
@@ -28,7 +27,7 @@ use crate::render::context::Context;
 use crate::render::{RelevantTokens, RenderState};
 use crate::sink::SinkBaseMetrics;
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, Timestamp>
+impl<G> Context<G, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -85,11 +84,11 @@ where
     }
 }
 
-fn apply_sink_envelope<'a, G>(
+fn apply_sink_envelope<G>(
     sink: &SinkDesc,
     sink_render: &Box<dyn SinkRender<G>>,
-    collection: Collection<Child<'a, G, G::Timestamp>, Row, Diff>,
-) -> Collection<Child<'a, G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>
+    collection: Collection<G, Row, Diff>,
+) -> Collection<G, (Option<Row>, Option<Row>), Diff>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -210,7 +209,7 @@ where
         render_state: &mut RenderState,
         sink: &SinkDesc,
         sink_id: GlobalId,
-        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         metrics: &SinkBaseMetrics,
     ) -> Option<Box<dyn Any>>
     where

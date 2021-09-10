@@ -32,7 +32,6 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{FrontieredInputHandle, InputHandle, OutputHandle};
 use timely::dataflow::operators::{Capability, Map};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
@@ -86,7 +85,7 @@ where
         render_state: &mut RenderState,
         sink: &SinkDesc,
         sink_id: GlobalId,
-        sinked_collection: Collection<Child<G, G::Timestamp>, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         metrics: &SinkBaseMetrics,
     ) -> Option<Box<dyn Any>>
     where
