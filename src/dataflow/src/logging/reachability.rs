@@ -16,7 +16,9 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, TimelyLog};
+use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
+use crate::{arrange_exchange_fn, MzExchange};
 use dataflow_types::logging::LoggingConfig;
 use repr::{Datum, Row, Timestamp};
 
@@ -106,7 +108,7 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+        use differential_dataflow::operators::arrange::arrangement::Arrange;
 
         // Restrict results by those logs that are meant to be active.
         let logs = vec![(LogVariant::Timely(TimelyLog::Reachability), updates)];
@@ -125,7 +127,10 @@ pub fn construct<A: Allocate>(
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange_by_key()
+                    .arrange_core::<_, RowSpine<_, _, _, _>>(
+                        MzExchange::new(arrange_exchange_fn),
+                        "Arrange Materialized Log",
+                    )
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }
