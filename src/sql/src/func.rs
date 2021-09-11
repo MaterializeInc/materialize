@@ -2140,6 +2140,15 @@ lazy_static! {
             "mz_render_typemod" => Scalar {
                 params!(Oid, Int32) => BinaryFunc::MzRenderTypemod, oid::FUNC_MZ_RENDER_TYPEMOD_OID;
             },
+            "mz_row_number" => Aggregate {
+                params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
+                    let e_arr = HirScalarExpr::CallVariadic{
+                        func: VariadicFunc::ListCreate{elem_type: ecx.scalar_type(&e)},
+                        exprs: vec![e],
+                    };
+                    Ok((e_arr, AggregateFunc::RowNumber{order_by}))
+                }),  oid::FUNC_MZ_ROW_NUMBER_OID;
+            },
             // This ought to be exposed in `mz_catalog`, but its name is rather
             // confusing. It does not identify the SQL session, but the
             // invocation of this `materialized` process.

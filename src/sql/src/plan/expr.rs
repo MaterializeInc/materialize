@@ -417,6 +417,9 @@ pub enum AggregateFunc {
     StringAgg {
         order_by: Vec<ColumnOrder>,
     },
+    RowNumber {
+        order_by: Vec<ColumnOrder>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -468,6 +471,7 @@ impl AggregateFunc {
             }
             AggregateFunc::ListConcat { order_by } => expr::AggregateFunc::ListConcat { order_by },
             AggregateFunc::StringAgg { order_by } => expr::AggregateFunc::StringAgg { order_by },
+            AggregateFunc::RowNumber { order_by } => expr::AggregateFunc::RowNumber { order_by },
             AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
         }
     }
@@ -481,6 +485,7 @@ impl AggregateFunc {
             AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
+            AggregateFunc::RowNumber { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -507,6 +512,31 @@ impl AggregateFunc {
                     _ => unreachable!(),
                 }
             }
+            AggregateFunc::RowNumber { .. } => {
+                match input_type.scalar_type {
+                    // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
+                    ScalarType::Record { fields, .. } => ScalarType::List {
+                        element_type: Box::new(ScalarType::Record {
+                            fields: vec![
+                                (ColumnName::from("i"), ScalarType::Int64.nullable(false)),
+                                (ColumnName::from("x"), {
+                                    let inner = match &fields[0].1.scalar_type {
+                                        ScalarType::List { element_type, .. } => {
+                                            element_type.clone()
+                                        }
+                                        _ => unreachable!(),
+                                    };
+                                    inner.nullable(true)
+                                }),
+                            ],
+                            custom_oid: None,
+                            custom_name: None,
+                        }),
+                        custom_oid: None,
+                    },
+                    _ => unreachable!(),
+                }
+            }
             _ => input_type.scalar_type,
         };
         // max/min/sum return null on empty sets
@@ -523,6 +553,7 @@ impl AggregateFunc {
                 | ArrayConcat { .. }
                 | ListConcat { .. }
                 | StringAgg { .. }
+                | RowNumber { .. }
         )
     }
 }
