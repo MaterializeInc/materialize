@@ -398,3 +398,53 @@ FROM
     v
 ----
 {"0":"c","1":"a","2":"b"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"d"}  {"0":"c","1":"a","2":"b"}
+
+query TTTT
+WITH
+    v (a, b)
+        AS (
+            VALUES
+                ('a', 1),
+                ('b', 2),
+                ('c', 0),
+                ('d', 2)
+        )
+SELECT
+    mz_internal.mz_row_number(v.* ORDER BY a DESC)::text AS a_desc,
+    mz_internal.mz_row_number(v.* ORDER BY b)::text AS b,
+    mz_internal.mz_row_number(v.* ORDER BY b, a ASC)::text AS b_a_asc,
+   mz_internal.mz_row_number(v.* ORDER BY b, a DESC)::text AS b_a_desc
+FROM
+    v
+----
+{"(1,\"(d,2)\")","(2,\"(c,0)\")","(3,\"(b,2)\")","(4,\"(a,1)\")"}  {"(1,\"(c,0)\")","(2,\"(a,1)\")","(3,\"(b,2)\")","(4,\"(d,2)\")"}  {"(1,\"(c,0)\")","(2,\"(a,1)\")","(3,\"(b,2)\")","(4,\"(d,2)\")"}  {"(1,\"(c,0)\")","(2,\"(a,1)\")","(3,\"(d,2)\")","(4,\"(b,2)\")"}
+
+# Demonstrate how to achieve `row_number() OVER (b)` with unnest.
+query TT
+WITH
+    v (a, b)
+        AS (
+            VALUES
+                ('a', 1),
+                ('b', 2),
+                ('c', 0),
+                ('d', 2)
+        ),
+    s (a)
+        AS (
+            SELECT
+                mz_internal.mz_row_number(v.*)
+            FROM
+                v
+            GROUP BY
+                b
+        )
+SELECT
+    (unnest).i as row_number, (unnest).x
+FROM
+    s, unnest(s.a)
+----
+1  (a,1)
+1  (b,2)
+1  (c,0)
+2  (d,2)
