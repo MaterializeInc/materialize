@@ -24,7 +24,7 @@ use ore::cast::CastFrom;
 use repr::adt::array::ArrayDimension;
 use repr::adt::numeric;
 use repr::adt::regex::Regex as ReprRegex;
-use repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::relation::{compare_columns, ColumnOrder};
 use crate::scalar::func::jsonb_stringify;
@@ -563,6 +563,27 @@ where
     })
 }
 
+fn row_number<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let datums = order_aggregate_datums(datums, order_by);
+    let datums = datums
+        .into_iter()
+        .map(|d| d.unwrap_list().iter())
+        .flatten()
+        .zip(1i64..)
+        .map(|(d, i)| {
+            temp_storage.make_datum(|packer| {
+                packer.push_list(vec![Datum::Int64(i), d]);
+            })
+        });
+
+    temp_storage.make_datum(|packer| {
+        packer.push_list(datums);
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
@@ -627,6 +648,9 @@ pub enum AggregateFunc {
     StringAgg {
         order_by: Vec<ColumnOrder>,
     },
+    RowNumber {
+        order_by: Vec<ColumnOrder>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -678,6 +702,7 @@ impl AggregateFunc {
             AggregateFunc::ArrayConcat { order_by } => array_concat(datums, temp_storage, order_by),
             AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
             AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
+            AggregateFunc::RowNumber { order_by } => row_number(datums, temp_storage, order_by),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -703,6 +728,7 @@ impl AggregateFunc {
             AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
+            AggregateFunc::RowNumber { .. } => Datum::empty_list(),
             _ => Datum::Null,
         }
     }
@@ -730,6 +756,29 @@ impl AggregateFunc {
                 }
             }
             AggregateFunc::StringAgg { .. } => ScalarType::String,
+            AggregateFunc::RowNumber { .. } => match input_type.scalar_type {
+                ScalarType::Record { fields, .. } => ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: vec![
+                            (
+                                ColumnName::from("?row_number?"),
+                                ScalarType::Int64.nullable(false),
+                            ),
+                            (ColumnName::from("?record?"), {
+                                let inner = match &fields[0].1.scalar_type {
+                                    ScalarType::List { element_type, .. } => element_type.clone(),
+                                    _ => unreachable!(),
+                                };
+                                inner.nullable(false)
+                            }),
+                        ],
+                        custom_oid: None,
+                        custom_name: None,
+                    }),
+                    custom_oid: None,
+                },
+                _ => unreachable!(),
+            },
             // Note AggregateFunc::MaxString, MinString rely on returning input
             // type as output type to support the proper return type for
             // character input.
@@ -913,6 +962,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::ArrayConcat { .. } => f.write_str("array_agg"),
             AggregateFunc::ListConcat { .. } => f.write_str("list_agg"),
             AggregateFunc::StringAgg { .. } => f.write_str("string_agg"),
+            AggregateFunc::RowNumber { .. } => f.write_str("row_number"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

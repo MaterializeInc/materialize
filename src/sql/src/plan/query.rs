@@ -55,7 +55,8 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
-    ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, UnaryFunc, VariadicFunc,
+    ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, UnaryFunc, VariadicFunc,
+    WindowExpr, WindowExprType,
 };
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -3021,6 +3022,28 @@ pub fn coerce_homogeneous_exprs(
     Ok(out)
 }
 
+fn plan_function_order_by(
+    ecx: &ExprContext,
+    order_by: &[OrderByExpr<Aug>],
+) -> Result<(Vec<HirScalarExpr>, Vec<ColumnOrder>), anyhow::Error> {
+    let mut order_by_exprs = vec![];
+    let mut col_orders = vec![];
+    {
+        for (i, obe) in order_by.iter().enumerate() {
+            // Unlike `SELECT ... ORDER BY` clauses, function `ORDER BY` clauses
+            // do not support ordinal references in PostgreSQL. So we use
+            // `plan_expr` directly rather than `plan_order_by_or_distinct_expr`.
+            let expr = plan_expr(ecx, &obe.expr)?.type_as_any(ecx)?;
+            order_by_exprs.push(expr);
+            col_orders.push(ColumnOrder {
+                column: i,
+                desc: !obe.asc.unwrap_or(true),
+            });
+        }
+    }
+    Ok((order_by_exprs, col_orders))
+}
+
 fn plan_aggregate(
     ecx: &ExprContext,
     sql_func: &Function<Aug>,
@@ -3044,7 +3067,7 @@ fn plan_aggregate(
     };
 
     if sql_func.over.is_some() {
-        bail_unsupported!(213, "window functions");
+        bail_unsupported!("aggregate window functions");
     }
 
     let name = normalize::unresolved_object_name(sql_func.name.clone())?;
@@ -3071,21 +3094,7 @@ fn plan_aggregate(
         }
     };
 
-    let mut order_by_exprs = vec![];
-    let mut col_orders = vec![];
-    {
-        for (i, obe) in order_by.iter().enumerate() {
-            // Unlike `SELECT ... ORDER BY` clauses, function `ORDER BY` clauses
-            // do not support ordinal references in PostgreSQL. So we use
-            // `plan_expr` directly rather than `plan_order_by_or_distinct_expr`.
-            let expr = plan_expr(ecx, &obe.expr)?.type_as_any(ecx)?;
-            order_by_exprs.push(expr);
-            col_orders.push(ColumnOrder {
-                column: i,
-                desc: !obe.asc.unwrap_or(true),
-            });
-        }
-    }
+    let (order_by_exprs, col_orders) = plan_function_order_by(ecx, &order_by)?;
 
     let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, col_orders)?;
     if let Some(filter) = &sql_func.filter {
@@ -3226,6 +3235,8 @@ fn plan_function<'a>(
         distinct,
     }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
+    let unresolved_name = normalize::unresolved_object_name(name.clone())?;
+
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
@@ -3244,11 +3255,73 @@ fn plan_function<'a>(
             );
         }
         Func::Scalar(impls) => impls,
+        Func::ScalarWindow(impls) => {
+            // Various things are duplicated here and below, but done this way to improve
+            // error messages.
+
+            if *distinct {
+                bail!(
+                    "DISTINCT specified, but {} is not an aggregate function",
+                    name
+                );
+            }
+
+            if filter.is_some() {
+                bail_unsupported!("FILTER in window functions");
+            }
+
+            let window_spec = match over.as_ref() {
+                Some(over) => over,
+                None => bail!("window function {} requires an OVER clause", name),
+            };
+            if window_spec.window_frame.is_some() {
+                bail_unsupported!("window frames");
+            }
+            let mut partition = Vec::new();
+            for expr in &window_spec.partition_by {
+                partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
+            }
+
+            let scalar_args = match &args {
+                FunctionArgs::Star => {
+                    bail!("* argument is invalid with non-aggregate function {}", name)
+                }
+                FunctionArgs::Args { args, order_by } => {
+                    if !order_by.is_empty() {
+                        bail!(
+                            "ORDER BY specified, but {} is not an aggregate function",
+                            name
+                        );
+                    }
+                    plan_exprs(ecx, args)?
+                }
+            };
+
+            let func = func::select_impl(
+                ecx,
+                FuncSpec::Func(&unresolved_name),
+                impls,
+                scalar_args,
+                vec![],
+            )?;
+
+            let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
+
+            return Ok(HirScalarExpr::Windowing(WindowExpr {
+                func: WindowExprType::Scalar(ScalarWindowExpr {
+                    func,
+                    order_by: col_orders,
+                }),
+                partition,
+                order_by,
+            }));
+        }
     };
 
     if over.is_some() {
         bail_unsupported!(213, "window functions");
     }
+
     if *distinct {
         bail!(
             "DISTINCT specified, but {} is not an aggregate function",
@@ -3262,7 +3335,7 @@ fn plan_function<'a>(
         );
     }
 
-    let args = match &args {
+    let scalar_args = match &args {
         FunctionArgs::Star => bail!("* argument is invalid with non-aggregate function {}", name),
         FunctionArgs::Args { args, order_by } => {
             if !order_by.is_empty() {
@@ -3275,8 +3348,13 @@ fn plan_function<'a>(
         }
     };
 
-    let name = normalize::unresolved_object_name(name.clone())?;
-    func::select_impl(ecx, FuncSpec::Func(&name), impls, args, vec![])
+    func::select_impl(
+        ecx,
+        FuncSpec::Func(&unresolved_name),
+        impls,
+        scalar_args,
+        vec![],
+    )
 }
 
 /// Resolves the name to a set of function implementations.
@@ -3678,9 +3756,9 @@ impl<'a, 'ast> Visit<'ast, Aug> for AggregateFuncVisitor<'a, 'ast> {
             self.visit_function_args(args);
 
             self.within_aggregate = old_within_aggregate;
-            return;
+        } else {
+            visit::visit_function(self, func);
         }
-        visit::visit_function(self, func);
     }
 
     fn visit_query(&mut self, _query: &'ast Query<Aug>) {

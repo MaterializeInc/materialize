@@ -26,7 +26,7 @@ use expr::{ExprHumanizer, Id, IdGen, RowSetFinishing};
 use ore::str::{bracketed, separated};
 use repr::{RelationType, ScalarType};
 
-use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr};
+use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
 
 /// An `Explanation` facilitates pretty-printing of a [`HirRelationExpr`].
 ///
@@ -451,6 +451,33 @@ impl<'a> Explanation<'a> {
             }
             Exists(expr) => write!(f, "exists(%{})", self.expr_chain(expr)),
             Select(expr) => write!(f, "select(%{})", self.expr_chain(expr)),
+            Windowing(expr) => {
+                match &expr.func {
+                    WindowExprType::Scalar(scalar) => {
+                        write!(f, "{}()", scalar.clone().into_expr())?
+                    }
+                }
+                write!(f, " over (")?;
+                for (i, e) in expr.partition.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "{}", ", ")?;
+                    }
+                    self.fmt_scalar_expr(f, e)?;
+                }
+                write!(f, ")")?;
+
+                if !expr.order_by.is_empty() {
+                    write!(f, " order by (")?;
+                    for (i, e) in expr.order_by.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, "{}", ", ")?;
+                        }
+                        self.fmt_scalar_expr(f, e)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
         }
     }
 

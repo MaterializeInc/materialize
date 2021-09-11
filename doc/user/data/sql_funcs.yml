@@ -535,6 +535,12 @@
         Computes a hashed MAC of the given bytea `data` using the specified `key` and
         `type` algorithm. The supported hash algorithms are the same as for `digest`.
 
+- type: Window
+  description: Window functions perform calculations across sets of rows that are related to the current query.
+  functions:
+  - signature: 'row_number() -> int'
+    description: Returns the number of the current row within its partition, counting from 1.
+
 - type: System information
   description: Functions that return information about the system
   functions:
