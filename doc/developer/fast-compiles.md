@@ -127,7 +127,7 @@ On Ruchir's laptop after an initial compile:
 
 [split-debuginfo-unpacked]: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#splitting-debug-information
 
-## Experimenal Mac Linker
+## Experimental Mac Linker
 
 The LLVM clang project has an old Mach-O (macOS) linker that seems to be
 generally discouraged, but about a year ago they started a [new one with an
