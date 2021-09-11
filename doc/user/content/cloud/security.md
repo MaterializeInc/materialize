@@ -11,13 +11,11 @@ menu:
 
 {{< cloud-notice >}}
 
-Currently, Materialize Cloud secures your connections by enforcing that clients connect via
-[TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security). In the future, the enterprise
-Materialize Cloud product will offer additional security options, such as:
+Materialize Cloud secures your connections by enforcing that clients connect via
+[TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security), and supports:
 
 * Two-factor authentication
 * Encryption at rest
-* Secure network ingress and egress
 * Single sign-on integration (SSO)
 
-If you're interested in implementing any of these security features, please [let us know](../support).
+In the future, the enterprise product will also provide secure network ingress and egress. If you have other specific security requirements, please [let us know](../support).
