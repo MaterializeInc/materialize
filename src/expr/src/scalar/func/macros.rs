@@ -129,12 +129,6 @@ macro_rules! sqlfunc {
                     }
                 }
 
-                impl From<[<$fn_name:camel>]> for crate::UnaryFunc {
-                    fn from(variant: [<$fn_name:camel>]) -> Self {
-                        Self::[<$fn_name:camel>](variant)
-                    }
-                }
-
                 impl fmt::Display for [<$fn_name:camel>] {
                     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                         f.write_str($name)
@@ -310,5 +304,13 @@ macro_rules! derive_unary {
                 }
             }
         }
+
+        $(
+            impl From<$name> for crate::UnaryFunc {
+                fn from(variant: $name) -> Self {
+                    Self::$name(variant)
+                }
+            }
+        )*
     }
 }
