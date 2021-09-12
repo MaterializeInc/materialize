@@ -532,32 +532,32 @@ impl<'a> From<bool> for Datum<'a> {
     }
 }
 
-impl From<i16> for Datum<'static> {
-    fn from(i: i16) -> Datum<'static> {
+impl<'a> From<i16> for Datum<'a> {
+    fn from(i: i16) -> Datum<'a> {
         Datum::Int16(i)
     }
 }
 
-impl From<i32> for Datum<'static> {
-    fn from(i: i32) -> Datum<'static> {
+impl<'a> From<i32> for Datum<'a> {
+    fn from(i: i32) -> Datum<'a> {
         Datum::Int32(i)
     }
 }
 
-impl From<i64> for Datum<'static> {
-    fn from(i: i64) -> Datum<'static> {
+impl<'a> From<i64> for Datum<'a> {
+    fn from(i: i64) -> Datum<'a> {
         Datum::Int64(i)
     }
 }
 
-impl From<OrderedFloat<f32>> for Datum<'static> {
-    fn from(f: OrderedFloat<f32>) -> Datum<'static> {
+impl<'a> From<OrderedFloat<f32>> for Datum<'a> {
+    fn from(f: OrderedFloat<f32>) -> Datum<'a> {
         Datum::Float32(f)
     }
 }
 
-impl From<OrderedFloat<f64>> for Datum<'static> {
-    fn from(f: OrderedFloat<f64>) -> Datum<'static> {
+impl<'a> From<OrderedFloat<f64>> for Datum<'a> {
+    fn from(f: OrderedFloat<f64>) -> Datum<'a> {
         Datum::Float64(f)
     }
 }
@@ -574,20 +574,20 @@ impl<'a> From<f64> for Datum<'a> {
     }
 }
 
-impl From<i128> for Datum<'static> {
-    fn from(d: i128) -> Datum<'static> {
+impl<'a> From<i128> for Datum<'a> {
+    fn from(d: i128) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
-impl From<Numeric> for Datum<'static> {
-    fn from(n: Numeric) -> Datum<'static> {
+impl<'a> From<Numeric> for Datum<'a> {
+    fn from(n: Numeric) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(n))
     }
 }
 
-impl From<chrono::Duration> for Datum<'static> {
-    fn from(duration: chrono::Duration) -> Datum<'static> {
+impl<'a> From<chrono::Duration> for Datum<'a> {
+    fn from(duration: chrono::Duration) -> Datum<'a> {
         Datum::Interval(
             Interval::new(
                 0,
@@ -599,8 +599,8 @@ impl From<chrono::Duration> for Datum<'static> {
     }
 }
 
-impl From<Interval> for Datum<'static> {
-    fn from(other: Interval) -> Datum<'static> {
+impl<'a> From<Interval> for Datum<'a> {
+    fn from(other: Interval) -> Datum<'a> {
         Datum::Interval(other)
     }
 }
@@ -641,8 +641,8 @@ impl<'a> From<DateTime<Utc>> for Datum<'a> {
     }
 }
 
-impl From<Uuid> for Datum<'static> {
-    fn from(uuid: Uuid) -> Datum<'static> {
+impl<'a> From<Uuid> for Datum<'a> {
+    fn from(uuid: Uuid) -> Datum<'a> {
         Datum::Uuid(uuid)
     }
 }
