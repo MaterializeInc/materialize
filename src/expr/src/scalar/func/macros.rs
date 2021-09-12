@@ -91,6 +91,13 @@ macro_rules! sqlfunc {
                 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
                 pub struct [<$fn_name:camel>];
 
+                /// Utility function that converts the return type the passed function into its
+                /// runtime representation
+                fn output_type_of<T, R, E>(_: fn(T) -> Result<Option<R>, E>) -> ScalarType
+                where ScalarType: FromTy<R> {
+                    <ScalarType as FromTy<R>>::from_ty()
+                }
+
                 impl UnaryFuncTrait for [<$fn_name:camel>] {
                     fn eval<'a>(
                         &'a self,
@@ -117,9 +124,9 @@ macro_rules! sqlfunc {
                     }
 
                     fn output_type(&self, input_type: ColumnType) -> ColumnType {
-                        // Use the FromTy trait to convert the Rust type into our runtime type
-                        // representation
-                        <ScalarType as FromTy<$ret_ty>>::from_ty()
+                        // Use the FromTy trait to convert the Rust return type into our runtime
+                        // type representation
+                        output_type_of(super::$fn_name)
                             .nullable($propagates_nulls && input_type.nullable || $introduces_nulls)
                     }
 
