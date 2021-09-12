@@ -250,6 +250,152 @@ macro_rules! sqlfunc {
     };
 }
 
+#[cfg(test)]
+mod test {
+    use crate::scalar::func::UnaryFuncTrait;
+    use repr::ScalarType;
+
+    sqlfunc!(
+        #[sqlname = "INFALLIBLE"]
+        fn infallible1(a: f32) -> f32 {
+            a
+        }
+    );
+
+    sqlfunc!(
+        fn infallible2(a: Option<f32>) -> f32 {
+            a.unwrap_or_default()
+        }
+    );
+
+    sqlfunc!(
+        fn infallible3(a: f32) -> Option<f32> {
+            Some(a)
+        }
+    );
+
+    #[test]
+    fn elision_rules_infallible() {
+        assert_eq!(format!("{}", Infallible1), "INFALLIBLE");
+        assert!(Infallible1.propagates_nulls());
+        assert!(!Infallible1.introduces_nulls());
+
+        assert!(!Infallible2.propagates_nulls());
+        assert!(!Infallible2.introduces_nulls());
+
+        assert!(Infallible3.propagates_nulls());
+        assert!(Infallible3.introduces_nulls());
+    }
+
+    #[test]
+    fn output_types_infallible() {
+        assert_eq!(
+            Infallible1.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
+        );
+        assert_eq!(
+            Infallible1.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Infallible2.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Infallible2.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Infallible3.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
+        );
+        assert_eq!(
+            Infallible3.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(true)
+        );
+    }
+
+    sqlfunc!(
+        fn fallible1(a: f32) -> Result<f32, EvalError> {
+            Ok(a)
+        }
+    );
+
+    sqlfunc!(
+        fn fallible2(a: Option<f32>) -> Result<f32, EvalError> {
+            Ok(a.unwrap_or_default())
+        }
+    );
+
+    sqlfunc!(
+        fn fallible3(a: f32) -> Result<Option<f32>, EvalError> {
+            Ok(Some(a))
+        }
+    );
+
+    #[test]
+    fn elision_rules_fallible() {
+        assert!(Fallible1.propagates_nulls());
+        assert!(!Fallible1.introduces_nulls());
+
+        assert!(!Fallible2.propagates_nulls());
+        assert!(!Fallible2.introduces_nulls());
+
+        assert!(Fallible3.propagates_nulls());
+        assert!(Fallible3.introduces_nulls());
+    }
+
+    #[test]
+    fn output_types_fallible() {
+        assert_eq!(
+            Fallible1.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
+        );
+        assert_eq!(
+            Fallible1.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Fallible2.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(false)
+        );
+        assert_eq!(
+            Fallible2.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Fallible3.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
+        );
+        assert_eq!(
+            Fallible3.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(true)
+        );
+    }
+
+    sqlfunc!(
+        #[sqlname = "foobar"]
+        #[propagates_nulls = false]
+        #[introduces_nulls = true]
+        #[preserves_uniqueness = true]
+        fn explicit(a: Option<f64>) -> Result<Option<f64>, EvalError> {
+            Ok(a)
+        }
+    );
+
+    #[test]
+    fn explicit_annotation() {
+        assert_eq!(format!("{}", Explicit), "foobar");
+        assert!(!Explicit.propagates_nulls());
+        assert!(Explicit.introduces_nulls());
+        assert!(Explicit.preserves_uniqueness());
+    }
+}
+
 /// Temporary macro that generates the equivalent of what enum_dispatch will do in the future. We
 /// need this manual macro implementation to delegate to the previous manual implementation for
 /// variants that use the old definitions.
