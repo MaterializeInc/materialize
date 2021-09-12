@@ -81,7 +81,7 @@ macro_rules! sqlfunc {
                 use std::convert::TryInto;
                 use std::fmt;
 
-                use repr::{ColumnType, Datum, FromTy, RowArena, ScalarType};
+                use repr::{ColumnType, Datum, FromTy, RowArena, ScalarType, WithArena};
                 use serde::{Deserialize, Serialize};
                 use lowertest::MzStructReflect;
 
@@ -106,7 +106,14 @@ macro_rules! sqlfunc {
                             .try_into()
                             .expect("expression already typechecked");
 
-                        super::$fn_name(a).map(|r| r.into())
+                        // Then we call the provided function that will return a Result<T, _>,
+                        // where T is some concrete, owned type
+                        let result = super::$fn_name(a);
+
+                        // Finally, we convert T into a Datum<'a> by wrapping the returned value
+                        // into a `WithArena` with the temporary storage provided to eval and
+                        // delegating to the respective `Into` implementation
+                        result.map(move |r| WithArena::new(temp_storage, r).into())
                     }
 
                     fn output_type(&self, input_type: ColumnType) -> ColumnType {
