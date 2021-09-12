@@ -25,8 +25,8 @@ use lowertest::MzEnumReflect;
 use crate::adt::array::Array;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
-use crate::Row;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
+use crate::{Row, RowArena};
 
 /// A single value.
 ///
@@ -660,6 +660,58 @@ where
     }
 }
 
+#[derive(Debug)]
+pub struct WithArena<'a, T> {
+    arena: &'a RowArena,
+    data: T,
+}
+
+impl<'a, T> WithArena<'a, T> {
+    pub fn new(arena: &'a RowArena, data: T) -> Self {
+        WithArena { arena, data }
+    }
+}
+
+/// Blanket implementation for types that don't need access to an allocation context
+impl<'a, T> From<WithArena<'a, T>> for Datum<'a>
+where
+    Datum<'a>: From<T>,
+{
+    fn from(context: WithArena<'a, T>) -> Datum<'a> {
+        context.data.into()
+    }
+}
+
+impl<'a> From<WithArena<'a, String>> for Datum<'a> {
+    fn from(context: WithArena<'a, String>) -> Datum<'a> {
+        Datum::String(context.arena.push_string(context.data))
+    }
+}
+
+impl<'a> From<WithArena<'a, Option<String>>> for Datum<'a> {
+    fn from(context: WithArena<'a, Option<String>>) -> Datum<'a> {
+        match context.data {
+            Some(b) => Datum::String(context.arena.push_string(b)),
+            None => Datum::Null,
+        }
+    }
+}
+
+impl<'a> From<WithArena<'a, Vec<u8>>> for Datum<'a> {
+    fn from(context: WithArena<'a, Vec<u8>>) -> Datum<'a> {
+        Datum::Bytes(context.arena.push_bytes(context.data))
+    }
+}
+
+impl<'a> From<WithArena<'a, Option<Vec<u8>>>> for Datum<'a> {
+    fn from(context: WithArena<'a, Option<Vec<u8>>>) -> Datum<'a> {
+        match context.data {
+            Some(b) => Datum::Bytes(context.arena.push_bytes(b)),
+            None => Datum::Null,
+        }
+    }
+}
+
 fn write_delimited<T, TS, F>(
     f: &mut fmt::Formatter,
     delimiter: &str,
@@ -873,6 +925,12 @@ impl FromTy<bool> for ScalarType {
 impl FromTy<String> for ScalarType {
     fn from_ty() -> Self {
         Self::String
+    }
+}
+
+impl FromTy<Vec<u8>> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Bytes
     }
 }
 
