@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.43"
+anyhow = "1.0.44"
 fstrings = "0.2.3"
 itertools = "0.10.1"
 ore = { path = "../ore", default-features = false }
