@@ -13,8 +13,6 @@ aliases:
 
 {{< cloud-notice >}}
 
-this is a test
-
 This guide walks you through getting started with Materialize Cloud, from setting up an account to creating your first materialized view on top of streaming data. We'll cover:
 
 * Signing up for Materialize Cloud
