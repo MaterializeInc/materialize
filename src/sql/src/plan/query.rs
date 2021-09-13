@@ -3087,9 +3087,15 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
             true => (Datum::True, ScalarType::Bool),
         },
         Value::Interval(iv) => {
-            let mut i = strconv::parse_interval_w_disambiguator(&iv.value, iv.precision_low)?;
-            i.truncate_high_fields(iv.precision_high);
-            i.truncate_low_fields(iv.precision_low, iv.fsec_max_precision)?;
+            let mut i = strconv::parse_interval_w_disambiguator(
+                &iv.value,
+                parser_datetimefield_to_adt(iv.precision_low),
+            )?;
+            i.truncate_high_fields(parser_datetimefield_to_adt(iv.precision_high));
+            i.truncate_low_fields(
+                parser_datetimefield_to_adt(iv.precision_low),
+                iv.fsec_max_precision,
+            )?;
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
@@ -3100,6 +3106,22 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
     };
     let expr = HirScalarExpr::literal(datum, scalar_type);
     Ok(expr.into())
+}
+
+// Implement these as two identical enums without From/Into impls so that they
+// have no cross-package dependencies, leaving that work up to this crate.
+fn parser_datetimefield_to_adt(
+    dtf: sql_parser::ast::DateTimeField,
+) -> repr::adt::datetime::DateTimeField {
+    use sql_parser::ast::DateTimeField::*;
+    match dtf {
+        Year => repr::adt::datetime::DateTimeField::Year,
+        Month => repr::adt::datetime::DateTimeField::Month,
+        Day => repr::adt::datetime::DateTimeField::Day,
+        Hour => repr::adt::datetime::DateTimeField::Hour,
+        Minute => repr::adt::datetime::DateTimeField::Minute,
+        Second => repr::adt::datetime::DateTimeField::Second,
+    }
 }
 
 fn find_trivial_column_equivalences(expr: &HirScalarExpr) -> Vec<(usize, usize)> {
