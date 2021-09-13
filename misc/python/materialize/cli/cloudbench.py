@@ -11,9 +11,11 @@
 
 import argparse
 import asyncio
+import base64
 import csv
 import itertools
 import json
+import os
 import shlex
 import sys
 import time
@@ -21,6 +23,7 @@ from datetime import timedelta
 from typing import List, NamedTuple, Optional, cast
 
 from materialize import git, scratch, util
+from materialize import spawn
 from materialize.cli.scratch import (
     DEFAULT_INSTPROF_NAME,
     DEFAULT_SG_ID,
@@ -39,6 +42,7 @@ from materialize.scratch import (
 # This is duplicated with the one in cli/scratch.
 # TODO - factor it out.
 def main() -> None:
+    os.chdir(os.environ['MZ_ROOT'])
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
     for cmd_name, configure, run in [
@@ -168,18 +172,23 @@ def start(ns: argparse.Namespace) -> None:
     bench_script = ns.bench_script
     script_name = bench_script[0]
     script_args = " ".join((shlex.quote(arg) for arg in bench_script[1:]))
-    script_is_py = script_name.endswith(".py")
 
-    with open(script_name) as f:
-        script_text = f.read()
+    # zip up the `misc` repository, for shipment to the remote machine
+    os.chdir('misc/python')
+    spawn.runv(["python3", "./setup.py", "sdist"])
 
-    if script_is_py:
-        mz_launch_script = f"""echo {shlex.quote(script_text)} > misc/python/materialize/cloudbench_script.py
-bin/pyactivate --dev -u -m materialize.cloudbench_script {script_args}
+    with open("./dist/materialize-0.0.0.tar.gz", "rb") as f:
+        pkg_data = f.read()
+    os.chdir(os.environ['MZ_ROOT'])
+
+    mz_launch_script = f"""echo {shlex.quote(base64.b64encode(pkg_data).decode('utf-8'))} | base64 -d > mz.tar.gz
+python3 -m venv /tmp/mzenv >&2 
+. /tmp/mzenv/bin/activate >&2
+python3 -m pip install --upgrade pip >&2
+pip3 install ./mz.tar.gz[dev] >&2
+MZ_ROOT=/home/ubuntu/materialize python3 -u -m {script_name} {script_args}
 echo $? > ~/bench_exit_code
 """
-    else:
-        assert False  # TODO
 
     if ns.profile == "basic":
         descs = [
