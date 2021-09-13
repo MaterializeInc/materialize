@@ -9,6 +9,7 @@ aliases:
   - materialize-cloud-quickstart
   - materialize-cloud-get-started
   - quickstart
+  - get-started
 ---
 
 {{< cloud-notice >}}
@@ -33,7 +34,7 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 1. If you've been invited to an existing workspace, jump directly to [Deploy and Connect](#deploy-and-connect). Otherwise, a dialog will ask you to create a workspace.
 
-    Enter a name, and click **Next**.
+    Enter a name and click **Next**.
 
 ## Deploy and connect
 
@@ -41,7 +42,7 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
     Then, click **Create**.
 
-    **Note:** The size of new deployments is set to Extra small (XS) by default, which is enough to run this walkthrough. For more information on deployment sizes, check [Account Limits](../account-limits).
+    **Note:** The size of new deployments is set to extra small (XS) by default, which is enough to run this walkthrough. For more information on deployment sizes, check [Account Limits](../account-limits).
 
 1. Once the status message reads `HEALTHY`, the deployment is ready for connections!
 
@@ -151,7 +152,7 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
     **Note:** We are using a table for convenience to avoid adding complexity to the guide. It's [unlikely](/sql/create-table/#when-to-use-a-table) that you'll need to use tables in real-world scenarios.
 
-1. Now, we can enrich our aggregated data with the ticker for each stock using a regular `JOIN`:
+1. Now we can enrich our aggregated data with the ticker for each stock using a regular `JOIN`:
 
     ```sql
     CREATE MATERIALIZED VIEW cnt_ticker AS
@@ -179,9 +180,9 @@ Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) u
 
 ### Temporal Filters
 
-In Materialize, [temporal filters](/guides/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This is useful to model business processes or simply to limit resource usage, for example.
+In Materialize, [temporal filters](/guides/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data. This can be useful for things like modeling business processes or limiting resource usage.
 
-1. If, instead of computing and maintaining the _overall_ count, we want to get the _moving_ count over the past minute:
+1. If, instead of computing and maintaining the _overall_ count of market orders, we want to get the _moving_ count from the past minute, we'd use a temporal filter defined by the `mz_logical_timestamp()` function:
 
     ```sql
     CREATE MATERIALIZED VIEW cnt_sliding AS
@@ -192,7 +193,7 @@ In Materialize, [temporal filters](/guides/temporal-filters/) allow you to defin
     GROUP BY symbol;
     ```
 
-    The `mz_logical_timestamp()` function is used to keep track of the logical time for your query (similar to `now()` in other systems, as explained more in-depth in ["now and mz_logical_timestamp functions"](/sql/functions/now_and_mz_logical_timestamp/)).
+    The `mz_logical_timestamp()` function is used to keep track of the logical time for your query ([similar to `now()` in other systems](/sql/functions/now_and_mz_logical_timestamp/)).
 
 1. To see the results:
 
@@ -212,7 +213,7 @@ In Materialize, [temporal filters](/guides/temporal-filters/) allow you to defin
 
 ## Learn more
 
-That's it! You just got up and running with Materialize Cloud to create your first materialized view and try out some common patterns enabled by SQL on streams. We encourage you to continue exploring the PubNub source using the supported [SQL commands](/sql/), and read through the following resources for a more comprehensive overview:
+That's it! You just got up and running with Materialize Cloud, creating your first materialized view and trying out some common queries enabled by SQL on streams. We encourage you to continue exploring the PubNub source using the supported [SQL commands](/sql/). You can read through the following resources for more comprehensive overviews:
 
 * [Connect to Materialize Cloud](../connect-to-cloud)
 * [Materialize Cloud Account Limits](../account-limits)

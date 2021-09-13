@@ -15,7 +15,7 @@ The [Deployments page](http://cloud.materialize.com/deployments) is your Materia
 Administrators can also:
 
 * [Create new deployments](../create-deployments)
-* [Delete deployments](../delete-deployments)
+* [Delete deployments](../destroy-deployments)
 * [Edit deployments](../administer-workspace)
 * [Update deployments](../update-deployments)
 * [View logs and troubleshoot](../troubleshoot-cloud)
