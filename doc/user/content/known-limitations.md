@@ -42,7 +42,6 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 ### Kafka
 
 - Protobuf data for Kafka sinks is not supported {{% gh 1541 %}}
-- JSON-encoded data for Kafka sinks is not supported {{% gh 1540 %}}
 
 ### Kinesis
 
