@@ -1,23 +1,21 @@
 ---
-title: "Materialize Cloud Security"
+title: "Security"
 description: "Learn about Materialize Cloud security options."
+disable_toc: true
+disable_toc: true
 menu:
   main:
     parent: "cloud"
-    weight: 7
+    weight:
 ---
 
 {{< cloud-notice >}}
 
-Currently, Materialize Cloud secures your connections by enforcing that clients connect via
-[TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security). In the future, the managed
-Materialize Cloud product will offer additional security options, such as:
+Materialize Cloud secures your connections by enforcing that clients connect via
+[TLS 1.2+](https://en.wikipedia.org/wiki/Transport_Layer_Security), and supports:
 
 * Two-factor authentication
 * Encryption at rest
-* Connection over VPC and VPN
 * Single sign-on integration (SSO)
 
-If you're interested in implementing any of these security features, please [let us know](../support).
-
-<!-- Are all of these managed, or will some of them be available to the free product? -->
+In the future, the enterprise product will also provide secure network ingress and egress. If you have other specific security requirements, please [let us know](../support).

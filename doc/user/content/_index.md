@@ -21,7 +21,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 {{< linkbox icon="bulb" title="Key Concepts" >}}
 - [Materialize overview](/overview/what-is-materialize)
 - [API components](/overview/api-components)
-- [Materialize Cloud overview](/cloud/what-is-materialize-cloud)
+- [Materialize Cloud overview](/cloud/)
 {{</ linkbox >}}
 {{< linkbox icon="touch" title="Demos" >}}
 - [Real-time analytics dashboard](/demos/business-intelligence)
@@ -50,5 +50,6 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 ## Learn more
 
 - [**Install Materialize**](./install) to try it out.
-- [**What is Materialize?**](./overview/what-is-materialize) to learn more about what Materialize does and how it works.
+- [**What is Materialize?**](./overview/what-is-materialize) to learn
+more about what Materialize does and how it works.
 - [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.

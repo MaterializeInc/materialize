@@ -1,23 +1,28 @@
 ---
 title: "Create Deployments"
 description: "Create Materialize Cloud deployments."
-menu:
-  main:
-    parent: "cloud"
-    weight: 3
+hidden: true
 ---
 
 {{< cloud-notice >}}
 
-On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**.
+This functionality is only available to [administrators](../administer-workspace).
 
-Materialize creates the deployment and assigns it a name and hostname. This should only take about a minute and a half.
+1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**.
 
-The free version of Materialize Cloud allows two deployments. If you need more, please [contact us](../support).
+    The default deployment size is **Extra small** (XS). In the trial period, you can go up to **Small** (S) deployment sizes. If you know in advance the resources your use case requires, [reach out to us](../support) to discuss the details.
+
+1. Click **Create**.
+
+    The deployment will be ready to accept connections as soon as the status message reads `HEALTHY`.
+
+**Trial period**
+
+The trial period lasts for **30 days** or **until you max out the available resources** (whichever comes first), and is limited to **two** deployments. Once the trial expires, your account and deployments may be deleted within 14 days, unless you have upgraded to an enterprise account.
 
 ## Related topics
 
-* [Connect to Materialize](../connect-to-materialize-cloud)
-* [Destroy Deployments](../destroy-deployments)
+* [Connect to Materialize](../connect-to-cloud)
+* [Delete Deployments](../delete-deployments)
 * [Materialize Cloud Account Limits](../account-limits)
 * [Upgrade Deployments](../upgrade-deployments)

@@ -31,7 +31,7 @@ main();
 
 ### Materialize Cloud Instance
 
-Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-materialize-cloud/) dialog and specify the path to each file in the [`ssl` property](https://node-postgres.com/features/ssl). Replace `MY_INSTANCE_ID` in the `connectionString` property with your Materialize Cloud instance ID.
+Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file in the [`ssl` property](https://node-postgres.com/features/ssl). Replace `MY_INSTANCE_ID` in the `connectionString` property with your Materialize Cloud instance ID.
 
 ```js
 const { Client } = require('pg');

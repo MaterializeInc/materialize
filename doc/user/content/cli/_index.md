@@ -347,7 +347,7 @@ We record the following data:
 * Count of sinks, sources, and views by type
 
 We use this data to guide our product roadmap. Unless you are using [Materialize
-Cloud](/cloud/what-is-materialize-cloud/), we do not and cannot correlate this
+Cloud](/cloud/), we do not and cannot correlate this
 data to your identity.
 
 ### Dataflow tuning

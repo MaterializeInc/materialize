@@ -51,6 +51,12 @@ name="Cloud"
 weight = 60
 
 [[menu.main]]
+name = "What Is Materialize Cloud?"
+parent = "cloud"
+url = "/cloud/"
+weight = 1
+
+[[menu.main]]
 identifier = "connections"
 name = "Connect"
 weight = 50
