@@ -263,7 +263,10 @@ format_spec ::=
         'CONFLUENT SCHEMA REGISTRY' url with_options? |
         'SCHEMA' 'FILE' schema_file_path
         ) |
-  'PROTOBUF MESSAGE' message_name 'USING' 'SCHEMA' 'FILE' schema_file_path |
+  'PROTOBUF' (
+        'MESSAGE' message_name 'USING' 'SCHEMA' 'FILE' schema_file_path? |
+        'USING CONFLUENT SCHEMA REGISTRY' url with_options
+        ) |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
