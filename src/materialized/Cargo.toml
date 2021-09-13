@@ -126,7 +126,7 @@ flate2 = "1.0.21"
 hex = "0.4.3"
 hex-literal = "0.3.3"
 reqwest = { version = "0.11.4", features = ["blocking"] }
-sha2 = "0.9.6"
+sha2 = "0.9.8"
 tar = "0.4.37"
 walkdir = "2.3.2"
 
