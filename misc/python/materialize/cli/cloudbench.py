@@ -22,8 +22,7 @@ import time
 from datetime import timedelta
 from typing import List, NamedTuple, Optional, cast
 
-from materialize import git, scratch, util
-from materialize import spawn
+from materialize import git, scratch, spawn, util
 from materialize.cli.scratch import (
     DEFAULT_INSTPROF_NAME,
     DEFAULT_SG_ID,
@@ -42,7 +41,7 @@ from materialize.scratch import (
 # This is duplicated with the one in cli/scratch.
 # TODO - factor it out.
 def main() -> None:
-    os.chdir(os.environ['MZ_ROOT'])
+    os.chdir(os.environ["MZ_ROOT"])
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
     for cmd_name, configure, run in [
@@ -174,12 +173,12 @@ def start(ns: argparse.Namespace) -> None:
     script_args = " ".join((shlex.quote(arg) for arg in bench_script[1:]))
 
     # zip up the `misc` repository, for shipment to the remote machine
-    os.chdir('misc/python')
+    os.chdir("misc/python")
     spawn.runv(["python3", "./setup.py", "sdist"])
 
     with open("./dist/materialize-0.0.0.tar.gz", "rb") as f:
         pkg_data = f.read()
-    os.chdir(os.environ['MZ_ROOT'])
+    os.chdir(os.environ["MZ_ROOT"])
 
     mz_launch_script = f"""echo {shlex.quote(base64.b64encode(pkg_data).decode('utf-8'))} | base64 -d > mz.tar.gz
 python3 -m venv /tmp/mzenv >&2 
@@ -219,6 +218,7 @@ echo $? > ~/bench_exit_code
                 ami="ami-0b29b6e62f2343b46",
                 tags={},
                 size_gb=1000,
+                checkout=False,
             ),
         ]
     else:
