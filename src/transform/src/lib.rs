@@ -328,7 +328,6 @@ impl Optimizer {
                     Box::new(crate::map_lifting::LiteralLifting::default()),
                 ],
             }),
-            Box::new(crate::reduction_pushdown::ReductionPushdown),
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.

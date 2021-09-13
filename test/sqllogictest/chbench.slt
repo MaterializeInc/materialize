@@ -1583,28 +1583,24 @@ ORDER BY substr(c_state, 1, 1)
 | ArrangeBy (#0, #1, #2)
 
 %5 =
-| Get %3 (l1)
+| Get materialize.public.order (u16)
+| Filter !(isnull(#3))
+| Project (#1..#3)
+| Distinct group=(#2, #0, #1)
 | ArrangeBy (#0, #1, #2)
 
 %6 =
-| Get materialize.public.order (u16)
-| ArrangeBy (#2, #1, #3)
-
-%7 =
-| Join %5 %6 (= #0 #6) (= #1 #4) (= #2 #5)
-| | implementation = DeltaQuery
-| |   delta %5 %6.(#2, #1, #3)
-| |   delta %6 %5.(#0, #1, #2)
+| Join %3 %5 (= #0 #3) (= #1 #4) (= #2 #5)
+| | implementation = Differential %3 %5.(#0, #1, #2)
 | Project (#0..#2)
-| Distinct group=(#0, #1, #2)
 | Negate
 
-%8 =
-| Union %7 %3
+%7 =
+| Union %6 %3
 
-%9 =
-| Join %4 %8 (= #0 #5) (= #1 #6) (= #2 #7)
-| | implementation = Differential %8 %4.(#0, #1, #2)
+%8 =
+| Join %4 %7 (= #0 #5) (= #1 #6) (= #2 #7)
+| | implementation = Differential %7 %4.(#0, #1, #2)
 | Project (#3, #4)
 | Reduce group=(substr(chartostr(#0), 1, 1))
 | | agg count(true)
