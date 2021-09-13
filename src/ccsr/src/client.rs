@@ -13,7 +13,7 @@ use std::fmt;
 use reqwest::{Method, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::config::Auth;
 
@@ -75,17 +75,36 @@ impl Client {
         subject: &str,
         schema: &str,
         schema_type: SchemaType,
+        references: &[SchemaReference],
     ) -> Result<i32, PublishError> {
-        let is_avro = matches!(schema_type, SchemaType::Avro);
         let req = self.make_request(Method::POST, format!("/subjects/{}/versions", subject));
-        let req = if is_avro {
-            // Old versions of CSR default to Avro, and don't accept `schemaType` (erroring when they see it).
-            req.json(&json!({ "schema": schema }))
-        } else {
-            req.json(&json!({ "schema": schema, "schemaType":  &schema_type }))
-        };
+        let req = req.json(&self.build_publish_schema_body(schema, schema_type, references));
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
+    }
+
+    /// Builds the minimal body for a `publish_schema` request to try to support
+    /// older CSR versions.
+    pub fn build_publish_schema_body(
+        &self,
+        schema: &str,
+        schema_type: SchemaType,
+        references: &[SchemaReference],
+    ) -> Value {
+        // Old versions of CSR default to Avro, and don't accept `schemaType` (erroring when they see it).
+        let is_avro = matches!(schema_type, SchemaType::Avro);
+        // `references` param was added in CSR version 5.4.0. Skip adding to body if empty.
+        let has_references = !references.is_empty();
+
+        if is_avro && !has_references {
+            json!({ "schema": schema })
+        } else if is_avro && has_references {
+            json!({ "schema": schema, "references": references })
+        } else if !is_avro && !has_references {
+            json!({ "schema": schema, "schemaType":  &schema_type })
+        } else {
+            json!({ "schema": schema, "schemaType":  &schema_type, "references": references })
+        }
     }
 
     /// Lists the names of all subjects that the schema registry is aware of.
@@ -144,6 +163,17 @@ pub struct Schema {
     pub id: i32,
     /// The raw text representing the schema.
     pub raw: String,
+}
+
+/// Required for publishing schemas that contain references.
+///
+/// For more information, check out:
+/// <https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#referenced-schemas>
+#[derive(Debug, Serialize)]
+pub struct SchemaReference {
+    pub name: String,
+    pub subject: String,
+    pub version: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,7 +288,7 @@ pub enum PublishError {
     /// requirements.
     IncompatibleSchema,
     /// The provided schema was invalid.
-    InvalidSchema,
+    InvalidSchema { message: String },
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
     /// An internal server error occured.
@@ -271,7 +301,7 @@ impl From<UnhandledError> for PublishError {
             UnhandledError::Transport(err) => PublishError::Transport(err),
             UnhandledError::Api { code, message } => match code {
                 409 => PublishError::IncompatibleSchema,
-                42201 => PublishError::InvalidSchema,
+                42201 => PublishError::InvalidSchema { message },
                 _ => PublishError::Server { code, message },
             },
         }
@@ -282,7 +312,7 @@ impl Error for PublishError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             PublishError::IncompatibleSchema
-            | PublishError::InvalidSchema
+            | PublishError::InvalidSchema { .. }
             | PublishError::Server { .. } => None,
             PublishError::Transport(err) => Some(err),
         }
@@ -298,7 +328,7 @@ impl fmt::Display for PublishError {
                 f,
                 "schema being registered is incompatible with an earlier schema"
             ),
-            PublishError::InvalidSchema => write!(f, "input schema is an invalid avro schema"),
+            PublishError::InvalidSchema { message } => write!(f, "{}", message),
             PublishError::Transport(err) => write!(f, "transport: {}", err),
             PublishError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)

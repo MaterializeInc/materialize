@@ -24,6 +24,7 @@ use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use log::{debug, error};
 use regex::Regex;
 use reqwest::Url;
@@ -1143,10 +1144,31 @@ fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
         .with_context(|| format!("creating out directory {}", out_dir.display()))?;
 
     // Compile schema string.
-    protoc::Protoc::new()
+    match protoc::Protoc::new()
         .include(&include_dir)
         .input(file.path())
-        .compile_into(&out_dir)?;
+        .compile_into(&out_dir)
+    {
+        Ok(()) => (),
+        Err(e) => {
+            lazy_static! {
+                static ref MISSING_IMPORT_ERROR: Regex = Regex::new(
+                    r#"protobuf path \\"(?P<reference>.*)\\" is not found in import path"#
+                )
+                .expect("known valid");
+            }
+
+            // Make protobuf import errors more user-friendly.
+            if let Some(captures) = MISSING_IMPORT_ERROR.captures(&e.to_string()) {
+                bail!(
+                    "unsupported protobuf schema reference {}",
+                    &captures["reference"]
+                )
+            } else {
+                return Err(e);
+            }
+        }
+    }
 
     Ok(fs::read(out_dir.join("file_descriptor_set.pb").as_path())?)
 }

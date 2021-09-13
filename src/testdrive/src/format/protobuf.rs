@@ -22,6 +22,7 @@ pub enum MessageType {
     Measurement,
     SimpleId,
     NestedOuter,
+    Imported,
 }
 
 impl FromStr for MessageType {
@@ -34,6 +35,7 @@ impl FromStr for MessageType {
             "measurement" => Ok(MessageType::Measurement),
             "simpleid" => Ok(MessageType::SimpleId),
             "nested" => Ok(MessageType::NestedOuter),
+            "imported" => Ok(MessageType::Imported),
             _ => Err(format!(
                 "testdrive: unknown built-in protobuf message: {}",
                 s
