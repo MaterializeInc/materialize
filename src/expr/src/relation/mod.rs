@@ -416,7 +416,7 @@ impl MirRelationExpr {
                     } = predicate
                     {
                         if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull,
+                            func: UnaryFunc::IsNull(scalar_func::IsNull),
                             expr,
                         } = &**expr
                         {

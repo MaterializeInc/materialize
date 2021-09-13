@@ -248,14 +248,14 @@ impl PredicatePushdown {
                                         pred_not_translated.push(
                                             expr1
                                                 .clone()
-                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                 .call_unary(UnaryFunc::Not(func::Not)),
                                         );
                                     } else if expr2.typ(&input_type).nullable {
                                         pred_not_translated.push(
                                             expr2
                                                 .clone()
-                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                 .call_unary(UnaryFunc::Not(func::Not)),
                                         );
                                     }
@@ -534,7 +534,7 @@ impl PredicatePushdown {
                             for constant in runtime_constants.iter() {
                                 let pred = if constant.is_literal_null() {
                                     MirScalarExpr::CallUnary {
-                                        func: expr::UnaryFunc::IsNull,
+                                        func: expr::UnaryFunc::IsNull(func::IsNull),
                                         expr: Box::new(expr.clone()),
                                     }
                                 } else {
@@ -666,11 +666,11 @@ impl PredicatePushdown {
                                         expr2: Box::new(MirScalarExpr::CallBinary {
                                             func: BinaryFunc::And,
                                             expr1: Box::new(MirScalarExpr::CallUnary {
-                                                func: UnaryFunc::IsNull,
+                                                func: UnaryFunc::IsNull(func::IsNull),
                                                 expr: Box::new(expr2.clone()),
                                             }),
                                             expr2: Box::new(MirScalarExpr::CallUnary {
-                                                func: UnaryFunc::IsNull,
+                                                func: UnaryFunc::IsNull(func::IsNull),
                                                 expr: Box::new(expr1.clone()),
                                             }),
                                         }),
@@ -806,8 +806,12 @@ impl PredicatePushdown {
                 expr2: eqinnerexpr2,
             } = &mut **expr2
             {
-                let isnull1 = eqinnerexpr1.clone().call_unary(UnaryFunc::IsNull);
-                let isnull2 = eqinnerexpr2.clone().call_unary(UnaryFunc::IsNull);
+                let isnull1 = eqinnerexpr1
+                    .clone()
+                    .call_unary(UnaryFunc::IsNull(func::IsNull));
+                let isnull2 = eqinnerexpr2
+                    .clone()
+                    .call_unary(UnaryFunc::IsNull(func::IsNull));
                 let both_null = isnull1.call_binary(isnull2, BinaryFunc::And);
 
                 if Self::extract_reduced_conjunction_terms(both_null, relation_type)

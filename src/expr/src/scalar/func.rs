@@ -1675,26 +1675,6 @@ fn rescale_numeric<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> 
     Ok(Datum::Numeric(d))
 }
 
-fn pg_column_size<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let sz = repr::datum_size(&a);
-    let sz = match i32::try_from(sz) {
-        Ok(sz) => sz,
-        Err(_) => return Err(EvalError::Int32OutOfRange),
-    };
-    Ok(Datum::Int32(sz))
-}
-
-/// Return the number of bytes this Record (List) datum would use if packed as
-/// a Row.
-fn mz_row_size<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let sz = repr::row_size(a.unwrap_list().iter());
-    let sz = match i32::try_from(sz) {
-        Ok(sz) => sz,
-        Err(_) => return Err(EvalError::Int32OutOfRange),
-    };
-    Ok(Datum::Int32(sz))
-}
-
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -3379,10 +3359,6 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
-fn is_null<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a == Datum::Null)
-}
-
 // This trait will eventualy be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
 trait UnaryFuncTrait {
     fn eval<'a>(
@@ -3402,7 +3378,7 @@ trait UnaryFuncTrait {
 )]
 pub enum UnaryFunc {
     Not(Not),
-    IsNull,
+    IsNull(IsNull),
     NegInt16,
     NegInt32,
     NegInt64,
@@ -3617,8 +3593,8 @@ pub enum UnaryFunc {
     ExpNumeric,
     Sleep,
     RescaleNumeric(u8),
-    PgColumnSize,
-    MzRowSize,
+    PgColumnSize(PgColumnSize),
+    MzRowSize(MzRowSize),
 }
 
 derive_unary!(
@@ -3640,7 +3616,10 @@ derive_unary!(
     CastFloat64ToInt32,
     CastFloat64ToInt64,
     CastFloat32ToFloat64,
-    CastFloat64ToFloat32
+    CastFloat64ToFloat32,
+    PgColumnSize,
+    MzRowSize,
+    IsNull
 );
 
 impl UnaryFunc {
@@ -3675,8 +3654,10 @@ impl UnaryFunc {
             | CastFloat64ToInt32(_)
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
+            | PgColumnSize(_)
+            | MzRowSize(_)
+            | IsNull(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            IsNull => Ok(is_null(a)),
             NegInt16 => Ok(neg_int16(a)),
             NegInt32 => Ok(neg_int32(a)),
             NegInt64 => Ok(neg_int64(a)),
@@ -3839,8 +3820,6 @@ impl UnaryFunc {
             ExpNumeric => exp_numeric(a),
             Sleep => sleep(a),
             RescaleNumeric(scale) => rescale_numeric(a, *scale),
-            PgColumnSize => pg_column_size(a),
-            MzRowSize => mz_row_size(a),
         }
     }
 
@@ -3872,8 +3851,10 @@ impl UnaryFunc {
             | CastFloat64ToInt32(_)
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
+            | PgColumnSize(_)
+            | MzRowSize(_)
+            | IsNull(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            IsNull => ScalarType::Bool.nullable(nullable),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => ScalarType::Int32.nullable(nullable),
@@ -4029,8 +4010,6 @@ impl UnaryFunc {
                 scale: Some(*scale),
             })
             .nullable(nullable),
-            PgColumnSize => ScalarType::Int32.nullable(nullable),
-            MzRowSize => ScalarType::Int32.nullable(nullable),
 
             AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
             | NegNumeric | RoundNumeric | SqrtNumeric => {
@@ -4043,9 +4022,8 @@ impl UnaryFunc {
     pub fn propagates_nulls_manual(&self) -> bool {
         match self {
             UnaryFunc::Not(_) => unreachable!(),
-            UnaryFunc::IsNull
             // converts null to jsonnull
-            | UnaryFunc::CastJsonbOrNullToJsonb => false,
+            UnaryFunc::CastJsonbOrNullToJsonb => false,
             _ => true,
         }
     }
@@ -4073,6 +4051,9 @@ impl UnaryFunc {
             | CastFloat64ToInt32(_)
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
+            | PgColumnSize(_)
+            | MzRowSize(_)
+            | IsNull(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4085,9 +4066,10 @@ impl UnaryFunc {
             RegexpMatch(_) => true,
             // Returns null on non-array input
             JsonbArrayLength => true,
+
             // Returns null on infinite input
             ToTimestamp => true,
-            IsNull => false,
+
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
             IsRegexpMatch(_)
@@ -4165,7 +4147,6 @@ impl UnaryFunc {
             NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => false,
             Log10 | Ln | Exp | Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot | SqrtFloat64
             | CbrtFloat64 => false,
-            PgColumnSize | MzRowSize => false,
             AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
             | NegNumeric | RoundNumeric | SqrtNumeric | RescaleNumeric(_) => false,
         }
@@ -4196,6 +4177,9 @@ impl UnaryFunc {
             | CastFloat64ToInt32(_)
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
+            | PgColumnSize(_)
+            | MzRowSize(_)
+            | IsNull(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInt16
             | NegInt32
@@ -4245,8 +4229,10 @@ impl UnaryFunc {
             | CastFloat64ToInt32(_)
             | CastFloat64ToInt64(_)
             | CastFloat64ToFloat32(_)
+            | PgColumnSize(_)
+            | MzRowSize(_)
+            | IsNull(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            IsNull => f.write_str("isnull"),
             NegInt16 => f.write_str("-"),
             NegInt32 => f.write_str("-"),
             NegInt64 => f.write_str("-"),
@@ -4396,8 +4382,6 @@ impl UnaryFunc {
             Exp => f.write_str("expf64"),
             Sleep => f.write_str("mz_sleep"),
             RescaleNumeric(..) => f.write_str("rescale_numeric"),
-            PgColumnSize => f.write_str("pg_column_size"),
-            MzRowSize => f.write_str("mz_row_size"),
         }
     }
 }

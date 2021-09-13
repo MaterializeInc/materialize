@@ -14,7 +14,7 @@
 //! can be simplified to a map operation.
 
 use crate::TransformArgs;
-use expr::{MirRelationExpr, MirScalarExpr};
+use expr::{func, MirRelationExpr, MirScalarExpr};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
@@ -57,13 +57,19 @@ impl ReduceElision {
                         // Count is one if non-null, and zero if null.
                         AggregateFunc::Count => {
                             let column_type = a.typ(&input_type);
-                            a.expr.clone().call_unary(UnaryFunc::IsNull).if_then_else(
-                                MirScalarExpr::literal_ok(
-                                    Datum::Int64(0),
-                                    column_type.scalar_type.clone(),
-                                ),
-                                MirScalarExpr::literal_ok(Datum::Int64(1), column_type.scalar_type),
-                            )
+                            a.expr
+                                .clone()
+                                .call_unary(UnaryFunc::IsNull(func::IsNull))
+                                .if_then_else(
+                                    MirScalarExpr::literal_ok(
+                                        Datum::Int64(0),
+                                        column_type.scalar_type.clone(),
+                                    ),
+                                    MirScalarExpr::literal_ok(
+                                        Datum::Int64(1),
+                                        column_type.scalar_type,
+                                    ),
+                                )
                         }
 
                         // SumInt16 takes Int16s as input, but outputs Int64s.

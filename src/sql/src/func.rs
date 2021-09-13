@@ -1506,7 +1506,7 @@ lazy_static! {
                 }), 1215;
             },
             "pg_column_size" => Scalar {
-                params!(Any) => UnaryFunc::PgColumnSize, 1269;
+                params!(Any) => UnaryFunc::PgColumnSize(func::PgColumnSize), 1269;
             },
             "mz_row_size" => Scalar {
                 params!(Any) => Operation::unary(|ecx, e| {
@@ -1514,7 +1514,7 @@ lazy_static! {
                     if !matches!(s, ScalarType::Record{..}) {
                         bail!("mz_row_size requires a record type");
                     }
-                    Ok(e.call_unary(UnaryFunc::MzRowSize))
+                    Ok(e.call_unary(UnaryFunc::MzRowSize(func::MzRowSize)))
                 }), oid::FUNC_MZ_ROW_SIZE;
             },
             "pg_encoding_to_char" => Scalar {

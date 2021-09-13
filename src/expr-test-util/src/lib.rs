@@ -14,7 +14,7 @@ use proc_macro2::TokenTree;
 use serde_json::Value;
 
 use expr::explain::ViewExplanation;
-use expr::func::Not;
+use expr::func::{IsNull, Not};
 use expr::*;
 use lowertest::*;
 use ore::result::ResultExt;
@@ -37,7 +37,14 @@ gen_reflect_info_func!(
         JoinImplementation,
         EvalError,
     ],
-    [AggregateExpr, ColumnOrder, ColumnType, RelationType, Not]
+    [
+        AggregateExpr,
+        ColumnOrder,
+        ColumnType,
+        RelationType,
+        IsNull,
+        Not
+    ]
 );
 
 lazy_static! {

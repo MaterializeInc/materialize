@@ -244,7 +244,7 @@ fn plan_dbz_flatten_one(
             predicates: vec![HirScalarExpr::CallUnary {
                 func: UnaryFunc::Not(func::Not),
                 expr: Box::new(HirScalarExpr::CallUnary {
-                    func: UnaryFunc::IsNull,
+                    func: UnaryFunc::IsNull(func::IsNull),
                     expr: Box::new(HirScalarExpr::Column(ColumnRef {
                         level: 0,
                         column: bare_column,
