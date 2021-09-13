@@ -31,12 +31,13 @@ use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
 use std::fmt::Formatter;
-use std::io::Read;
 use std::ops::AddAssign;
+use std::sync::Arc;
 
 use anyhow::anyhow;
-use flate2::read::MultiGzDecoder;
-use futures::FutureExt;
+use async_compression::tokio::bufread::GzipDecoder;
+use futures::lock::Mutex;
+use futures::{FutureExt, StreamExt};
 use globset::GlobMatcher;
 use rusoto_core::RusotoError;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
@@ -45,9 +46,10 @@ use rusoto_sqs::{
     DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
 };
 use timely::scheduling::SyncActivator;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
+use tokio_util::io::ReaderStream;
 
 use aws_util::aws;
 use dataflow_types::{
@@ -74,6 +76,8 @@ type Out = MessagePayload;
 struct InternalMessage {
     record: Out,
 }
+/// Size of data chunks we send to dataflow
+const CHUNK_SIZE: usize = 4096;
 
 /// Information required to load data from S3
 pub struct S3SourceReader {
@@ -195,32 +199,42 @@ async fn download_objects_task(
                 let (tx, activator, client, msg_ref, sid) =
                     (&tx, &activator, &client, &msg, &source_id);
 
+                let skip_bytes = Arc::new(Mutex::new(0));
                 let result = Retry::default()
-                    .retry(|state| async move {
-                        let (download_status, update) = download_object(
-                            tx,
-                            &activator,
-                            &client,
-                            &msg_ref.bucket,
-                            &msg_ref.key,
-                            compression,
-                            sid,
-                        )
-                        .await;
+                    .retry(move |state| {
+                        let skip_bytes = Arc::clone(&skip_bytes);
+                        async move {
+                            let mut skip_bytes = skip_bytes.lock().await;
+                            let (download_status, update) = download_object(
+                                tx,
+                                &activator,
+                                &client,
+                                &msg_ref.bucket,
+                                &msg_ref.key,
+                                compression,
+                                sid,
+                                *skip_bytes
+                            )
+                                .await;
 
-                        match download_status {
-                            // Exit retry loop
-                            DownloadStatus::Ok => Ok((DownloadStatus::Ok, update)),
-                            DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
-                            // Retriable error
-                            DownloadStatus::Retry(e) => {
-                                log::debug!(
-                                    "Failed to download object: {}/{} (attempt {})",
-                                    msg_ref.bucket,
-                                    msg_ref.key,
-                                    state.i
-                                );
-                                Err((DownloadStatus::Retry(e), update))
+                            match download_status {
+                                // Exit retry loop
+                                DownloadStatus::Ok => Ok((DownloadStatus::Ok, update)),
+                                DownloadStatus::Empty => Ok((DownloadStatus::Empty, update)),
+                                DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
+                                // Retriable error
+                                DownloadStatus::Retry { bytes_read, err } => {
+                                    log::debug!(
+                                        "Failed to download object: {}/{} attempt={} skip={} read={}",
+                                        msg_ref.bucket,
+                                        msg_ref.key,
+                                        state.i,
+                                        *skip_bytes,
+                                        bytes_read,
+                                    );
+                                    *skip_bytes += bytes_read;
+                                    Err((DownloadStatus::Retry { bytes_read, err }, update))
+                                }
                             }
                         }
                     })
@@ -236,8 +250,8 @@ async fn download_objects_task(
                 // Extract and handle status updates
                 match status {
                     // Retry making it out of the retry loop means retries failed
-                    DownloadStatus::Retry(e) => {
-                        if tx.send(Err(e)).await.is_err() {
+                    DownloadStatus::Retry { err, .. } => {
+                        if tx.send(Err(err)).await.is_err() {
                             rx.close();
                             break;
                         };
@@ -249,6 +263,15 @@ async fn download_objects_task(
                     DownloadStatus::Ok => {
                         log::debug!(
                             "source_id={} successfully downloaded {}/{}",
+                            source_id,
+                            msg.bucket,
+                            msg.key
+                        );
+                        bucket_info.keys.insert(msg.key);
+                    }
+                    DownloadStatus::Empty => {
+                        log::trace!(
+                            "source_id={} empty object {}/{}",
                             source_id,
                             msg.bucket,
                             msg.key
@@ -669,7 +692,14 @@ struct DownloadMetricUpdate {
 #[derive(Debug)]
 enum DownloadStatus {
     Ok,
-    Retry(S3Error),
+    /// Object has nothing in it
+    Empty,
+    /// Recoverable download error
+    Retry {
+        bytes_read: usize,
+        err: S3Error,
+    },
+    /// Unable to send data to the `get_next_message` function, dataflow has shut down
     SendFailed,
 }
 
@@ -677,7 +707,6 @@ enum DownloadStatus {
 enum S3Error {
     BodyMissing(String),
     ClientConstructionFailed(anyhow::Error),
-    Decode(String, std::io::Error),
     GetObjectError {
         bucket: String,
         key: String,
@@ -693,9 +722,6 @@ impl std::fmt::Display for S3Error {
         match self {
             S3Error::BodyMissing(body) => write!(f, "Get object response had no body: {}", body),
             S3Error::ClientConstructionFailed(err) => err.fmt(f),
-            S3Error::Decode(key, err) => {
-                write!(f, "Failed to decode object {} using gzip: {}", key, err)
-            }
             S3Error::GetObjectError { bucket, key, err } => {
                 write!(f, "getting object {}/{}: {}", bucket, key, err)
             }
@@ -716,11 +742,18 @@ async fn download_object(
     key: &str,
     compression: Compression,
     source_id: &str,
+    skip_bytes: usize,
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
+    let range = if skip_bytes > 0 {
+        Some(format!("bytes={}-", skip_bytes))
+    } else {
+        None
+    };
     let obj = match client
         .get_object(GetObjectRequest {
             bucket: bucket.to_string(),
             key: key.to_string(),
+            range,
             ..Default::default()
         })
         .await
@@ -728,11 +761,14 @@ async fn download_object(
         Ok(obj) => obj,
         Err(err) => {
             return (
-                DownloadStatus::Retry(S3Error::GetObjectError {
-                    bucket: bucket.to_string(),
-                    key: key.to_string(),
-                    err,
-                }),
+                DownloadStatus::Retry {
+                    bytes_read: 0,
+                    err: S3Error::GetObjectError {
+                        bucket: bucket.to_string(),
+                        key: key.to_string(),
+                        err,
+                    },
+                },
                 None,
             );
         }
@@ -752,88 +788,106 @@ async fn download_object(
     };
 
     if let Some(body) = obj.body {
-        let mut reader = body.into_async_read();
-        // unwrap is safe because content length is not allowed to be negative
-        let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
-
-        match reader.read_to_end(&mut buf).await {
-            Ok(_) => {
-                if buf.is_empty() {
-                    return (DownloadStatus::Ok, None);
-                }
-
-                let bytes_read = buf.len() as u64;
-
-                let buf = match compression {
-                    Compression::None => buf,
-                    Compression::Gzip => {
-                        let mut decoded = Vec::new();
-                        let mut decoder = MultiGzDecoder::new(&*buf);
-                        match decoder.read_to_end(&mut decoded) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                let metrics = DownloadMetricUpdate {
-                                    bytes: bytes_read,
-                                    messages: 0,
-                                };
-                                return (
-                                    DownloadStatus::Retry(S3Error::Decode(key.into(), e)),
-                                    Some(metrics),
-                                );
-                            }
-                        }
-                        decoded
-                    }
-                };
-
-                let mut messages = 0;
-                let mut chunk_idx = 0;
-                const CHUNK_SIZE: usize = 4096;
-                let mut download_status = DownloadStatus::Ok;
-                while chunk_idx < buf.len() {
-                    let chunk_bound = std::cmp::min(chunk_idx + CHUNK_SIZE, buf.len());
-                    let chunk = (&buf[chunk_idx..chunk_bound]).to_vec();
-                    let sent = tx.send(Ok(InternalMessage {
-                        record: MessagePayload::Data(chunk),
-                    }));
-                    if sent.await.is_err() {
-                        log::debug!("source_id={} unable to send chunk to dataflow", source_id);
-                        download_status = DownloadStatus::SendFailed;
-                        break;
-                    } else {
-                        messages += 1;
-                    }
-                    chunk_idx = chunk_bound;
-                }
-                log::trace!("sent {} chunks to dataflow", messages);
-                if !matches!(download_status, DownloadStatus::SendFailed) {
-                    let sent = tx.send(Ok(InternalMessage {
-                        record: MessagePayload::EOF,
-                    }));
-                    if sent.await.is_err() {
-                        log::debug!("source_id={} unable to send EOF to dataflow", source_id);
-                        download_status = DownloadStatus::SendFailed;
-                    }
-                };
-                activator.activate().expect("s3 reader activation failed");
-                (
-                    download_status,
-                    Some(DownloadMetricUpdate {
-                        bytes: bytes_read,
-                        messages,
-                    }),
-                )
+        // don't do anything if there is nothing to download
+        if let Some(length) = obj.content_length {
+            if length == 0 {
+                return (DownloadStatus::Empty, None);
             }
-            Err(e) => {
-                return (DownloadStatus::Retry(S3Error::Read(e)), None);
+        };
+
+        let mut reader = BufReader::new(body.into_async_read());
+        let (mut download_status, metric_update) = match compression {
+            Compression::None => read_object_chunked(source_id, &mut reader, tx).await,
+            Compression::Gzip => {
+                let mut decoder = GzipDecoder::new(reader);
+                read_object_chunked(source_id, &mut decoder, tx).await
             }
-        }
+        };
+
+        log::debug!(
+            "source_id={} {}/{} download_status={:?}",
+            source_id,
+            bucket,
+            key,
+            download_status
+        );
+
+        if matches!(download_status, DownloadStatus::Ok) {
+            let sent = tx.send(Ok(InternalMessage {
+                record: MessagePayload::EOF,
+            }));
+            if sent.await.is_err() {
+                download_status = DownloadStatus::SendFailed;
+            }
+        };
+        activator.activate().expect("s3 reader activation failed");
+        (download_status, metric_update)
     } else {
         return (
-            DownloadStatus::Retry(S3Error::BodyMissing(key.into())),
+            DownloadStatus::Retry {
+                bytes_read: 0,
+                err: S3Error::BodyMissing(key.into()),
+            },
             None,
         );
     }
+}
+
+async fn read_object_chunked<R>(
+    source_id: &str,
+    reader: &mut R,
+    tx: &Sender<Result<InternalMessage, S3Error>>,
+) -> (DownloadStatus, Option<DownloadMetricUpdate>)
+where
+    R: Unpin + AsyncRead,
+{
+    let (mut bytes_read, mut chunks) = (0, 0);
+
+    let mut stream = ReaderStream::with_capacity(reader, CHUNK_SIZE);
+
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(chunk) => {
+                bytes_read += chunk.len();
+                chunks += 1;
+                if tx
+                    .send(Ok(InternalMessage {
+                        record: MessagePayload::Data(chunk.to_vec()),
+                    }))
+                    .await
+                    .is_err()
+                {
+                    return (DownloadStatus::SendFailed, None);
+                }
+            }
+            Err(err) => {
+                return (
+                    DownloadStatus::Retry {
+                        bytes_read,
+                        err: S3Error::Read(err),
+                    },
+                    Some(DownloadMetricUpdate {
+                        bytes: bytes_read.try_into().expect("usize <= u64"),
+                        messages: chunks,
+                    }),
+                )
+            }
+        }
+    }
+
+    log::trace!(
+        "source_id={} finished sending object to dataflow chunks={} bytes={}",
+        source_id,
+        chunks,
+        bytes_read
+    );
+    return (
+        DownloadStatus::Ok,
+        Some(DownloadMetricUpdate {
+            bytes: bytes_read.try_into().expect("usize <= u64"),
+            messages: chunks,
+        }),
+    );
 }
 
 impl SourceReader for S3SourceReader {
@@ -949,7 +1003,6 @@ impl SourceReader for S3SourceReader {
                     }
                     S3Error::RetryFailed => Err(anyhow!("Retry failed")),
                     S3Error::BodyMissing(_)
-                    | S3Error::Decode(_, _)
                     | S3Error::GetObjectError { .. }
                     | S3Error::ListObjectsFailed(_)
                     | S3Error::Read(_) => Ok(NextMessage::Pending),
@@ -964,8 +1017,8 @@ impl SourceReader for S3SourceReader {
 impl Drop for S3SourceReader {
     fn drop(&mut self) {
         log::debug!("source_id={} Dropping S3SourceReader", self.id);
-        if let Err(e) = self.dataflow_status.send(DataflowStatus::Stopped) {
-            log::warn!("unable to send shutdown update: {}", e);
+        if self.dataflow_status.send(DataflowStatus::Stopped).is_err() {
+            log::debug!("source_id={} already shutdown", self.id);
         };
     }
 }

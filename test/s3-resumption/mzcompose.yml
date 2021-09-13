@@ -151,4 +151,4 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG_FILTER
+    - MZ_LOG_FILTER=${MZ_LOG_FILTER:-dataflow::source::s3=trace,info}
