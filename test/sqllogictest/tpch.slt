@@ -353,12 +353,15 @@ GROUP BY
 ORDER BY
     o_orderpriority
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.orders (u18)
 | ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.lineitem (u21)
+| Filter (#11 < #12)
+| Project (#0)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %2 =
@@ -366,16 +369,6 @@ ORDER BY
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
-| Filter (#20 < #21), (datetots(#4) < 1993-10-01 00:00:00), (#4 >= 1993-07-01)
-| Project (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%3 =
-| Join %0 %2 (= #0 #9)
-| | implementation = DeltaQuery
-| |   delta %0 %2.(#0)
-| |   delta %2 %0.(#0)
 | Filter (datetots(#4) < 1993-10-01 00:00:00), (#4 >= 1993-07-01)
 | Project (#5)
 | Reduce group=(#0)
@@ -1789,28 +1782,23 @@ ORDER BY
 | ArrangeBy (#0)
 
 %5 =
-| Get %3 (l1)
+| Get materialize.public.orders (u18)
+| Project (#1)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %6 =
-| Get materialize.public.orders (u18)
-| ArrangeBy (#1)
-
-%7 =
-| Join %5 %6 (= #0 #2)
-| | implementation = DeltaQuery
-| |   delta %5 %6.(#1)
-| |   delta %6 %5.(#0)
+| Join %3 %5 (= #0 #1)
+| | implementation = Differential %3 %5.(#0)
 | Project (#0)
-| Distinct group=(#0)
 | Negate
 
-%8 =
-| Union %7 %3
+%7 =
+| Union %6 %3
 
-%9 =
-| Join %4 %8 (= #0 #3)
-| | implementation = Differential %8 %4.(#0)
+%8 =
+| Join %4 %7 (= #0 #3)
+| | implementation = Differential %7 %4.(#0)
 | Project (#1, #2)
 | Reduce group=(substr(chartostr(#0), 1, 2))
 | | agg count(true)
