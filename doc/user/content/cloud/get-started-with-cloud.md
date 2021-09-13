@@ -8,7 +8,7 @@ menu:
 aliases:
   - materialize-cloud-quickstart
   - materialize-cloud-get-started
-  - /docs/cloud/quickstart
+  - quickstart
 ---
 
 {{< cloud-notice >}}
