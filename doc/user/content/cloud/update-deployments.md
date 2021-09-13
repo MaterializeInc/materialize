@@ -14,4 +14,4 @@ If you haven't upgraded a deployment to the latest version within 14 days, we wi
 ## Related topics
 
 * [Create Deployments](../create-deployments)
-* [Destroy Deployments](../delete-deployments)
+* [Destroy Deployments](../destroy-deployments)

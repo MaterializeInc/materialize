@@ -23,6 +23,6 @@ The trial period lasts for **30 days** or **until you max out the available reso
 ## Related topics
 
 * [Connect to Materialize](../connect-to-cloud)
-* [Delete Deployments](../delete-deployments)
+* [Delete Deployments](../destroy-deployments)
 * [Materialize Cloud Account Limits](../account-limits)
 * [Upgrade Deployments](../upgrade-deployments)
