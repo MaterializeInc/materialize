@@ -167,7 +167,6 @@ def main() -> None:
     kgen_launcher = Thread(target=generate_data, args=[ns.records])
     kgen_launcher.start()
     kgen_launcher.join()
-    os.dup2(old_stdout, 1)
 
     cid_path = Path("docker.cid")
     cid = ""
@@ -176,6 +175,7 @@ def main() -> None:
     while not cid:
         with open(cid_path) as f:
             cid = f.read()
+    os.dup2(old_stdout, 1)
     os.remove(cid_path)
     conn = psycopg2.connect("host=localhost port=6875 user=materialize")
     conn.autocommit = True
