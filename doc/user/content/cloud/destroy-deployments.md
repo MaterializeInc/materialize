@@ -1,8 +1,8 @@
 ---
-title: "Delete Deployments"
-description: "Delete Materialize Cloud deployments."
+title: "Destroy Deployments"
+description: "Destroy Materialize Cloud deployments."
 aliases:
-  - destroy-deployments
+  - delete-deployments
 ---
 
 {{< cloud-notice >}}
