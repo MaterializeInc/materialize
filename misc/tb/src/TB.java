@@ -106,7 +106,9 @@ public class TB {
         String type = ns.getString("type");
         if (type.equals("mysql")) {
             config.setProperty("connector.class", "io.debezium.connector.mysql.MySqlConnector");
-            config.setProperty("name", "mysql-connector");;
+            config.setProperty("name", "mysql-connector");
+            // Required for MySQL8 if connection does not use SSL.
+            config.setProperty("database.allowPublicKeyRetrieval", "true");
         } else if (type.equals("postgres")) {
             config.setProperty("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
             config.setProperty("name", "postgres-connector");

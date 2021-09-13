@@ -19,17 +19,17 @@ use std::rc::Rc;
 use anyhow::bail;
 use lazy_static::lazy_static;
 
+use expr::func;
 use expr::VariadicFunc;
 use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
 use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
-use crate::func;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
-    let invoke = func::sql_impl(expr);
+    let invoke = crate::func::sql_impl(expr);
     CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
         let mut out = invoke(&ecx.qcx, vec![from_type.clone()]).ok()?;
         Some(move |e| {
@@ -178,7 +178,7 @@ lazy_static! {
             (Float32, Int16) => Assignment: CastFloat32ToInt16,
             (Float32, Int32) => Assignment: CastFloat32ToInt32,
             (Float32, Int64) => Assignment: CastFloat32ToInt64,
-            (Float32, Float64) => Implicit: CastFloat32ToFloat64,
+            (Float32, Float64) => Implicit: CastFloat32ToFloat64(func::CastFloat32ToFloat64),
             (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(s)))

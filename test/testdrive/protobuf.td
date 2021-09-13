@@ -105,10 +105,101 @@ message SimpleId {
   string id = 1;
 }
 
-$ kafka-ingest topic=tester format=protobuf message=simpleid schema=${schema} publish=true
+$ kafka-ingest topic=tester format=protobuf schema=${schema} message=simpleid publish=true
 {"id": "a"}
+{"id": "b"}
 
-! CREATE MATERIALIZED SOURCE tester
+> CREATE MATERIALIZED SOURCE tester
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tester-${testdrive.seed}'
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-confluent schema registry protobuf schemas not yet supported
+
+> SHOW COLUMNS FROM tester
+id         true   text
+mz_offset  false  bigint
+
+> SELECT * FROM tester
+id   mz_offset
+------------
+a    1
+b    2
+
+$ kafka-create-topic topic=nested-proto
+
+$ set schema
+syntax = "proto3";
+
+enum Binary {
+  ZERO = 0;
+  ONE = 1;
+}
+
+message NestedOuter {
+  double double = 1;
+  float float = 2;
+  int32 int32 = 3;
+  int64 int64 = 4;
+  sint32 sint32 = 5;
+  sint64 sint64 = 6;
+  sfixed32 sfixed32 = 7;
+  sfixed64 sfixed64 = 8;
+  bool bool = 9;
+  string string = 10;
+  bytes bytes = 11;
+
+  Binary binary = 12;
+
+  repeated NestedInner nested = 13;
+}
+
+message NestedInner {
+  double double = 1;
+  float float = 2;
+  int32 int32 = 3;
+  int64 int64 = 4;
+  sint32 sint32 = 5;
+  sint64 sint64 = 6;
+  sfixed32 sfixed32 = 7;
+  sfixed64 sfixed64 = 8;
+  bool bool = 9;
+  string string = 10;
+
+  Binary binary = 11;
+}
+
+
+$ kafka-ingest topic=nested-proto format=protobuf schema=${schema} message=nested publish=true
+{"double": 1.1, "float": 2.2, "int32": -100, "int64": 200, "sint32": 987234, "sint64": 129387981723, "sfixed32": 123, "sfixed64": 567, "bool": true, "string": "hey", "bytes": [102, 111, 111], "binary": "ZERO", "nested": []}
+
+> CREATE MATERIALIZED SOURCE nested_proto_inline FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nested-proto-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.NestedOuter' USING SCHEMA '${testdrive.protobuf-descriptors}'
+
+> SELECT * FROM nested_proto_inline
+double  float   int32   int64   sint32   sint64         sfixed32   sfixed64   bool   string   bytes   binary   nested   mz_offset
+---------------------------------------------------------------------------------------------------------------------------
+1.1     2.2     -100    200     987234   129387981723   123        567        true   "hey"    "foo"   "ZERO"   []       1
+
+> CREATE MATERIALIZED SOURCE nested_proto
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nested-proto-${testdrive.seed}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> SHOW COLUMNS FROM nested_proto
+double    true "double precision"
+float     true real
+int32     true integer
+int64     true bigint
+sint32    true integer
+sint64    true bigint
+sfixed32  true integer
+sfixed64  true bigint
+bool      true boolean
+string    true text
+bytes     true bytea
+binary    true text
+nested    true jsonb
+mz_offset false  bigint
+
+> SELECT * FROM nested_proto
+double  float   int32   int64   sint32   sint64         sfixed32   sfixed64   bool   string   bytes   binary   nested   mz_offset
+--------------------------------------------------------------------------------------------------------------------------
+1.1     2.2     -100    200     987234   129387981723   123        567        true   "hey"    "foo"   "ZERO"  []       1

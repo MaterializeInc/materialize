@@ -119,10 +119,13 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 | ArrangeBy (#0)
 
 %2 =
-| Join %0 %1 %1 (= #2 (#0 + 1)) (= #4 (#0 + #2))
-| | implementation = Differential %0 %1.(#0) %1.(#0)
-| | demand = (#0, #3, #5)
-| Project (#0, #3, #5)
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Join %2 %1 %1 (= #1 (#0 + 1)) (= #3 (#0 + #1))
+| | implementation = Differential %2 %1.(#0) %1.(#0)
+| Project (#0, #2, #4)
 
 EOF
 
@@ -145,54 +148,55 @@ WHERE l1.la IN (
     )
 )
 ----
-%0 =
+%0 = Let l0 =
 | Get materialize.public.l (u1)
+| Project (#0)
+
+%1 =
+| Get %0 (l0)
 | Distinct group=(#0)
 | ArrangeBy ()
 
-%1 =
-| Get materialize.public.l (u1)
-
-%2 = Let l0 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| | demand = (#0, #1)
+%2 = Let l1 =
+| Join %1 %0
+| | implementation = Differential %0 %1.()
 
 %3 =
 | Get materialize.public.l (u1)
 
 %4 =
-| Get %2 (l0)
+| Get %2 (l1)
 | Filter (#0 = (#1 + 1))
 
 %5 =
-| Get %2 (l0)
+| Get %2 (l1)
 | Filter !(isnull(#1))
-| Distinct group=(#1)
+| Project (#1)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %6 =
 | Get materialize.public.l (u1)
 | Filter !(isnull(#0))
+| Project (#0)
 
 %7 =
 | Join %5 %6 (= #0 (#1 + 1))
 | | implementation = Differential %6 %5.(#0)
-| | demand = (#0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %8 =
-| Join %4 %7 (= #1 #3)
+| Join %4 %7 (= #1 #2)
 | | implementation = Differential %4 %7.(#0)
-| | demand = (#0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %9 =
 | Join %3 %8 (= #0 #2)
 | | implementation = Differential %3 %8.(#0)
-| | demand = (#0, #1)
 | Project (#0, #1)
 
 EOF
@@ -319,22 +323,22 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1, #3)
+| Project (#0, #1, #3)
 
 %3 =
 | Get materialize.public.l (u1)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #0 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.l (u1)
@@ -345,7 +349,7 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 
 %8 =
 | Get %2 (l0)
-| Project (#0, #1, #0, #3)
+| Project (#0, #1, #0, #2)
 
 %9 =
 | Union %7 %8
@@ -368,22 +372,22 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1, #3)
+| Project (#0, #1, #3)
 
 %3 =
 | Get materialize.public.r (u3)
 
 %4 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
 %5 =
 | Join %3 %4 (= #0 #2)
 | | implementation = Differential %3 %4.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.r (u3)
@@ -395,7 +399,7 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 
 %8 =
 | Get %2 (l0)
-| Project (#0, #1, #0, #3)
+| Project (#0, #1, #0, #2)
 
 %9 =
 | Union %7 %8
@@ -418,10 +422,11 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 %2 = Let l0 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1, #3)
+| Project (#0, #1, #3)
 
 %3 = Let l1 =
 | Get %2 (l0)
+| Project (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
@@ -431,9 +436,8 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 %5 =
 | Join %4 %3 (= #0 #2)
 | | implementation = Differential %4 %3.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %6 =
 | Get materialize.public.r (u3)
@@ -449,9 +453,8 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 %9 =
 | Join %8 %3 (= #0 #2)
 | | implementation = Differential %8 %3.(#0)
-| | demand = (#0, #1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %10 =
 | Get materialize.public.l (u1)
@@ -462,7 +465,7 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 
 %12 =
 | Get %2 (l0)
-| Project (#0, #1, #0, #3)
+| Project (#0, #1, #0, #2)
 
 %13 =
 | Union %7 %11 %12
@@ -495,7 +498,6 @@ EXPLAIN PLAN FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 %2 =
 | Join %0 %1 (= (#0 % 2) (#2 % 2))
 | | implementation = Differential %1 %0.((#0 % 2))
-| | demand = (#0..#3)
 
 EOF
 
@@ -551,11 +553,12 @@ EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id
 
 %3 =
 | Get %0 (l0)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %4 =
 | Union %2 %3
@@ -563,7 +566,6 @@ EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id
 %5 =
 | Join %1 %4 (= #0 #2)
 | | implementation = Differential %4 %1.(#0)
-| | demand = (#0, #1)
 | Project (#0, #1)
 
 EOF
@@ -633,7 +635,6 @@ EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#1, #3)
 | Project (#1, #3)
 
 EOF
@@ -657,7 +658,6 @@ EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra OR (ra IS NULL AND la IS 
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#1, #3)
 | Project (#1, #3)
 
 EOF
@@ -682,7 +682,6 @@ EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON (la IS NULL AND ra IS NULL) OR la
 %2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#1, #3)
 | Project (#1, #3)
 
 EOF

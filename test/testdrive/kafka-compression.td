@@ -47,23 +47,3 @@ world
 > SELECT text FROM lz4
 hello
 world
-
-$ kafka-create-topic topic=zstd compression=zstd
-
-$ kafka-ingest format=bytes topic=zstd timestamp=1
-hello
-world
-
-> CREATE MATERIALIZED SOURCE zstd
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-zstd-${testdrive.seed}'
-  FORMAT TEXT
-> SELECT text FROM zstd
-hello
-world
-
-> CREATE MATERIALIZED SOURCE zstd_fast_forwarded
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-zstd-${testdrive.seed}'
-  WITH (start_offset=1)
-  FORMAT TEXT
-> SELECT text FROM zstd_fast_forwarded
-world

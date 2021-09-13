@@ -189,6 +189,7 @@ mod tests {
         // TODO(justin): is there a way to just extract these from the Optimizer list of
         // transforms?
         match name {
+            "CanonicalizeMfp" => Ok(Box::new(transform::canonicalize_mfp::CanonicalizeMfp)),
             "ColumnKnowledge" => Ok(Box::new(transform::column_knowledge::ColumnKnowledge)),
             "Demand" => Ok(Box::new(transform::demand::Demand)),
             "FilterFusion" => Ok(Box::new(transform::fusion::filter::Filter)),
@@ -205,7 +206,13 @@ mod tests {
                 transform::projection_extraction::ProjectionExtraction,
             )),
             "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
+            "ProjectionPushdown" => {
+                Ok(Box::new(transform::projection_pushdown::ProjectionPushdown))
+            }
             "ReductionPushdown" => Ok(Box::new(transform::reduction_pushdown::ReductionPushdown)),
+            "UnionBranchCancellation" => {
+                Ok(Box::new(transform::union_cancel::UnionBranchCancellation))
+            }
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

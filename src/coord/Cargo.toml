@@ -21,7 +21,7 @@ derivative = "2.2.0"
 dec = "0.4.5"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
-futures = "0.3.16"
+futures = "0.3.17"
 interchange = { path = "../interchange" }
 itertools = "0.10.1"
 lazy_static = "1.4.0"
@@ -46,7 +46,7 @@ sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.10.1"
+tokio = "1.11.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-stream = "0.1.7"
 transform = { path = "../transform" }

@@ -373,7 +373,7 @@ mod tests {
     use crate::indexed::encoding::Id;
     use crate::indexed::metrics::Metrics;
     use crate::indexed::SnapshotExt;
-    use crate::mem::MemBlob;
+    use crate::mem::MemRegistry;
 
     use super::*;
 
@@ -459,10 +459,7 @@ mod tests {
 
     #[test]
     fn trace_compact() -> Result<(), Error> {
-        let mut blob = BlobCache::new(
-            Metrics::default(),
-            MemBlob::new_no_reentrance("trace_compact"),
-        );
+        let mut blob = BlobCache::new(Metrics::default(), MemRegistry::new().blob_no_reentrance()?);
         let mut t = Trace::new(TraceMeta::new(Id(0)));
         t.update_seal(10);
 

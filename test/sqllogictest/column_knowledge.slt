@@ -50,7 +50,6 @@ EXPLAIN SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -76,12 +75,11 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 %3 = Let l1 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
-| | demand = (#0..#3)
 
 %4 =
 | Get %3 (l1)
-| Negate
 | Project (#0, #1)
+| Negate
 
 %5 =
 | Union %4 %0
@@ -106,17 +104,18 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 %2 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
+| Project (#1)
 
 %3 = Let l1 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
-| | demand = (#0, #1, #3)
 
 %4 =
 | Get %3 (l1)
+| Project (#1)
 | Negate
 | Map 123
-| Project (#4, #1)
+| Project (#1, #0)
 
 %5 =
 | Get %0 (l0)
@@ -125,11 +124,10 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 
 %6 =
 | Union %4 %5
-| Map null, null
+| Map null
 
 %7 =
 | Union %3 %6
-| Project (#0, #1, #3)
 
 EOF
 
@@ -148,7 +146,6 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -174,7 +171,6 @@ EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 =
 %3 =
 | Join %0 %1 %2
 | | implementation = Differential %2 %0.() %1.()
-| | demand = (#0..#5)
 
 EOF
 
@@ -186,18 +182,18 @@ EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1
 %0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
+| Project ()
 | ArrangeBy ()
 
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
+| Project ()
 
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = ()
 | Map 123
-| Project (#4)
 
 EOF
 
@@ -211,6 +207,7 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 
 %0 = Let l0 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
+| Project ()
 
 %1 = Let l1 =
 | Get %0 (l0)
@@ -219,40 +216,27 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 
 %2 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
+| Project (#0)
 
 %3 = Let l2 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
-| | demand = (#2)
 
 %4 =
 | Get %3 (l2)
-| Map 123
-| Project (#4, #2)
+| Project ()
+| Negate
 
 %5 =
-| Get %3 (l2)
-| Negate
-| Map 123
-| Project (#4)
-
-%6 =
-| Get %0 (l0)
-| Map 123
-| Project (#2)
-
-%7 =
-| Union %5 %6
+| Union %4 %0
 | Map null
 
-%8 =
-| Union %4 %7
+%6 =
+| Union %3 %5
 
-%9 =
-| Join %1 %8
-| | implementation = Differential %8 %1.()
-| | demand = (#3)
-| Project (#3)
+%7 =
+| Join %1 %6
+| | implementation = Differential %6 %1.()
 
 EOF
 
@@ -266,11 +250,12 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 
 %1 =
 | Get materialize.public.t1 (u1)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
+| Project ()
 | Map (err: more than one record produced in subquery)
-| Project (#1)
 
 %2 = Let l0 =
 | Union %0 %1
@@ -278,10 +263,12 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 %3 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
+| Project ()
 | ArrangeBy ()
 
 %4 =
 | Get %2 (l0)
+| Project ()
 | Distinct group=()
 | Negate
 
@@ -298,9 +285,8 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 %8 =
 | Join %3 %7
 | | implementation = Differential %7 %3.()
-| | demand = (#2)
-| Map (#2 = 123)
-| Project (#3)
+| Map (#0 = 123)
+| Project (#1)
 
 EOF
 
@@ -315,12 +301,11 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
+| Project ()
 
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0, #1)
-| Project (#0, #1)
 
 EOF
 
@@ -335,17 +320,17 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
+| Project ()
 | ArrangeBy ()
 
 %2 =
 | Get materialize.public.t3 (u5)
 | Filter (#0 = 123)
+| Project ()
 
 %3 =
 | Join %0 %1 %2
 | | implementation = Differential %2 %0.() %1.()
-| | demand = (#0, #1)
-| Project (#0, #1)
 
 EOF
 
@@ -360,12 +345,11 @@ EXPLAIN SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
+| Project (#0)
 
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#2)
-| Project (#0..#2)
 
 EOF
 
@@ -379,15 +363,15 @@ EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
-| Project (#0)
+| Project ()
 
 %2 =
 | Get materialize.public.t2 (u3)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#1)
+| Project ()
 
 %3 =
 | Union %1 %2
@@ -395,8 +379,6 @@ EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 %4 =
 | Join %0 %3
 | | implementation = Differential %3 %0.()
-| | demand = (#0, #1)
-| Project (#0, #1)
 
 EOF
 
@@ -411,15 +393,15 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
-| Project (#0)
+| Project ()
 
 %2 =
 | Get materialize.public.t2 (u3)
+| Project ()
 | Reduce group=()
 | | agg count(true)
 | Filter (err: more than one record produced in subquery), (#0 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#1)
+| Project ()
 
 %3 =
 | Union %1 %2
@@ -427,8 +409,6 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 %4 =
 | Join %0 %3
 | | implementation = Differential %3 %0.()
-| | demand = (#0, #1)
-| Project (#0, #1)
 
 EOF
 
@@ -453,32 +433,9 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
-
-%1 =
-| Get %0 (l0)
-| Project (#0, #1, #0, #1)
-
-%2 =
-| Get %0 (l0)
-| Negate
-| Map 123, 234
-| Project (#2, #3)
-
-%3 =
-| Get %0 (l0)
-| Map 123, 234
-| Project (#2, #3)
-
-%4 =
-| Union %2 %3
-| Map null, null
-
-%5 =
-| Union %1 %4
-| Project (#0, #1)
 
 EOF
 
@@ -489,32 +446,9 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
-
-%1 =
-| Get %0 (l0)
-| Project (#0, #1, #0, #1)
-
-%2 =
-| Get %0 (l0)
-| Negate
-| Map 123, 234
-| Project (#2, #3)
-
-%3 =
-| Get %0 (l0)
-| Map 123, 234
-| Project (#2, #3)
-
-%4 =
-| Union %2 %3
-| Map null, null
-
-%5 =
-| Union %1 %4
-| Project (#0, #1)
 
 EOF
 
@@ -536,17 +470,18 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 2
 %2 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123), (#0 = 234)
+| Project (#1)
 
 %3 = Let l1 =
 | Join %1 %2
 | | implementation = Differential %2 %1.()
-| | demand = (#0, #1, #3)
 
 %4 =
 | Get %3 (l1)
+| Project (#1)
 | Negate
 | Map 123
-| Project (#4, #1)
+| Project (#1, #0)
 
 %5 =
 | Get %0 (l0)
@@ -555,11 +490,10 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 2
 
 %6 =
 | Union %4 %5
-| Map null, null
+| Map null
 
 %7 =
 | Union %3 %6
-| Project (#0, #1, #3)
 
 EOF
 
@@ -580,7 +514,6 @@ EXPLAIN SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -605,7 +538,6 @@ explain select * from int_table, double_table where int_table.int_col = double_t
 %2 =
 | Join %0 %1 (= #1 i32tof64(#0))
 | | implementation = Differential %0 %1.(#0)
-| | demand = (#0, #1)
 | Filter !(isnull(#1))
 
 EOF

@@ -76,9 +76,14 @@ impl Client {
         schema: &str,
         schema_type: SchemaType,
     ) -> Result<i32, PublishError> {
-        let req = self
-            .make_request(Method::POST, format!("/subjects/{}/versions", subject))
-            .json(&json!({ "schema": schema, "schemaType":  &schema_type }));
+        let is_avro = matches!(schema_type, SchemaType::Avro);
+        let req = self.make_request(Method::POST, format!("/subjects/{}/versions", subject));
+        let req = if is_avro {
+            // Old versions of CSR default to Avro, and don't accept `schemaType` (erroring when they see it).
+            req.json(&json!({ "schema": schema }))
+        } else {
+            req.json(&json!({ "schema": schema, "schemaType":  &schema_type }))
+        };
         let res: PublishResponse = send_request(req).await?;
         Ok(res.id)
     }

@@ -26,13 +26,13 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Consolidate;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use repr::{Diff, Row};
 use serde::{Deserialize, Serialize};
 
+use crate::arrangement::manager::RowSpine;
 use crate::render::context::CollectionBundle;
 use crate::render::context::{ArrangementFlavor, Context};
 
@@ -101,7 +101,7 @@ fn threshold_arrangement<G, T, R, L>(
     arrangement: &R,
     name: &str,
     logic: L,
-) -> Arranged<G, TraceAgent<OrdValSpine<Row, Row, G::Timestamp, Diff>>>
+) -> Arranged<G, TraceAgent<RowSpine<Row, Row, G::Timestamp, Diff>>>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,

@@ -11,7 +11,7 @@ bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
 env_logger = "0.9.0"
-futures = "0.3.16"
+futures = "0.3.17"
 futures-channel = "0.3.16"
 hex = "0.4.3"
 log = "0.4.13"
@@ -21,9 +21,9 @@ protobuf = "2.23.0"
 rand = "0.8.4"
 rand_distr = "0.4.1"
 repr = { path = "../../src/repr" }
-structopt = "0.3.22"
+structopt = "0.3.23"
 test-util = { path = "../../test/test-util" }
-tokio = "1.10.1"
+tokio = "1.11.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 uuid = { version = "0.8.2", features = ["v4"] }
 

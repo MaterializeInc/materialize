@@ -28,7 +28,7 @@ use std::iter;
 use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use expr::LocalId;
+use expr::{func as expr_func, LocalId};
 use itertools::Itertools;
 use ore::str::StrExt;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
@@ -1788,10 +1788,18 @@ fn plan_table_function(
     };
     let args = match args {
         FunctionArgs::Star => bail!("{} does not accept * as an argument", name),
-        FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
+        FunctionArgs::Args { args, order_by } => {
+            if !order_by.is_empty() {
+                bail!(
+                    "ORDER BY specified, but {} is not an aggregate function",
+                    name
+                );
+            }
+            plan_exprs(ecx, args)?
+        }
     };
     let name = normalize::unresolved_object_name(name.clone())?;
-    let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
+    let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, vec![])?;
     let call = HirRelationExpr::CallTable {
         func: tf.func,
         exprs: tf.exprs,
@@ -2363,7 +2371,7 @@ pub fn plan_expr<'a>(
         Expr::Not { expr } => {
             let ecx = ecx.with_name("NOT argument");
             HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not,
+                func: UnaryFunc::Not(expr_func::Not),
                 expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, &ScalarType::Bool)?),
             }
             .into()
@@ -2699,6 +2707,19 @@ fn plan_aggregate(
     ecx: &ExprContext,
     sql_func: &Function<Aug>,
 ) -> Result<AggregateExpr, anyhow::Error> {
+    // Normal aggregate functions, like `sum`, expect as input a single expression
+    // which yields the datum to aggregate. Order sensitive aggregate functions,
+    // like `jsonb_agg`, are special, and instead expect a Record whose first
+    // element yields the datum to aggregate and whose successive elements yield
+    // keys to order by. This expectation is hard coded within the implementation
+    // of each of the order-sensitive aggregates. The specification of how many
+    // order by keys to consider, and in what order, is passed via the `order_by`
+    // field on the `AggregateFunc` variant.
+
+    // While all aggregate functions support the ORDER BY syntax, it's a no-op for
+    // most, so explicitly drop it if the function doesn't care about order. This
+    // prevents the projection into Record below from triggering on unspported
+    // functions.
     let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
         Func::Aggregate(impls) => impls,
         _ => unreachable!("plan_aggregate called on non-aggregate function,"),
@@ -2718,17 +2739,34 @@ fn plan_aggregate(
     // rules to all aggregates, not just `count`, since we may one day support
     // user-defined aggregates, including user-defined aggregates that take no
     // parameters.
-    let args = match &sql_func.args {
-        FunctionArgs::Star => vec![],
-        FunctionArgs::Args(args) if args.is_empty() => {
-            bail!(
-                "{}(*) must be used to call a parameterless aggregate function",
-                name
-            );
+    let (args, order_by) = match &sql_func.args {
+        FunctionArgs::Star => (vec![], vec![]),
+        FunctionArgs::Args { args, order_by } => {
+            if args.is_empty() {
+                bail!(
+                    "{}(*) must be used to call a parameterless aggregate function",
+                    name
+                );
+            }
+            let args = plan_exprs(ecx, args)?;
+            (args, order_by.clone())
         }
-        FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
-    let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
+    let (order_by_exprs, map_exprs) = plan_order_by_exprs(ecx, &order_by)?;
+
+    // order_by contains column indexes for the containing scope, and we need to
+    // map them into the expected Record format (first element is the aggregate
+    // datum, further elements are the keys to order by).
+    let func_order_by = order_by_exprs
+        .iter()
+        .enumerate()
+        .map(|(idx, co)| ColumnOrder {
+            column: idx,
+            desc: co.desc,
+        })
+        .collect();
+    let (mut expr, func) =
+        func::select_impl(ecx, FuncSpec::Func(&name), impls, args, func_order_by)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -2762,6 +2800,27 @@ fn plan_aggregate(
             3720,
             "aggregate functions that refer exclusively to outer columns"
         );
+    }
+    // If a function supports ORDER BY (even if there was no ORDER BY specified),
+    // map the needed expressions into the aggregate datum.
+    if func.is_order_sensitive() {
+        if !map_exprs.is_empty() {
+            bail!("unsupported: ORDER BY must specify unmodified columns");
+        }
+        let field_names = iter::repeat(ColumnName::from(""))
+            .take(1 + order_by_exprs.len())
+            .collect();
+        let mut exprs = vec![expr];
+        exprs.extend(order_by_exprs.into_iter().map(|co| {
+            HirScalarExpr::Column(ColumnRef {
+                column: co.column,
+                level: 0,
+            })
+        }));
+        expr = HirScalarExpr::CallVariadic {
+            func: VariadicFunc::RecordCreate { field_names },
+            exprs,
+        };
     }
 
     Ok(AggregateExpr {
@@ -2840,7 +2899,7 @@ fn plan_op(
         None => plan_exprs(ecx, &[expr1])?,
         Some(expr2) => plan_exprs(ecx, &[expr1, expr2])?,
     };
-    func::select_impl(ecx, FuncSpec::Op(op), impls, args)
+    func::select_impl(ecx, FuncSpec::Op(op), impls, args, vec![])
 }
 
 fn plan_function<'a>(
@@ -2891,11 +2950,19 @@ fn plan_function<'a>(
 
     let args = match &args {
         FunctionArgs::Star => bail!("* argument is invalid with non-aggregate function {}", name),
-        FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
+        FunctionArgs::Args { args, order_by } => {
+            if !order_by.is_empty() {
+                bail!(
+                    "ORDER BY specified, but {} is not an aggregate function",
+                    name
+                );
+            }
+            plan_exprs(ecx, args)?
+        }
     };
 
     let name = normalize::unresolved_object_name(name.clone())?;
-    func::select_impl(ecx, FuncSpec::Func(&name), impls, args)
+    func::select_impl(ecx, FuncSpec::Func(&name), impls, args, vec![])
 }
 
 /// Resolves the name to a set of function implementations.
@@ -2916,7 +2983,15 @@ pub fn resolve_func(
     // message.
     let cexprs = match args {
         sql_parser::ast::FunctionArgs::Star => vec![],
-        sql_parser::ast::FunctionArgs::Args(args) => plan_exprs(ecx, &args)?,
+        sql_parser::ast::FunctionArgs::Args { args, order_by } => {
+            if !order_by.is_empty() {
+                bail!(
+                    "ORDER BY specified, but {} is not an aggregate function",
+                    name
+                );
+            }
+            plan_exprs(ecx, &args)?
+        }
     };
 
     let types: Vec<_> = cexprs
@@ -2946,7 +3021,7 @@ fn plan_is_null_expr<'a>(
     };
     if not {
         expr = HirScalarExpr::CallUnary {
-            func: UnaryFunc::Not,
+            func: UnaryFunc::Not(expr_func::Not),
             expr: Box::new(expr),
         }
     }
@@ -3236,6 +3311,7 @@ impl<'a, 'ast> Visit<'ast, Aug> for AggregateFuncVisitor<'a, 'ast> {
             let old_within_aggregate = self.within_aggregate;
             self.within_aggregate = true;
             self.visit_function_args(args);
+
             self.within_aggregate = old_within_aggregate;
             return;
         }

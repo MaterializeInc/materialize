@@ -19,7 +19,18 @@ use expr::{Id, LocalId, MirRelationExpr};
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
-pub struct InlineLet;
+pub struct InlineLet {
+    /// If `true`, inline MFPs around a Get.
+    ///
+    /// We want this value to be true for the InlineLet call that comes right
+    /// before [crate::join_implementation::JoinImplementation] runs because
+    /// [crate::join_implementation::JoinImplementation] cannot lift MFPs
+    /// through a Let.
+    ///
+    /// Generally, though, we prefer to be more conservative in our inlining in
+    /// order to be able to better detect CSEs.
+    pub inline_mfp: bool,
+}
 
 impl crate::Transform for InlineLet {
     fn transform(
@@ -57,7 +68,13 @@ impl InlineLet {
                 }
                 _ => (),
             });
-            let inlinable = match &**value {
+
+            let stripped_value = if self.inline_mfp {
+                expr::MapFilterProject::extract_non_errors_from_expr(&**value).1
+            } else {
+                &**value
+            };
+            let inlinable = match stripped_value {
                 MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
                 _ => num_gets <= 1,
             };

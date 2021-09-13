@@ -59,6 +59,7 @@ where
 
 lazy_static! {
     static ref VER_0_9_1: Version = Version::new(0, 9, 1);
+    static ref VER_0_9_2: Version = Version::new(0, 9, 2);
 }
 
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
@@ -79,7 +80,9 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
         ast_insert_default_confluent_wire_format_0_7_1(stmt)?;
         if catalog_version < *VER_0_9_1 {
             ast_rewrite_pg_catalog_char_to_text_0_9_1(stmt)?;
-            ast_rewrite_csv_column_aliases_0_9_1(stmt)?;
+        }
+        if catalog_version < *VER_0_9_2 {
+            ast_rewrite_csv_column_aliases_0_9_2(stmt)?;
         }
         Ok(())
     })?;
@@ -468,7 +471,7 @@ fn ast_rewrite_type_references_0_6_1(
 /// This provides us an explicit check that we are reading the correct columns, and also allows us
 /// to in the future correctly loosen the semantics of our column aliases syntax to not exactly
 /// match the number of columns in a source.
-fn ast_rewrite_csv_column_aliases_0_9_1(
+fn ast_rewrite_csv_column_aliases_0_9_2(
     stmt: &mut sql::ast::Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     let (connector, col_names, columns, delimiter) =

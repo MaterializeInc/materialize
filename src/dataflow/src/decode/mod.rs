@@ -305,9 +305,14 @@ impl DataDecoder {
                 result
             }
             DataDecoderInner::DelimitedBytes { format, .. } => {
-                let data = *bytes;
-                *bytes = &[][..];
-                format.decode(data, upstream_coord, push_metadata)
+                let data = std::mem::take(bytes);
+                // If we hit EOF with no bytes left in the buffer it means the file had a trailing
+                // \n character that can be ignored. Otherwise, we decode the final bytes as normal
+                if data.is_empty() {
+                    Ok(None)
+                } else {
+                    format.decode(data, upstream_coord, push_metadata)
+                }
             }
             _ => Ok(None),
         }
@@ -374,7 +379,7 @@ fn get_decoder(
                     message_name,
                 }) => PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(
                     &descriptors,
-                    &message_name,
+                    message_name,
                 )),
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Text => PreDelimitedFormat::Text,

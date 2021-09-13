@@ -15,8 +15,8 @@ bytes = "1.1.0"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
-flate2 = "1.0.20"
-futures = "0.3.16"
+flate2 = "1.0.21"
+futures = "0.3.17"
 interchange = { path = "../interchange" }
 itertools = "0.10.1"
 kafka-util = { path = "../kafka-util" }
@@ -43,19 +43,19 @@ serde = "1.0.130"
 serde-protobuf = "0.8.2"
 serde_json = "1.0.67"
 sql-parser = { path = "../sql-parser" }
-structopt = "0.3.22"
+structopt = "0.3.23"
 tempfile = "3.2.0"
 termcolor = "1.1.2"
-tiberius = "0.6.3"
-tokio = "1.10.1"
+tiberius = "0.6.4"
+tokio = "1.11.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.7"
-tokio-util = { version = "0.6.7", features = ['compat'] }
+tokio-util = { version = "0.6.8", features = ['compat'] }
 url = "2.2.2"
 uuid = "0.8.2"
 
 [dev-dependencies]
-assert_cmd = "2.0.0"
+assert_cmd = "2.0.1"
 predicates = "2.0.2"
 
 [build-dependencies]

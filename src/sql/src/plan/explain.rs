@@ -455,7 +455,7 @@ impl<'a> Explanation<'a> {
     }
 
     fn fmt_aggregate_expr(&self, f: &mut fmt::Formatter, expr: &AggregateExpr) -> fmt::Result {
-        write!(f, "{}(", expr.func.into_expr())?;
+        write!(f, "{}(", expr.func.clone().into_expr())?;
         if expr.distinct {
             write!(f, "distinct ")?;
         }

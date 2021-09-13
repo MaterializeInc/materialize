@@ -605,13 +605,13 @@ impl MirScalarExpr {
                                 (Some(Ok(Datum::False)), _) => {
                                     *e = cond
                                         .take()
-                                        .call_unary(UnaryFunc::Not)
+                                        .call_unary(UnaryFunc::Not(func::Not))
                                         .call_binary(els.take(), BinaryFunc::And);
                                 }
                                 (_, Some(Ok(Datum::True))) => {
                                     *e = cond
                                         .take()
-                                        .call_unary(UnaryFunc::Not)
+                                        .call_unary(UnaryFunc::Not(func::Not))
                                         .call_binary(then.take(), BinaryFunc::Or);
                                 }
                                 (_, Some(Ok(Datum::False))) => {
@@ -630,7 +630,7 @@ impl MirScalarExpr {
                 match e {
                     // 2) Push down not expressions
                     MirScalarExpr::CallUnary { func, expr } => {
-                        if *func == UnaryFunc::Not {
+                        if *func == UnaryFunc::Not(func::Not) {
                             match &mut **expr {
                                 MirScalarExpr::CallBinary { expr1, expr2, func } => {
                                     // Transforms `NOT(a <op> b)` to `a negate(<op>) b`
@@ -648,7 +648,7 @@ impl MirScalarExpr {
                                 // Two negates cancel each other out.
                                 MirScalarExpr::CallUnary {
                                     expr: inner_expr,
-                                    func: UnaryFunc::Not,
+                                    func: UnaryFunc::Not(func::Not),
                                 } => *e = inner_expr.take(),
                                 _ => {}
                             }
@@ -713,7 +713,7 @@ impl MirScalarExpr {
     fn demorgans(&mut self) {
         if let MirScalarExpr::CallUnary {
             expr: inner,
-            func: UnaryFunc::Not,
+            func: UnaryFunc::Not(func::Not),
         } = self
         {
             if let MirScalarExpr::CallBinary { expr1, expr2, func } = &mut **inner {
@@ -721,11 +721,11 @@ impl MirScalarExpr {
                     BinaryFunc::And => {
                         let inner0 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr1.take()),
-                            func: UnaryFunc::Not,
+                            func: UnaryFunc::Not(func::Not),
                         };
                         let inner1 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr2.take()),
-                            func: UnaryFunc::Not,
+                            func: UnaryFunc::Not(func::Not),
                         };
                         *self = MirScalarExpr::CallBinary {
                             expr1: Box::new(inner0),
@@ -736,11 +736,11 @@ impl MirScalarExpr {
                     BinaryFunc::Or => {
                         let inner0 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr1.take()),
-                            func: UnaryFunc::Not,
+                            func: UnaryFunc::Not(func::Not),
                         };
                         let inner1 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr2.take()),
-                            func: UnaryFunc::Not,
+                            func: UnaryFunc::Not(func::Not),
                         };
                         *self = MirScalarExpr::CallBinary {
                             expr1: Box::new(inner0),
@@ -985,7 +985,9 @@ impl fmt::Display for MirScalarExpr {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
+)]
 pub enum EvalError {
     DivisionByZero,
     FloatOverflow,

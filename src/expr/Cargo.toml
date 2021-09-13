@@ -21,7 +21,7 @@ md-5 = "0.9.0"
 num_enum = "0.5.4"
 num = "0.4.0"
 num-iter = "0.1.42"
-ordered-float = { version = "2.7.0", features = ["serde"] }
+ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
 pgrepr = { path = "../pgrepr" }
@@ -31,11 +31,12 @@ repr = { path = "../repr" }
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.67"
 sha-1 = "0.9.8"
-sha2 = "0.9.6"
+sha2 = "0.9.8"
 uncased = "0.9.6"
+paste = "1"
 
 [dev-dependencies]
 datadriven = "0.6.0"
 expr_test_util = { path = "../expr-test-util"}
 ore = { path = "../ore" }
-proc-macro2 = "1.0.28"
+proc-macro2 = "1.0.29"

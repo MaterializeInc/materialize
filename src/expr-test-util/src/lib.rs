@@ -14,6 +14,7 @@ use proc_macro2::TokenTree;
 use serde_json::Value;
 
 use expr::explain::ViewExplanation;
+use expr::func::Not;
 use expr::*;
 use lowertest::*;
 use ore::result::ResultExt;
@@ -33,9 +34,10 @@ gen_reflect_info_func!(
         TableFunc,
         AggregateFunc,
         MirRelationExpr,
-        JoinImplementation
+        JoinImplementation,
+        EvalError,
     ],
-    [AggregateExpr, ColumnOrder, ColumnType, RelationType]
+    [AggregateExpr, ColumnOrder, ColumnType, RelationType, Not]
 );
 
 lazy_static! {
@@ -193,12 +195,14 @@ impl ExprHumanizer for TestCatalog {
 /// Extends the test case syntax to support `MirScalarExpr`s
 ///
 /// The following variants of `MirScalarExpr` have non-standard syntax:
-/// Literal -> the syntax is `(<literal> <scalar type>)` or `<literal>`.
+/// Literal -> the syntax is `(ok <literal> <scalar type>)`, `<literal>`
+/// or (err <eval error> <scalar type>). Note that `ok` token can be omitted.
 /// If `<scalar type>` is not specified, then literals will be assigned
 /// default types:
 /// * true/false become Bool
 /// * numbers become Int64
 /// * strings become String
+/// * Bool for literal errors
 /// Column -> the syntax is `#n`, where n is the column number.
 #[derive(Default)]
 pub struct MirScalarExprDeserializeContext;
@@ -214,6 +218,50 @@ impl MirScalarExprDeserializeContext {
     }
 
     fn build_literal_if_able<I>(
+        &mut self,
+        first_arg: TokenTree,
+        rest_of_stream: &mut I,
+        rti: &ReflectedTypeInfo,
+    ) -> Result<Option<MirScalarExpr>, String>
+    where
+        I: Iterator<Item = TokenTree>,
+    {
+        match &first_arg {
+            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "ok" => {
+                // literal definition is mandatory after OK token
+                let first_arg = if let Some(first_arg) = rest_of_stream.next() {
+                    first_arg
+                } else {
+                    return Err(format!("expected literal after {:?}", i));
+                };
+                match self.build_literal_ok_if_able(first_arg, rest_of_stream) {
+                    Ok(Some(l)) => Ok(Some(l)),
+                    _ => Err(format!("expected literal after {:?}", i)),
+                }
+            }
+            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "err" => {
+                let error = deserialize(
+                    rest_of_stream,
+                    "EvalError",
+                    rti,
+                    &mut GenericTestDeserializeContext::default(),
+                )?;
+                let typ: Option<ScalarType> = deserialize_optional(
+                    rest_of_stream,
+                    "ScalarType",
+                    rti,
+                    &mut GenericTestDeserializeContext::default(),
+                )?;
+                Ok(Some(MirScalarExpr::literal(
+                    Err(error),
+                    typ.unwrap_or(ScalarType::Bool),
+                )))
+            }
+            _ => self.build_literal_ok_if_able(first_arg, rest_of_stream),
+        }
+    }
+
+    fn build_literal_ok_if_able<I>(
         &mut self,
         first_arg: TokenTree,
         rest_of_stream: &mut I,
@@ -240,7 +288,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
         first_arg: TokenTree,
         rest_of_stream: &mut I,
         type_name: &str,
-        _rti: &ReflectedTypeInfo,
+        rti: &ReflectedTypeInfo,
     ) -> Result<Option<String>, String>
     where
         I: Iterator<Item = TokenTree>,
@@ -251,7 +299,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                     Some(self.build_column(rest_of_stream.next())?)
                 }
                 TokenTree::Group(_) => None,
-                symbol => self.build_literal_if_able(symbol, rest_of_stream)?,
+                symbol => self.build_literal_if_able(symbol, rest_of_stream, rti)?,
             }
         } else {
             None
@@ -278,22 +326,34 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                     "Literal" => {
                         let column_type: ColumnType =
                             serde_json::from_value(data.as_array().unwrap()[1].clone()).unwrap();
-                        match data.as_array().unwrap()[0].as_object().unwrap().get("Ok") {
-                            Some(inner_data) => {
-                                let row: Row = serde_json::from_value(inner_data.clone()).unwrap();
-                                let result = format!(
-                                    "({} {})",
-                                    datum_to_test_spec(row.unpack_first()),
-                                    from_json(
-                                        &serde_json::to_value(&column_type.scalar_type).unwrap(),
-                                        "ScalarType",
-                                        rti,
-                                        self
-                                    )
-                                );
-                                return Some(result);
-                            }
-                            None => unreachable!("Literal errors are not supported"),
+                        let obj = data.as_array().unwrap()[0].as_object().unwrap();
+                        if let Some(inner_data) = obj.get("Ok") {
+                            let row: Row = serde_json::from_value(inner_data.clone()).unwrap();
+                            let result = format!(
+                                "({} {})",
+                                datum_to_test_spec(row.unpack_first()),
+                                from_json(
+                                    &serde_json::to_value(&column_type.scalar_type).unwrap(),
+                                    "ScalarType",
+                                    rti,
+                                    self
+                                )
+                            );
+                            return Some(result);
+                        } else if let Some(inner_data) = obj.get("Err") {
+                            let result = format!(
+                                "(err {} {})",
+                                from_json(&inner_data, "EvalError", rti, self),
+                                from_json(
+                                    &serde_json::to_value(&column_type.scalar_type).unwrap(),
+                                    "ScalarType",
+                                    rti,
+                                    self
+                                ),
+                            );
+                            return Some(result);
+                        } else {
+                            unreachable!("Literal errors are not supported");
                         }
                     }
                     _ => {}

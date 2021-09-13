@@ -513,8 +513,11 @@ impl DataEncoding {
                 descriptors,
                 message_name,
             }) => {
-                let d = decode_descriptors(descriptors)?;
-                validate_descriptors(message_name, &d)?
+                let descriptors = decode_descriptors(descriptors)?;
+                let message_name = message_name
+                    .as_ref()
+                    .unwrap_or_else(|| &descriptors.first_message_name);
+                validate_descriptors(message_name, &descriptors.descriptors)?
                     .into_iter()
                     .fold(key_desc, |desc, (name, ty)| {
                         desc.with_named_column(name.unwrap(), ty)
@@ -600,7 +603,7 @@ pub struct AvroOcfEncoding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
-    pub message_name: String,
+    pub message_name: Option<String>,
 }
 
 /// Arguments necessary to define how to decode from CSV format

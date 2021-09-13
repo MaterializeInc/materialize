@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.43"
-futures = "0.3.16"
+futures = "0.3.17"
 mz-http-proxy = { path = "../http-proxy", features = ["reqwest"] }
 native-tls = "0.2.8"
 openssl = { version = "0.10.36", features = ["vendored"] }
@@ -19,5 +19,5 @@ url = { version = "2.2.2", features = ["serde"] }
 [dev-dependencies]
 hyper = { version = "0.14.12", features = ["server"] }
 lazy_static = "1.4.0"
-tokio = { version = "1.10.1", features = ["macros"] }
+tokio = { version = "1.11.0", features = ["macros"] }
 tracing = { version = "0.1.26", features = ["log"] }

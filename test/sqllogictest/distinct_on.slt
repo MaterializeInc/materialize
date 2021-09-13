@@ -41,7 +41,8 @@ EXPLAIN SELECT DISTINCT ON (c) a FROM abc
 ----
 %0 =
 | Get materialize.public.abc (u1)
-| TopK group=(#2) order=() limit=1 offset=0
+| Project (#0, #2)
+| TopK group=(#1) order=() limit=1 offset=0
 | Project (#0)
 
 EOF

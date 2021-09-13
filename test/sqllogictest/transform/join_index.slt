@@ -41,7 +41,6 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = bar.a where foo.a =
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -69,7 +68,6 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = abs(bar.a) where mo
 %2 =
 | Join %0 %1 (= #0 abs(#2))
 | | implementation = Differential %1 %0.(#0)
-| | demand = (#0..#3)
 
 EOF
 
@@ -102,7 +100,6 @@ EXPLAIN PLAN FOR select * from (select * from foo where a = 1) filtered_foo, bar
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
 
 EOF
 
@@ -149,7 +146,6 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %1 %2.(#0) %0.(#0)
-| | demand = (#0, #5)
 | Project (#0, #5)
 
 EOF
@@ -198,7 +194,6 @@ where foo.a = bar.a
 %3 =
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %0.(#0) %1.(#0) %2.(#0)
-| | demand = (#0, #3, #5)
 | Filter !(isnull(#0)), !(isnull(#3))
 | Project (#0, #5)
 
@@ -240,7 +235,6 @@ where nullif(foo.a, 0) = -bar.a
 | | implementation = DeltaQuery
 | |   delta %0 %1.(-(#0))
 | |   delta %1 %0.(if (#0 = 0) then {null} else {#0})
-| | demand = (#0..#3)
 | Filter !(isnull(#2)), !(isnull(if (#0 = 0) then {null} else {#0}))
 | Project (#1, #3)
 
@@ -268,34 +262,33 @@ CREATE INDEX bar_idx3 on bar(a + 4);
 query T multiline
 EXPLAIN PLAN FOR
 select foo.b, bar.b, baz.b
-FROM foo, bar, baz
+FROM bar, foo, baz
 where foo.a = bar.a
   and bar.a + 4 = baz.a
 ----
 %0 =
-| Get materialize.public.foo (u1)
-| ArrangeBy (#0)
-
-%1 =
 | Get materialize.public.bar (u3)
 | ArrangeBy ((#0 + 4))
+
+%1 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.baz (u9)
 | ArrangeBy (#0)
 
 %3 =
-| Join %0 %1 %2 (= #0 #2) (= #4 (#2 + 4))
-| | implementation = Differential %2.(#0) %1.((#0 + 4)) %0.(#0)
-| | demand = (#0, #1, #3..#5)
+| Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
+| | implementation = Differential %2.(#0) %0.((#0 + 4)) %1.(#0)
 | Filter !(isnull(#0)), !(isnull(#4))
-| Project (#1, #3, #5)
+| Project (#3, #1, #5)
 
 EOF
 
 query III
 select foo.b, bar.b, baz.b
-FROM foo, bar, baz
+FROM bar, foo, baz
 where foo.a = bar.a
   and bar.a + 4 = baz.a
 ----
@@ -321,7 +314,6 @@ explain plan for select foo.b, bar.b from foo, bar, (select 1 as a) const where 
 %2 =
 | Join %0 %1 (= 1 (#0 / #2))
 | | implementation = Differential %1 %0.()
-| | demand = (#1, #3)
 | Project (#1, #3)
 
 EOF
@@ -351,7 +343,6 @@ and bar.b - foo.b = foo.a / bar.a
 %2 =
 | Join %0 %1 (= -1 (#3 - #1) (#0 / #2))
 | | implementation = Differential %1 %0.()
-| | demand = (#1, #3)
 | Project (#1, #3)
 
 EOF
@@ -364,3 +355,156 @@ and bar.b - foo.b = foo.a / bar.a
 ----
 4
 3
+
+statement ok
+DROP INDEX baz_idx
+
+# materialize#8002: it would be nice if this join used the indexes on foo(a)
+# and bar(a+4)
+
+query T multiline
+EXPLAIN PLAN FOR
+select foo.b, bar.b, baz.b
+FROM foo, bar, baz
+where foo.a = bar.a
+  and foo.a + 4 = baz.a
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter !(isnull(#0))
+| ArrangeBy ((#0 + 4))
+
+%1 =
+| Get materialize.public.bar (u3)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.baz (u9)
+| Filter !(isnull(#0))
+
+%3 =
+| Join %0 %1 %2 (= #0 #2) (= #4 (#0 + 4))
+| | implementation = Differential %2 %0.((#0 + 4)) %1.(#0)
+| Project (#1, #3, #5)
+
+EOF
+
+query III
+select foo.b, bar.b, baz.b
+FROM bar, foo, baz
+where foo.a = bar.a
+  and bar.a + 4 = baz.a
+----
+4
+NULL
+0
+2
+3
+2
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t1i1 ON t1(f1);
+
+statement ok
+CREATE INDEX t1i2 ON t1(f2, f1);
+
+# one NULL row in t1
+
+statement ok
+INSERT INTO t1 VALUES (NULL, 0);
+
+# values 1 and 2 have 2 rows each in t1
+
+statement ok
+INSERT INTO t1 VALUES (1, 1), (1, 1), (2, 2), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8);
+
+# value 9 not present in either table
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t2i1 ON t2(f1);
+
+statement ok
+CREATE INDEX i2i2 ON t2(f2, f1);
+
+# two NULL rows in t2
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0), (NULL, 0), (1, 1);
+
+# value 2 has 2 rows in t2
+statement ok
+INSERT INTO t2 VALUES (2, 2), (2, 2);
+
+# value 3 has no rows in t2
+statement ok
+INSERT INTO t2 VALUES (4, 4), (5, 5), (6, 6), (7, 7), (8, 8);
+
+query RRR
+SELECT *
+  FROM (
+        SELECT AVG(f1) + 10000 AS agg1
+          FROM t1
+       ) a1,
+       t1 a2
+ WHERE a2.f2 > a1.agg1;
+----
+
+query RR rowsort
+SELECT a2.f2, agg1
+  FROM (
+        SELECT AVG(f1)  AS agg1 FROM t1
+       ) a1 ,
+       t1 a2
+ WHERE a2.f2 < a1.agg1;
+----
+0.000
+3.900
+1.000
+3.900
+1.000
+3.900
+2.000
+3.900
+2.000
+3.900
+3.000
+3.900
+
+query
+SELECT  FROM (  SELECT  AVG ( f2  ) f2  FROM t2  )  JOIN (  SELECT a2 .f1  FROM t1  JOIN t1 a2  ON  TRUE  )  ON  TRUE  WHERE  TRUE  AND f1  = f2   ;
+----
+
+query B
+SELECT a1 .f1  FROM (  SELECT  TRUE f1  , MAX ( f1  ) f2  FROM t2  ) a1  RIGHT  JOIN (  SELECT f1  FROM t2  )  ON f2  IN (  1  , f2  )   ;
+----
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+
+query R
+SELECT f1  FROM (  SELECT  2 f1  , MIN ( f2  ) f2  FROM t1  ) a1  RIGHT  JOIN (  SELECT f2  FROM t2  )  ON f1  = a1 .f2   ;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL

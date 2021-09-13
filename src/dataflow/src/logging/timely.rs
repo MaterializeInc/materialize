@@ -23,6 +23,7 @@ use timely::dataflow::Scope;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use super::{LogVariant, TimelyLog};
+use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
@@ -409,7 +410,7 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+        use differential_dataflow::operators::arrange::arrangement::Arrange;
 
         // Restrict results by those logs that are meant to be active.
         let logs = vec![
@@ -436,7 +437,7 @@ pub fn construct<A: Allocate>(
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange_by_key()
+                    .arrange::<RowSpine<_, _, _, _>>()
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }

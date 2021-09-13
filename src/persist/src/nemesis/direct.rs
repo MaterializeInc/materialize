@@ -38,7 +38,7 @@ use crate::unreliable::UnreliableHandle;
 // without graceful shutdown) and reimplement Direct using Indexed.
 pub struct Direct {
     start_fn: Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient, Error>>,
-    persister: RuntimeClient,
+    pub persister: RuntimeClient,
     worker: Worker<Thread>,
     unreliable: UnreliableHandle,
     streams: HashMap<
@@ -282,10 +282,8 @@ mod tests {
     #[test]
     fn direct_mem() {
         let mut registry = MemRegistry::new();
-        let direct = Direct::new(move |unreliable| {
-            registry.open_unreliable("direct_mem", "direct_mem", unreliable)
-        })
-        .expect("initial start failed");
+        let direct = Direct::new(move |unreliable| registry.runtime_unreliable(unreliable))
+            .expect("initial start failed");
         nemesis::run(100, GeneratorConfig::default(), direct)
     }
 
@@ -321,10 +319,8 @@ mod tests {
             ..Default::default()
         };
         let mut registry = MemRegistry::new();
-        let direct = Direct::new(move |unreliable| {
-            registry.open_unreliable("direct_mzlike", "direct_mzlike", unreliable)
-        })
-        .expect("initial start failed");
+        let direct = Direct::new(move |unreliable| registry.runtime_unreliable(unreliable))
+            .expect("initial start failed");
         nemesis::run(100, config, direct)
     }
 }

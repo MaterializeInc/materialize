@@ -14,11 +14,13 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
+use std::fs;
+use std::io::{self, Write};
 use std::iter;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
 use globset::GlobBuilder;
 use itertools::Itertools;
@@ -34,7 +36,7 @@ use dataflow_types::{
     PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
     SourceConnector, SourceDataEncoding, SourceEnvelope, Timeline,
 };
-use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
+use expr::{func, GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, AvroSchemaGenerator, DebeziumDeduplicationStrategy};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
@@ -49,7 +51,7 @@ use crate::ast::{
     CreateRoleStatement, CreateSchemaStatement, CreateSinkConnector, CreateSinkStatement,
     CreateSourceConnector, CreateSourceKeyEnvelope, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
-    CreateViewsStatement, CsrConnector, DataType, DbzMode, DropDatabaseStatement,
+    CreateViewsStatement, CsrConnector, CsrSeed, DataType, DbzMode, DropDatabaseStatement,
     DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
     ObjectType, ProtobufSchema, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
     ViewDefinition, WithOption,
@@ -239,7 +241,7 @@ fn plan_dbz_flatten_one(
         input: Box::new(HirRelationExpr::Filter {
             input: Box::new(input),
             predicates: vec![HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not,
+                func: UnaryFunc::Not(func::Not),
                 expr: Box::new(HirScalarExpr::CallUnary {
                     func: UnaryFunc::IsNull,
                     expr: Box::new(HirScalarExpr::Column(ColumnRef {
@@ -1044,8 +1046,33 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
             }
         }
         Format::Protobuf(schema) => match schema {
-            ProtobufSchema::Csr { .. } => {
-                bail_unsupported!("confluent schema registry protobuf schemas");
+            ProtobufSchema::Csr {
+                csr_connector: CsrConnector { seed, .. },
+            } => {
+                if let Some(CsrSeed {
+                    key_schema,
+                    value_schema,
+                }) = seed
+                {
+                    let descriptors = compile_proto(&value_schema)?;
+                    let value = DataEncoding::Protobuf(ProtobufEncoding {
+                        descriptors,
+                        message_name: None,
+                    });
+                    if let Some(key_schema) = key_schema {
+                        return Ok(SourceDataEncoding::KeyValue {
+                            key: DataEncoding::Protobuf(ProtobufEncoding {
+                                descriptors: compile_proto(&key_schema)?,
+                                message_name: None,
+                            }),
+                            value,
+                        });
+                    } else {
+                        value
+                    }
+                } else {
+                    unreachable!("CSR seed resolution should already have been called")
+                }
             }
             ProtobufSchema::InlineSchema {
                 message_name,
@@ -1060,7 +1087,7 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
 
                 DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
-                    message_name: message_name.to_owned(),
+                    message_name: Some(message_name.to_owned()),
                 })
             }
         },
@@ -1091,6 +1118,37 @@ fn get_encoding_inner<T: sql_parser::ast::AstInfo>(
         Format::Json => bail_unsupported!("JSON sources"),
         Format::Text => DataEncoding::Text,
     }))
+}
+
+fn compile_proto(schema: &str) -> Result<Vec<u8>, anyhow::Error> {
+    // Write schema string to a file to compile it.
+    let schema_bytes = strconv::parse_bytes(schema)?;
+    let include_dir = tempfile::tempdir()?.into_path();
+    let mut file = tempfile::NamedTempFile::new_in(&include_dir)?;
+    file.write_all(&schema_bytes)?;
+    file.flush()?;
+
+    // Destroy and recreate the build directory, in case any inputs have
+    // been deleted since the last invocation.
+    let out_dir = tempfile::tempdir()?.into_path();
+    match fs::remove_dir_all(&out_dir) {
+        Ok(()) => (),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+        Err(e) => {
+            return Err(anyhow::Error::new(e))
+                .with_context(|| format!("removing existing out directory {}", out_dir.display()))
+        }
+    }
+    fs::create_dir(&out_dir)
+        .with_context(|| format!("creating out directory {}", out_dir.display()))?;
+
+    // Compile schema string.
+    protoc::Protoc::new()
+        .include(&include_dir)
+        .input(file.path())
+        .compile_into(&out_dir)?;
+
+    Ok(fs::read(out_dir.join("file_descriptor_set.pb").as_path())?)
 }
 
 fn get_key_envelope(

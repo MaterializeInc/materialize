@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn new_persistent_unordered_input() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        let p = registry.open("1", "new_persistent_unordered_input_1")?;
+        let p = registry.runtime_no_reentrance()?;
 
         timely::execute_directly(move |worker| {
             let (mut handle, cap) = worker.dataflow(|scope| {
@@ -168,7 +168,7 @@ mod tests {
         // Execute a second dataflow and reuse the previous in-memory state.
         // This exists to simulate what would happen after a restart in a Persister
         // that was actually backed by persistent storage
-        let p = registry.open("1", "new_persistent_unordered_input_2")?;
+        let p = registry.runtime_no_reentrance()?;
         let recv = timely::execute_directly(move |worker| {
             let ((mut handle, cap), recv) = worker.dataflow(|scope| {
                 let token = p.create_or_load("1").unwrap();
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn multiple_workers() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        let p = registry.open("1", "multiple_workers 1")?;
+        let p = registry.runtime_no_reentrance()?;
 
         // Write some data using 3 workers.
         timely::execute(Config::process(3), move |worker| {
@@ -222,7 +222,7 @@ mod tests {
         // Execute a second dataflow with a different number of workers (2).
         // This is mainly testing that we only get one copy of the original
         // persisted data in the stream (as opposed to one per worker).
-        let p = registry.open("1", "multiple_workers 2")?;
+        let p = registry.runtime_no_reentrance()?;
         let (tx, rx) = mpsc::channel();
         let tx = Arc::new(Mutex::new(tx));
         timely::execute(Config::process(2), move |worker| {
@@ -255,9 +255,8 @@ mod tests {
 
     #[test]
     fn error_stream() -> Result<(), Error> {
-        let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
+        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
         let token = p.create_or_load::<(), ()>("error_stream").unwrap();
         unreliable.make_unavailable();
 

@@ -17,7 +17,9 @@ use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 
 use crate::error::Error;
+use crate::indexed::metrics::Metrics;
 use crate::indexed::runtime::{self, RuntimeClient};
+use crate::indexed::Indexed;
 use crate::storage::{Blob, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
 
@@ -252,6 +254,16 @@ impl MemBlob {
         core.lock()?.open(lock_info)?;
         Ok(Self { core })
     }
+
+    #[cfg(test)]
+    pub fn all_blobs(&self) -> Result<Vec<(String, Vec<u8>)>, Error> {
+        let core = self.core.lock()?;
+        Ok(core
+            .dataz
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    }
 }
 
 impl Drop for MemBlob {
@@ -283,23 +295,96 @@ impl Blob for MemBlob {
     }
 }
 
+/// An in-memory representation of a [Log] and [Blob] that can be reused
+/// across dataflows
+#[derive(Clone)]
+pub struct MemRegistry {
+    log: Arc<Mutex<MemLogCore>>,
+    blob: Arc<Mutex<MemBlobCore>>,
+}
+
+impl MemRegistry {
+    /// Constructs a new, empty [MemRegistry]
+    pub fn new() -> Self {
+        let mut log = MemLog::new(LockInfo::new_no_reentrance("".into()));
+        log.close()
+            .expect("newly opened MemLog close is infallible");
+        let mut blob = MemBlob::new(LockInfo::new_no_reentrance("".into()));
+        blob.close()
+            .expect("newly opened MemBlob close is infallible");
+        MemRegistry {
+            log: log.core.clone(),
+            blob: blob.core.clone(),
+        }
+    }
+
+    /// Opens the [MemLog] contained by this registry.
+    pub fn log_no_reentrance(&self) -> Result<MemLog, Error> {
+        MemLog::open(
+            self.log.clone(),
+            LockInfo::new_no_reentrance("MemRegistry".to_owned()),
+        )
+    }
+
+    /// Opens the [MemBlob] contained by this registry.
+    pub fn blob_no_reentrance(&self) -> Result<MemBlob, Error> {
+        MemBlob::open(
+            self.blob.clone(),
+            LockInfo::new_no_reentrance("MemRegistry".to_owned()),
+        )
+    }
+
+    /// Returns a [RuntimeClient] using the [MemLog] and [MemBlob] contained by
+    /// this registry.
+    pub fn indexed_no_reentrance(&mut self) -> Result<Indexed<MemLog, MemBlob>, Error> {
+        let log = self.log_no_reentrance()?;
+        let blob = self.blob_no_reentrance()?;
+        let metrics = Metrics::register_with(&MetricsRegistry::new());
+        Indexed::new(log, blob, metrics)
+    }
+
+    /// Starts a [RuntimeClient] using the [MemLog] and [MemBlob] contained by
+    /// this registry.
+    pub fn runtime_no_reentrance(&mut self) -> Result<RuntimeClient, Error> {
+        let log = self.log_no_reentrance()?;
+        let blob = self.blob_no_reentrance()?;
+        runtime::start(log, blob, &MetricsRegistry::new())
+    }
+
+    /// Open a [RuntimeClient] with unreliable storage backed by the given
+    /// [`UnreliableHandle`].
+    pub fn runtime_unreliable(
+        &mut self,
+        unreliable: UnreliableHandle,
+    ) -> Result<RuntimeClient, Error> {
+        let log = self.log_no_reentrance()?;
+        let log = UnreliableLog::from_handle(log, unreliable.clone());
+        let blob = self.blob_no_reentrance()?;
+        let blob = UnreliableBlob::from_handle(blob, unreliable);
+        runtime::start(log, blob, &MetricsRegistry::new())
+    }
+}
+
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
-pub struct MemRegistry {
+#[cfg(test)]
+pub struct MemMultiRegistry {
     log_by_path: HashMap<String, Arc<Mutex<MemLogCore>>>,
     blob_by_path: HashMap<String, Arc<Mutex<MemBlobCore>>>,
 }
 
-impl MemRegistry {
-    /// Constructs a new, empty MemRegistry
+#[cfg(test)]
+impl MemMultiRegistry {
+    /// Constructs a new, empty [MemMultiRegistry].
     pub fn new() -> Self {
-        MemRegistry {
+        MemMultiRegistry {
             log_by_path: HashMap::new(),
             blob_by_path: HashMap::new(),
         }
     }
 
-    fn log(&mut self, path: &str, lock_info: LockInfo) -> Result<MemLog, Error> {
+    /// Opens the [MemLog] associated with `path`.
+    pub fn log(&mut self, path: &str, lock_info: LockInfo) -> Result<MemLog, Error> {
         if let Some(log) = self.log_by_path.get(path) {
             MemLog::open(log.clone(), lock_info)
         } else {
@@ -309,7 +394,8 @@ impl MemRegistry {
         }
     }
 
-    fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
+    /// Opens the [MemBlob] associated with `path`.
+    pub fn blob(&mut self, path: &str, lock_info: LockInfo) -> Result<MemBlob, Error> {
         if let Some(blob) = self.blob_by_path.get(path) {
             MemBlob::open(blob.clone(), lock_info)
         } else {
@@ -327,21 +413,6 @@ impl MemRegistry {
         let blob = self.blob(path, lock_info)?;
         runtime::start(log, blob, &MetricsRegistry::new())
     }
-
-    /// Open a [RuntimeClient] with unreliable storage associated with `path`.
-    pub fn open_unreliable(
-        &mut self,
-        path: &str,
-        lock_info: &str,
-        unreliable: UnreliableHandle,
-    ) -> Result<RuntimeClient, Error> {
-        let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
-        let log = self.log(path, lock_info.clone())?;
-        let log = UnreliableLog::from_handle(log, unreliable.clone());
-        let blob = self.blob(path, lock_info)?;
-        let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(log, blob, &MetricsRegistry::new())
-    }
 }
 
 #[cfg(test)]
@@ -352,13 +423,13 @@ mod tests {
 
     #[test]
     fn mem_log() -> Result<(), Error> {
-        let mut registry = MemRegistry::new();
+        let mut registry = MemMultiRegistry::new();
         log_impl_test(move |t| registry.log(t.path, (t.reentrance_id, "log_impl_test").into()))
     }
 
     #[test]
     fn mem_blob() -> Result<(), Error> {
-        let mut registry = MemRegistry::new();
+        let mut registry = MemMultiRegistry::new();
         blob_impl_test(move |t| registry.blob(t.path, (t.reentrance_id, "blob_impl_test").into()))
     }
 }

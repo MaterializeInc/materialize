@@ -21,14 +21,15 @@ use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
+use expr::func;
 use ore::collections::CollectionExt;
 use pgrepr::oid;
 use repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 
 use crate::names::PartialName;
 use crate::plan::expr::{
-    AggregateFunc, BinaryFunc, CoercibleScalarExpr, HirScalarExpr, NullaryFunc, TableFunc,
-    UnaryFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirScalarExpr, NullaryFunc,
+    TableFunc, UnaryFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
@@ -152,6 +153,7 @@ struct Operation<R>(
                 FuncSpec,
                 Vec<CoercibleScalarExpr>,
                 &ParamList,
+                Vec<ColumnOrder>,
             ) -> Result<R, anyhow::Error>
             + Send
             + Sync,
@@ -173,6 +175,7 @@ impl<R> Operation<R> {
                 FuncSpec,
                 Vec<CoercibleScalarExpr>,
                 &ParamList,
+                Vec<ColumnOrder>,
             ) -> Result<R, anyhow::Error>
             + Send
             + Sync
@@ -200,6 +203,20 @@ impl<R> Operation<R> {
         Self::variadic(move |ecx, exprs| f(ecx, exprs.into_element()))
     }
 
+    /// Builds an operation that takes one argument and an order_by.
+    fn unary_ordered<F>(f: F) -> Operation<R>
+    where
+        F: Fn(&ExprContext, HirScalarExpr, Vec<ColumnOrder>) -> Result<R, anyhow::Error>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self::new(move |ecx, spec, cexprs, params, order_by| {
+            let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
+            f(ecx, exprs.into_element(), order_by)
+        })
+    }
+
     /// Builds an operation that takes two arguments.
     fn binary<F>(f: F) -> Operation<R>
     where
@@ -217,12 +234,35 @@ impl<R> Operation<R> {
         })
     }
 
+    /// Builds an operation that takes two arguments and an order_by.
+    fn binary_ordered<F>(f: F) -> Operation<R>
+    where
+        F: Fn(
+                &ExprContext,
+                HirScalarExpr,
+                HirScalarExpr,
+                Vec<ColumnOrder>,
+            ) -> Result<R, anyhow::Error>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self::new(move |ecx, spec, cexprs, params, order_by| {
+            let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
+            assert_eq!(exprs.len(), 2);
+            let mut exprs = exprs.into_iter();
+            let left = exprs.next().unwrap();
+            let right = exprs.next().unwrap();
+            f(ecx, left, right, order_by)
+        })
+    }
+
     /// Builds an operation that takes any number of arguments.
     fn variadic<F>(f: F) -> Operation<R>
     where
         F: Fn(&ExprContext, Vec<HirScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
     {
-        Self::new(move |ecx, spec, cexprs, params| {
+        Self::new(move |ecx, spec, cexprs, params, _order_by| {
             let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
             f(ecx, exprs)
         })
@@ -822,12 +862,13 @@ pub fn select_impl<R>(
     spec: FuncSpec,
     impls: &[FuncImpl<R>],
     args: Vec<CoercibleScalarExpr>,
+    order_by: Vec<ColumnOrder>,
 ) -> Result<R, anyhow::Error>
 where
     R: fmt::Debug,
 {
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
-    select_impl_inner(ecx, spec, impls, args, &types).with_context(|| {
+    select_impl_inner(ecx, spec, impls, args, &types, order_by).with_context(|| {
         let types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
@@ -854,6 +895,7 @@ fn select_impl_inner<R>(
     impls: &[FuncImpl<R>],
     cexprs: Vec<CoercibleScalarExpr>,
     types: &[Option<ScalarType>],
+    order_by: Vec<ColumnOrder>,
 ) -> Result<R, anyhow::Error>
 where
     R: fmt::Debug,
@@ -869,7 +911,7 @@ where
 
     let f = find_match(ecx, types, impls)?;
 
-    (f.op.0)(ecx, spec, cexprs, &f.params)
+    (f.op.0)(ecx, spec, cexprs, &f.params, order_by)
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds
@@ -1226,8 +1268,8 @@ lazy_static! {
                 params!(Int32) => UnaryFunc::AbsInt32, 1397;
                 params!(Int64) => UnaryFunc::AbsInt64, 1396;
                 params!(Numeric) => UnaryFunc::AbsNumeric, 1705;
-                params!(Float32) => UnaryFunc::AbsFloat32, 1394;
-                params!(Float64) => UnaryFunc::AbsFloat64, 1395;
+                params!(Float32) => UnaryFunc::AbsFloat32(func::AbsFloat32), 1394;
+                params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64), 1395;
             },
             "array_in" => Scalar {
                 params!(String, Oid, Int32) => Operation::unary(|_ecx, _e| bail_unsupported!("array_in")), 750;
@@ -1509,7 +1551,7 @@ lazy_static! {
                 ), 2079;
             },
             "pg_typeof" => Scalar {
-                params!(Any) => Operation::new(|ecx, spec, exprs, params| {
+                params!(Any) => Operation::new(|ecx, spec, exprs, params, _order_by| {
                     // pg_typeof reports the type *before* coercion.
                     let name = match ecx.scalar_type(&exprs[0]) {
                         None => "unknown".to_string(),
@@ -1690,7 +1732,7 @@ lazy_static! {
 
             // Aggregates.
             "array_agg" => Aggregate {
-                params!(NonVecAny) => Operation::unary(|ecx, e| {
+                params!(NonVecAny) => Operation::unary_ordered(|ecx, e, order_by| {
                     if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
                         bail_unsupported!("array_agg on char");
                     };
@@ -1700,7 +1742,7 @@ lazy_static! {
                         func: VariadicFunc::ArrayCreate{elem_type: ecx.scalar_type(&e)},
                         exprs: vec![e],
                     };
-                    Ok((e_arr, AggregateFunc::ArrayConcat))
+                    Ok((e_arr, AggregateFunc::ArrayConcat{order_by}))
                 }), 2335;
                 params!(ArrayAny) => Operation::unary(|_ecx, _e| bail_unsupported!("array_agg on arrays")), 4053;
             },
@@ -1751,7 +1793,7 @@ lazy_static! {
                 params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("json_agg")), 3175;
             },
             "jsonb_agg" => Aggregate {
-                params!(Any) => Operation::unary(|ecx, e| {
+                params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                     // TODO(#7572): remove this
                     let e = match ecx.scalar_type(&e) {
                         ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar { length }),
@@ -1767,11 +1809,11 @@ lazy_static! {
                         func: VariadicFunc::Coalesce,
                         exprs: vec![typeconv::to_jsonb(ecx, e), json_null],
                     };
-                    Ok((e, AggregateFunc::JsonbAgg))
+                    Ok((e, AggregateFunc::JsonbAgg{ order_by }))
                 }), 3267;
             },
             "jsonb_object_agg" => Aggregate {
-                params!(Any, Any) => Operation::binary(|ecx, key, val| {
+                params!(Any, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
                     // TODO(#7572): remove this
                     let key = match ecx.scalar_type(&key) {
                         ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar { length }),
@@ -1790,18 +1832,18 @@ lazy_static! {
                         },
                         exprs: vec![key, val],
                     };
-                    Ok((e, AggregateFunc::JsonbObjectAgg))
+                    Ok((e, AggregateFunc::JsonbObjectAgg{ order_by }))
                 }), 3270;
             },
             "string_agg" => Aggregate {
-                params!(String, String) => Operation::binary(|_ecx, value, sep| {
+                params!(String, String) => Operation::binary_ordered(|_ecx, value, sep, order_by| {
                     let e = HirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
                             field_names: vec![ColumnName::from("value"), ColumnName::from("sep")],
                         },
                         exprs: vec![value, sep],
                     };
-                    Ok((e, AggregateFunc::StringAgg))
+                    Ok((e, AggregateFunc::StringAgg{ order_by }))
                 }), 3538;
                 params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg")), 3545;
             },
@@ -1937,7 +1979,7 @@ lazy_static! {
                 params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID;
             },
             "list_agg" => Aggregate {
-                params!(Any) => Operation::unary(|ecx, e| {
+                params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                     if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
                         bail_unsupported!("list_agg on char");
                     };
@@ -1947,7 +1989,7 @@ lazy_static! {
                         func: VariadicFunc::ListCreate{elem_type: ecx.scalar_type(&e)},
                         exprs: vec![e],
                     };
-                    Ok((e_arr, AggregateFunc::ListConcat))
+                    Ok((e_arr, AggregateFunc::ListConcat{order_by}))
                 }),  oid::FUNC_LIST_AGG_OID;
             },
             "list_append" => Scalar {
@@ -2195,7 +2237,7 @@ lazy_static! {
 
             // ARITHMETIC
             "+" => Scalar {
-                params!(Any) => Operation::new(|ecx, _spec, exprs, _params| {
+                params!(Any) => Operation::new(|ecx, _spec, exprs, _params, _order_by| {
                     // Unary plus has unusual compatibility requirements.
                     //
                     // In PostgreSQL, it is only defined for numeric types, so
@@ -2242,8 +2284,8 @@ lazy_static! {
                 params!(Int16) => UnaryFunc::NegInt32, 559;
                 params!(Int32) => UnaryFunc::NegInt32, 558;
                 params!(Int64) => UnaryFunc::NegInt64, 484;
-                params!(Float32) => UnaryFunc::NegFloat32, 584;
-                params!(Float64) => UnaryFunc::NegFloat64, 585;
+                params!(Float32) => UnaryFunc::NegFloat32(func::NegFloat32), 584;
+                params!(Float64) => UnaryFunc::NegFloat64(func::NegFloat64), 585;
                 params!(Numeric) => UnaryFunc::NegNumeric, 17510;
                 params!(Interval) => UnaryFunc::NegInterval, 1336;
                 params!(Int32, Int32) => SubInt32, 555;
@@ -2303,7 +2345,7 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 1628;
             },
 
@@ -2322,13 +2364,13 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 1210;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar { length })
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
-                        .call_unary(UnaryFunc::Not)
+                        .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }), 1212;
             },
@@ -2358,13 +2400,13 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 642;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar { length })
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not)
+                        .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }), 1056;
             },
@@ -2372,13 +2414,13 @@ lazy_static! {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not))
+                        .call_unary(UnaryFunc::Not(func::Not)))
                 }), 1229;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
                     Ok(lhs.call_unary(UnaryFunc::PadChar { length })
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
-                        .call_unary(UnaryFunc::Not)
+                        .call_unary(UnaryFunc::Not(func::Not))
                     )
                 }), 1235;
             },

@@ -29,6 +29,7 @@ use expr::MirRelationExpr;
 use expr::MirScalarExpr;
 use expr::{GlobalId, IdGen};
 
+pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
@@ -41,6 +42,7 @@ pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
+pub mod projection_pushdown;
 pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
@@ -166,7 +168,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::filter::Filter),
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
-                Box::new(crate::inline_let::InlineLet),
+                Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
@@ -274,7 +276,7 @@ impl Optimizer {
                     // Identifies common relation subexpressions.
                     // Must be followed by let inlining, to keep under control.
                     Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet),
+                    Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
                     Box::new(crate::update_let::UpdateLet),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
@@ -292,30 +294,30 @@ impl Optimizer {
     pub fn for_dataflow() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
+            Box::new(crate::projection_pushdown::ProjectionPushdown),
+            // Types need to be updates after ProjectionPushdown
+            // because the width of local values may have changed.
+            Box::new(crate::update_let::UpdateLet),
+            // Inline Let expressions whose values are just Maps, Filters, and
+            // Projects around a Get because JoinImplementation cannot lift them
+            // through a Let expression.
+            Box::new(crate::inline_let::InlineLet { inline_mfp: true }),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
-                    Box::new(crate::fusion::filter::Filter),
-                    // fill in the new demand after maps have been shifted
-                    // around.
                     Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
-                    Box::new(crate::fusion::map::Map),
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
-            Box::new(crate::cse::map::Map),
-            Box::new(crate::projection_lifting::ProjectionLifting),
-            Box::new(crate::join_implementation::JoinImplementation),
-            Box::new(crate::fusion::project::Project),
+            Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
             // Must be followed by let inlining, to keep under control.
             Box::new(crate::cse::relation_cse::RelationCSE),
-            Box::new(crate::inline_let::InlineLet),
+            Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
             Box::new(crate::update_let::UpdateLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
@@ -328,7 +330,7 @@ impl Optimizer {
     pub fn pre_optimization() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             Box::new(crate::fusion::join::Join),
-            Box::new(crate::inline_let::InlineLet),
+            Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),

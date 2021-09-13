@@ -104,6 +104,72 @@ pub enum Datum<'a> {
     Null,
 }
 
+impl TryFrom<Datum<'_>> for bool {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::False => Ok(false),
+            Datum::True => Ok(true),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<bool> {
+    type Error = ();
+
+    fn try_from(datum: Datum<'_>) -> Result<Self, Self::Error> {
+        match datum {
+            Datum::Null => Ok(None),
+            Datum::False => Ok(Some(false)),
+            Datum::True => Ok(Some(true)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for f32 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Float32(f) => Ok(*f),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<f32> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Float32(f) => Ok(Some(*f)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for f64 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Float64(f) => Ok(*f),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<f64> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Float64(f) => Ok(Some(*f)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
@@ -456,8 +522,8 @@ impl<'a> Datum<'a> {
     }
 }
 
-impl From<bool> for Datum<'static> {
-    fn from(b: bool) -> Datum<'static> {
+impl<'a> From<bool> for Datum<'a> {
+    fn from(b: bool) -> Datum<'a> {
         if b {
             Datum::True
         } else {
@@ -496,14 +562,14 @@ impl From<OrderedFloat<f64>> for Datum<'static> {
     }
 }
 
-impl From<f32> for Datum<'static> {
-    fn from(f: f32) -> Datum<'static> {
+impl<'a> From<f32> for Datum<'a> {
+    fn from(f: f32) -> Datum<'a> {
         Datum::Float32(OrderedFloat(f))
     }
 }
 
-impl From<f64> for Datum<'static> {
-    fn from(f: f64) -> Datum<'static> {
+impl<'a> From<f64> for Datum<'a> {
+    fn from(f: f64) -> Datum<'a> {
         Datum::Float64(OrderedFloat(f))
     }
 }
@@ -785,6 +851,41 @@ pub enum ScalarType {
     },
     /// A PostgreSQL function name.
     RegProc,
+}
+
+/// [FromTy] is a utility trait for [ScalarType] that defines a mapping between a Rust type T and
+/// its runtime representation as a ScalarType. Not all ScalarType variants have a 1-1 mapping to a
+/// Rust type but for those variants can simply be ignored.
+///
+/// The main usecase of FromTy is to use rustc's inference to lift type information from compile
+/// time to runtime, a primitive form of reflection. See the implementation of the `fn_unary` macro
+/// in `expr` for an example use of this trait.
+pub trait FromTy<T> {
+    fn from_ty() -> Self;
+}
+
+impl FromTy<bool> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Bool
+    }
+}
+
+impl FromTy<String> for ScalarType {
+    fn from_ty() -> Self {
+        Self::String
+    }
+}
+
+impl FromTy<f32> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Float32
+    }
+}
+
+impl FromTy<f64> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Float64
+    }
 }
 
 impl<'a> ScalarType {

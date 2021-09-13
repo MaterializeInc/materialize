@@ -81,9 +81,9 @@ use crate::indexed::ListenEvent;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
 use crate::nemesis::validator::Validator;
 
-mod direct;
-mod generator;
-mod validator;
+pub mod direct;
+pub mod generator;
+pub mod validator;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReqId(u64);

@@ -1,7 +1,7 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.9.3-dev"
+version = "0.9.4-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2018"
@@ -42,11 +42,11 @@ crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.16"
+futures = "0.3.17"
 hex = "0.4.3"
 hyper = { version = "0.14.12", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
-include_dir = "0.6.1"
+include_dir = "0.6.2"
 itertools = "0.10.1"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
@@ -73,12 +73,12 @@ serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.67"
 shell-words = "1.0.0"
 sql = { path = "../sql" }
-structopt = "0.3.22"
+structopt = "0.3.23"
 sysctl = "0.4.2"
-sysinfo = "0.20.1"
+sysinfo = "0.20.3"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.10.1", features = ["sync"] }
+tokio = { version = "1.11.0", features = ["sync"] }
 tokio-openssl = "0.6.2"
 tokio-stream = { version = "0.1.7", features = ["net"] }
 tracing = "0.1.26"
@@ -98,7 +98,7 @@ prof = { path = "../prof", features = ["jemalloc"] }
 tikv-jemallocator = { version = "0.4.1", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "2.0.0"
+assert_cmd = "2.0.1"
 bytes = "1.1.0"
 coordtest = { path = "../coordtest" }
 datadriven = "0.6.0"
@@ -121,12 +121,12 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", bran
 [build-dependencies]
 anyhow = "1.0.43"
 askama_shared = { version = "0.11.1", features = ["config"] }
-cc = "1.0.69"
-flate2 = "1.0.20"
+cc = "1.0.70"
+flate2 = "1.0.21"
 hex = "0.4.3"
 hex-literal = "0.3.3"
 reqwest = { version = "0.11.4", features = ["blocking"] }
-sha2 = "0.9.6"
+sha2 = "0.9.8"
 tar = "0.4.37"
 walkdir = "2.3.2"
 

@@ -1,6 +1,6 @@
 ---
-title: "Materialize Cloud Account Limits"
-description: "Learn Materialize Cloud's account limits and its differences from the installed version."
+title: "Account Limits"
+description: "Learn what features Materialize Cloud offers."
 menu:
   main:
     parent: "cloud"
@@ -9,23 +9,41 @@ menu:
 
 {{< cloud-notice >}}
 
-For the most part, Materialize Cloud offers the same functionality as the installed version. The major exceptions are:
+Materialize Cloud offers five deployment sizes with increasing processing and memory capacities. The **XS** and **S** sizes are available **for free** during a limited trial period, with larger capacity available for enterprise accounts.
 
-* Materialize Cloud doesn't currently support using files as sources or sinks; you can only use streaming sources or sinks.
-* By default, Materialize Cloud only permits two deployments. If you need more than that, [let us know](../support).
-* We reserve the right to terminate a session on your deployment. This may happen after prolonged inactivity or if we need to upgrade Materialize Cloud. Catalog items persist across sessions.
-* Right now, we only support one user per account. If you'd like multiple users to access your Cloud console, you'll need to share the login. Alternatively, any user can connect to a Cloud deployment as long as you share your TLS certificates and your psql connection string.
+The trial period lasts for **30 days** or **until you max out the available resources** (whichever comes first), and is limited to **two** deployments. Once the trial expires, your account and deployments may be deleted within 14 days, unless you have upgraded to an enterprise account.
 
-## A comparison of the local install and Cloud versions
+## Materialize Cloud specifications
 
-Feature | Materialize local install | Materialize Cloud
---------|---------------------------|------------------
-File sources  |  Yes | No
-File sinks  | Yes  |  No
-Number of deployments  |  Unlimited | 2
-Default specs  | Depends on your setup |  `t3.medium` (2 vCPU, 4GB memory)
+For now, Materialize Cloud is only available on **AWS** within the `us-east-1` [region](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html#concepts-available-regions). We are working on expanding this availability to additional cloud providers and regions soon.
+
+Deployment Size | XS | S | M | L | XL
+----------------|----|---|---|---|---
+**CPUs**  | 4vCPUs  | 8vCPUs  | 16vCPUs  |  32vCPUs  |  64vCPUs
+**RAM**  |  32GB | 64GB  | 128GB  | 256GB  |  512GB
+
+If you need a larger deployment size for your specific use case, [get in touch with us](../support).
+
+### Cloud vs. self-managed
+
+For the most part, Materialize Cloud offers the same functionality as the self-managed version. The major exceptions to be aware of are:
+
+* Materialize Cloud doesn't support using local files as sources; you can otherwise use any other combination of [source type](/sql/create-source/#types-of-sources) and format:
+
+  Sources | Materialize Cloud | Materialize
+  --------|-------------------|--------------------------
+  **Kafka** | Yes | Yes
+  **Kinesis**  | Yes | Yes
+  **S3**  |  Yes | Yes
+  **PubNub**  | Yes | Yes
+  **Local Files**  |  No |  Yes
+  **Postgres**  | Yes | Yes
+
+* Materialize is source-available and free on a single node, so deployment limits only depend on your hardware.
+* We reserve the right to terminate a session in your deployment. This may happen after prolonged inactivity or in the event of planned maintenance work on Materialize Cloud, and doesn't affect catalog items (which are persisted across sessions).
 
 ## Related topics
 
 * [What Is Materialize?](/overview/what-is-materialize)
-* [Connect to Materialize Cloud](../connect-to-materialize-cloud)
+* [Connect to Materialize Cloud](../connect-to-cloud)
+* [Materialize Cloud Support](../support)

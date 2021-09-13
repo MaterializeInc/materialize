@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn persisted_source() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        let p = registry.open("1", "lock 1")?;
+        let p = registry.runtime_no_reentrance()?;
 
         let (oks, errs) = timely::execute_directly(move |worker| {
             let (oks, errs) = worker.dataflow(|scope| {
@@ -259,7 +259,7 @@ mod tests {
         let mut registry = MemRegistry::new();
 
         let seal_ts = {
-            let p = registry.open("1", "lock 1")?;
+            let p = registry.runtime_no_reentrance()?;
 
             let (write, _) = p.create_or_load("1").unwrap();
             for i in 1..=5 {
@@ -276,7 +276,7 @@ mod tests {
 
         let result = timely::execute_directly(move |worker| {
             let mut registry = registry.lock().expect("poisoned lock");
-            let p = registry.open("1", "lock 2").expect("missing registry");
+            let p = registry.runtime_no_reentrance().expect("missing registry");
             let mut probe = ProbeHandle::new();
 
             worker.dataflow(|scope| {
@@ -305,7 +305,7 @@ mod tests {
     #[ignore]
     fn multiple_workers() -> Result<(), Error> {
         let mut registry = MemRegistry::new();
-        let p = registry.open("multiple_workers", "lock 1")?;
+        let p = registry.runtime_no_reentrance()?;
 
         // Write some data using 3 workers.
         timely::execute(Config::process(3), move |worker| {
@@ -322,7 +322,7 @@ mod tests {
         // Execute a second dataflow with a different number of workers (2).
         // This is mainly testing that we only get one copy of the original
         // persisted data in the stream (as opposed to one per worker).
-        let p = registry.open("multiple_workers", "lock 2")?;
+        let p = registry.runtime_no_reentrance()?;
         let (tx, rx) = mpsc::channel();
         let capture_tx = Arc::new(Mutex::new(tx));
         timely::execute(Config::process(2), move |worker| {
@@ -373,9 +373,8 @@ mod tests {
 
     #[test]
     fn error_stream() -> Result<(), Error> {
-        let mut registry = MemRegistry::new();
         let mut unreliable = UnreliableHandle::default();
-        let p = registry.open_unreliable("1", "error_stream", unreliable.clone())?;
+        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
         let (_, read) = p.create_or_load::<(), ()>("1").unwrap();
         unreliable.make_unavailable();
 

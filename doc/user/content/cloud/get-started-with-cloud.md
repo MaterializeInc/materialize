@@ -1,10 +1,13 @@
 ---
-title: "Materialize Cloud Quickstart"
-description: "Set up a Materialize Cloud account, create deployments, and connect to data sources."
+title: "Get Started with Cloud"
+description: "Connect to Cloud and create Materialize deployments."
 menu:
   main:
     parent: "cloud"
     weight: 2
+aliases:
+  - materialize-cloud-quickstart
+  - materialize-cloud-get-started
 ---
 
 {{< cloud-notice >}}
@@ -13,7 +16,7 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 * Signing up for Materialize Cloud
 
-* Creating, and connecting to a Materialize Cloud deployment
+* Creating and connecting to a Materialize Cloud deployment
 
 * Connecting to a streaming data source
 
@@ -21,15 +24,27 @@ This guide walks you through getting started with Materialize Cloud, from settin
 
 * Exploring common patterns like joins and time-windowing
 
-## Sign up, deploy, connect
+## Sign up
 
-1. Sign up for Materialize Cloud at [https://cloud.materialize.com](https://cloud.materialize.com#signup).
+1. Sign up for Materialize Cloud at [https://cloud.materialize.com](https://cloud.materialize.com/signup/).
 
-1. Once you [log in](https://cloud.materialize.com), you can use the [Deployments](https://cloud.materialize.com/deployments) page to create, upgrade, or destroy deployments, as well as to obtain the TLS certificates you need to install on your local machine to connect.
+1. Once your account has been created, [log in](https://cloud.materialize.com).
 
-   By default, you can create up to two deployments. If you're interested in more, [let us know](../support)!
+1. If you've been invited to an existing workspace, jump directly to [Deploy and Connect](#deploy-and-connect). Otherwise, a dialog will ask you to create a workspace.
 
-1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**. Materialize creates a deployment and assigns it a `name` and `hostname`.
+    Enter a name, and click **Next**.
+
+## Deploy and connect
+
+1. In the deployments page, click [**Create deployment**](../create-deployments) in the upper right corner. Enter a unique **Name** (or use the default) and choose **Extra small** (XS) as the deployment size.
+
+    Then, click **Create**.
+
+    **Note:** The size of new deployments is set to Extra small (XS) by default, which is enough to run this walkthrough. For more information on deployment sizes, check [Account Limits](../account-limits).
+
+1. Once the status message reads `HEALTHY`, the deployment is ready for connections!
+
+    Before you can connect, though, you need to install some TLS certificates on your local machine.
 
 {{% cloud-connection-details %}}
 
@@ -198,7 +213,7 @@ In Materialize, [temporal filters](/guides/temporal-filters/) allow you to defin
 
 That's it! You just got up and running with Materialize Cloud to create your first materialized view and try out some common patterns enabled by SQL on streams. We encourage you to continue exploring the PubNub source using the supported [SQL commands](/sql/), and read through the following resources for a more comprehensive overview:
 
-* [Connect to Materialize Cloud](../connect-to-materialize-cloud)
+* [Connect to Materialize Cloud](../connect-to-cloud)
 * [Materialize Cloud Account Limits](../account-limits)
 * [Materialize Architecture](../../overview/architecture)
 * [`CREATE SOURCE`](../../sql/create-source)

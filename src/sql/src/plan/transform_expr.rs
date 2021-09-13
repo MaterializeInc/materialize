@@ -14,6 +14,7 @@ use std::mem;
 
 use lazy_static::lazy_static;
 
+use expr::func;
 use repr::{ColumnType, RelationType, ScalarType};
 
 use crate::plan::expr::{
@@ -242,13 +243,13 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                         let expr = expr.take();
                         let filter = expr
                             .clone()
-                            .call_unary(UnaryFunc::Not)
+                            .call_unary(UnaryFunc::Not(func::Not))
                             .call_binary(expr.call_unary(UnaryFunc::IsNull), BinaryFunc::Or);
                         *e = input
                             .take()
                             .filter(vec![filter])
                             .exists()
-                            .call_unary(UnaryFunc::Not);
+                            .call_unary(UnaryFunc::Not(func::Not));
                     }
                     _ => (),
                 }

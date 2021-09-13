@@ -34,7 +34,7 @@ pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena, RowRef,
 };
-pub use scalar::{Datum, ScalarBaseType, ScalarType};
+pub use scalar::{Datum, FromTy, ScalarBaseType, ScalarType};
 
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.
 /// System-wide timestamp type.

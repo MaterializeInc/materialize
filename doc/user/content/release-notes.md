@@ -46,9 +46,25 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.9.3 %}}
+{{% version-header v0.9.4 %}}
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
+- Trailing newline characters of POSIX compliant files will no longer be
+  decoded as an empty byte row {{% gh 8142 %}}
+
+- Support `ORDER BY` in aggregate functions.
+
+- Persist the `mz_metrics` and `mz_metric_histogram` system tables and rehydrate
+  the previous contents on restart. This is a small test of the system that will
+  power upcoming persistence features. Users are free to opt out of this test
+  by setting the `--disable_persistent_system_tables_test` flag to "true".
+
+
+{{% version-header v0.9.3 %}}
+
+- Fix a bug that prevented creating Avro sinks on old versions of Confluent Platform
+
+- Fix a bug that prevented upgrading to 0.9.2 if the catalog referenced CSV file sources with headers.
 
 {{% version-header v0.9.2 %}}
 
