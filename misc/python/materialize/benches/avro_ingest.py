@@ -146,12 +146,28 @@ def main() -> None:
     ns = parser.parse_args()
 
     wait_for_confluent()
+    # We need to temporarily redirect stdout to stderr,
+    # because, although recent versions of the mz repository
+    # make sure mzbuild only writes to stderr here,
+    # we might want to run this against older versions that don't.
+    #
+    # This will not work correctly
+    # if stdout is buffered, but we invoke this script
+    # with python3 -u, so that's fine.
+    #
+    # We have to do this the POSIX way here, rather than with
+    # `contextlib.redirect_stdout`, because that only affects native
+    # Python code, not e.g. spawned processes
+    old_stdout = os.dup(1)
+    os.dup2(2, 1)
+
     mz_launcher = Thread(target=launch_mz, daemon=True)
     mz_launcher.start()
 
     kgen_launcher = Thread(target=generate_data, args=[ns.records])
     kgen_launcher.start()
     kgen_launcher.join()
+    os.dup2(old_stdout, 1)
 
     cid_path = Path("docker.cid")
     cid = ""
