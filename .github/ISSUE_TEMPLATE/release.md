@@ -243,13 +243,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 ### Open a PR on the cloud repo enabling the new version
 
-- [ ] Issue a PR to the cloud repo to allow the released version following [the instructions][].
-- [ ] After that PR has been merged, a PR suggesting a merge from `main` -> `production` will be
-  automatically created and assigned to you. Request somebody on the
-  [@MaterializeInc/cloud-deployers][deployers] team review it; once approved, merge the PR and it
-  will be automatically deployed to production.
+- [ ] Issue a PR to the cloud repo to bless the released version following [the
+  instructions][], tag people from the
+  [@MaterializeInc/cloud-deployers][deployers] team to review it.
 
-[the instructions]: https://github.com/MaterializeInc/cloud/blob/main/doc/misc.md#updating-to-a-new-materialize-release
+[the instructions]: https://github.com/MaterializeInc/cloud/blob/main/doc/misc.md#blessing-a-new-materialize-release
 [deployers]: https://github.com/orgs/MaterializeInc/teams/cloud-deployers/members
 
 ### Convert the GitHub Tag into a GitHub Release
