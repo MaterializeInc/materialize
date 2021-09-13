@@ -32,9 +32,11 @@ use std::convert::{From, TryInto};
 use std::default::Default;
 use std::fmt::Formatter;
 use std::ops::AddAssign;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_compression::tokio::bufread::GzipDecoder;
+use futures::lock::Mutex;
 use futures::{FutureExt, StreamExt};
 use globset::GlobMatcher;
 use rusoto_core::RusotoError;
@@ -197,39 +199,42 @@ async fn download_objects_task(
                 let (tx, activator, client, msg_ref, sid) =
                     (&tx, &activator, &client, &msg, &source_id);
 
-                let mut skip_bytes = 0;
+                let skip_bytes = Arc::new(Mutex::new(0));
                 let result = Retry::default()
-                    .retry(|state| async move {
-                        let skip_bytes = &mut skip_bytes;
-                        let (download_status, update) = download_object(
-                            tx,
-                            &activator,
-                            &client,
-                            &msg_ref.bucket,
-                            &msg_ref.key,
-                            compression,
-                            sid,
-                            *skip_bytes,
-                        )
-                        .await;
+                    .retry(move |state| {
+                        let skip_bytes = Arc::clone(&skip_bytes);
+                        async move {
+                            let mut skip_bytes = skip_bytes.lock().await;
+                            let (download_status, update) = download_object(
+                                tx,
+                                &activator,
+                                &client,
+                                &msg_ref.bucket,
+                                &msg_ref.key,
+                                compression,
+                                sid,
+                                *skip_bytes
+                            )
+                                .await;
 
-                        match download_status {
-                            // Exit retry loop
-                            DownloadStatus::Ok => Ok((DownloadStatus::Ok, update)),
-                            DownloadStatus::Empty => Ok((DownloadStatus::Empty, update)),
-                            DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
-                            // Retriable error
-                            DownloadStatus::Retry { bytes_read, err } => {
-                                log::debug!(
-                                    "Failed to download object: {}/{} attempt={} skip={} read={}",
-                                    msg_ref.bucket,
-                                    msg_ref.key,
-                                    state.i,
-                                    skip_bytes,
-                                    bytes_read,
-                                );
-                                *skip_bytes += bytes_read;
-                                Err((DownloadStatus::Retry { bytes_read, err }, update))
+                            match download_status {
+                                // Exit retry loop
+                                DownloadStatus::Ok => Ok((DownloadStatus::Ok, update)),
+                                DownloadStatus::Empty => Ok((DownloadStatus::Empty, update)),
+                                DownloadStatus::SendFailed => Ok((DownloadStatus::SendFailed, update)),
+                                // Retriable error
+                                DownloadStatus::Retry { bytes_read, err } => {
+                                    log::debug!(
+                                        "Failed to download object: {}/{} attempt={} skip={} read={}",
+                                        msg_ref.bucket,
+                                        msg_ref.key,
+                                        state.i,
+                                        *skip_bytes,
+                                        bytes_read,
+                                    );
+                                    *skip_bytes += bytes_read;
+                                    Err((DownloadStatus::Retry { bytes_read, err }, update))
+                                }
                             }
                         }
                     })
