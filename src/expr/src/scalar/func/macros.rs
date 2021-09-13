@@ -69,11 +69,11 @@ macro_rules! sqlfunc {
         #[propagates_nulls = $propagates_nulls:literal]
         #[introduces_nulls = $introduces_nulls:literal]
         #[preserves_uniqueness = $preserves_uniqueness:literal]
-        fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Result<Option<$ret_ty:ty>, EvalError>
+        fn $fn_name:ident($param_name:ident: $param_ty:ty) -> Result<Option<$ret_ty:ty>, EvalError>
             $body:block
     ) => {
         paste::paste! {
-            pub fn $fn_name($param_name: Option<$param_ty>) -> Result<Option<$ret_ty>, crate::EvalError> {
+            pub fn $fn_name($param_name: $param_ty) -> Result<Option<$ret_ty>, crate::EvalError> {
                 $body
             }
 
@@ -101,7 +101,7 @@ macro_rules! sqlfunc {
                         // Evaluate the argument and convert it to the concrete type that the
                         // implementation expects. This cannot fail here because the expression is
                         // already typechecked.
-                        let a: Option<$param_ty> = a
+                        let a: $param_ty = a
                             .eval(datums, temp_storage)?
                             .try_into()
                             .expect("expression already typechecked");
