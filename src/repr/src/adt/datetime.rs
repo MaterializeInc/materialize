@@ -1885,6 +1885,15 @@ mod test {
     use super::*;
 
     #[test]
+    fn iterate_datetimefield() {
+        use DateTimeField::*;
+        assert_eq!(
+            Year.into_iter().take(10).collect::<Vec<_>>(),
+            vec![Month, Day, Hour, Minute, Second]
+        )
+    }
+
+    #[test]
     fn test_datetimefieldvalue_div() {
         let test_cases = vec![
             (

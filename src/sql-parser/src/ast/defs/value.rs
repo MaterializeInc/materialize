@@ -19,8 +19,7 @@
 // limitations under the License.
 
 use std::fmt;
-
-use repr::adt::datetime::DateTimeField;
+use std::str::FromStr;
 
 use crate::ast::defs::AstInfo;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
@@ -136,6 +135,45 @@ impl AstDisplay for Value {
 }
 impl_display!(Value);
 
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub enum DateTimeField {
+    Year,
+    Month,
+    Day,
+    Hour,
+    Minute,
+    Second,
+}
+
+impl fmt::Display for DateTimeField {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            DateTimeField::Year => "YEAR",
+            DateTimeField::Month => "MONTH",
+            DateTimeField::Day => "DAY",
+            DateTimeField::Hour => "HOUR",
+            DateTimeField::Minute => "MINUTE",
+            DateTimeField::Second => "SECOND",
+        })
+    }
+}
+
+impl FromStr for DateTimeField {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_uppercase().as_ref() {
+            "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
+            "MONTH" | "MONTHS" | "MON" | "MONS" => Ok(Self::Month),
+            "DAY" | "DAYS" | "D" => Ok(Self::Day),
+            "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
+            "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
+            "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
+            _ => Err(format!("invalid DateTimeField: {}", s)),
+        }
+    }
+}
+
 /// An intermediate value for Intervals, which tracks all data from
 /// the user, as well as the computed ParsedDateTime.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -164,20 +202,6 @@ impl Default for IntervalValue {
             precision_low: DateTimeField::Second,
             fsec_max_precision: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn iterate_datetimefield() {
-        use DateTimeField::*;
-        assert_eq!(
-            Year.into_iter().take(10).collect::<Vec<_>>(),
-            vec![Month, Day, Hour, Minute, Second]
-        )
     }
 }
 
