@@ -28,7 +28,6 @@ use log::{debug, warn};
 
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
-use repr::adt::datetime::DateTimeField;
 
 use crate::ast::*;
 use crate::keywords::*;
