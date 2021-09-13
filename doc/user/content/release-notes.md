@@ -54,6 +54,9 @@ Wrap your release notes at the 80 character mark.
 
 - Support `ORDER BY` in aggregate functions.
 
+- When issuing `COMMIT` or `ROLLBACK` commands outside of an explicit
+  transaction, always return a warning. Previously, the warning could be suppressed.
+
 {{% version-header v0.9.3 %}}
 
 - Fix a bug that prevented creating Avro sinks on old versions of Confluent Platform
