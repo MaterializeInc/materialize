@@ -877,8 +877,8 @@ lazy_static! {
         id: GlobalId::System(4043),
         index_id: GlobalId::System(4044),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable_persistent_system_tables_test) also has to be true
-        // for this to be persisted.
+        // up to --persistent-system-tables) also has to be true for this to be
+        // persisted.
         persistent: true,
     };
     pub static ref MZ_PROMETHEUS_METRICS: BuiltinTable = BuiltinTable {
@@ -908,8 +908,8 @@ lazy_static! {
         id: GlobalId::System(4047),
         index_id: GlobalId::System(4048),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable_persistent_system_tables_test) also has to be true
-        // for this to be persisted.
+        // up to --persistent-system-tables) also has to be true for this to be
+        // persisted.
         persistent: true,
     };
 }
