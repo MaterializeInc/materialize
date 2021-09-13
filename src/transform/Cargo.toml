@@ -12,7 +12,7 @@ itertools = "0.10.1"
 repr = { path = "../repr" }
 
 [dev-dependencies]
-anyhow = "1.0.43"
+anyhow = "1.0.44"
 datadriven = "0.6.0"
 lazy_static = "1.4.0"
 expr_test_util = {path = "../expr-test-util"}

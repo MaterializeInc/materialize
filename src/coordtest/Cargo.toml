@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.43"
+anyhow = "1.0.44"
 coord = { path = "../coord" }
 datadriven = "0.6.0"
 dataflow = { path = "../dataflow" }
