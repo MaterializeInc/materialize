@@ -185,11 +185,21 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             .extend(0..dataflow.arity_of(&input_id));
     }
 
-    // Propagate demand information from outputs to inputs.
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         let transform = crate::demand::Demand;
         if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
+            // Propagate demand information from outputs to inputs.
             transform.action(build_desc.view.as_inner_mut(), columns.clone(), &mut demand);
+        } else if dataflow.index_exports.is_empty() && dataflow.sink_exports.is_empty() {
+            // If there are no outputs (which happens if we just want to build
+            // a plan explanation), then demand all columns from views that are
+            // not depended on by another view.
+            let arity = build_desc.view.arity();
+            transform.action(
+                build_desc.view.as_inner_mut(),
+                (0..arity).collect(),
+                &mut demand,
+            );
         }
     }
 
