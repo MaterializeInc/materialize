@@ -24,6 +24,7 @@ pub mod future;
 pub mod indexed;
 pub mod mem;
 pub mod operators;
+pub mod s3;
 pub mod storage;
 pub mod unreliable;
 
