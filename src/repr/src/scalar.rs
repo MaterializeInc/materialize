@@ -964,6 +964,12 @@ impl FromTy<i64> for ScalarType {
     }
 }
 
+impl FromTy<DateTime<Utc>> for ScalarType {
+    fn from_ty() -> Self {
+        Self::TimestampTz
+    }
+}
+
 impl<'a> ScalarType {
     /// Returns the contained numeric scale.
     ///
