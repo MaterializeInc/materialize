@@ -27,33 +27,128 @@ so the exact shape of what we would give to users requires more design work.
 
 ## Description
 
-We will extend the existing `INCLUDE` syntax to take an optional `METADATA
-(timestamp | offset | partition | topic)+` clause. These are all the remaining
-fields in a Kafka message that are not `headers`. Each field inside the field
-list can take an optional `AS <name>` clause, in case of conflicts with the key
-or value names.
+We will extend the existing `INCLUDE` syntax to take additionaloptional metadata
+field specifiers: `timestamp`, `offset`, `partition`, and `topic` clause. These
+are all the remaining fields in a Kafka message that are not `headers`. Each
+field inside the field list can take an optional `AS <name>` clause, in case of
+conflicts with the key or value names.
 
 With this, the full syntax for the `INCLUDE` clause becomes:
 
 ```
 INCLUDE (
-    KEY (AS <name>)?
-    | METADATA ((timestamp | offset | partition | topic) (AS <name>)?)+
-)
+    KEY (AS <name>)? |
+    TIMESTAMP (AS <name>)? |
+    OFFSET (AS <name>)? |
+    PARTITION (AS <name>)? |
+    TOPIC (AS <name>)?
+)+
 ```
 
 With an example of just the new syntax looking like:
 
-`INCLUDE METADATA (timestamp, offset)`
+`INCLUDE TIMESTAMP`
 
 And an example of it being combined with existing uses of `INCLUDE KEY` full
 syntax:
 
-`INCLUDE KEY, METADATA (timestamp, offset, partition, topic)`
+`INCLUDE KEY, TIMESTAMP, OFFSET, PARTITION, TOPIC`
 
 and with the renaming syntax:
 
-`INCLUDE KEY AS mykey, METADATA (timestamp AS ts, offset as "Off")`
+`INCLUDE KEY AS mykey, TIMESTAMP AS ts, OFFSET AS "Off"`
+
+### Column Types
+
+Each of the new fields will become a column in the dataflow, with an appropriate
+type:
+
+* `TIMESTAMP` will become a nullable `TIMESTAMP WITH TIME ZONE` ([javadoc][ts])
+* `OFFSET` will become a nullable `BIGINT` ([javadoc][offset])
+* `PARTITION` will become an `INTEGER` ([javadoc][partition])
+* `TOPIC` will become a `STRING` ([javadoc][topic])
+
+[ts]: https://kafka.apache.org/28/javadoc//org/apache/kafka/clients/producer/RecordMetadata.html#timestamp()
+[offset]: https://kafka.apache.org/28/javadoc//org/apache/kafka/clients/producer/RecordMetadata.html#offset()
+[partition]: https://kafka.apache.org/28/javadoc//org/apache/kafka/clients/producer/RecordMetadata.html#partition()
+[topic]: https://kafka.apache.org/28/javadoc//org/apache/kafka/clients/producer/RecordMetadata.html#topic()
+
+### Envelope Support
+
+#### Background
+
+Envelopes will have varying support for metadata fields, due variously to their
+inherent properties and engineering effort. The key constraint is that any
+envelope that knows how to do its own retractions (i.e. the Debezium and
+Materialize envelopes) require that the full retraction be present in the data.
+Essentially, retraction-aware envelopes provide `materialized` with information
+that is morally equivalent to:
+
+```javascript
+// "insert" event
+{
+    "retract": null,
+    "insert": [1, "a"]
+}
+// "update" event
+{
+    "retract": [1, "a"],
+    "insert": [1, "b"]
+}
+```
+
+The retraction-aware envelopes understand the semantics of these events and will
+correctly provide retraction/insertion messages to their dataflows.
+
+The problem comes if we add metadata, it is guaranteed that each message will be
+unique:
+
+```javascript
+// "insert" event
+{
+    "retract": null,
+    "insert": [1, "a"],
+    "offset": 100
+}
+// "update" event
+{
+    "retract": [1, "a"],
+    "insert": [1, "b"],
+    "offset": 704
+}
+```
+
+If we insert the offset from the insert event then the row in Materialize
+becomes `[1, "a", 100]`. When we see the update event, the event itself does not
+have enough information to provide a retraction, the naive retraction would be
+to try and `DELETE [1, "a", 704]`, but that does not exist and will therefore
+cause errors in dataflows.
+
+This can be worked around by maintaining UPSERT-like state for each envelope,
+but it is unclear how needed this work is, and so the next section describes the
+intended initial state and future work possible or required.
+
+#### Trivially supported
+
+`ENVELOPE NONE`: works inherently, no additional work required
+
+
+#### Small amount of work to support
+
+Both of `UPSERT` and `DEBEZIUM UPSERT` require the approximately the same amount
+of effort as `ENVELOPE NONE` and should be part of the initial implementation.
+
+#### Future work
+
+Envelopes `DEBEZIUM` and `MATERIALIZE` can both be made to work by creating a
+shadow upsert-like map from previously-seen entry keys to the metadata that they
+were originally inserted with. For `ENVELOPE DEBEZIUM` this would just allow a
+memory saving over `DEBEZIUM UPSERT` since Materialize would not need to store
+all the data from each row, just the metadata.
+
+It is unclear what the use case for the combination of these envelopes with
+metadata is, so we are not expecting this to be worked on until we receive use
+cases that need them.
 
 ## Alternatives
 
@@ -84,47 +179,3 @@ This has several drawbacks though:
   users to write a projecting view if they want access to just their data. Based
   on the fact that all our current users are getting by with none of these
   fields, that will be a majority of users.
-
-### Alternative syntax
-
-We could write this without the `METADATA` prefix, just field names as keywords:
-
-`INCLUDE KEY, TIMESTAMP, OFFSET, PARTITION, TOPIC`.
-
-Aesthetically this looks a little better to me. Which one we use depends I think
-primarily on whether we want to consider these as the same category of item as
-user data, or if we want to more clearly signify that these properties are
-always set by Kafka itself.
-
-With our likely eventual support for user-set headers (which I believe will
-require a user-specified list of fields) we will end up with the full `INCLUDE`
-syntax looking like one of the two following examples:
-
-```
-INCLUDE
-    KEY,
-    METADATA (timestamp, offset),
-    HEADERS (encryption_key_id)
-```
-
-vs
-
-```
-INCLUDE
-    KEY,
-    TIMESTAMP,
-    OFFSET,
-    HEADERS (encryption_key_id)
-```
-
-## Open questions
-
-### Debezium data cannot be retracted with metadata columns
-
-The initial implementation will just prevent use of `INCLUDE METADATA` with
-`ENVELOPE DEBEZIUM`, in the same way that we prevent `INCLUDE KEY` with Debezium
-data.
-
-The problem is that the Debezium envelope self-retracts data, but the data that
-it knows how to retract does not include any Kafka metadata, so all retractions
-(that is, all UPDATEs and DELETEs in upstream databases) will fail.
