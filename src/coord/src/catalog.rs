@@ -2171,8 +2171,10 @@ impl Catalog {
                 return;
             }
 
-            if let Some((index_id, _)) = catalog.enabled_indexes[&id].first() {
-                indexes.push(*index_id);
+            // Include all indexes on an id so the dataflow builder can safely use any
+            // of them.
+            if !catalog.enabled_indexes[&id].is_empty() {
+                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
                 return;
             }
 
