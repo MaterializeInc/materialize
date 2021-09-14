@@ -960,23 +960,19 @@ impl AnalyzedRegex {
     }
 }
 
-// TODO: Convert to an `impl Iterator` return value.
-pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
+pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)> + '_ {
     let bytes = a.unwrap_str().as_bytes();
     let mut row = Row::default();
-    let mut csv_reader = csv::ReaderBuilder::new()
+    let csv_reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .from_reader(bytes);
-    csv_reader
-        .records()
-        .filter_map(|res| match res {
-            Ok(sr) if sr.len() == n_cols => {
-                row.extend(sr.iter().map(|s| Datum::String(s)));
-                Some((row.finish_and_reuse(), 1))
-            }
-            _ => None,
-        })
-        .collect()
+    csv_reader.into_records().filter_map(move |res| match res {
+        Ok(sr) if sr.len() == n_cols => {
+            row.extend(sr.iter().map(|s| Datum::String(s)));
+            Some((row.finish_and_reuse(), 1))
+        }
+        _ => None,
+    })
 }
 
 pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
