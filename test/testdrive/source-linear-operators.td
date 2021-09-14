@@ -44,7 +44,7 @@ Query:
 | Get materialize.public.data (UID)
 | Filter (#0 = 1)
 
-? EXPLAIN PLAN FOR SELECT b from data_view where b = 1 
+? EXPLAIN PLAN FOR SELECT b from data_view where b = 1
 Source materialize.public.data (UID):
 | Filter (#1 = 1)
 | Project (#1)
