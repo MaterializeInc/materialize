@@ -109,10 +109,19 @@ mod tests {
             FormatType::Explain(args.get(FORMAT))
         };
 
+        let mut logical_opt = Optimizer::for_view();
+        let mut physical_opt = Optimizer::for_dataflow();
+
         let out = match test_type {
             TestType::Opt => {
-                let mut opt = Optimizer::for_dataflow();
-                rel = opt.optimize(rel, &HashMap::new()).unwrap().into_inner();
+                rel = logical_opt
+                    .optimize(rel, &HashMap::new())
+                    .unwrap()
+                    .into_inner();
+                rel = physical_opt
+                    .optimize(rel, &HashMap::new())
+                    .unwrap()
+                    .into_inner();
 
                 convert_rel_to_string(&rel, &cat, &format_type)
             }
@@ -120,7 +129,6 @@ mod tests {
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
                 // that helpful for optimizations that involve those (which is most of them).
-                let opt = Optimizer::for_dataflow();
                 let mut out = String::new();
                 // Buffer of the names of the transformations that have been applied with no changes.
                 let mut no_change: Vec<String> = Vec::new();
@@ -128,7 +136,11 @@ mod tests {
                 writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
                 writeln!(out, "====")?;
 
-                for transform in opt.transforms.iter() {
+                for transform in logical_opt
+                    .transforms
+                    .iter()
+                    .chain(physical_opt.transforms.iter())
+                {
                     let prev = rel.clone();
                     transform.transform(
                         &mut rel,

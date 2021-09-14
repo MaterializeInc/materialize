@@ -30,8 +30,8 @@ pub fn optimize_dataflow(
     // Inline views that are used in only one other view.
     inline_views(dataflow);
 
-    // Full optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes);
+    // Logical optimization pass after view inlining
+    optimize_dataflow_relations(dataflow, indexes, false);
 
     optimize_dataflow_filters(dataflow);
     // TODO: when the linear operator contract ensures that propagated
@@ -41,6 +41,10 @@ pub fn optimize_dataflow(
     // that way demand only includes the columns that are still necessary after
     // the filters are applied.
     optimize_dataflow_demand(dataflow);
+
+    // Physical optimization pass
+    optimize_dataflow_relations(dataflow, indexes, true);
+
     monotonic::optimize_dataflow_monotonic(dataflow);
 }
 
@@ -142,17 +146,24 @@ fn inline_views(dataflow: &mut DataflowDesc) {
     }
 }
 
-/// Performs a full optimization pass on the dataflow, including physcal planning
-/// using the supplied set of indexes.
+/// Performs either the logical or the physical optimization pass on the
+/// dataflow using the supplied set of indexes.
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    physical: bool,
 ) {
-    // Re-optimize each dataflow and perform physical optimizations.
+    // Re-optimize each dataflow
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
-    let optimizer = crate::Optimizer::for_dataflow();
+    let optimizer = if physical {
+        // Perform physical optimizations.
+        crate::Optimizer::for_dataflow()
+    } else {
+        // Perform logical optimizations.
+        crate::Optimizer::for_view()
+    };
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.
@@ -243,7 +254,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
                     .filter(list.iter().cloned());
             }
         }
-        transform.dataflow_transform(build_desc.view.as_inner_mut(), &mut predicates);
+        transform.action(build_desc.view.as_inner_mut(), &mut predicates);
     }
 
     // Push predicate information into the SourceDesc.

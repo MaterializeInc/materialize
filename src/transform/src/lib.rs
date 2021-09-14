@@ -321,9 +321,7 @@ impl Optimizer {
             Box::new(crate::update_let::UpdateLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
-        let mut optimizer = Self::for_view();
-        optimizer.transforms.extend(transforms);
-        optimizer
+        Self { transforms }
     }
 
     /// Simple fusion and elision transformations to render the query readable.
