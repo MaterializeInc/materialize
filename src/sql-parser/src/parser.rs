@@ -1014,6 +1014,12 @@ impl<'a> Parser<'a> {
                     expr: Box::new(expr),
                     field: Ident::new(id),
                 }),
+                // Per PostgreSQL, even reserved keywords are ok after a field
+                // access operator.
+                Some(Token::Keyword(kw)) => Ok(Expr::FieldAccess {
+                    expr: Box::new(expr),
+                    field: kw.into_ident(),
+                }),
                 Some(Token::Star) => Ok(Expr::WildcardAccess(Box::new(expr))),
                 unexpected => self.expected(
                     self.peek_prev_pos(),
