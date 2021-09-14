@@ -140,15 +140,24 @@ of effort as `ENVELOPE NONE` and should be part of the initial implementation.
 
 #### Future work
 
-Envelopes `DEBEZIUM` and `MATERIALIZE` can both be made to work by creating a
-shadow upsert-like map from previously-seen entry keys to the metadata that they
-were originally inserted with. For `ENVELOPE DEBEZIUM` this would just allow a
-memory saving over `DEBEZIUM UPSERT` since Materialize would not need to store
-all the data from each row, just the metadata.
+Envelopes `DEBEZIUM` and `MATERIALIZE` on data streams that have primary-key
+semantics (i.e. where rows are guaranteed to be unique according to some key
+which is a subset of the data) can both be made to work by creating a shadow
+upsert-like map from previously-seen entry keys to the metadata that they were
+originally inserted with. For `ENVELOPE DEBEZIUM` this would just allow a memory
+saving over `DEBEZIUM UPSERT` since Materialize would not need to store all the
+data from each row, just the metadata.
 
 It is unclear what the use case for the combination of these envelopes with
 metadata is, so we are not expecting this to be worked on until we receive use
 cases that need them.
+
+#### Significant design and work to support
+
+Self-retracting formats that operate on streams of data where rows do not have
+primary-key semantics cannot be made to work without input from the user -- if
+the same row was inserted three times, with three different offsets, which one
+do you retract?
 
 ## Alternatives
 
