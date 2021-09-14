@@ -526,7 +526,7 @@ impl<K: Codec + Ord, V: Codec + Ord> DecodedSnapshot<K, V> {
         let mut buf = Vec::new();
 
         // Read in all of the potentially decoded data.
-        while self.read(&mut buf) {}
+        while self.read(&mut buf)? {}
 
         for ((k, v), ts, diff) in buf.drain(..) {
             res.push(((k?, v?), ts, diff));
@@ -540,14 +540,14 @@ impl<K: Codec, V: Codec> Snapshot<Result<K, String>, Result<V, String>> for Deco
     fn read<E: Extend<((Result<K, String>, Result<V, String>), u64, isize)>>(
         &mut self,
         buf: &mut E,
-    ) -> bool {
-        let ret = self.snap.read(&mut self.buf);
+    ) -> Result<bool, Error> {
+        let ret = self.snap.read(&mut self.buf)?;
         buf.extend(self.buf.drain(..).map(|((k, v), ts, diff)| {
             let k = K::decode(&k);
             let v = V::decode(&v);
             ((k, v), ts, diff)
         }));
-        ret
+        Ok(ret)
     }
 }
 

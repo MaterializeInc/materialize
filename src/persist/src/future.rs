@@ -18,6 +18,7 @@ use crate::error::Error;
 ///
 /// Unlike [std::future::Future], the computation will complete even if this is
 /// dropped.
+#[derive(Debug)]
 pub struct Future<T>(oneshot::Receiver<Result<T, Error>>);
 
 impl<T> Future<T> {

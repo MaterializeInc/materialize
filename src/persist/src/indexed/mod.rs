@@ -833,7 +833,16 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             {
                 let mut snap =
                     unsealed.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
-                while snap.read(&mut updates) {}
+                let mut more = true;
+                while more {
+                    match snap.read(&mut updates) {
+                        Ok(m) => more = m,
+                        Err(err) => {
+                            self.restore();
+                            return Err(format!("failed to fetch snapshot: {}", err).into());
+                        }
+                    };
+                }
             }
 
             // Trace batches are required to be sorted and consolidated by ((k, v), t)
@@ -975,7 +984,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             .get(&id)
             .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
         let seal_frontier = trace.get_seal();
-        let trace = trace.snapshot(&self.blob)?;
+        let trace = trace.snapshot(&self.blob);
         let unsealed = unsealed.snapshot(trace.ts_upper.clone(), Antichain::new(), &self.blob)?;
 
         Ok(IndexedSnapshot(
@@ -1035,18 +1044,18 @@ pub trait Snapshot<K, V> {
     /// changed the semantics to "Return false when no more data has been added,
     /// nor will ever be added to the destination" then we could support the
     /// desired control flow.
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> bool;
+    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> Result<bool, Error>;
 }
 
 /// Extension methods on `Snapshot<K, V>` for use in tests.
 #[cfg(test)]
 pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
     /// A full read of the data in the snapshot.
-    fn read_to_end(mut self) -> Vec<((K, V), u64, isize)> {
+    fn read_to_end(mut self) -> Result<Vec<((K, V), u64, isize)>, Error> {
         let mut buf = Vec::new();
-        while self.read(&mut buf) {}
+        while self.read(&mut buf)? {}
         buf.sort();
-        buf
+        Ok(buf)
     }
 }
 
@@ -1081,8 +1090,11 @@ impl IndexedSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
-        self.0.read(buf) || self.1.read(buf)
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
+        &mut self,
+        buf: &mut E,
+    ) -> Result<bool, Error> {
+        Ok(self.0.read(buf)? || self.1.read(buf)?)
     }
 }
 
@@ -1126,8 +1138,8 @@ mod tests {
         // Empty things are empty.
         let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end(), vec![]);
-        assert_eq!(trace.read_to_end(), vec![]);
+        assert_eq!(unsealed.read_to_end()?, vec![]);
+        assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 0);
         assert_eq!(seal_frontier.elements(), &[0]);
 
@@ -1149,22 +1161,22 @@ mod tests {
         block_on_drain(&mut i, |i, handle| {
             i.write(vec![(id, updates.clone())], handle)
         })?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
+        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
         let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end(), updates);
-        assert_eq!(trace.read_to_end(), vec![]);
+        assert_eq!(unsealed.read_to_end()?, updates);
+        assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 1);
         assert_eq!(seal_frontier.elements(), &[0]);
 
         // After a step, it's all still in the unsealed as nothing has been sealed
         // yet.
         i.step()?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
+        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
         let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end(), updates);
-        assert_eq!(trace.read_to_end(), vec![]);
+        assert_eq!(unsealed.read_to_end()?, updates);
+        assert_eq!(trace.read_to_end()?, vec![]);
         assert_eq!(seqno.0, 1);
         assert_eq!(seal_frontier.elements(), &[0]);
 
@@ -1173,22 +1185,22 @@ mod tests {
         // is still in the unsealed.
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 2, handle))?;
         i.step()?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
+        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
         let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end(), updates[1..]);
-        assert_eq!(trace.read_to_end(), updates[..1]);
+        assert_eq!(unsealed.read_to_end()?, updates[1..]);
+        assert_eq!(trace.read_to_end()?, updates[..1]);
         assert_eq!(seqno.0, 1);
         assert_eq!(seal_frontier.elements(), &[2]);
 
         // All the data has been sealed, so it's now all in the trace.
         block_on_drain(&mut i, |i, handle| i.seal(vec![id], 3, handle))?;
         i.step()?;
-        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end(), updates);
+        assert_eq!(block_on(|res| i.snapshot(id, res))?.read_to_end()?, updates);
         let IndexedSnapshot(unsealed, trace, seqno, seal_frontier) =
             block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end(), vec![]);
-        assert_eq!(trace.read_to_end(), updates);
+        assert_eq!(unsealed.read_to_end()?, vec![]);
+        assert_eq!(trace.read_to_end()?, updates);
         assert_eq!(seqno.0, 1);
         assert_eq!(seal_frontier.elements(), &[3]);
 
@@ -1236,8 +1248,8 @@ mod tests {
 
         // Sanity check that all the data made it into trace as expected.
         let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end(), vec![]);
-        assert_eq!(trace.read_to_end(), updates);
+        assert_eq!(unsealed.read_to_end()?, vec![]);
+        assert_eq!(trace.read_to_end()?, updates);
         Ok(())
     }
 
@@ -1274,8 +1286,8 @@ mod tests {
 
         // Sanity check that all the data made it into trace as expected.
         let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end(), vec![]);
-        assert_eq!(trace.read_to_end(), vec![(("1".into(), "".into()), 1, 4)]);
+        assert_eq!(unsealed.read_to_end()?, vec![]);
+        assert_eq!(trace.read_to_end()?, vec![(("1".into(), "".into()), 1, 4)]);
 
         Ok(())
     }
