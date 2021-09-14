@@ -46,6 +46,8 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.9.5 %}}
+
 {{% version-header v0.9.4 %}}
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
