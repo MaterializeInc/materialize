@@ -16,7 +16,7 @@ By default, Materialize creates new, distinct topics for sinks after each restar
 
 This allows for exactly-once stream processing, meaning that each incoming event affects the final results only once, even if the stream is disrupted or Materialize is restarted.
 
-This is currently available only for Kafka sources and the views based on them.
+Exactly-once stream processing is currently available only for Kafka sources and the views based on them.
 
 When you create a sink, you must:
 
