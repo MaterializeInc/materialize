@@ -194,7 +194,10 @@ def main() -> None:
                 n = cur.fetchone()[0]
                 if n == ns.records:
                     break
-            except psycopg2.errors.SqlStatementNotYetComplete:
+            except (
+                psycopg2.errors.SqlStatementNotYetComplete,
+                psycopg2.errors.InternalError,
+            ):
                 pass
             time.sleep(1)
         prev = print_stats(cid, prev)
