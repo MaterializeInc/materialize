@@ -146,6 +146,21 @@ def main() -> None:
     ns = parser.parse_args()
 
     wait_for_confluent()
+    # We need to temporarily redirect stdout to stderr,
+    # because, although recent versions of the mz repository
+    # make sure mzbuild only writes to stderr here,
+    # we might want to run this against older versions that don't.
+    #
+    # This will not work correctly
+    # if stdout is buffered, but we invoke this script
+    # with python3 -u, so that's fine.
+    #
+    # We have to do this the POSIX way here, rather than with
+    # `contextlib.redirect_stdout`, because that only affects native
+    # Python code, not e.g. spawned processes
+    old_stdout = os.dup(1)
+    os.dup2(2, 1)
+
     mz_launcher = Thread(target=launch_mz, daemon=True)
     mz_launcher.start()
 
@@ -160,6 +175,7 @@ def main() -> None:
     while not cid:
         with open(cid_path) as f:
             cid = f.read()
+    os.dup2(old_stdout, 1)
     os.remove(cid_path)
     conn = psycopg2.connect("host=localhost port=6875 user=materialize")
     conn.autocommit = True

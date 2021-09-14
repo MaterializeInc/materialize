@@ -27,7 +27,6 @@ setup(
     install_requires=requires("requirements.txt"),
     extras_require={
         "dev": requires("requirements-dev.txt"),
-        "ci": requires("requirements-ci.txt"),
     },
     package_data={"materialize": ["py.typed"]},
     include_package_data=True,

@@ -113,7 +113,6 @@ def launch(
     instance_profile: Optional[str],
     nonce: str,
     delete_after: int,
-    git_rev: str,
 ) -> Instance:
     """Launch and configure an ec2 instance with the given properties."""
 
@@ -308,6 +307,7 @@ class MachineDesc(NamedTuple):
     ami: str
     tags: Dict[str, str]
     size_gb: int
+    checkout: bool = True
 
 
 async def setup_all(
@@ -346,7 +346,6 @@ def launch_cluster(
             security_group_id=security_group_id,
             instance_profile=instance_profile,
             nonce=nonce,
-            git_rev=git_rev,
             delete_after=delete_after,
         )
         for d in descs
@@ -362,9 +361,19 @@ def launch_cluster(
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
-        setup_all(instances, subnet_id, local_pub_key, identity_file, git_rev)
+        asyncio.gather(
+            *(
+                setup(
+                    i,
+                    subnet_id,
+                    local_pub_key,
+                    identity_file,
+                    (git_rev if d.checkout else "HEAD"),
+                )
+                for (i, d) in zip(instances, descs)
+            )
+        )
     )
-
     hosts_str = "".join(
         (f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs))
     )

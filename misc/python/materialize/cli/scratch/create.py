@@ -89,6 +89,7 @@ def run(args: argparse.Namespace) -> None:
             ami=obj["ami"],
             tags=obj.get("tags", dict()),
             size_gb=obj["size_gb"],
+            checkout=obj.get("checkout", True),
         )
         for obj in multi_json(sys.stdin.read())
     ]
