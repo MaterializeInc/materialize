@@ -472,6 +472,16 @@ parse-scalar
 FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }
 
 parse-scalar
+(x).order
+----
+FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("order") }
+
+parse-scalar
+(x).date
+----
+FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("date") }
+
+parse-scalar
 (x).a.b.c
 ----
 FieldAccess { expr: FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }, field: Ident("c") }
