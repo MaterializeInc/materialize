@@ -8,11 +8,15 @@ alter_index ::=
     )
     | 'RESET' '(' field ( ',' field )* ')'
   )
+begin ::=
+  'BEGIN' ( transaction_mode ( ',' transaction_mode )* )?
 close ::=
   'CLOSE' cursor_name
 col_option ::=
   'NOT' 'NULL' |
   'DEFAULT' expr
+commit ::=
+  'COMMIT'
 connector_spec ::=
   'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
   'KAFKA BROKER' host 'TOPIC' topic?
@@ -305,6 +309,8 @@ lit_cast ::=
   type val
 op_cast ::=
   val '::' type
+rollback ::=
+  'ROLLBACK'
 select_stmt ::=
   'WITH' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )?
   'AS' '(' select_stmt ')' ( ',' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')' )*
