@@ -181,7 +181,7 @@ def start(ns: argparse.Namespace) -> None:
     os.chdir(os.environ["MZ_ROOT"])
 
     mz_launch_script = f"""echo {shlex.quote(base64.b64encode(pkg_data).decode('utf-8'))} | base64 -d > mz.tar.gz
-python3 -m venv /tmp/mzenv >&2 
+python3 -m venv /tmp/mzenv >&2
 . /tmp/mzenv/bin/activate >&2
 python3 -m pip install --upgrade pip >&2
 pip3 install ./mz.tar.gz[dev] >&2
