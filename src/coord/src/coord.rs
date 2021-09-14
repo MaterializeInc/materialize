@@ -2292,10 +2292,6 @@ impl Coordinator {
         mut session: Session,
         mut action: EndTransactionAction,
     ) {
-        let was_implicit = matches!(
-            session.transaction(),
-            TransactionStatus::InTransactionImplicit(_)
-        );
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
             (&action, session.transaction())
@@ -2304,7 +2300,7 @@ impl Coordinator {
         }
         let response = ExecuteResponse::TransactionExited {
             tag: action.tag(),
-            was_implicit,
+            was_implicit: session.transaction().is_implicit(),
         };
         let rx = self.sequence_end_transaction_inner(&mut session, &action);
         match rx {
