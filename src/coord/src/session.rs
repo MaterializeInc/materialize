@@ -414,6 +414,17 @@ impl TransactionStatus {
             | TransactionStatus::Failed(txn) => Some(txn),
         }
     }
+
+    /// Expresses whether or not the transaction was implicitly started.
+    /// However, its negation does not imply explicitly started.
+    pub fn is_implicit(&self) -> bool {
+        match self {
+            TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => true,
+            TransactionStatus::Default
+            | TransactionStatus::InTransaction(_)
+            | TransactionStatus::Failed(_) => false,
+        }
+    }
 }
 
 impl Default for TransactionStatus {

@@ -16,6 +16,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use crate::error::Error;
+use crate::future::Future;
 use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::{UnsealedBatchMeta, UnsealedMeta};
 use crate::indexed::{BlobUnsealedBatch, Id, Snapshot};
@@ -194,7 +195,7 @@ impl Unsealed {
             )));
         }
 
-        let mut updates = Vec::with_capacity(self.batches.len());
+        let mut batches = Vec::with_capacity(self.batches.len());
         for meta in self.batches.iter() {
             // We want to read this batch as long as it contains times [lo, hi] s.t.
             // they overlap with the requested [ts_lower, ts_upper).
@@ -202,14 +203,14 @@ impl Unsealed {
             // - ts_lower <= hi
             // - ts_upper > lo
             if ts_lower.less_equal(&meta.ts_upper) && !ts_upper.less_equal(&meta.ts_lower) {
-                updates.push(blob.get_unsealed_batch(&meta.key)?);
+                batches.push(blob.get_unsealed_batch_async(&meta.key));
             }
         }
 
         Ok(UnsealedSnapshot {
             ts_lower,
             ts_upper,
-            updates,
+            batches,
         })
     }
 
@@ -266,7 +267,8 @@ impl Unsealed {
         let mut updates = vec![];
 
         updates.extend(
-            blob.get_unsealed_batch(&batch.key)?
+            blob.get_unsealed_batch_async(&batch.key)
+                .recv()?
                 .updates
                 .iter()
                 .filter(|(_, ts, _)| self.ts_lower.less_equal(ts))
@@ -308,12 +310,16 @@ pub struct UnsealedSnapshot {
     pub ts_lower: Antichain<u64>,
     /// An open upper bound on the times of the contained updates.
     pub ts_upper: Antichain<u64>,
-    updates: Vec<Arc<BlobUnsealedBatch>>,
+    batches: Vec<Future<Arc<BlobUnsealedBatch>>>,
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(&mut self, buf: &mut E) -> bool {
-        if let Some(batch) = self.updates.pop() {
+    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
+        &mut self,
+        buf: &mut E,
+    ) -> Result<bool, Error> {
+        if let Some(batch) = self.batches.pop() {
+            let batch = batch.recv()?;
             let updates = batch
                 .updates
                 .iter()
@@ -321,7 +327,7 @@ impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
                 .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
             buf.extend(updates);
         }
-        !self.updates.is_empty()
+        Ok(!self.batches.is_empty())
     }
 }
 
@@ -387,7 +393,7 @@ mod tests {
     ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
         let hi = hi.map_or_else(|| Antichain::new(), |e| Antichain::from_elem(e));
         let snapshot = unsealed.snapshot(Antichain::from_elem(lo), hi, &blob)?;
-        let updates = snapshot.read_to_end();
+        let updates = snapshot.read_to_end()?;
         Ok(updates)
     }
 

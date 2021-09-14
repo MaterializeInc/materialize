@@ -188,16 +188,17 @@ false)`.
 
 ### `PROGRESS`
 
+Intuitively, progress messages communicate that no updates have occurred in a
+given time window. Without explicit progress messages, it is impossible to
+distinguish between a stall in Materialize and a legitimate period of no
+updates.
+
 If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional
 `mz_progressed` column appears in the output.
 It is `false` if there may be more rows with the same timestamp.
 It is `true` if no more timestamps will appear that are strictly less than the
 timestamp.
 All further columns after `mz_progressed` will be `NULL` in the `true` case.
-
-Intuitively, progress messages communicate that no updates have occurred in a
-given time window. Without explicit progress messages, it is impossible to
-distinguish between a stall in Materialize and a legimate period of no updates.
 
 Not all timestamps that appear will have a corresponding `mz_progressed` row.
 For example, the following is a valid sequence of updates:

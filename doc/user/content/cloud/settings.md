@@ -5,6 +5,8 @@ menu:
   main:
     parent: "cloud"
     weight: 4
+aliases:
+  - account-settings
 ---
 
 {{< cloud-notice >}}
@@ -23,7 +25,7 @@ On the Profile tab, you change any of the following:
 * Address
 * Job title
 
-If you wish to delete your profile or Materialize account, [reach out to us](../support). If you are the sole administrator of any workspaces, you will be asked whether you want to delete the workspace as well or give administrator privileges to another user.
+If you wish to delete your profile or Materialize account, [reach out to us](../support).
 
 ## Privacy &amp; security
 

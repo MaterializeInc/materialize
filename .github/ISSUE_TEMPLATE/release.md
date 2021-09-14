@@ -88,7 +88,7 @@ production readiness.
 
 - [ ] An issue should be automatically created with unreviewed PRs linked inside
   of it. Review (or get review on) all unreviewed PRs, and link to that issue
-  here.
+  here. Once all PRs have been reviewed, close the issue.
 
 [gh]: https://cli.github.com/
 
@@ -98,17 +98,17 @@ Release notes should be updated by engineers as they merge PRs. The release note
 team is responsible for reviewing release notes and the release announcement before
 a release is published.
 
-- [ ] Post the following message to the `#release` channel in slack, modifying the link to the issue to point to this one:
+- [ ] Post the following message to the `#release` channel in slack, modifying the two
+  issue links, one to point to the unreviewed PRs issue you went through above, and one
+  to point to this issue:
 
   > @relnotes-team the release is in progress, now's a great time to verify or
   > prepare the release notes and any announcement posts.
   > * release notes: https://github.com/MaterializeInc/materialize/blob/main/doc/user/content/release-notes.md
-  > * release issue: https://github.com/MaterializeInc/materialize/issues/
+  > * All PRs in this release: https://github.com/MaterializeInc/materialize/issues/`<unreviewed PRs issue>`
+  > * Release: https://github.com/MaterializeInc/materialize/issues/`<this issue>`
 
 ### Test the release candidate
-
-Cloud engineers run many of the steps in this section, their steps are prefixed with **cloud
-engineer**.
 
 To run the required load tests on the release candidate tag, Materialize employees
 can follow [these instructions for running semi-automatic load tests][load-instr]
@@ -160,8 +160,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
   ```
   </details>
 
-- [ ] **cloud engineer** Let the tests run for at least 24 hours, with the following success
-  criteria:
+- [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
   - [ ] chbench: The ingest rate should not be slower than the previous release.
   - [ ] billing-demo: The container should run and finish without error. You can get the exit code
@@ -244,13 +243,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 ### Open a PR on the cloud repo enabling the new version
 
-- [ ] Issue a PR to the cloud repo to allow the released version following [the instructions][].
-- [ ] After that PR has been merged, a PR suggesting a merge from `main` -> `production` will be
-  automatically created and assigned to you. Request somebody on the
-  [@MaterializeInc/cloud-deployers][deployers] team review it; once approved, merge the PR and it
-  will be automatically deployed to production.
+- [ ] Issue a PR to the cloud repo to bless the released version following [the
+  instructions][], tag people from the
+  [@MaterializeInc/cloud-deployers][deployers] team to review it.
 
-[the instructions]: https://github.com/MaterializeInc/cloud/blob/main/doc/misc.md#updating-to-a-new-materialize-release
+[the instructions]: https://github.com/MaterializeInc/cloud/blob/main/doc/misc.md#blessing-a-new-materialize-release
 [deployers]: https://github.com/orgs/MaterializeInc/teams/cloud-deployers/members
 
 ### Convert the GitHub Tag into a GitHub Release

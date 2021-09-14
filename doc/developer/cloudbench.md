@@ -30,10 +30,10 @@ Launching benchmarks is done with the `bin/cloudbench start` subcommand. It take
 
 For example, the following command:
 ```
-bin/cloudbench start --profile confluent --trials 3 --revs HEAD,'HEAD^' misc/python/materialize/benches/avro_ingest.py -r 100000000 -n 10
+bin/cloudbench start --profile confluent --trials 3 --revs HEAD,'HEAD^' materialize.benches.avro_ingest -r 100000000 -n 10
 ```
 
-launches 12 machines: two git revisions, three clusters per revision, and two machines per cluster. It then runs `misc/python/materialize/benches/avro_ingest.py -r 100000000 -n 10`
+launches 12 machines: two git revisions, three clusters per revision, and two machines per cluster. It then runs the module `misc.benches.avro_ingest`, defined in the file `misc/python/materialize/benches/avro_ingest.py`, with the arguments `-r 100000000 -n 10`
 on 6 of those machines (one per cluster; the other machine is for the Confulent platform).
 
 ## Checking results

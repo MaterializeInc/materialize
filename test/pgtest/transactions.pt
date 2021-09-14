@@ -141,9 +141,13 @@ ReadyForQuery {"status":"I"}
 send
 Query {"query": "SELECT 1; COMMIT; SELECT 2"}
 Query {"query": "SELECT 3; ROLLBACK; SELECT 4"}
+Query {"query": "COMMIT;"}
+Query {"query": "ROLLBACK;"}
 ----
 
 until
+ReadyForQuery
+ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
@@ -164,6 +168,12 @@ CommandComplete {"tag":"ROLLBACK"}
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["4"]}
 CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
+CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
 
 send

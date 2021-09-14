@@ -130,6 +130,9 @@ impl Transcoder {
                         Self::decode_json::<_, protobuf::gen::nested::NestedOuter>(row)?
                             .map(convert)
                     }
+                    protobuf::MessageType::Imported => {
+                        Self::decode_json::<_, protobuf::gen::imported::Imported>(row)?.map(convert)
+                    }
                 };
                 let val = if let Some(decoded) = val {
                     decoded
@@ -257,7 +260,7 @@ impl Action for IngestAction {
                     let schema_id = if self.publish {
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
                         let schema_id = ccsr_client
-                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Avro)
+                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Avro, &[])
                             .await
                             .map_err(|e| format!("schema registry error: {}", e))?;
                         schema_id
@@ -279,7 +282,7 @@ impl Action for IngestAction {
                         let schema = schema.expect("schema");
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
                         ccsr_client
-                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Protobuf)
+                            .publish_schema(&ccsr_subject, &schema, ccsr::SchemaType::Protobuf, &[])
                             .await
                             .map_err(|e| format!("schema registry error: {}", e))?;
                     }

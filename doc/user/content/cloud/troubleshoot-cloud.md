@@ -12,7 +12,6 @@ menu:
 We're working on other monitoring tools, but for now there are a few tools you can use for troubleshooting issues with Materialize Cloud:
 
 * Logs
-* Catalog-only mode
 * Monitoring integrations
 
 ## Logs
@@ -31,12 +30,6 @@ levels](/ops/monitoring/#levels). Every message at either of these levels indica
 that must be investigated and resolved.
 
 For more information, see [Monitoring: Logging](/ops/monitoring/#logging)
-
-## Catalog-only mode
-
-The system catalog contains metadata about a Materialize instance. If a deployment is unable to start, you will see the option to launch it in catalog-only mode. This launches Materialize without data and allows you to turn on specified indexes one at a time so that you can identify which dataflow is causing issues.
-
-For more information, see [System Catalog](/sql/system-catalog).
 
 ## Third-party monitoring tools
 

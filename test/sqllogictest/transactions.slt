@@ -391,3 +391,27 @@ simple conn=t1
 COMMIT;
 ----
 db error: ERROR: unknown catalog item 'u21'
+
+# Test transaction syntax that we don't support.
+
+statement error READ WRITE not yet supported
+BEGIN READ WRITE
+
+statement ok
+BEGIN ISOLATION LEVEL SERIALIZABLE
+
+statement error CHAIN not yet supported
+COMMIT AND CHAIN
+
+statement error CHAIN not yet supported
+ROLLBACK AND CHAIN
+
+statement ok
+ROLLBACK
+
+# This is a noop, but is supported syntax.
+statement ok
+BEGIN ISOLATION LEVEL REPEATABLE READ
+
+statement ok
+COMMIT

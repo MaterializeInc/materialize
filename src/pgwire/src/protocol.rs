@@ -440,11 +440,7 @@ where
 
         // Implicit transactions are closed at the end of a Query message.
         {
-            let implicit = matches!(
-                self.coord_client.session().transaction(),
-                TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_)
-            );
-            if implicit {
+            if self.coord_client.session().transaction().is_implicit() {
                 self.commit_transaction().await?;
             }
         }
@@ -900,12 +896,8 @@ where
     }
 
     async fn sync(&mut self) -> Result<State, io::Error> {
-        // Close the current transaction if we are not in an explicit transaction.
-        let started = matches!(
-            self.coord_client.session().transaction(),
-            TransactionStatus::Started(_)
-        );
-        if started {
+        // Close the current transaction if we are in an implicit transaction.
+        if self.coord_client.session().transaction().is_implicit() {
             self.commit_transaction().await?;
         }
         return self.ready().await;

@@ -11,12 +11,14 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Instant;
 
 use abomonation::abomonated::Abomonated;
 use ore::cast::CastFrom;
 
 use crate::error::Error;
+use crate::future::Future;
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
 };
@@ -81,19 +83,8 @@ impl<B: Blob> BlobCache<B> {
         self.blob.lock()?.close()
     }
 
-    /// Returns the batch for the given key, blocking to fetch if it's not
-    /// already in the cache.
-    pub fn get_unsealed_batch(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
-        {
-            // New scope to ensure the cache lock is dropped during the
-            // (expensive) get.
-            if let Some(entry) = self.unsealed.lock()?.get(key) {
-                self.metrics.blob_read_cache_hit_count.inc();
-                return Ok(entry.clone());
-            }
-            self.metrics.blob_read_cache_miss_count.inc();
-        }
-
+    /// Synchronously fetches the batch for the given key.
+    fn fetch_unsealed_batch_sync(&self, key: &str) -> Result<Arc<BlobUnsealedBatch>, Error> {
         let bytes = self
             .blob
             .lock()?
@@ -113,6 +104,40 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
         Ok(cache.get(key).unwrap().clone())
+    }
+
+    /// Asynchronously returns the batch for the given key, fetching in another
+    /// thread if it's not already in the cache.
+    pub fn get_unsealed_batch_async(&self, key: &str) -> Future<Arc<BlobUnsealedBatch>> {
+        let (tx, rx) = Future::new();
+        {
+            // New scope to ensure the cache lock is dropped during the
+            // (expensive) get.
+            let unsealed = match self.unsealed.lock() {
+                Ok(unsealed) => unsealed,
+                Err(err) => {
+                    tx.fill(Err(err.into()));
+                    return rx;
+                }
+            };
+            if let Some(entry) = unsealed.get(key) {
+                self.metrics.blob_read_cache_hit_count.inc();
+                tx.fill(Ok(entry.clone()));
+                return rx;
+            }
+            self.metrics.blob_read_cache_miss_count.inc();
+        }
+
+        // TODO: If a fetch for this key is already in progress join that one
+        // instead of starting another.
+        let cache = self.clone();
+        let key = key.to_owned();
+        // TODO: IO thread pool for persist instead of spawning one here.
+        let _ = thread::spawn(move || {
+            let res = cache.fetch_unsealed_batch_sync(&key);
+            tx.fill(res);
+        });
+        rx
     }
 
     /// Writes a batch to backing [Blob] storage.
@@ -166,19 +191,8 @@ impl<B: Blob> BlobCache<B> {
         Ok(())
     }
 
-    /// Returns the batch for the given key, blocking to fetch if it's not
-    /// already in the cache.
-    pub fn get_trace_batch(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
-        {
-            // New scope to ensure the cache lock is dropped during the
-            // (expensive) get.
-            if let Some(entry) = self.trace.lock()?.get(key) {
-                self.metrics.blob_read_cache_hit_count.inc();
-                return Ok(entry.clone());
-            }
-            self.metrics.blob_read_cache_miss_count.inc();
-        }
-
+    /// Synchronously fetches the batch for the given key.
+    fn fetch_trace_batch_sync(&self, key: &str) -> Result<Arc<BlobTraceBatch>, Error> {
         let bytes = self
             .blob
             .lock()?
@@ -198,6 +212,40 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
         cache.insert(key.to_owned(), Arc::new(batch));
         Ok(cache.get(key).unwrap().clone())
+    }
+
+    /// Asynchronously returns the batch for the given key, fetching in another
+    /// thread if it's not already in the cache.
+    pub fn get_trace_batch_async(&self, key: &str) -> Future<Arc<BlobTraceBatch>> {
+        let (tx, rx) = Future::new();
+        {
+            // New scope to ensure the cache lock is dropped during the
+            // (expensive) get.
+            let trace = match self.trace.lock() {
+                Ok(trace) => trace,
+                Err(err) => {
+                    tx.fill(Err(err.into()));
+                    return rx;
+                }
+            };
+            if let Some(entry) = trace.get(key) {
+                self.metrics.blob_read_cache_hit_count.inc();
+                tx.fill(Ok(entry.clone()));
+                return rx;
+            }
+            self.metrics.blob_read_cache_miss_count.inc();
+        }
+
+        // TODO: If a fetch for this key is already in progress join that one
+        // instead of starting another.
+        let cache = self.clone();
+        let key = key.to_owned();
+        // TODO: IO thread pool for persist instead of spawning one here.
+        let _ = thread::spawn(move || {
+            let res = cache.fetch_trace_batch_sync(&key);
+            tx.fill(res);
+        });
+        rx
     }
 
     /// Writes a batch to backing [Blob] storage.
