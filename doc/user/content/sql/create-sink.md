@@ -29,6 +29,8 @@ Field | Use
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
 **AVRO OCF** _path_ | The absolute path and file name of the Avro Object Container file (OCF) to create and write to. The filename will be modified to let Materialize create a unique file each time Materialize starts, but the file extension will not be modified. You can find more details [here](#avro-ocf-sinks).
+**WITH (** _option&lowbar;list_ **)** | Options affecting sink creation. For more detail, see [`WITH` options](#with-options).
+**FORMAT** _sink&lowbar;format&lowbar;spec_ | The data format of the sink. For more detail, see [`FORMAT`](#format).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source. This is the default.
 **ENVELOPE UPSERT** | The sink emits data with upsert semantics: updates and inserts for the given key are expressed as a value, and deletes are expressed as a null value payload in Kafka. For more detail, see [Upsert source details](/sql/create-source/text-kafka/#upsert-envelope-details).
 
@@ -47,8 +49,17 @@ Field | Use
 **KEY (** _key&lowbar;column&lowbar;list_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset. {{< version-added v0.5.1 />}}
 **CONSISTENCY TOPIC** _consistency&lowbar;topic_ | Makes the sink emit additional [consistency metadata](#consistency-metadata) to the named topic. Only valid for Kafka sinks. If `reuse_topic` is `true`, a default consistency_topic will be used when not explicitly set. The default consistency topic name is formed by appending `-consistency` to the output topic name. {{< version-added v0.8.4 />}}
 **CONSISTENCY FORMAT** _format_ | The format of the Kafka consistency topic. Defaults to the format of the sink if not provided. {{< version-added v0.8.4 />}}
-**WITH OPTIONS (** _option&lowbar;_ **)** | Options affecting sink creation. For more details see [`WITH` options](#with-options).
+**WITH (** _option&lowbar;list_ **)** | Options affecting Materialize's connection to Kafka. For more detail, see [Kafka connector `WITH` options](#kafka-connector-with-options).
 **CONFLUENT SCHEMA REGISTRY** _url_ | The URL of the Confluent schema registry to get schema information from.
+
+### Kafka connector `WITH` options
+
+The following options are valid within the Kafka connector's `WITH` clause.
+
+Field                | Value type | Description
+---------------------|------------|------------
+`username `          | `text`     | The Kafka username.
+`password `          | `text`     | The Kafka password.
 
 ### `WITH` options
 
@@ -95,6 +106,12 @@ the environment variable's presence to boot Materialize.
 `sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanisms` is `GSSAPI`.
 `sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanisms` is `GSSAPI`.
 
+### `FORMAT`
+
+The data format of the emitted records.
+
+{{< diagram "sink-format-spec.svg" >}}
+
 ### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 
 By default, each `SINK` is created with a `SNAPSHOT` which contains the consolidated results of the
@@ -103,7 +120,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 
 ## Detail
 
-- Materialize currently only supports the following sinks:
+- Materialize currently only supports the following [sink formats](#format):
     - Avro-formatted sinks that write to either a topic or an Avro object container file.
     - JSON-formatted sinks that write to a topic.
 - For most sinks, Materialize creates new, distinct topics and files for each sink on restart.

@@ -47,8 +47,10 @@ create_sink ::=
     'FROM' item_name
     'INTO' (
     sink_kafka_connector |
-    'AVRO OCF' path-prefix
+    'AVRO OCF' path
     )
+    ( 'WITH' '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
+    ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
     ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
 create_source_avro_file ::=
@@ -284,6 +286,12 @@ format_spec ::=
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+sink_format_spec ::=
+  'AVRO USING' (
+        'CONFLUENT SCHEMA REGISTRY' url with_options? |
+        'SCHEMA' 'FILE' schema_file_path
+        ) |
+  'JSON'
 key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
     'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'
@@ -312,8 +320,7 @@ sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('CONSISTENCY' 'TOPIC' topic ('CONSISTENCY' 'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url)?)?
-    with_options?
-    'FORMAT' ('AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url | 'JSON')
+    ( 'WITH' '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 lit_cast ::=
   type val
 op_cast ::=
