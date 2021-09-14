@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use crate::EvalError;
+use repr::strconv;
 
 sqlfunc!(
     #[sqlname = "-"]
@@ -197,5 +198,14 @@ sqlfunc!(
     #[sqlname = "f32tof64"]
     fn cast_float32_to_float64(a: f32) -> f64 {
         a.into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "f32tostr"]
+    fn cast_float32_to_string(a: f32) -> String {
+        let mut s = String::new();
+        strconv::format_float32(&mut s, a);
+        s
     }
 );
