@@ -1307,7 +1307,7 @@ lazy_static! {
                 params!(String, String) => BinaryFunc::Trim, 884;
             },
             "cbrt" => Scalar {
-                params!(Float64) => UnaryFunc::CbrtFloat64, 1345;
+                params!(Float64) => UnaryFunc::CbrtFloat64(func::CbrtFloat64), 1345;
             },
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32(func::CeilFloat32), oid::FUNC_CEIL_F32_OID;
@@ -1341,13 +1341,13 @@ lazy_static! {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom, 1714;
             },
             "cos" => Scalar {
-                params!(Float64) => UnaryFunc::Cos, 1605;
+                params!(Float64) => UnaryFunc::Cos(func::Cos), 1605;
             },
             "cosh" => Scalar {
-                params!(Float64) => UnaryFunc::Cosh, 2463;
+                params!(Float64) => UnaryFunc::Cosh(func::Cosh), 2463;
             },
             "cot" => Scalar {
-                params!(Float64) => UnaryFunc::Cot, 1607;
+                params!(Float64) => UnaryFunc::Cot(func::Cot), 1607;
             },
             "current_schema" => Scalar {
                 params!() => sql_impl_func("current_schemas(false)[1]"), 1402;
@@ -1387,7 +1387,7 @@ lazy_static! {
                 params!(Bytes, String) => BinaryFunc::DigestBytes, 44155;
             },
             "exp" => Scalar {
-                params!(Float64) => UnaryFunc::Exp, 1347;
+                params!(Float64) => UnaryFunc::Exp(func::Exp), 1347;
                 params!(Numeric) => UnaryFunc::ExpNumeric, 1732;
             },
             "floor" => Scalar {
@@ -1452,15 +1452,15 @@ lazy_static! {
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
             },
             "ln" => Scalar {
-                params!(Float64) => UnaryFunc::Ln, 1341;
+                params!(Float64) => UnaryFunc::Ln(func::Ln), 1341;
                 params!(Numeric) => UnaryFunc::LnNumeric, 1734;
             },
             "log10" => Scalar {
-                params!(Float64) => UnaryFunc::Log10, 1194;
+                params!(Float64) => UnaryFunc::Log10(func::Log10), 1194;
                 params!(Numeric) => UnaryFunc::Log10Numeric, 1481;
             },
             "log" => Scalar {
-                params!(Float64) => UnaryFunc::Log10, 1340;
+                params!(Float64) => UnaryFunc::Log10(func::Log10), 1340;
                 params!(Numeric) => UnaryFunc::Log10Numeric, 1741;
                 params!(Numeric, Numeric) => BinaryFunc::LogNumeric, 1736;
             },
@@ -1604,10 +1604,10 @@ lazy_static! {
                 params!(String, String) => BinaryFunc::TrimTrailing, 876;
             },
             "sin" => Scalar {
-                params!(Float64) => UnaryFunc::Sin, 1604;
+                params!(Float64) => UnaryFunc::Sin(func::Sin), 1604;
             },
             "sinh" => Scalar {
-                params!(Float64) => UnaryFunc::Sinh, 2462;
+                params!(Float64) => UnaryFunc::Sinh(func::Sinh), 2462;
             },
             "split_part" => Scalar {
                 params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
@@ -1642,14 +1642,14 @@ lazy_static! {
                 params!(String, Int64, Int64) => VariadicFunc::Substr, 936;
             },
             "sqrt" => Scalar {
-                params!(Float64) => UnaryFunc::SqrtFloat64, 1344;
+                params!(Float64) => UnaryFunc::SqrtFloat64(func::SqrtFloat64), 1344;
                 params!(Numeric) => UnaryFunc::SqrtNumeric, 1730;
             },
             "tan" => Scalar {
-                params!(Float64) => UnaryFunc::Tan, 1606;
+                params!(Float64) => UnaryFunc::Tan(func::Tan), 1606;
             },
             "tanh" => Scalar {
-                params!(Float64) => UnaryFunc::Tanh, 2464;
+                params!(Float64) => UnaryFunc::Tanh(func::Tanh), 2464;
             },
             "timezone" => Scalar {
                 params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;

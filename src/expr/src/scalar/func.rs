@@ -308,12 +308,6 @@ fn cast_float64_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<
     }
 }
 
-fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_float64(&mut buf, a.unwrap_float64());
-    Datum::String(temp_storage.push_string(buf))
-}
-
 fn cast_numeric_to_int16<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut cx = numeric::cx_datum();
@@ -1541,15 +1535,6 @@ pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_interval())
 }
 
-fn sqrt_float64<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let x = a.unwrap_float64();
-    if x < 0.0 {
-        return Err(EvalError::NegSqrt);
-    }
-
-    Ok(Datum::from(x.sqrt()))
-}
-
 fn sqrt_numeric<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     let mut a = a.unwrap_numeric();
     if a.0.is_negative() {
@@ -1559,73 +1544,6 @@ fn sqrt_numeric<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     cx.sqrt(&mut a.0);
     numeric::munge_numeric(&mut a.0).unwrap();
     Ok(Datum::Numeric(a))
-}
-
-fn cbrt_float64<'a>(a: Datum<'a>) -> Datum {
-    Datum::from(a.unwrap_float64().cbrt())
-}
-
-fn cos<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let f = a.unwrap_float64();
-    if f.is_infinite() {
-        return Err(EvalError::InfinityOutOfDomain("cos".to_owned()));
-    }
-    Ok(Datum::from(f.cos()))
-}
-
-fn cosh<'a>(a: Datum<'a>) -> Datum {
-    Datum::from(a.unwrap_float64().cosh())
-}
-
-fn sin<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let f = a.unwrap_float64();
-    if f.is_infinite() {
-        return Err(EvalError::InfinityOutOfDomain("sin".to_owned()));
-    }
-    Ok(Datum::from(f.sin()))
-}
-
-fn sinh<'a>(a: Datum<'a>) -> Datum {
-    Datum::from(a.unwrap_float64().sinh())
-}
-
-fn tan<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let f = a.unwrap_float64();
-    if f.is_infinite() {
-        return Err(EvalError::InfinityOutOfDomain("tan".to_owned()));
-    }
-    Ok(Datum::from(f.tan()))
-}
-
-fn tanh<'a>(a: Datum<'a>) -> Datum {
-    Datum::from(a.unwrap_float64().tanh())
-}
-
-fn cot<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let f = a.unwrap_float64();
-    if f.is_infinite() {
-        return Err(EvalError::InfinityOutOfDomain("cot".to_owned()));
-    }
-    Ok(Datum::from(1.0 / f.tan()))
-}
-
-fn log_guard(val: f64, function_name: &str) -> Result<f64, EvalError> {
-    if val.is_sign_negative() {
-        return Err(EvalError::NegativeOutOfDomain(function_name.to_owned()));
-    }
-    if val == 0.0 {
-        return Err(EvalError::ZeroOutOfDomain(function_name.to_owned()));
-    }
-    Ok(val)
-}
-
-fn log<'a, 'b, F: Fn(f64) -> f64>(
-    a: Datum<'a>,
-    logic: F,
-    name: &'b str,
-) -> Result<Datum<'a>, EvalError> {
-    let f = log_guard(a.unwrap_float64(), name)?;
-    Ok(Datum::from(logic(f)))
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
@@ -1676,10 +1594,6 @@ fn log_numeric<'a, 'b, F: Fn(&mut dec::Context<Numeric>, &mut Numeric)>(
     logic(&mut cx, &mut a.0);
     numeric::munge_numeric(&mut a.0).unwrap();
     Ok(Datum::Numeric(a))
-}
-
-fn exp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    Ok(Datum::from(a.unwrap_float64().exp()))
 }
 
 fn exp_numeric<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -3530,9 +3444,9 @@ pub enum UnaryFunc {
     NegFloat64(NegFloat64),
     NegNumeric,
     NegInterval,
-    SqrtFloat64,
+    SqrtFloat64(SqrtFloat64),
     SqrtNumeric,
-    CbrtFloat64,
+    CbrtFloat64(CbrtFloat64),
     AbsInt16,
     AbsInt32,
     AbsInt64,
@@ -3578,7 +3492,7 @@ pub enum UnaryFunc {
     CastFloat64ToInt32(CastFloat64ToInt32),
     CastFloat64ToInt64(CastFloat64ToInt64),
     CastFloat64ToFloat32(CastFloat64ToFloat32),
-    CastFloat64ToString,
+    CastFloat64ToString(CastFloat64ToString),
     CastNumericToFloat32,
     CastNumericToFloat64,
     CastNumericToInt16,
@@ -3722,18 +3636,18 @@ pub enum UnaryFunc {
     ListLength,
     Upper,
     Lower,
-    Cos,
-    Cosh,
-    Sin,
-    Sinh,
-    Tan,
-    Tanh,
-    Cot,
-    Log10,
+    Cos(Cos),
+    Cosh(Cosh),
+    Sin(Sin),
+    Sinh(Sinh),
+    Tan(Tan),
+    Tanh(Tanh),
+    Cot(Cot),
+    Log10(Log10),
     Log10Numeric,
-    Ln,
+    Ln(Ln),
     LnNumeric,
-    Exp,
+    Exp(Exp),
     ExpNumeric,
     Sleep(Sleep),
     RescaleNumeric(u8),
@@ -3766,7 +3680,20 @@ derive_unary!(
     MzRowSize,
     IsNull,
     Sleep,
-    ToTimestamp
+    ToTimestamp,
+    CastFloat64ToString,
+    Cos,
+    Cosh,
+    Sin,
+    Sinh,
+    Tan,
+    Tanh,
+    Cot,
+    Log10,
+    Ln,
+    Exp,
+    SqrtFloat64,
+    CbrtFloat64
 );
 
 impl UnaryFunc {
@@ -3807,6 +3734,19 @@ impl UnaryFunc {
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
+            | CastFloat64ToString(_)
+            | Cos(_)
+            | Cosh(_)
+            | Sin(_)
+            | Sinh(_)
+            | Tan(_)
+            | Tanh(_)
+            | Cot(_)
+            | Log10(_)
+            | Ln(_)
+            | Exp(_)
+            | SqrtFloat64(_)
+            | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             BitNotInt16 => Ok(bit_not_int16(a)),
             BitNotInt32 => Ok(bit_not_int32(a)),
@@ -3850,7 +3790,6 @@ impl UnaryFunc {
             CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
             CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
             CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
-            CastFloat64ToString => Ok(cast_float64_to_string(a, temp_storage)),
             CastStringToBool => cast_string_to_bool(a),
             CastStringToBytes => cast_string_to_bytes(a, temp_storage),
             CastStringToInt16 => cast_string_to_int16(a),
@@ -3925,9 +3864,7 @@ impl UnaryFunc {
             CastInPlace { .. } => Ok(a),
             CeilNumeric => Ok(ceil_numeric(a)),
             FloorNumeric => Ok(floor_numeric(a)),
-            SqrtFloat64 => sqrt_float64(a),
             SqrtNumeric => sqrt_numeric(a),
-            CbrtFloat64 => Ok(cbrt_float64(a)),
             Ascii => Ok(ascii(a)),
             BitLengthString => bit_length(a.unwrap_str()),
             BitLengthBytes => bit_length(a.unwrap_bytes()),
@@ -3956,18 +3893,8 @@ impl UnaryFunc {
             ListLength => Ok(list_length(a)),
             Upper => Ok(upper(a, temp_storage)),
             Lower => Ok(lower(a, temp_storage)),
-            Cos => cos(a),
-            Cosh => Ok(cosh(a)),
-            Sin => sin(a),
-            Sinh => Ok(sinh(a)),
-            Tan => tan(a),
-            Tanh => Ok(tanh(a)),
-            Cot => cot(a),
-            Log10 => log(a, f64::log10, "log10"),
             Log10Numeric => log_numeric(a, dec::Context::log10, "log10"),
-            Ln => log(a, f64::ln, "ln"),
             LnNumeric => log_numeric(a, dec::Context::ln, "ln"),
-            Exp => exp(a),
             ExpNumeric => exp_numeric(a),
             RescaleNumeric(scale) => rescale_numeric(a, *scale),
         }
@@ -4007,6 +3934,19 @@ impl UnaryFunc {
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
+            | CastFloat64ToString(_)
+            | Cos(_)
+            | Cosh(_)
+            | Sin(_)
+            | Sinh(_)
+            | Tan(_)
+            | Tanh(_)
+            | Cot(_)
+            | Log10(_)
+            | Ln(_)
+            | Exp(_)
+            | SqrtFloat64(_)
+            | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4028,7 +3968,6 @@ impl UnaryFunc {
             | CastInt16ToString
             | CastInt32ToString
             | CastInt64ToString
-            | CastFloat64ToString
             | CastNumericToString
             | CastDateToString
             | CastTimeToString
@@ -4151,9 +4090,6 @@ impl UnaryFunc {
 
             RegexpMatch(_) => ScalarType::Array(Box::new(ScalarType::String)).nullable(nullable),
 
-            SqrtFloat64 | CbrtFloat64 => ScalarType::Float64.nullable(nullable),
-            Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot => ScalarType::Float64.nullable(nullable),
-            Log10 | Ln | Exp => ScalarType::Float64.nullable(nullable),
             RescaleNumeric(scale) => (ScalarType::Numeric {
                 scale: Some(*scale),
             })
@@ -4205,6 +4141,19 @@ impl UnaryFunc {
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
+            | CastFloat64ToString(_)
+            | Cos(_)
+            | Cosh(_)
+            | Sin(_)
+            | Sinh(_)
+            | Tan(_)
+            | Tanh(_)
+            | Cot(_)
+            | Log10(_)
+            | Ln(_)
+            | Exp(_)
+            | SqrtFloat64(_)
+            | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4234,7 +4183,6 @@ impl UnaryFunc {
             | CastInt16ToString
             | CastInt32ToString
             | CastInt64ToString
-            | CastFloat64ToString
             | CastNumericToString
             | CastDateToString
             | CastTimeToString
@@ -4292,8 +4240,6 @@ impl UnaryFunc {
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
             NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => false,
             BitNotInt16 | BitNotInt32 | BitNotInt64 => false,
-            Log10 | Ln | Exp | Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot | SqrtFloat64
-            | CbrtFloat64 => false,
             AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
             | NegNumeric | RoundNumeric | SqrtNumeric | RescaleNumeric(_) => false,
         }
@@ -4330,6 +4276,19 @@ impl UnaryFunc {
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
+            | CastFloat64ToString(_)
+            | Cos(_)
+            | Cosh(_)
+            | Sin(_)
+            | Sinh(_)
+            | Tan(_)
+            | Tanh(_)
+            | Cot(_)
+            | Log10(_)
+            | Ln(_)
+            | Exp(_)
+            | SqrtFloat64(_)
+            | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInt16
             | NegInt32
@@ -4346,7 +4305,6 @@ impl UnaryFunc {
             | CastInt32ToInt64
             | CastInt32ToString
             | CastInt64ToString
-            | CastFloat64ToString
             | CastStringToBytes
             | CastDateToTimestamp
             | CastDateToTimestampTz
@@ -4384,6 +4342,19 @@ impl UnaryFunc {
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
+            | CastFloat64ToString(_)
+            | Cos(_)
+            | Cosh(_)
+            | Sin(_)
+            | Sinh(_)
+            | Tan(_)
+            | Tanh(_)
+            | Cot(_)
+            | Log10(_)
+            | Ln(_)
+            | Exp(_)
+            | SqrtFloat64(_)
+            | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             BitNotInt16 => f.write_str("~"),
             BitNotInt32 => f.write_str("~"),
@@ -4426,7 +4397,6 @@ impl UnaryFunc {
             CastInt64ToFloat64 => f.write_str("i64tof64"),
             CastInt64ToString => f.write_str("i64tostr"),
             CastFloat32ToNumeric(_) => f.write_str("f32tonumeric"),
-            CastFloat64ToString => f.write_str("f64tostr"),
             CastFloat64ToNumeric(_) => f.write_str("f32tonumeric"),
             CastNumericToInt16 => f.write_str("numerictoi16"),
             CastNumericToInt32 => f.write_str("numerictoi32"),
@@ -4489,9 +4459,7 @@ impl UnaryFunc {
             CastInPlace { .. } => f.write_str("castinplace"),
             CeilNumeric => f.write_str("ceilnumeric"),
             FloorNumeric => f.write_str("floornumeric"),
-            SqrtFloat64 => f.write_str("sqrtf64"),
             SqrtNumeric => f.write_str("sqrtnumeric"),
-            CbrtFloat64 => f.write_str("cbrtf64"),
             Ascii => f.write_str("ascii"),
             CharLength => f.write_str("char_length"),
             BitLengthBytes => f.write_str("bit_length"),
@@ -4520,19 +4488,9 @@ impl UnaryFunc {
             ListLength => f.write_str("list_length"),
             Upper => f.write_str("upper"),
             Lower => f.write_str("lower"),
-            Cos => f.write_str("cos"),
-            Cosh => f.write_str("cosh"),
-            Sin => f.write_str("sin"),
-            Sinh => f.write_str("sinh"),
-            Tan => f.write_str("tan"),
-            Tanh => f.write_str("tanh"),
-            Cot => f.write_str("cot"),
-            Log10 => f.write_str("log10f64"),
             Log10Numeric => f.write_str("log10numeric"),
-            Ln => f.write_str("lnf64"),
             LnNumeric => f.write_str("lnnumeric"),
             ExpNumeric => f.write_str("expnumeric"),
-            Exp => f.write_str("expf64"),
             RescaleNumeric(..) => f.write_str("rescale_numeric"),
         }
     }

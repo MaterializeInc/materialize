@@ -194,7 +194,7 @@ lazy_static! {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(s)))
             }),
-            (Float64, String) => Assignment: CastFloat64ToString,
+            (Float64, String) => Assignment: CastFloat64ToString(func::CastFloat64ToString),
 
             // DATE
             (Date, Timestamp) => Implicit: CastDateToTimestamp,

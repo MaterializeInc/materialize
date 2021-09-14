@@ -212,6 +212,119 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "f64tostr"]
+    fn cast_float64_to_string(a: f64) -> String {
+        let mut s = String::new();
+        strconv::format_float64(&mut s, a);
+        s
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "sqrtf64"]
+    fn sqrt_float64(a: f64) -> Result<f64, EvalError> {
+        if a < 0.0 {
+            return Err(EvalError::NegSqrt);
+        }
+        Ok(a.sqrt())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "cbrtf64"]
+    fn cbrt_float64(a: f64) -> f64 {
+        a.cbrt()
+    }
+);
+
+sqlfunc!(
+    fn cos(a: f64) -> Result<f64, EvalError> {
+        if a.is_infinite() {
+            return Err(EvalError::InfinityOutOfDomain("cos".to_owned()));
+        }
+        Ok(a.cos())
+    }
+);
+
+sqlfunc!(
+    fn cosh(a: f64) -> f64 {
+        a.cosh()
+    }
+);
+
+sqlfunc!(
+    fn sin(a: f64) -> Result<f64, EvalError> {
+        if a.is_infinite() {
+            return Err(EvalError::InfinityOutOfDomain("sin".to_owned()));
+        }
+        Ok(a.sin())
+    }
+);
+
+sqlfunc!(
+    fn sinh(a: f64) -> f64 {
+        a.sinh()
+    }
+);
+
+sqlfunc!(
+    fn tan(a: f64) -> Result<f64, EvalError> {
+        if a.is_infinite() {
+            return Err(EvalError::InfinityOutOfDomain("tan".to_owned()));
+        }
+        Ok(a.tan())
+    }
+);
+
+sqlfunc!(
+    fn tanh(a: f64) -> f64 {
+        a.tanh()
+    }
+);
+
+sqlfunc!(
+    fn cot(a: f64) -> Result<f64, EvalError> {
+        if a.is_infinite() {
+            return Err(EvalError::InfinityOutOfDomain("cot".to_owned()));
+        }
+        Ok(1.0 / a.tan())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "log10f64"]
+    fn log10(a: f64) -> Result<f64, EvalError> {
+        if a.is_sign_negative() {
+            return Err(EvalError::NegativeOutOfDomain("log10".to_owned()));
+        }
+        if a == 0.0 {
+            return Err(EvalError::ZeroOutOfDomain("log10".to_owned()));
+        }
+        Ok(a.log10())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "lnf64"]
+    fn ln(a: f64) -> Result<f64, EvalError> {
+        if a.is_sign_negative() {
+            return Err(EvalError::NegativeOutOfDomain("ln".to_owned()));
+        }
+        if a == 0.0 {
+            return Err(EvalError::ZeroOutOfDomain("ln".to_owned()));
+        }
+        Ok(a.ln())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "expf64"]
+    fn exp(a: f64) -> f64 {
+        a.exp()
+    }
+);
+
+sqlfunc!(
     #[sqlname = "mz_sleep"]
     fn sleep(a: f64) -> Option<DateTime<Utc>> {
         let duration = std::time::Duration::from_secs_f64(a);
