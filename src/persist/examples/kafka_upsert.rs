@@ -38,6 +38,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 fn main() {
+    ore::test::init_logging_default("trace");
+
     if let Err(err) = run(env::args().collect()) {
         eprintln!("error: {}", err);
         process::exit(1);
@@ -77,8 +79,8 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
                 let err_stream = vec![(err.to_string(), 0, 1)].to_stream(scope);
                 (ok_stream, err_stream)
             });
-            ok_stream.inspect(|d| println!("ok: {:?}", d));
-            err_stream.inspect(|d| println!("err: {:?}", d));
+            ok_stream.inspect(|d| log::info!("ok: {:?}", d));
+            err_stream.inspect(|d| log::info!("err: {:?}", d));
         })
     })?;
 
