@@ -117,9 +117,15 @@ struct Args {
     #[structopt(long, hidden = true)]
     persistent_user_tables: bool,
 
-    /// Enable persistent system tables. Has to be used with --experimental.
-    #[structopt(long, hidden = true)]
-    persistent_system_tables: bool,
+    /// Disable persistence of all system tables.
+    ///
+    /// This is a test of the upcoming persistence system. The data is stored on
+    /// the filesystem in a sub-directory of the Materialize data_directory.
+    /// This test is enabled by default to allow us to collect data from a
+    /// variety of deployments, but setting this flag to true to opt out of the
+    /// test is always safe.
+    #[structopt(long)]
+    disable_persistent_system_tables_test: bool,
 
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
@@ -622,13 +628,7 @@ swap: {swap_total}KB total, {swap_used}KB used{swap_limit}",
         } else {
             false
         };
-        let system_table_enabled = if args.experimental && args.persistent_system_tables {
-            true
-        } else if args.persistent_system_tables {
-            bail!("cannot specify --persistent-system-tables without --experimental");
-        } else {
-            false
-        };
+        let system_table_enabled = !args.disable_persistent_system_tables_test;
         let lock_info = format!(
             "materialized {mz_version}\nos: {os}\nstart time: {start_time}\nnum workers: {num_workers}\n",
             mz_version = materialized::BUILD_INFO.human_version(),
