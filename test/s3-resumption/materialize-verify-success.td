@@ -7,5 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT SUM(LENGTH(text)) FROM s3;
+> SELECT SUM(LENGTH(text)) FROM s3_text;
+65280
+
+> SELECT SUM(LENGTH(text)) FROM s3_gzip;
 65280

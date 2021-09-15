@@ -744,16 +744,10 @@ async fn download_object(
     source_id: &str,
     skip_bytes: usize,
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>) {
-    let range = if skip_bytes > 0 {
-        Some(format!("bytes={}-", skip_bytes))
-    } else {
-        None
-    };
     let obj = match client
         .get_object(GetObjectRequest {
             bucket: bucket.to_string(),
             key: key.to_string(),
-            range,
             ..Default::default()
         })
         .await
@@ -797,10 +791,10 @@ async fn download_object(
 
         let mut reader = BufReader::new(body.into_async_read());
         let (mut download_status, metric_update) = match compression {
-            Compression::None => read_object_chunked(source_id, &mut reader, tx).await,
+            Compression::None => read_object_chunked(source_id, skip_bytes, &mut reader, tx).await,
             Compression::Gzip => {
                 let mut decoder = GzipDecoder::new(reader);
-                read_object_chunked(source_id, &mut decoder, tx).await
+                read_object_chunked(source_id, skip_bytes, &mut decoder, tx).await
             }
         };
 
@@ -835,6 +829,7 @@ async fn download_object(
 
 async fn read_object_chunked<R>(
     source_id: &str,
+    skip_bytes: usize,
     reader: &mut R,
     tx: &Sender<Result<InternalMessage, S3Error>>,
 ) -> (DownloadStatus, Option<DownloadMetricUpdate>)
@@ -843,7 +838,7 @@ where
 {
     let (mut bytes_read, mut chunks) = (0, 0);
 
-    let mut stream = ReaderStream::with_capacity(reader, CHUNK_SIZE);
+    let mut stream = ReaderStream::with_capacity(reader, CHUNK_SIZE).skip(skip_bytes);
 
     while let Some(result) = stream.next().await {
         match result {
