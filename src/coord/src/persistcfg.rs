@@ -20,7 +20,9 @@ use serde::Serialize;
 
 use expr::GlobalId;
 use persist::file::FileBlob;
-use persist::indexed::runtime::{self, MultiWriteHandle, RuntimeClient, StreamWriteHandle};
+use persist::indexed::runtime::{
+    self, MultiWriteHandle, RuntimeClient, RuntimeConfig, StreamWriteHandle,
+};
 use uuid::Uuid;
 
 /// Configuration of the persistence runtime and features.
@@ -68,7 +70,7 @@ impl PersistConfig {
             let lock_info = LockInfo::new(lock_reentrance_id, self.lock_info.clone())?;
             let log = ErrorLog;
             let blob = FileBlob::new(&self.blob_path, lock_info)?;
-            let persister = runtime::start(log, blob, reg)?;
+            let persister = runtime::start(RuntimeConfig::default(), log, blob, reg)?;
             Some(persister)
         } else {
             None

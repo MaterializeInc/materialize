@@ -14,7 +14,7 @@ use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
 use ore::metrics::MetricsRegistry;
 use persist::error::Error;
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::runtime::{self, RuntimeClient, StreamReadHandle};
+use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
 use persist::mem::MemRegistry;
 use persist::storage::LockInfo;
 use persist::Codec;
@@ -89,6 +89,7 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
             .join(format!("snapshot_bench_blob_{}", path));
         let lock_info = LockInfo::new_no_reentrance("snapshot_bench".to_owned());
         runtime::start(
+            RuntimeConfig::default(),
             FileLog::new(log_dir, lock_info.clone())?,
             FileBlob::new(blob_dir, lock_info)?,
             &MetricsRegistry::new(),

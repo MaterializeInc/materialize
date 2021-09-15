@@ -17,7 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log;
 use ore::metrics::MetricsRegistry;
@@ -43,6 +43,9 @@ enum Cmd {
     Snapshot(Id, FutureHandle<IndexedSnapshot>),
     Listen(Id, ListenFn<Vec<u8>, Vec<u8>>, FutureHandle<()>),
     Stop(FutureHandle<()>),
+    /// A no-op command sent on a regular interval so the runtime has an
+    /// opportunity to do periodic maintenance work.
+    Tick,
 }
 
 /// Starts the runtime in a [std::thread].
@@ -53,7 +56,12 @@ enum Cmd {
 // TODO: At the moment, this runs IO and heavy cpu work in a single thread.
 // Move this work out into whatever async runtime the user likes, via something
 // like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
-pub fn start<L, B>(log: L, blob: B, reg: &MetricsRegistry) -> Result<RuntimeClient, Error>
+pub fn start<L, B>(
+    config: RuntimeConfig,
+    log: L,
+    blob: B,
+    reg: &MetricsRegistry,
+) -> Result<RuntimeClient, Error>
 where
     L: Log + Send + 'static,
     B: Blob + Send + 'static,
@@ -62,23 +70,43 @@ where
     let indexed = Indexed::new(log, blob, metrics.clone())?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
+    let runtime_impl_config = config.clone();
     let runtime_impl_metrics = metrics.clone();
     let runtime_f = move || {
         // TODO: Set up the tokio or other async runtime context here.
-        let mut l = RuntimeImpl {
-            indexed,
-            rx,
-            metrics: runtime_impl_metrics,
-        };
+        let mut l = RuntimeImpl::new(runtime_impl_config, indexed, rx, runtime_impl_metrics);
         while l.work() {}
     };
     let id = RuntimeId::new();
-    let handle = thread::Builder::new()
+    let impl_handle = thread::Builder::new()
         .name(format!("persist-runtime-{}", id.0))
         .spawn(runtime_f)?;
-    let handle = Mutex::new(Some(handle));
+    let ticker_tx = tx.clone();
+    let ticker_handle = thread::Builder::new()
+        .name(format!("persist-ticker"))
+        .spawn(move || {
+            // Try to keep worst case command response times to roughly `110% of
+            // min_step_interval` by ensuring there's a tick relatively shortly
+            // after a step becomes eligible. We could just as easily make this
+            // 2 if we decide 150% is okay.
+            let tick_interval = config.min_step_interval / 10;
+            loop {
+                thread::sleep(tick_interval);
+                match ticker_tx.send(Cmd::Tick) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        // Runtime has shut down, we can stop ticking.
+                        return;
+                    }
+                }
+            }
+        })?;
+    let handles = Mutex::new(Some(RuntimeHandles {
+        impl_handle,
+        ticker_handle,
+    }));
     let core = RuntimeCore {
-        handle,
+        handles,
         tx,
         metrics,
     };
@@ -100,8 +128,14 @@ impl RuntimeId {
 }
 
 #[derive(Debug)]
+struct RuntimeHandles {
+    impl_handle: JoinHandle<()>,
+    ticker_handle: JoinHandle<()>,
+}
+
+#[derive(Debug)]
 struct RuntimeCore {
-    handle: Mutex<Option<JoinHandle<()>>>,
+    handles: Mutex<Option<RuntimeHandles>>,
     tx: crossbeam_channel::Sender<Cmd>,
     metrics: Metrics,
 }
@@ -126,12 +160,13 @@ impl RuntimeCore {
                 Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+                Cmd::Tick => {}
             }
         }
     }
 
     fn stop(&self) -> Result<(), Error> {
-        if let Some(handle) = self.handle.lock()?.take() {
+        if let Some(handles) = self.handles.lock()?.take() {
             let (tx, rx) = Future::new();
             self.send(Cmd::Stop(tx));
             // NB: Make sure there are no early returns before this `join`,
@@ -139,12 +174,19 @@ impl RuntimeCore {
             // returns (flushing out final writes, cleaning up LOCK files, etc).
             //
             // TODO: Regression test for this.
-            if let Err(_) = handle.join() {
+            if let Err(_) = handles.impl_handle.join() {
                 // If the thread panic'd, then by definition it has been
                 // stopped, so we can return an Ok. This is surprising, though,
                 // so log a message. Unfortunately, there isn't really a way to
                 // put the panic message in this log.
                 log::error!("persist runtime thread panic'd");
+            }
+            if let Err(_) = handles.ticker_handle.join() {
+                // If the thread panic'd, then by definition it has been
+                // stopped, so we can return an Ok. This is surprising, though,
+                // so log a message. Unfortunately, there isn't really a way to
+                // put the panic message in this log.
+                log::error!("persist ticker thread panic'd");
             }
             rx.recv()
         } else {
@@ -626,9 +668,53 @@ struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
     rx: crossbeam_channel::Receiver<Cmd>,
     metrics: Metrics,
+    prev_step: Instant,
+    min_step_interval: Duration,
+}
+
+/// Configuration for [start]ing a [RuntimeClient].
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    min_step_interval: Duration,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            min_step_interval: Self::DEFAULT_MIN_STEP_INTERVAL,
+        }
+    }
+}
+
+impl RuntimeConfig {
+    const DEFAULT_MIN_STEP_INTERVAL: Duration = Duration::from_millis(1000);
+
+    /// An alternate configuration that minimizes latency at the cost of
+    /// increased storage traffic.
+    pub(crate) fn for_tests() -> Self {
+        RuntimeConfig {
+            min_step_interval: Duration::from_millis(1),
+        }
+    }
 }
 
 impl<L: Log, B: Blob> RuntimeImpl<L, B> {
+    fn new(
+        config: RuntimeConfig,
+        indexed: Indexed<L, B>,
+        rx: crossbeam_channel::Receiver<Cmd>,
+        metrics: Metrics,
+    ) -> Self {
+        RuntimeImpl {
+            indexed,
+            rx,
+            metrics,
+            // Initialize this so it's ready to trigger immediately.
+            prev_step: Instant::now() - config.min_step_interval,
+            min_step_interval: config.min_step_interval,
+        }
+    }
+
     /// Synchronously waits for the next command, executes it, and responds.
     ///
     /// Returns false to indicate a graceful shutdown, true otherwise.
@@ -697,6 +783,11 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Listen(id, listen_fn, res) => {
                     self.indexed.listen(id, listen_fn, res);
                 }
+                Cmd::Tick => {
+                    // This is a no-op. It's only here to give us the
+                    // opportunity to hit the step logic below on some minimum
+                    // interval, even when no other commands are coming in.
+                }
             }
             self.metrics.cmd_run_count.inc()
         }
@@ -705,17 +796,64 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             .cmd_run_ms
             .inc_by(metric_duration_ms(step_start.duration_since(run_start)));
 
-        if let Err(e) = self.indexed.step() {
-            self.metrics.cmd_step_error_count.inc();
-            // TODO: revisit whether we need to move this to a different log level
-            // depending on how spammy it ends up being. Alternatively, we
-            // may want to rate-limit our logging here.
-            log::warn!("error running step: {:?}", e);
-        }
+        // HACK: This rate limits how much we call step in response to workloads
+        // consisting entirely of write, seal, and allow_compaction (which is
+        // exactly what we expect in the common/steady state). At the moment,
+        // step is too aggressive about compaction if called in a tight loop,
+        // causing excess disk usage. This is exactly what happens if coord is
+        // getting steady read traffic over indexes derived directly or
+        // indirectly from tables (it continually seals).
+        //
+        // The downside to this rate limiting is that it introduces artificial
+        // latency into filling the response futures we returned to the client
+        // as well as to updating listeners. The former blocks literally no
+        // critical paths in the initial persisted system tables test, which is
+        // considered an acceptable tradeoff for the short-term. In the
+        // long-term, we'll do something better (probably by using Buffer).
+        //
+        // For context, in the persistent system tables test, we get writes
+        // every ~30s (how often we write to mz_metrics and
+        // mz_metric_histograms). In a non-loaded system as well as anything
+        // that's only selecting from views purely derived from sources, we also
+        // get seals every ~30s. In a system that's selecting from mz_metrics in
+        // a loop, the selects all take ~1s and we get seals every ~1s. In a
+        // system that's selecting from a user table in a tight loop, the
+        // selects take ~10ms (the same amount of time they would with
+        // persistence disabled) and we get seals every ~10ms.
+        //
+        // TODO: It would almost certainly be better to separate the rate limit
+        // of drain_pending vs the rest of step. The other parts (drain_unsealed
+        // and compact) can and should be called even less frequently than this.
+        // However, this change is going into a release at the last minute and
+        // I'm less confidant about unknown ramifications of a two interval
+        // strategy.
+        let need_step = step_start.duration_since(self.prev_step) > self.min_step_interval;
 
-        self.metrics
-            .cmd_step_ms
-            .inc_by(metric_duration_ms(step_start.elapsed()));
+        // BONUS HACK: If pending_responses is empty, then step would be a no-op
+        // from a user's perspective. Unfortunately, step would still write out
+        // meta (three times, in fact). So, we manually skip over it here as an
+        // optimization. In a system that's not selecting from tables, this
+        // reduces the frequency of step calls from every ~1s
+        // (DEFAULT_MIN_STEP_INTERVAL) to ~30s (the frequency of writing to
+        // mz_metrics). Otherwise, it has no effect.
+        //
+        // TODO: Make step smarter and remove this hack.
+        let need_step = need_step && !self.indexed.pending_responses.is_empty();
+
+        if need_step {
+            self.prev_step = step_start;
+            if let Err(e) = self.indexed.step() {
+                self.metrics.cmd_step_error_count.inc();
+                // TODO: revisit whether we need to move this to a different log level
+                // depending on how spammy it ends up being. Alternatively, we
+                // may want to rate-limit our logging here.
+                log::warn!("error running step: {:?}", e);
+            }
+
+            self.metrics
+                .cmd_step_ms
+                .inc_by(metric_duration_ms(step_start.elapsed()));
+        }
 
         return more_work;
     }
