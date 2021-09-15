@@ -59,6 +59,7 @@ copyright_files=$(grep -vE \
     -e 'src/pid-file/libbsd' \
     -e 'test/sqllogictest/postgres/testdata/.*\.data' \
     -e 'test/pgtest/.*\.pt' \
+    -e 'test/pgtest-mz/.*\.pt' \
     -e 'test/coordtest/.*\.ct' \
     -e 'gen/.*\.rs' \
     <<< "$files"
