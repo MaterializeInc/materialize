@@ -48,6 +48,14 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.9.5 %}}
 
+- Improve the performance of
+  [built-in sources and views](/cli/#introspection-sources) in the
+  [system catalog](/sql/system-catalog), which should result in lower latency
+  spikes and increased throughput when issuing many small queries, and reduce
+  overall memory consumption. Additionally, the content of the views is now
+  consistent at the introspection interval boundaries. Prior to this release,
+  some views would reveal more details about ephemeral dataflows and operators.
+
 {{% version-header v0.9.4 %}}
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
