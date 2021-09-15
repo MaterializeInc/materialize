@@ -200,7 +200,7 @@ def dashboard_links(start_time: str, env: str) -> None:
     template = (
         "https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?"
         + "orgId=1&from={time_from}&to={time_to}&var-test={test}&var-purpose={purpose}"
-        + "&var-env={env}"  # &var-workflow=cloud-load-test
+        + "&var-env={env}"
     )
     purpose = "load_test"
 
