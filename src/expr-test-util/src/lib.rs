@@ -360,7 +360,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                             );
                             return Some(result);
                         } else {
-                            unreachable!("Literal errors are not supported");
+                            unreachable!("unexpected JSON data: {:?}", obj);
                         }
                     }
                     _ => {}
@@ -454,6 +454,24 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         })
     }
 
+    fn build_constant_err<I>(&mut self, stream_iter: &mut I) -> Result<MirRelationExpr, String>
+    where
+        I: Iterator<Item = TokenTree>,
+    {
+        let error: EvalError = deserialize(
+            stream_iter,
+            "EvalError",
+            &RTI,
+            &mut GenericTestDeserializeContext::default(),
+        )?;
+        let typ: RelationType = deserialize(stream_iter, "RelationType", &RTI, self)?;
+
+        Ok(MirRelationExpr::Constant {
+            rows: Err(error),
+            typ,
+        })
+    }
+
     fn build_get(&mut self, token: Option<TokenTree>) -> Result<MirRelationExpr, String> {
         match token {
             Some(TokenTree::Ident(ident)) => {
@@ -524,6 +542,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         if let TokenTree::Ident(ident) = first_arg {
             return Ok(match &ident.to_string().to_lowercase()[..] {
                 "constant" => Some(self.build_constant(rest_of_stream)?),
+                "constant_err" => Some(self.build_constant_err(rest_of_stream)?),
                 "get" => Some(self.build_get(rest_of_stream.next())?),
                 "let" => Some(self.build_let(rest_of_stream)?),
                 "union" => Some(self.build_union(rest_of_stream)?),
@@ -656,8 +675,15 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                         separated(" ", rows),
                                         from_json(&inner_map["typ"], "RelationType", rti, self)
                                     ));
+                                } else if let Some(inner_data) = inner_map["rows"].get("Err") {
+                                    return Some(format!(
+                                        "(constant_err {} {})",
+                                        from_json(&inner_data, "EvalError", rti, self),
+                                        from_json(&inner_map["typ"], "RelationType", rti, self)
+                                    ));
+                                } else {
+                                    unreachable!("unexpected JSON data: {:?}", inner_map);
                                 }
-                                unreachable!("Constant errors are not yet supported")
                             }
                             "Union" => {
                                 let mut inputs = inner_map["inputs"].as_array().unwrap().to_owned();
