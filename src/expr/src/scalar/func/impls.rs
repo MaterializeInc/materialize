@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod datum;
 mod float;
 mod not;
 
+pub use datum::*;
 pub use float::*;
 pub use not::Not;

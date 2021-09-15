@@ -244,7 +244,10 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                         let filter = expr
                             .clone()
                             .call_unary(UnaryFunc::Not(func::Not))
-                            .call_binary(expr.call_unary(UnaryFunc::IsNull), BinaryFunc::Or);
+                            .call_binary(
+                                expr.call_unary(UnaryFunc::IsNull(func::IsNull)),
+                                BinaryFunc::Or,
+                            );
                         *e = input
                             .take()
                             .filter(vec![filter])

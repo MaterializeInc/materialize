@@ -69,8 +69,11 @@ mod tests {
         format_type: &FormatType,
     ) -> String {
         match format_type {
-            FormatType::Test => json_to_spec(&serde_json::to_string(rel).unwrap(), cat).0,
-            FormatType::Json => serde_json::to_string(rel).unwrap(),
+            FormatType::Test => format!(
+                "{}\n",
+                json_to_spec(&serde_json::to_string(rel).unwrap(), cat).0
+            ),
+            FormatType::Json => format!("{}\n", serde_json::to_string(rel).unwrap()),
             FormatType::Explain(format) => cat.generate_explanation(rel, *format),
         }
     }

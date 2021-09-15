@@ -15,7 +15,7 @@
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
 use crate::TransformArgs;
-use expr::{AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
+use expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::{Datum, RelationType, ScalarType};
 
 /// Harvests information about non-nullability of columns from sources.
@@ -84,7 +84,7 @@ fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
     let mut result = false;
     expr.visit(&mut |e| {
         if let MirScalarExpr::CallUnary {
-            func: UnaryFunc::IsNull,
+            func: UnaryFunc::IsNull(func::IsNull),
             ..
         } = e
         {
@@ -99,7 +99,7 @@ fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
     // Tests for null can be replaced by "false" for non-nullable columns.
     expr.visit_mut(&mut |e| {
         if let MirScalarExpr::CallUnary {
-            func: UnaryFunc::IsNull,
+            func: UnaryFunc::IsNull(func::IsNull),
             expr,
         } = e
         {

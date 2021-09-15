@@ -144,7 +144,7 @@ impl ColumnKnowledge {
                     } = predicate
                     {
                         if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull,
+                            func: UnaryFunc::IsNull(func::IsNull),
                             expr,
                         } = &**expr
                         {
@@ -386,7 +386,7 @@ pub fn optimize(
                     let knowledge = knowledge_stack.pop().unwrap();
                     if knowledge.value.is_some() {
                         e.reduce(input_type);
-                    } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
+                    } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable {
                         *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
                     };
                     DatumKnowledge::from(&*e)

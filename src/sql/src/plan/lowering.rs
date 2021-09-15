@@ -593,7 +593,7 @@ impl HirScalarExpr {
                                 expr2: Box::new(SS::literal_ok(Datum::False, ScalarType::Bool)),
                             }),
                             expr2: Box::new(SS::CallUnary {
-                                func: expr::UnaryFunc::IsNull,
+                                func: expr::UnaryFunc::IsNull(expr::func::IsNull),
                                 expr: Box::new(cond_expr.clone()),
                             }),
                         }]);

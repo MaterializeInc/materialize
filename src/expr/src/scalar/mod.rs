@@ -329,7 +329,7 @@ impl MirScalarExpr {
                         // 1a) Decompose IsNull expressions into a disjunction
                         // of simpler IsNull subexpressions
                         MirScalarExpr::CallUnary { func, expr } => {
-                            if *func == UnaryFunc::IsNull {
+                            if *func == UnaryFunc::IsNull(func::IsNull) {
                                 if let Some(expr) = expr.decompose_is_null() {
                                     *e = expr
                                 }
@@ -688,8 +688,8 @@ impl MirScalarExpr {
             // (<expr1> <op> <expr2>) IS NULL can often be simplified to
             // (<expr1> IS NULL) OR (<expr2> IS NULL).
             if func.propagates_nulls() && !func.introduces_nulls() {
-                let expr1 = expr1.take().call_unary(UnaryFunc::IsNull);
-                let expr2 = expr2.take().call_unary(UnaryFunc::IsNull);
+                let expr1 = expr1.take().call_unary(UnaryFunc::IsNull(func::IsNull));
+                let expr2 = expr2.take().call_unary(UnaryFunc::IsNull(func::IsNull));
                 return Some(expr1.call_binary(expr2, BinaryFunc::Or));
             }
         } else if let MirScalarExpr::CallUnary {
