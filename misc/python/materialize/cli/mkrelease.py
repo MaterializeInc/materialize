@@ -171,7 +171,8 @@ def finish(create_branch: Optional[str], affect_remote: bool) -> None:
 
 @cli.command()
 @click.argument("start-time")
-def dashboard_links(start_time: str) -> None:
+@click.option("--env", default="dev")
+def dashboard_links(start_time: str, env: str) -> None:
     """
     Create the Grafana dashboard links for the release qualification tests
 
@@ -199,20 +200,20 @@ def dashboard_links(start_time: str) -> None:
     template = (
         "https://grafana.i.mtrlz.dev/d/materialize-overview/materialize-overview-load-tests?"
         + "orgId=1&from={time_from}&to={time_to}&var-test={test}&var-purpose={purpose}"
-        + "&var-env=dev"  # &var-workflow=cloud-load-test
+        + "&var-env={env}"  # &var-workflow=cloud-load-test
     )
     purpose = "load_test"
 
     tests = []
     for test in ("chbench", "kinesis", "billing-demo"):
         url = template.format(
-            time_from=time_from, time_to=time_to, test=test, purpose=purpose
+            time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
         )
         tests.append((test, url))
 
     purpose = test = "chaos"
     url = template.format(
-        time_from=time_from, time_to=time_to, test=test, purpose=purpose
+        time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
     )
     tests.append((test, url))
 
