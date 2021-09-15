@@ -198,6 +198,7 @@ else
     aws s3 cp - s3://mz-cloudbench/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.out < ~/mzscratch-startup.out >&2
     aws s3 cp - s3://mz-cloudbench/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.err < ~/mzscratch-startup.err
 fi
+sudo shutdown -h now # save some money
 """
 
     if ns.profile == "basic":
