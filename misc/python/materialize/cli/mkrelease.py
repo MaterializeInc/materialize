@@ -171,7 +171,7 @@ def finish(create_branch: Optional[str], affect_remote: bool) -> None:
 
 @cli.command()
 @click.argument("start-time")
-@click.option("--env", default="dev")
+@click.option("--env", default="dev", type=click.Choice(["dev", "scratch"]))
 def dashboard_links(start_time: str, env: str) -> None:
     """
     Create the Grafana dashboard links for the release qualification tests
