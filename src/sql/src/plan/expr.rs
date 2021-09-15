@@ -208,14 +208,10 @@ impl WindowExprType {
 /// Scalar Window Expr
 pub struct ScalarWindowExpr {
     pub func: ScalarWindowFunc,
-    pub expr: Vec<HirScalarExpr>,
 }
 
 impl ScalarWindowExpr {
-    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
-        for p in self.expr.iter_mut() {
-            p.bind_parameters(params)?;
-        }
+    pub fn bind_parameters(&mut self, _params: &Params) -> Result<(), anyhow::Error> {
         Ok(())
     }
 

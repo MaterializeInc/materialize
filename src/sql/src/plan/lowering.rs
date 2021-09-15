@@ -709,10 +709,8 @@ impl HirScalarExpr {
                 SS::Column(inner.arity() - 1)
             }
             Windowing(expr) => {
-                // @todo
                 // 1. for Aggregate window functions we need to join inner with a reduce over itself
-                // 2. for Scalar window functions we need to put a FlatMap operator on top of inner if there is no grouping key.
-                //    Otherwise, we need to put the FlatMap operator on top of the reduced version of inner and join it with inner
+                // 2. for Scalar window functions we need to put a FlatMap operator on top of inner
 
                 // @todo order
 
@@ -752,7 +750,125 @@ impl HirScalarExpr {
                             });
                         SS::Column(inner.arity() - 1)
                     }
-                    _ => panic!(),
+                    WindowExprType::Scalar(_func) => {
+                        *inner = inner
+                            .take_dangerous()
+                            .let_in(id_gen, |id_gen, mut get_inner| {
+                                let mut group_key = Vec::new();
+
+                                for p in partition {
+                                    let key = p.applied_to(id_gen, col_map, &mut get_inner);
+                                    get_inner = get_inner.map(vec![key]);
+                                    group_key.push(get_inner.arity() - 1);
+                                }
+
+                                get_inner.let_in(id_gen, |_id_gen, get_inner| {
+                                    let to_reduce = get_inner.clone();
+                                    let input_type = to_reduce.typ();
+                                    let input_arity = input_type.arity();
+                                    let fields = input_type
+                                        .column_types
+                                        .iter()
+                                        .map(|t| (ColumnName::from("?column?"), t.clone()))
+                                        .collect_vec();
+                                    let agg_input = expr::MirScalarExpr::CallVariadic {
+                                        func: expr::VariadicFunc::RecordCreate {
+                                            field_names: fields
+                                                .iter()
+                                                .map(|(name, _)| name.clone())
+                                                .collect_vec(),
+                                        },
+                                        exprs: (0..input_arity)
+                                            .map(|column| expr::MirScalarExpr::Column(column))
+                                            .collect_vec(),
+                                    };
+                                    let record_type = ScalarType::Record {
+                                        fields,
+                                        custom_oid: None,
+                                        custom_name: None,
+                                    };
+                                    let agg_input = expr::MirScalarExpr::CallVariadic {
+                                        func: expr::VariadicFunc::ListCreate {
+                                            elem_type: record_type.clone(),
+                                        },
+                                        exprs: vec![agg_input],
+                                    };
+                                    let list_type = ScalarType::List {
+                                        element_type: Box::new(record_type.clone()),
+                                        custom_oid: None,
+                                    };
+                                    let agg_input = expr::MirScalarExpr::CallVariadic {
+                                        func: expr::VariadicFunc::RecordCreate {
+                                            field_names: (0..1)
+                                                .map(|_| ColumnName::from("?column?"))
+                                                .collect_vec(),
+                                        },
+                                        exprs: vec![agg_input],
+                                    };
+                                    let agg_input_type = ScalarType::Record {
+                                        fields: std::iter::once(&list_type)
+                                            .map(|t| {
+                                                (
+                                                    ColumnName::from("?column?"),
+                                                    t.clone().nullable(false),
+                                                )
+                                            })
+                                            .collect_vec(),
+                                        custom_oid: None,
+                                        custom_name: None,
+                                    }
+                                    .nullable(false);
+                                    let aggregate = expr::AggregateExpr {
+                                        func: expr::AggregateFunc::RowNumber {
+                                            order_by: Vec::new(),
+                                        },
+                                        expr: agg_input,
+                                        distinct: false,
+                                    };
+                                    let mut reduce = to_reduce
+                                        .reduce(group_key.clone(), vec![aggregate.clone()], None)
+                                        .flat_map(
+                                            expr::TableFunc::UnnestList {
+                                                el_typ: aggregate
+                                                    .func
+                                                    .output_type(agg_input_type)
+                                                    .scalar_type
+                                                    .unwrap_list_element_type()
+                                                    .clone(),
+                                            },
+                                            vec![expr::MirScalarExpr::Column(group_key.len())],
+                                        );
+                                    let record_col = reduce.arity() - 1;
+
+                                    // unpack the record
+                                    for c in 0..input_arity {
+                                        reduce = reduce.take_dangerous().map(vec![
+                                            expr::MirScalarExpr::CallUnary {
+                                                func: expr::UnaryFunc::RecordGet(c),
+                                                expr: Box::new(expr::MirScalarExpr::CallUnary {
+                                                    func: expr::UnaryFunc::RecordGet(1),
+                                                    expr: Box::new(expr::MirScalarExpr::Column(
+                                                        record_col,
+                                                    )),
+                                                }),
+                                            },
+                                        ]);
+                                    }
+
+                                    // aggregation
+                                    reduce = reduce.take_dangerous().map(vec![
+                                        expr::MirScalarExpr::CallUnary {
+                                            func: expr::UnaryFunc::RecordGet(0),
+                                            expr: Box::new(expr::MirScalarExpr::Column(record_col)),
+                                        },
+                                    ]);
+
+                                    let agg_col = record_col + 1 + input_arity;
+                                    reduce.project((record_col + 1..agg_col + 1).collect_vec())
+                                })
+                            });
+                        SS::Column(inner.arity() - 1)
+                    }
                 }
             }
         }

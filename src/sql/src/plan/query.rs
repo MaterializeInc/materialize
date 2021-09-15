@@ -55,8 +55,8 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
-    ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, UnaryFunc, VariadicFunc, WindowExpr,
-    WindowExprType,
+    ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, UnaryFunc, VariadicFunc,
+    WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -2951,6 +2951,23 @@ fn plan_function<'a>(
             );
         }
         Func::Scalar(impls) => impls,
+        Func::ScalarWindow(impls) => {
+            let name = normalize::unresolved_object_name(name.clone())?;
+            let func = func::select_impl(ecx, FuncSpec::Func(&name), impls, vec![], vec![])?;
+
+            let window_spec = over.as_ref().unwrap();
+            let mut partition = Vec::new();
+            for k in window_spec.partition_by.iter() {
+                partition.push(plan_expr(ecx, k)?.type_as_any(ecx)?);
+            }
+            let order_by = Vec::new();
+
+            return Ok(HirScalarExpr::Windowing(WindowExpr {
+                func: WindowExprType::Scalar(ScalarWindowExpr { func }),
+                partition,
+                order_by,
+            }));
+        }
     };
 
     if over.is_some() {
