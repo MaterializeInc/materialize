@@ -648,6 +648,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
         };
 
         let mut more_work = true;
+        let mut contains_write = false;
 
         // Grab as many commands as we can out of the channel and execute them
         // all before calling `step` again to amortise the cost of trace
@@ -688,6 +689,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                 Cmd::Write(updates, res) => {
                     self.metrics.cmd_write_count.inc();
                     self.indexed.write(updates, res);
+                    contains_write = true;
                 }
                 Cmd::Seal(ids, ts, res) => {
                     self.indexed.seal(ids, ts, res);
@@ -709,7 +711,13 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
             .cmd_run_ms
             .inc_by(metric_duration_ms(step_start.duration_since(run_start)));
 
-        if let Err(e) = self.indexed.drain_pending().and_then(|_| {
+        let drain_pending_res = if contains_write {
+            self.indexed.drain_pending()
+        } else {
+            Ok(())
+        };
+
+        if let Err(e) = drain_pending_res.and_then(|_| {
             if self.last_step.elapsed() > STEP_INTERVAL {
                 self.last_step = Instant::now();
                 self.indexed.step()
