@@ -22,6 +22,8 @@ import time
 from datetime import timedelta
 from typing import List, NamedTuple, Optional, cast
 
+import boto3
+
 from materialize import git, scratch, spawn, util
 from materialize.cli.scratch import (
     DEFAULT_INSTPROF_NAME,
@@ -166,7 +168,9 @@ def start(ns: argparse.Namespace) -> None:
 
     revs = ns.revs.split(",")
 
-    clusters = itertools.product(range(ns.trials), (git.rev_parse(rev) for rev in revs))
+    clusters = list(
+        itertools.product(range(ns.trials), (git.rev_parse(rev) for rev in revs))
+    )
 
     bench_script = ns.bench_script
     script_name = bench_script[0]
@@ -186,7 +190,14 @@ python3 -m venv /tmp/mzenv >&2
 python3 -m pip install --upgrade pip >&2
 pip3 install ./mz.tar.gz[dev] >&2
 MZ_ROOT=/home/ubuntu/materialize python3 -u -m {script_name} {script_args}
-echo $? > ~/bench_exit_code
+result=$?
+echo $result > ~/bench_exit_code
+if [ $result -eq 0 ]; then
+    aws s3 cp - s3://mz-cloudbench/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv < ~/mzscratch-startup.out >&2
+else
+    aws s3 cp - s3://mz-cloudbench/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.out < ~/mzscratch-startup.out >&2
+    aws s3 cp - s3://mz-cloudbench/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.err < ~/mzscratch-startup.err
+fi
 """
 
     if ns.profile == "basic":
@@ -225,6 +236,12 @@ echo $? > ~/bench_exit_code
         raise RuntimeError(f"Profile {ns.profile} is not implemented yet")
 
     bench_id = util.nonce(8)
+
+    manifest_bytes = "".join(f"{i}-{rev}\n" for i, rev in clusters).encode("utf-8")
+    boto3.client("s3").put_object(
+        Body=manifest_bytes, Bucket="mz-cloudbench", Key=f"{bench_id}/MANIFEST"
+    )
+
     # TODO - Do these in parallel
     launched = []
     for (i, rev) in clusters:
@@ -241,6 +258,7 @@ echo $? > ~/bench_exit_code
                 "bench_i": str(i),
                 "LaunchedBy": scratch.whoami(),
             },
+            extra_env={"MZ_CB_BENCH_ID": bench_id, "MZ_CB_CLUSTER_ID": f"{i}-{rev}"},
             delete_after=scratch.now_plus(timedelta(days=1)),
             git_rev=rev,
         )
