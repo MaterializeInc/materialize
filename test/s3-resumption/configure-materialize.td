@@ -9,10 +9,8 @@
 
 > CREATE MATERIALIZED SOURCE s3_text
   FROM S3
-  DISCOVER OBJECTS
-  MATCHING 's3/*.text'
+  DISCOVER OBJECTS MATCHING 's3/*.text'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
-  SQS NOTIFICATIONS 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -24,10 +22,8 @@
 
 > CREATE MATERIALIZED SOURCE s3_gzip
   FROM S3
-  DISCOVER OBJECTS
-  MATCHING 's3/*.gzip'
+  DISCOVER OBJECTS MATCHING 's3/*.gzip'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
-  SQS NOTIFICATIONS 'testdrive-test-${testdrive.seed}'
   COMPRESSION GZIP
   WITH (
     region = '${testdrive.aws-region}',
