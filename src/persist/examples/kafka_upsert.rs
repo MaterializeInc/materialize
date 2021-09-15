@@ -15,25 +15,27 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::{cmp, env, process};
 
+use differential_dataflow::Hashable;
+use persist::operators::stream::Persist;
+use serde::{Deserialize, Serialize};
+
 use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, NowFn};
 use persist::error::Error as PersistError;
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::runtime::{
-    self, RuntimeClient, RuntimeConfig, StreamReadHandle, StreamWriteHandle,
-};
+use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
 use persist::indexed::Snapshot;
+use persist::operators::stream::{AwaitFrontier, Seal};
+use persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
 use persist::storage::LockInfo;
 use persist::Data;
 use persist_types::Codec;
-use timely::dataflow::channels::pact::Pipeline;
+
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator;
-use timely::dataflow::operators::ok_err::OkErr;
-use timely::dataflow::operators::{Concat, Inspect, Operator, ToStream};
+use timely::dataflow::operators::{Concat, Inspect, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use timely::PartialOrder;
 
 fn main() {
     if let Err(err) = run(env::args().collect()) {
@@ -125,20 +127,38 @@ where
         ts_read,
     )?;
 
-    let bindings_persist_err = persist_bindings(&bindings, ts_write);
+    let (bindings_persist_oks, bindings_persist_err) =
+        bindings.persist("timestamp_bindings", ts_write.clone());
+
+    let (_bindings_seal_oks, bindings_seal_err) =
+        bindings_persist_oks.seal("timestamp_bindings", ts_write);
 
     bindings.inspect(|b| println!("Binding: {:?}", b));
 
-    let (records_persist_ok, records_persist_err) =
-        persist_records::<G, S>(&source_records, start_ts, out_read, out_write)?;
+    // Notice how we ignore diff here. Before the upsert uperator, we don't actually have
+    // differential updates. We could update our mock-source to not emit the diff field.
+    let source_records = source_records
+        .map(|((key, value), source_ts, _assigned_ts, _diff)| (key, Some(value), source_ts));
 
-    // TODO: add an operator that waits for the seal on bindings and
-    // records (or upsert state, or whatnot) to advance before it releases records.
-    //
-    // We could do this either by listening for `Seal` events on a
-    // StreamReadHandle or by waiting for the frontier to advance
+    let upsert_oks = source_records.persistent_upsert(
+        Antichain::from_elem(u64::MIN),
+        PersistentUpsertConfig::new(start_ts, out_read, out_write.clone()),
+    );
 
-    let errs = bindings_persist_err.concat(&records_persist_err);
+    let (upsert_oks, upsert_seal_err) = upsert_oks.seal("upsert_state", out_write);
+
+    // Wait for persistent collections to be sealed before forwarding results.  We could do this
+    // either by listening for `Seal` events on a StreamReadHandle or by waiting for the frontier
+    // to advance, as we do here.
+
+    // This operator controls whether we do "optimistic" or "pessimistic" concurrency control.
+    // Without blocking here, we would send data along straight away but the frontier would still
+    // be held back until data is persisted and sealed by the upstream persist/seal operators.
+    let records_persist_ok = upsert_oks.await_frontier("upsert_state");
+
+    let errs = bindings_persist_err
+        .concat(&bindings_seal_err)
+        .concat(&upsert_seal_err);
 
     Ok((records_persist_ok, errs))
 }
@@ -159,7 +179,7 @@ fn read_source<G, S>(
     bindings_read: StreamReadHandle<S::SourceTimestamp, AssignedTimestamp>,
 ) -> Result<
     (
-        Stream<G, ((S::K, S::V), u64, isize)>,
+        Stream<G, ((S::K, S::V), S::SourceTimestamp, u64, isize)>,
         Stream<G, ((S::SourceTimestamp, AssignedTimestamp), u64, isize)>,
     ),
     Box<dyn Error>,
@@ -218,10 +238,10 @@ where
                 records_capability.downgrade(&current_ts);
             }
 
-            if let Some((record, _source_timestamp)) = source.get_next_message() {
+            if let Some((record, source_timestamp)) = source.get_next_message() {
                 let mut records_out = records_out.activate();
                 let mut records_session = records_out.session(&records_capability);
-                records_session.give((record, current_ts, 1));
+                records_session.give((record, source_timestamp, current_ts, 1));
             }
 
             activator.activate_after(Duration::from_millis(100));
@@ -229,148 +249,6 @@ where
     });
 
     Ok((records, bindings))
-}
-
-/// Persists bindings to the given handle and emits errors as a `Stream`.
-///
-/// Returns a stream of errors.
-// TODO: also return a Stream<G, ()> that could be used to listen on
-// the frontier. As an alternative to listening for `Seal` events on a stream handle.
-fn persist_bindings<G, ST>(
-    bindings: &Stream<G, ((ST, AssignedTimestamp), u64, isize)>,
-    bindings_write: StreamWriteHandle<ST, AssignedTimestamp>,
-) -> Stream<G, (String, u64, isize)>
-where
-    G: Scope<Timestamp = u64>,
-    ST: Codec + timely::Data,
-{
-    let mut buffer = Vec::new();
-    let mut input_frontier =
-        Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
-
-    bindings.unary_frontier(
-        Pipeline,
-        "persist_bindings",
-        move |mut capability, _info| {
-            move |input, output| {
-                input.for_each(|time, data| {
-                    data.swap(&mut buffer);
-                    let result = bindings_write.write(buffer.iter().as_ref()).recv();
-                    if let Err(e) = result {
-                        let mut session = output.session(&time);
-                        // TODO: make error retractable? Probably not...
-                        session.give((e.to_string(), time.time().clone(), 1));
-                    }
-                });
-
-                let new_input_frontier = input.frontier().frontier();
-                let progress =
-                    !PartialOrder::less_equal(&new_input_frontier, &input_frontier.borrow());
-                if progress {
-                    input_frontier.clear();
-                    input_frontier.extend(new_input_frontier.into_iter().cloned());
-                    if let Some(frontier) = input_frontier.elements().first() {
-                        println!("Sealing bindings up to {}", *frontier);
-                        let result = bindings_write.seal(*frontier).recv();
-                        if let Err(e) = result {
-                            let mut session = output.session(&capability);
-                            // TODO: make error retractable? Probably not...
-                            session.give((e.to_string(), capability.time().clone(), 1));
-                        }
-                        capability.downgrade(&frontier);
-                    }
-                }
-            }
-        },
-    )
-}
-
-/// Persists records and sends them along. When restoring, we also emit the previously persisted
-/// records.
-///
-/// We use `start_ts`, which is in the target timeline, to determine up to which time we should
-/// restore previously written records.
-fn persist_records<G, S>(
-    records: &Stream<G, ((S::K, S::V), u64, isize)>,
-    start_ts: u64,
-    records_read: StreamReadHandle<S::K, S::V>,
-    records_write: StreamWriteHandle<S::K, S::V>,
-) -> Result<
-    (
-        Stream<G, ((S::K, S::V), u64, isize)>,
-        Stream<G, (String, u64, isize)>,
-    ),
-    Box<dyn Error>,
->
-where
-    G: Scope<Timestamp = u64>,
-    S: Source,
-{
-    // TODO: don't use collect()
-    // TODO: actually do upserts here, and everywhere
-    let mut prev_records = Vec::new();
-    for ((k, v), ts, diff) in records_read
-        .snapshot()?
-        .into_iter()
-        .collect::<Result<Vec<_>, PersistError>>()?
-    {
-        // TODO: look extra hard at whether we need > or >= here. According
-        // to how timely frontiers work we need >=.
-        if ts >= start_ts {
-            continue;
-        }
-        prev_records.push(((k, v), ts, diff));
-    }
-
-    let mut buffer = Vec::new();
-    let mut input_frontier =
-        Antichain::from_elem(<G::Timestamp as timely::progress::Timestamp>::minimum());
-
-    let (oks, err) = records
-        .unary_frontier(Pipeline, "persist_records", move |mut capability, _info| {
-            move |input, output| {
-                input.for_each(|time, data| {
-                    data.swap(&mut buffer);
-                    let result = records_write.write(buffer.iter().as_ref()).recv();
-                    if let Err(e) = result {
-                        let mut session = output.session(&time);
-                        // TODO: make error retractable?
-                        session.give(Err((e.to_string(), time.time().clone(), 1)));
-                    }
-                    // TODO: Be more efficient about this
-                    let mut session = output.session(&time);
-                    for record in buffer.drain(..) {
-                        assert!(record.1 >= start_ts);
-                        session.give(Ok(record));
-                    }
-                });
-
-                let new_input_frontier = input.frontier().frontier();
-                let progress =
-                    !PartialOrder::less_equal(&new_input_frontier, &input_frontier.borrow());
-                if progress {
-                    input_frontier.clear();
-                    input_frontier.extend(new_input_frontier.into_iter().cloned());
-                    if let Some(frontier) = input_frontier.elements().first() {
-                        println!("Sealing records up to {}", *frontier);
-                        let result = records_write.seal(*frontier).recv();
-                        if let Err(e) = result {
-                            let mut session = output.session(&capability);
-                            // TODO: make error retractable? Probably not...
-                            session.give(Err((e.to_string(), capability.time().clone(), 1)));
-                        }
-                        capability.downgrade(&frontier);
-                    }
-                }
-            }
-        })
-        .ok_err(|res| res);
-
-    let prev_ok = prev_records.to_stream(&mut records.scope());
-
-    let oks = oks.concat(&prev_ok);
-
-    Ok((oks, err))
 }
 
 // HACK: This should be a method on StreamReadHandle that actually queries the
@@ -390,9 +268,9 @@ fn sealed_ts<K: Data, V: Data>(read: &StreamReadHandle<K, V>) -> Result<u64, Box
 /// Cheapo version of our current `SourceReader`. The new source trait from Petros uses an async
 /// `Stream` instead of polling for messages.
 trait Source {
-    type SourceTimestamp: timely::Data + persist::Data;
-    type K: timely::Data + persist::Data + Hash;
-    type V: timely::Data + persist::Data;
+    type SourceTimestamp: timely::Data + timely::ExchangeData + persist::Data + Ord;
+    type K: timely::Data + timely::ExchangeData + persist::Data + Hash + Codec;
+    type V: timely::Data + timely::ExchangeData + persist::Data + Hash + Codec;
 
     fn new(
         starting_offsets: Vec<Self::SourceTimestamp>,
@@ -500,16 +378,18 @@ impl Source for KafkaSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Default, Serialize, Deserialize)]
 struct KafkaOffset(u64);
 
-#[derive(Debug, Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Default)]
+#[derive(
+    Debug, Clone, Copy, Hash, PartialOrd, Ord, PartialEq, Eq, Default, Serialize, Deserialize,
+)]
 struct KafkaPartition(u64);
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Default)]
 struct AssignedTimestamp(u64);
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Default, Serialize, Deserialize)]
 struct SourceTimestamp<P, O>(P, O);
 
 mod kafka_offset_impls {
