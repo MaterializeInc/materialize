@@ -30,7 +30,7 @@ pub mod adt;
 pub mod strconv;
 pub mod util;
 
-pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
+pub use relation::{ColumnName, ColumnType, NotNullViolation, RelationDesc, RelationType};
 pub use row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, Row, RowArena, RowRef,
 };

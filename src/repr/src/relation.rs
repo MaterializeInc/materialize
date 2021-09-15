@@ -15,8 +15,9 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use lowertest::MzStructReflect;
+use ore::str::StrExt;
 
-use crate::ScalarType;
+use crate::{Datum, ScalarType};
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -420,6 +421,19 @@ impl RelationDesc {
             None
         }
     }
+
+    /// Verifies that `d` meets all of the constraints for the `i`th column of `self`.
+    ///
+    /// n.b. The only constraint MZ currently supports in NOT NULL, but this
+    /// structure will  be simple to extend.
+    pub fn constraints_met(&self, i: usize, d: &Datum) -> Result<(), NotNullViolation> {
+        let (name, typ) = (self.names[i].as_ref(), &self.typ.column_types[i]);
+        if d == &Datum::Null && !typ.nullable {
+            Err(NotNullViolation(name.cloned()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl IntoIterator for RelationDesc {
@@ -428,5 +442,23 @@ impl IntoIterator for RelationDesc {
 
     fn into_iter(self) -> Self::IntoIter {
         self.names.into_iter().zip(self.typ.column_types)
+    }
+}
+
+/// Expression violated not-null constraint on named column
+#[derive(Debug, PartialEq, Eq)]
+pub struct NotNullViolation(pub Option<ColumnName>);
+
+impl fmt::Display for NotNullViolation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "null value in column {} violates not-null constraint",
+            self.0
+                .as_ref()
+                .unwrap_or(&ColumnName::from("unnamed column"))
+                .as_str()
+                .quoted()
+        )
     }
 }

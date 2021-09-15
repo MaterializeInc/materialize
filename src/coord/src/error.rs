@@ -12,6 +12,7 @@ use std::fmt;
 
 use expr::EvalError;
 use ore::str::StrExt;
+use repr::NotNullViolation;
 use transform::TransformError;
 
 use crate::catalog;
@@ -42,6 +43,8 @@ pub enum CoordError {
     InvalidAlterOnDisabledIndex(String),
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    /// Expression violated a column's constraint
+    ConstraintViolation(NotNullViolation),
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
@@ -214,6 +217,9 @@ impl fmt::Display for CoordError {
                 p.name().quoted(),
                 p.type_name().quoted()
             ),
+            CoordError::ConstraintViolation(not_null_violation) => {
+                write!(f, "{}", not_null_violation)
+            }
             CoordError::OperationProhibitsTransaction(op) => {
                 write!(f, "{} cannot be run inside a transaction block", op)
             }
@@ -293,6 +299,12 @@ impl From<sql::catalog::CatalogError> for CoordError {
 impl From<TransformError> for CoordError {
     fn from(e: TransformError) -> CoordError {
         CoordError::Transform(e)
+    }
+}
+
+impl From<NotNullViolation> for CoordError {
+    fn from(e: NotNullViolation) -> CoordError {
+        CoordError::ConstraintViolation(e)
     }
 }
 

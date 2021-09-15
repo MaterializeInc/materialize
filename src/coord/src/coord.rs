@@ -79,10 +79,9 @@ use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
 use ore::retry::Retry;
-use ore::str::StrExt;
 use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
 use repr::adt::numeric;
-use repr::{ColumnName, Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
+use repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
@@ -3265,15 +3264,8 @@ impl Coordinator {
                 };
                 let desc = table.desc()?;
                 for (row, _) in &rows {
-                    for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
-                        if datum == &Datum::Null && !typ.nullable {
-                            coord_bail!(
-                                "null value in column {} violates not-null constraint",
-                                name.unwrap_or(&ColumnName::from("unnamed column"))
-                                    .as_str()
-                                    .quoted()
-                            )
-                        }
+                    for (i, datum) in row.unpack().iter().enumerate() {
+                        desc.constraints_met(i, datum)?;
                     }
                 }
                 let diffs_plan = SendDiffsPlan {
@@ -3331,15 +3323,18 @@ impl Coordinator {
         } = plan;
 
         // Delete can be queued, so re-verify the id exists.
-        if self.catalog.try_get_by_id(id).is_none() {
-            tx.send(
-                Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                    id.to_string(),
-                ))),
-                session,
-            );
-            return;
-        }
+        let desc = match self.catalog.try_get_by_id(id) {
+            Some(table) => table.desc().expect("desc called on table").clone(),
+            None => {
+                tx.send(
+                    Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                        id.to_string(),
+                    ))),
+                    session,
+                );
+                return;
+            }
+        };
 
         let ts = self.get_read_ts();
         let peek_response = match self.sequence_peek(
@@ -3378,6 +3373,7 @@ impl Coordinator {
                                                 return Err(CoordError::Unstructured(anyhow!(e)))
                                             }
                                         };
+                                        desc.constraints_met(*idx, &updated)?;
                                         updates.push((*idx, updated));
                                     }
                                     for (idx, new_value) in updates {
