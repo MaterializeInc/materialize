@@ -451,6 +451,7 @@ impl<'a> Explanation<'a> {
             }
             Exists(expr) => write!(f, "exists(%{})", self.expr_chain(expr)),
             Select(expr) => write!(f, "select(%{})", self.expr_chain(expr)),
+            Windowing(_) => write!(f, "asenac will fix me"),
         }
     }
 

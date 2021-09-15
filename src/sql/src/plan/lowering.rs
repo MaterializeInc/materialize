@@ -47,7 +47,7 @@ use repr::*;
 
 use crate::plan::expr::HirRelationExpr;
 use crate::plan::expr::HirScalarExpr;
-use crate::plan::expr::{AggregateExpr, ColumnOrder, ColumnRef, JoinKind};
+use crate::plan::expr::{AggregateExpr, ColumnOrder, ColumnRef, JoinKind, WindowExprType};
 use crate::plan::transform_expr;
 
 /// Maps a leveled column reference to a specific column.
@@ -708,6 +708,53 @@ impl HirScalarExpr {
                 );
                 SS::Column(inner.arity() - 1)
             }
+            Windowing(expr) => {
+                // @todo
+                // 1. for Aggregate window functions we need to join inner with a reduce over itself
+                // 2. for Scalar window functions we need to put a FlatMap operator on top of inner if there is no grouping key.
+                //    Otherwise, we need to put the FlatMap operator on top of the reduced version of inner and join it with inner
+
+                // @todo order
+
+                let partition = expr.partition;
+
+                match expr.func {
+                    WindowExprType::Aggregate(aggr_expr) => {
+                        *inner = inner
+                            .take_dangerous()
+                            .let_in(id_gen, |id_gen, mut get_inner| {
+                                let mut group_key = Vec::new();
+
+                                for p in partition {
+                                    let key = p.applied_to(id_gen, col_map, &mut get_inner);
+                                    get_inner = get_inner.map(vec![key]);
+                                    group_key.push(get_inner.arity() - 1);
+                                }
+
+                                get_inner.let_in(id_gen, |id_gen, get_inner| {
+                                    let mut to_reduce = get_inner.clone();
+                                    let aggregate =
+                                        aggr_expr.applied_to(id_gen, col_map, &mut to_reduce);
+                                    let reduce =
+                                        to_reduce.reduce(group_key.clone(), vec![aggregate], None);
+                                    let inner_arity = get_inner.arity();
+
+                                    get_inner.product(reduce).filter(
+                                        group_key.iter().enumerate().map(|(key_pos, key_col)| {
+                                            SS::CallBinary {
+                                                func: expr::BinaryFunc::Eq,
+                                                expr1: Box::new(SS::Column(*key_col)),
+                                                expr2: Box::new(SS::Column(inner_arity + key_pos)),
+                                            }
+                                        }),
+                                    )
+                                })
+                            });
+                        SS::Column(inner.arity() - 1)
+                    }
+                    _ => panic!(),
+                }
+            }
         }
     }
 
@@ -741,7 +788,7 @@ impl HirScalarExpr {
                 then: Box::new(then.lower_uncorrelated()?),
                 els: Box::new(els.lower_uncorrelated()?),
             },
-            Select { .. } | Exists { .. } | Parameter(..) | Column(..) => {
+            Select { .. } | Exists { .. } | Parameter(..) | Column(..) | Windowing(..) => {
                 bail!("unexpected ScalarExpr in uncorrelated plan: {:?}", self);
             }
         })

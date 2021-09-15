@@ -55,7 +55,8 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
-    ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, UnaryFunc, VariadicFunc,
+    ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, UnaryFunc, VariadicFunc, WindowExpr,
+    WindowExprType,
 };
 use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -2725,10 +2726,6 @@ fn plan_aggregate(
         _ => unreachable!("plan_aggregate called on non-aggregate function,"),
     };
 
-    if sql_func.over.is_some() {
-        bail_unsupported!(213, "window functions");
-    }
-
     let name = normalize::unresolved_object_name(sql_func.name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
@@ -2913,6 +2910,30 @@ fn plan_function<'a>(
     }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
     let impls = match resolve_func(ecx, name, args)? {
+        Func::Aggregate(_) if over.is_some() => {
+            let aggr = plan_aggregate(
+                ecx,
+                &Function {
+                    name: name.clone(),
+                    args: args.clone(),
+                    filter: filter.clone(),
+                    over: None,
+                    distinct: *distinct,
+                },
+            )?;
+            // @todo
+            let window_spec = over.as_ref().unwrap();
+            let mut partition = Vec::new();
+            for k in window_spec.partition_by.iter() {
+                partition.push(plan_expr(ecx, k)?.type_as_any(ecx)?);
+            }
+            let order_by = Vec::new();
+            return Ok(HirScalarExpr::Windowing(WindowExpr {
+                func: WindowExprType::Aggregate(aggr),
+                partition,
+                order_by,
+            }));
+        }
         Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
@@ -3308,34 +3329,36 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
 
 impl<'a, 'ast> Visit<'ast, Aug> for AggregateFuncVisitor<'a, 'ast> {
     fn visit_function(&mut self, func: &'ast Function<Aug>) {
-        let item = match self.scx.resolve_function(func.name.clone()) {
-            Ok(i) => i,
-            // Catching missing functions later in planning improves error messages.
-            Err(_) => return,
-        };
+        if func.over.is_none() {
+            let item = match self.scx.resolve_function(func.name.clone()) {
+                Ok(i) => i,
+                // Catching missing functions later in planning improves error messages.
+                Err(_) => return,
+            };
 
-        if let Ok(Func::Aggregate { .. }) = item.func() {
-            if self.within_aggregate {
-                self.err = Some(anyhow!("nested aggregate functions are not allowed"));
+            if let Ok(Func::Aggregate { .. }) = item.func() {
+                if self.within_aggregate {
+                    self.err = Some(anyhow!("nested aggregate functions are not allowed"));
+                    return;
+                }
+                self.aggs.push(func);
+                let Function {
+                    name: _,
+                    args,
+                    filter,
+                    over: _,
+                    distinct: _,
+                } = func;
+                if let Some(filter) = filter {
+                    self.visit_expr(filter);
+                }
+                let old_within_aggregate = self.within_aggregate;
+                self.within_aggregate = true;
+                self.visit_function_args(args);
+
+                self.within_aggregate = old_within_aggregate;
                 return;
             }
-            self.aggs.push(func);
-            let Function {
-                name: _,
-                args,
-                filter,
-                over: _,
-                distinct: _,
-            } = func;
-            if let Some(filter) = filter {
-                self.visit_expr(filter);
-            }
-            let old_within_aggregate = self.within_aggregate;
-            self.within_aggregate = true;
-            self.visit_function_args(args);
-
-            self.within_aggregate = old_within_aggregate;
-            return;
         }
         visit::visit_function(self, func);
     }

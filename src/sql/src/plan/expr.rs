@@ -152,6 +152,89 @@ pub enum HirScalarExpr {
     ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
     ///   (see <https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/>).
     Select(Box<HirRelationExpr>),
+    Windowing(WindowExpr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Window Expr
+pub struct WindowExpr {
+    pub func: WindowExprType,
+    pub partition: Vec<HirScalarExpr>,
+    pub order_by: Vec<HirScalarExpr>,
+}
+
+impl WindowExpr {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+        self.func.bind_parameters(params)?;
+        for p in self.partition.iter_mut() {
+            p.bind_parameters(params)?;
+        }
+        for p in self.order_by.iter_mut() {
+            p.bind_parameters(params)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Window Expr Type
+pub enum WindowExprType {
+    Scalar(ScalarWindowExpr),
+    Aggregate(AggregateExpr),
+}
+
+impl WindowExprType {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+        match self {
+            Self::Scalar(expr) => expr.bind_parameters(params),
+            Self::Aggregate(expr) => expr.bind_parameters(params),
+        }
+    }
+
+    fn typ(
+        &self,
+        outers: &[RelationType],
+        inner: &RelationType,
+        params: &BTreeMap<usize, ScalarType>,
+    ) -> ColumnType {
+        match self {
+            Self::Scalar(expr) => expr.typ(outers, inner, params),
+            Self::Aggregate(expr) => expr.typ(outers, inner, params),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Scalar Window Expr
+pub struct ScalarWindowExpr {
+    pub func: ScalarWindowFunc,
+    pub expr: Vec<HirScalarExpr>,
+}
+
+impl ScalarWindowExpr {
+    pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
+        for p in self.expr.iter_mut() {
+            p.bind_parameters(params)?;
+        }
+        Ok(())
+    }
+
+    fn typ(
+        &self,
+        _outers: &[RelationType],
+        _inner: &RelationType,
+        _params: &BTreeMap<usize, ScalarType>,
+    ) -> ColumnType {
+        // @todo asenac
+        ScalarType::Int64.nullable(false)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Scalar Window functions
+pub enum ScalarWindowFunc {
+    RowNumber,
+    Rank,
 }
 
 /// A `CoercibleScalarExpr` is a [`HirScalarExpr`] whose type is not fully
@@ -1166,6 +1249,7 @@ impl HirScalarExpr {
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
                 expr.bind_parameters(params)
             }
+            HirScalarExpr::Windowing(expr) => expr.bind_parameters(params),
         }
     }
 
@@ -1280,6 +1364,7 @@ impl HirScalarExpr {
                 f(els);
             }
             Exists(..) | Select(..) => (),
+            Windowing(..) => (), // @todo asenac
         }
     }
 
@@ -1322,6 +1407,7 @@ impl HirScalarExpr {
                 f(els);
             }
             Exists(..) | Select(..) => (),
+            Windowing(..) => (), // @todo asenac
         }
     }
 
@@ -1357,6 +1443,7 @@ impl HirScalarExpr {
             HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
                 expr.visit_columns(depth + 1, f);
             }
+            HirScalarExpr::Windowing(..) => (), // @todo asenac
         }
     }
 
@@ -1452,6 +1539,7 @@ impl AbstractExpr for HirScalarExpr {
                     .into_element()
                     .nullable(true)
             }
+            HirScalarExpr::Windowing(expr) => expr.func.typ(outers, inner, params),
         }
     }
 }
