@@ -9,7 +9,8 @@ menu:
 
 {{< beta v0.9.0 />}}
 
-By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead and provide exactly-once processing guarantees, Materialize must be able to do two things:
+By default, Materialize creates new, distinct topics for sinks after each restart. To enable the reuse of the existing topic instead and provide exactly-once processing guarantees, Materialize must be able to do two
+things:
 
 * Reconstruct the history of the sinked object and all the objects on which it depends, based on the replayable timestamps of their source events.
 * Ensure that no other processes write to the output topic.
