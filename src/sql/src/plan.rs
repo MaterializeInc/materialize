@@ -136,7 +136,6 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
@@ -144,7 +143,6 @@ pub struct CreateTablePlan {
     pub name: FullName,
     pub table: Table,
     pub if_not_exists: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
@@ -156,12 +154,13 @@ pub struct CreateViewPlan {
     /// whether we should auto-materialize the view
     pub materialize: bool,
     pub if_not_exists: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
 pub struct CreateViewsPlan {
-    pub views: Vec<CreateViewPlan>,
+    pub views: Vec<(FullName, View)>,
+    pub materialize: bool,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug)]
@@ -170,14 +169,12 @@ pub struct CreateIndexPlan {
     pub index: Index,
     pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
 pub struct CreateTypePlan {
     pub name: FullName,
     pub typ: Type,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
@@ -320,6 +317,7 @@ pub struct Table {
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Raw>>,
     pub temporary: bool,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -337,6 +335,7 @@ pub struct Sink {
     pub from: GlobalId,
     pub connector_builder: SinkConnectorBuilder,
     pub envelope: SinkEnvelope,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -345,6 +344,7 @@ pub struct View {
     pub expr: ::expr::MirRelationExpr,
     pub column_names: Vec<Option<ColumnName>>,
     pub temporary: bool,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -352,12 +352,14 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<::expr::MirScalarExpr>,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Type {
     pub create_sql: String,
     pub inner: TypeInner,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]

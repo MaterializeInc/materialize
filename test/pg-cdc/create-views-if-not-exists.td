@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Use CREATE VIEWS FROM SOURCE with an explicit schema
+# Use CREATE VIEWS IF NOT EXISTS FROM SOURCE
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -20,21 +20,13 @@ CREATE SCHEMA public;
 
 CREATE TABLE t1 (f1 INTEGER);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
-INSERT INTO t1 VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> DROP SCHEMA IF EXISTS schema1
-
-> CREATE SCHEMA schema1
-
-> CREATE MATERIALIZED SOURCE schema1.mz_source
+> CREATE MATERIALIZED SOURCE mz_source
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
-> CREATE VIEWS FROM SOURCE schema1.mz_source;
+> CREATE VIEWS FROM SOURCE mz_source;
 
-> SELECT * FROM t1;
-1
-
-> DROP SCHEMA schema1 CASCADE;
+> CREATE VIEWS IF NOT EXISTS FROM SOURCE mz_source;

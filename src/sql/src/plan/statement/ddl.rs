@@ -214,12 +214,12 @@ pub fn plan_create_table(
         desc,
         defaults,
         temporary,
+        depends_on,
     };
     Ok(Plan::CreateTable(CreateTablePlan {
         name,
         table,
         if_not_exists: *if_not_exists,
-        depends_on,
     }))
 }
 
@@ -1222,32 +1222,32 @@ pub fn describe_create_view(
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_create_view(
+pub fn plan_view(
     scx: &StatementContext,
-    mut stmt: CreateViewStatement<Raw>,
+    def: &mut ViewDefinition<Raw>,
     params: &Params,
-) -> Result<Plan, anyhow::Error> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateView(stmt.clone()))?;
-    let CreateViewStatement {
-        temporary,
-        materialized,
-        if_exists,
-        definition:
-            ViewDefinition {
-                name,
-                columns,
-                query,
-                with_options,
-            },
-    } = &mut stmt;
+    temporary: bool,
+) -> Result<(FullName, View), anyhow::Error> {
+    let create_sql = normalize::create_statement(
+        scx,
+        Statement::CreateView(CreateViewStatement {
+            if_exists: IfExistsBehavior::Error,
+            temporary,
+            materialized: false,
+            definition: def.clone(),
+        }),
+    )?;
+
+    let ViewDefinition {
+        name,
+        columns,
+        query,
+        with_options,
+    } = def;
+
     if !with_options.is_empty() {
         bail_unsupported!("WITH options");
     }
-    let name = if *temporary {
-        scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
-    } else {
-        scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
-    };
     let query::PlannedQuery {
         mut expr,
         mut desc,
@@ -1258,9 +1258,41 @@ pub fn plan_create_view(
     //TODO: materialize#724 - persist finishing information with the view?
     expr.finish(finishing);
     let relation_expr = expr.lower();
+
+    let name = if temporary {
+        scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
+    } else {
+        scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
+    };
+
+    desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, &columns)?;
+
+    let view = View {
+        create_sql,
+        expr: relation_expr,
+        column_names: desc.iter_names().map(|n| n.cloned()).collect(),
+        temporary,
+        depends_on,
+    };
+
+    Ok((name, view))
+}
+
+pub fn plan_create_view(
+    scx: &StatementContext,
+    mut stmt: CreateViewStatement<Raw>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    let CreateViewStatement {
+        temporary,
+        materialized,
+        if_exists,
+        definition,
+    } = &mut stmt;
+    let (name, view) = plan_view(scx, definition, params, *temporary)?;
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
-            if relation_expr.global_uses().contains(&item.id()) {
+            if view.expr.global_uses().contains(&item.id()) {
                 bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     item.name()
@@ -1274,22 +1306,12 @@ pub fn plan_create_view(
     } else {
         None
     };
-    desc = plan_utils::maybe_rename_columns(format!("view {}", name), desc, columns)?;
-    let temporary = *temporary;
-    let materialize = *materialized; // Normalize for `raw_sql` below.
-    let if_not_exists = *if_exists == IfExistsBehavior::Skip;
     Ok(Plan::CreateView(CreateViewPlan {
         name,
-        view: View {
-            create_sql,
-            expr: relation_expr,
-            column_names: desc.iter_names().map(|n| n.cloned()).collect(),
-            temporary,
-        },
+        view,
         replace,
-        materialize,
-        if_not_exists,
-        depends_on,
+        materialize: *materialized,
+        if_not_exists: *if_exists == IfExistsBehavior::Skip,
     }))
 }
 
@@ -1302,25 +1324,24 @@ pub fn describe_create_views(
 
 pub fn plan_create_views(
     scx: &StatementContext,
-    stmt: CreateViewsStatement<Raw>,
+    CreateViewsStatement {
+        definitions,
+        if_exists,
+        materialized,
+        temporary,
+    }: CreateViewsStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
-    match stmt.definitions {
+    match definitions {
         CreateViewsDefinitions::Literal(view_definitions) => {
-            let mut planned_views = Vec::with_capacity(view_definitions.len());
-            for definition in view_definitions {
-                let view = CreateViewStatement {
-                    temporary: stmt.temporary,
-                    materialized: stmt.materialized,
-                    if_exists: stmt.if_exists,
-                    definition,
-                };
-                match plan_create_view(scx, view, &Params::empty())? {
-                    Plan::CreateView(plan) => planned_views.push(plan),
-                    _ => unreachable!(),
-                }
+            let mut views = Vec::with_capacity(view_definitions.len());
+            for mut definition in view_definitions {
+                let view = plan_view(scx, &mut definition, &Params::empty(), temporary)?;
+                views.push(view);
             }
             Ok(Plan::CreateViews(CreateViewsPlan {
-                views: planned_views,
+                views,
+                if_not_exists: if_exists == IfExistsBehavior::Skip,
+                materialize: materialized,
             }))
         }
         CreateViewsDefinitions::Source { .. } => bail!("cannot create view from source"),
@@ -1760,10 +1781,10 @@ pub fn plan_create_sink(
             from: from.id(),
             connector_builder,
             envelope,
+            depends_on,
         },
         with_snapshot,
         if_not_exists,
-        depends_on,
     }))
 }
 
@@ -1946,10 +1967,10 @@ pub fn plan_create_index(
             create_sql,
             on: on.id(),
             keys,
+            depends_on,
         },
         options,
         if_not_exists,
-        depends_on,
     }))
 }
 
@@ -2062,8 +2083,11 @@ pub fn plan_create_type(
 
     Ok(Plan::CreateType(CreateTypePlan {
         name,
-        typ: Type { create_sql, inner },
-        depends_on: ids,
+        typ: Type {
+            create_sql,
+            inner,
+            depends_on: ids,
+        },
     }))
 }
 

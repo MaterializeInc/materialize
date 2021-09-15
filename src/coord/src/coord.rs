@@ -89,7 +89,6 @@ use sql::ast::{
 };
 use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
-use sql::plan::StatementDesc;
 use sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
@@ -98,6 +97,7 @@ use sql::plan::{
     FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
     Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
+use sql::plan::{StatementDesc, View};
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
@@ -1729,7 +1729,6 @@ impl Coordinator {
             name,
             table,
             if_not_exists,
-            depends_on,
         } = plan;
 
         let conn_id = if table.temporary {
@@ -1738,7 +1737,7 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog.allocate_id()?;
-        let mut index_depends_on = depends_on.clone();
+        let mut index_depends_on = table.depends_on.clone();
         index_depends_on.push(table_id);
         let persist = self
             .catalog
@@ -1749,7 +1748,7 @@ impl Coordinator {
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
-            depends_on,
+            depends_on: table.depends_on,
             persist,
         };
         let index_id = self.catalog.allocate_id()?;
@@ -1930,7 +1929,6 @@ impl Coordinator {
             sink,
             with_snapshot,
             if_not_exists,
-            depends_on,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
@@ -1965,7 +1963,7 @@ impl Coordinator {
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
                 envelope: sink.envelope,
                 with_snapshot,
-                depends_on,
+                depends_on: sink.depends_on,
             }),
         };
         match self.catalog_transact(vec![op]) {
@@ -2003,17 +2001,11 @@ impl Coordinator {
     fn generate_view_ops(
         &mut self,
         session: &Session,
-        plan: CreateViewPlan,
+        name: FullName,
+        view: View,
+        replace: Option<GlobalId>,
+        materialize: bool,
     ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
-        let CreateViewPlan {
-            name,
-            view,
-            replace,
-            materialize,
-            if_not_exists: _,
-            depends_on,
-        } = plan;
-
         self.validate_timeline(view.expr.global_uses())?;
 
         let mut ops = vec![];
@@ -2035,7 +2027,7 @@ impl Coordinator {
             } else {
                 None
             },
-            depends_on,
+            depends_on: view.depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2081,7 +2073,13 @@ impl Coordinator {
         plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let if_not_exists = plan.if_not_exists;
-        let (ops, index_id) = self.generate_view_ops(session, plan)?;
+        let (ops, index_id) = self.generate_view_ops(
+            session,
+            plan.name,
+            plan.view,
+            plan.replace,
+            plan.materialize,
+        )?;
 
         match self.catalog_transact(ops) {
             Ok(()) => {
@@ -2108,8 +2106,9 @@ impl Coordinator {
         let mut ops = vec![];
         let mut index_ids = vec![];
 
-        for view_plan in plan.views {
-            let (mut view_ops, index_id) = self.generate_view_ops(session, view_plan)?;
+        for (name, view) in plan.views {
+            let (mut view_ops, index_id) =
+                self.generate_view_ops(session, name, view, None, plan.materialize)?;
             ops.append(&mut view_ops);
             if let Some(index_id) = index_id {
                 index_ids.push(index_id);
@@ -2127,8 +2126,7 @@ impl Coordinator {
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
-            // TODO somehow check this or remove if not exists modifiers
-            // Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -2142,7 +2140,6 @@ impl Coordinator {
             mut index,
             options,
             if_not_exists,
-            depends_on,
         } = plan;
 
         for key in &mut index.keys {
@@ -2154,7 +2151,7 @@ impl Coordinator {
             keys: index.keys,
             on: index.on,
             conn_id: None,
-            depends_on,
+            depends_on: index.depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
         };
         let oid = self.catalog.allocate_oid()?;
@@ -2188,7 +2185,7 @@ impl Coordinator {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
             inner: plan.typ.inner.into(),
-            depends_on: plan.depends_on,
+            depends_on: plan.typ.depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
