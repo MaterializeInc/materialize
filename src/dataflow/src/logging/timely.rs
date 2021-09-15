@@ -15,9 +15,9 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::capture::Replay;
-use timely::dataflow::operators::Map;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use super::{LogVariant, TimelyLog};
@@ -57,7 +57,8 @@ pub fn construct<A: Allocate>(
         let (mut parks_out, parks) = demux.new_output();
         let (mut messages_sent_out, messages_sent) = demux.new_output();
         let (mut messages_received_out, messages_received) = demux.new_output();
-        let (mut schedules_out, schedules) = demux.new_output();
+        let (mut schedules_duration_out, schedules_duration) = demux.new_output();
+        let (mut schedules_histogram_out, schedules_histogram) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -78,7 +79,8 @@ pub fn construct<A: Allocate>(
                 let parks = parks_out.activate();
                 let messages_sent = messages_sent_out.activate();
                 let messages_received = messages_received_out.activate();
-                let schedules = schedules_out.activate();
+                let schedules_duration = schedules_duration_out.activate();
+                let schedules_histogram = schedules_histogram_out.activate();
 
                 let mut operates_session = ConsolidateBuffer::new(operates, 0);
                 let mut channels_session = ConsolidateBuffer::new(channels, 1);
@@ -86,7 +88,9 @@ pub fn construct<A: Allocate>(
                 let mut parks_sesssion = ConsolidateBuffer::new(parks, 3);
                 let mut messages_sent_session = ConsolidateBuffer::new(messages_sent, 4);
                 let mut messages_received_session = ConsolidateBuffer::new(messages_received, 5);
-                let mut schedules_session = ConsolidateBuffer::new(schedules, 6);
+                let mut schedules_duration_session = ConsolidateBuffer::new(schedules_duration, 6);
+                let mut schedules_histogram_session =
+                    ConsolidateBuffer::new(schedules_histogram, 7);
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
@@ -149,12 +153,14 @@ pub fn construct<A: Allocate>(
                                             .enumerate()
                                             .filter(|(_, (pow, _))| *pow != 0)
                                         {
-                                            let data = (
-                                                (event.id, worker, 1 << index),
-                                                time_ms,
-                                                (-pow, -elapsed_ns),
+                                            schedules_duration_session.give(
+                                                &cap,
+                                                ((event.id, worker), time_ms, -elapsed_ns),
                                             );
-                                            schedules_session.give(&cap, data);
+                                            schedules_histogram_session.give(
+                                                &cap,
+                                                ((event.id, worker, 1 << index), time_ms, -pow),
+                                            );
                                         }
                                     }
 
@@ -228,9 +234,10 @@ pub fn construct<A: Allocate>(
                                         let duration_ns = time_ns - start_ns;
                                         let requested =
                                             requested.map(|r| r.as_nanos().next_power_of_two());
+                                        let pow = duration_ns.next_power_of_two();
                                         parks_sesssion.give(
                                             &cap,
-                                            ((worker, duration_ns, requested), time_ms, 1),
+                                            ((worker, pow as i64, requested), time_ms, 1),
                                         );
                                     } else {
                                         panic!("Park data not found!");
@@ -288,9 +295,12 @@ pub fn construct<A: Allocate>(
                                         schedule_entry.0 += 1;
                                         schedule_entry.1 += elapsed_ns as isize;
 
+                                        schedules_duration_session.give(
+                                            &cap,
+                                            ((key.1, worker), time_ms, elapsed_ns as isize),
+                                        );
                                         let d = (key.1, worker, elapsed_ns.next_power_of_two());
-                                        schedules_session
-                                            .give(&cap, (d, time_ms, (1, elapsed_ns as isize)));
+                                        schedules_histogram_session.give(&cap, (d, time_ms, 1));
                                     }
                                 }
                             }
@@ -301,89 +311,119 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        // Duration statistics derive from the non-rounded event times.
-        let duration = schedules;
-
         // Accumulate the durations of each operator.
-        let elapsed = duration
-            .map(|((op, worker, _), t, (_, d))| {
-                let row = Row::pack_slice(&[Datum::Int64(op as i64), Datum::Int64(worker as i64)]);
-                (row, t, d)
-            })
-            .as_collection();
+        let elapsed = schedules_duration
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w), ()), _, _)| *w as u64),
+                "PreArrange Timely duration",
+            )
+            .as_collection(|(op, worker), _| {
+                Row::pack_slice(&[Datum::Int64(*op as i64), Datum::Int64(*worker as i64)])
+            });
 
         // Accumulate histograms of execution times for each operator.
-        let histogram = duration
-            .map(|((op, worker, pow), t, (c, _))| {
+        let histogram = schedules_histogram
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w, _), ()), _, _)| *w as u64),
+                "PreArrange Timely histogram",
+            )
+            .as_collection(|(op, worker, pow), _| {
                 let row = Row::pack_slice(&[
-                    Datum::Int64(op as i64),
-                    Datum::Int64(worker as i64),
-                    Datum::Int64(pow as i64),
+                    Datum::Int64(*op as i64),
+                    Datum::Int64(*worker as i64),
+                    Datum::Int64(*pow as i64),
                 ]);
-                (row, t, c)
-            })
-            .as_collection();
+                row
+            });
 
-        let operates = operates.as_collection().map({
-            move |((id, worker), name)| {
+        let operates = operates
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
+                "PreArrange Timely operates",
+            )
+            .as_collection(move |((id, worker), name), _| {
                 Row::pack_slice(&[
-                    Datum::Int64(id as i64),
-                    Datum::Int64(worker as i64),
+                    Datum::Int64(*id as i64),
+                    Datum::Int64(*worker as i64),
                     Datum::String(&name),
                 ])
-            }
-        });
+            });
 
-        let addresses = addresses.as_collection().map(|(event_id, worker, addr)| {
-            create_address_row(event_id as i64, worker as i64, &addr)
-        });
-
-        let channels = channels.as_collection();
+        let addresses = addresses
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((_, w, _), ()), _, _)| *w as u64),
+                "PreArrange Timely addresses",
+            )
+            .as_collection(|(event_id, worker, addr), _| {
+                create_address_row(*event_id as i64, *worker as i64, &addr)
+            });
 
         let parks = parks
             .as_collection()
-            .map(|(worker, duration_ns, requested)| {
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|(((w, _, _), ()), _, _)| *w as u64),
+                "PreArrange Timely parks",
+            )
+            .as_collection(|(worker, duration_ns, requested), ()| {
                 Row::pack_slice(&[
-                    Datum::Int64(worker as i64),
-                    Datum::Int64(duration_ns.next_power_of_two() as i64),
+                    Datum::Int64(*worker as i64),
+                    Datum::Int64(*duration_ns),
                     requested
                         .map(|requested| Datum::Int64(requested as i64))
                         .unwrap_or(Datum::Null),
                 ])
             });
 
-        let messages_sent = messages_sent.as_collection();
-
-        let messages_received = messages_received.as_collection();
-
-        let messages_received = messages_received.map(move |((channel, source), target)| {
-            Row::pack_slice(&[
-                Datum::Int64(channel as i64),
-                Datum::Int64(source as i64),
-                Datum::Int64(target as i64),
-            ])
-        });
-
-        let messages_sent = messages_sent.map(move |((channel, source), target)| {
-            Row::pack_slice(&[
-                Datum::Int64(channel as i64),
-                Datum::Int64(source as i64),
-                Datum::Int64(target as i64),
-            ])
-        });
-
-        let channels = channels.map({
-            move |((id, worker), source_node, source_port, target_node, target_port)| {
+        let messages_received = messages_received
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
+                "PreArrange Timely messages received",
+            )
+            .as_collection(move |((channel, source), target), ()| {
                 Row::pack_slice(&[
-                    Datum::Int64(id as i64),
-                    Datum::Int64(worker as i64),
-                    Datum::Int64(source_node as i64),
-                    Datum::Int64(source_port as i64),
-                    Datum::Int64(target_node as i64),
-                    Datum::Int64(target_port as i64),
+                    Datum::Int64(*channel as i64),
+                    Datum::Int64(*source as i64),
+                    Datum::Int64(*target as i64),
                 ])
-            }
-        });
+            });
+
+        let messages_sent = messages_sent
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
+                "PreArrange Timely messages sent",
+            )
+            .as_collection(move |((channel, source), target), ()| {
+                Row::pack_slice(&[
+                    Datum::Int64(*channel as i64),
+                    Datum::Int64(*source as i64),
+                    Datum::Int64(*target as i64),
+                ])
+            });
+
+        let channels = channels
+            .as_collection()
+            .arrange_core::<_, RowSpine<_, _, _, _>>(
+                Exchange::new(|((((_, w), _, _, _, _), ()), _, _)| *w as u64),
+                "PreArrange Timely operates",
+            )
+            .as_collection(
+                move |((id, worker), source_node, source_port, target_node, target_port), ()| {
+                    Row::pack_slice(&[
+                        Datum::Int64(*id as i64),
+                        Datum::Int64(*worker as i64),
+                        Datum::Int64(*source_node as i64),
+                        Datum::Int64(*source_port as i64),
+                        Datum::Int64(*target_node as i64),
+                        Datum::Int64(*target_port as i64),
+                    ])
+                },
+            );
 
         // Restrict results by those logs that are meant to be active.
         let logs = vec![

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
@@ -99,9 +100,13 @@ pub fn construct<A: Allocate>(
             let mut row_packer = Row::default();
             updates
                 .as_collection()
-                .map(move |(update_type, addr, source, port, worker, ts)| {
+                .arrange_core::<_, RowSpine<_, _, _, _>>(
+                    Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
+                    "PreArrange Timely reachability",
+                )
+                .as_collection(move |(update_type, addr, source, port, worker, ts), _| {
                     let row_arena = RowArena::default();
-                    let update_type = if update_type { "source" } else { "target" };
+                    let update_type = if *update_type { "source" } else { "target" };
                     row_packer.push_list(
                         addr.iter()
                             .chain_one(&source)
@@ -109,8 +114,8 @@ pub fn construct<A: Allocate>(
                     );
                     let datums = &[
                         row_arena.push_unary_row(row_packer.finish_and_reuse()),
-                        Datum::Int64(port as i64),
-                        Datum::Int64(worker as i64),
+                        Datum::Int64(*port as i64),
+                        Datum::Int64(*worker as i64),
                         Datum::String(&update_type),
                         Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
                     ];
