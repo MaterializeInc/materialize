@@ -7,12 +7,28 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE MATERIALIZED SOURCE s3
+> CREATE MATERIALIZED SOURCE s3_text
   FROM S3
   DISCOVER OBJECTS
-  MATCHING 's3/*'
+  MATCHING 's3/*.text'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
   SQS NOTIFICATIONS 'testdrive-test-${testdrive.seed}'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> CREATE MATERIALIZED SOURCE s3_gzip
+  FROM S3
+  DISCOVER OBJECTS
+  MATCHING 's3/*.gzip'
+  USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
+  SQS NOTIFICATIONS 'testdrive-test-${testdrive.seed}'
+  COMPRESSION GZIP
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
