@@ -58,9 +58,13 @@
 
 use std::cmp;
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
-use tokio::time::{self, Duration};
+use futures::{ready, Stream, StreamExt};
+use pin_project::pin_project;
+use tokio::time::Duration;
 
 // TODO(benesch): remove this if the `duration_constants` feature stabilizes.
 // See: https://github.com/rust-lang/rust/issues/57391
@@ -81,12 +85,19 @@ pub struct RetryState {
 /// Configures a retry operation.
 ///
 /// See the [module documentation](self) for usage examples.
+#[pin_project]
 #[derive(Debug)]
 pub struct Retry {
     initial_backoff: Duration,
     factor: f64,
     clamp_backoff: Duration,
     limit: RetryLimit,
+
+    i: usize,
+    next_backoff: Option<Duration>,
+    #[pin]
+    sleep: tokio::time::Sleep,
+    start: Instant,
 }
 
 impl Retry {
@@ -153,6 +164,16 @@ impl Retry {
         self
     }
 
+    /// Resets the start time and try counters of this Retry instance to their initial values to
+    /// allow re-using it for another retryable operation
+    pub fn reset(self: Pin<&mut Self>) {
+        let mut this = self.project();
+        *this.i = 0;
+        *this.next_backoff = None;
+        *this.start = Instant::now();
+        this.sleep.set(tokio::time::sleep(Duration::default()));
+    }
+
     /// Retries the asynchronous, fallible operation `f` according to the
     /// configured policy.
     ///
@@ -177,36 +198,16 @@ impl Retry {
         F: FnMut(RetryState) -> U,
         U: Future<Output = Result<T, E>>,
     {
-        let start = Instant::now();
-        let mut i = 0;
-        let mut next_backoff = Some(cmp::min(self.initial_backoff, self.clamp_backoff));
-        loop {
-            match self.limit {
-                RetryLimit::Tries(max_tries) if i + 1 >= max_tries => next_backoff = None,
-                RetryLimit::Duration(max_duration) => {
-                    let elapsed = start.elapsed();
-                    if elapsed > max_duration {
-                        next_backoff = None;
-                    } else if elapsed + next_backoff.unwrap() > max_duration {
-                        next_backoff = Some(max_duration - elapsed);
-                    }
-                }
-                _ => (),
-            }
-            let state = RetryState { i, next_backoff };
+        let this = self;
+        tokio::pin!(this);
+        let mut err = None;
+        while let Some(state) = this.next().await {
             match f(state).await {
-                Ok(t) => return Ok(t),
-                Err(e) => match &mut next_backoff {
-                    None => return Err(e),
-                    Some(next_backoff) => {
-                        time::sleep(*next_backoff).await;
-                        *next_backoff =
-                            cmp::min(next_backoff.mul_f64(self.factor), self.clamp_backoff);
-                    }
-                },
+                Ok(v) => return Ok(v),
+                Err(e) => err = Some(e),
             }
-            i += 1;
         }
+        Err(err.expect("retry produces at least one element"))
     }
 }
 
@@ -219,7 +220,56 @@ impl Default for Retry {
             factor: 2.0,
             clamp_backoff: MAX_DURATION,
             limit: RetryLimit::Duration(Duration::from_secs(30)),
+
+            i: 0,
+            next_backoff: None,
+            start: Instant::now(),
+            sleep: tokio::time::sleep(Duration::default()),
         }
+    }
+}
+
+impl Stream for Retry {
+    type Item = RetryState;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+        if *this.i == 0 {
+            *this.start = Instant::now();
+            *this.next_backoff = Some(cmp::min(*this.initial_backoff, *this.clamp_backoff));
+        } else {
+            match this.next_backoff {
+                None => return Poll::Ready(None),
+                Some(next_backoff) => {
+                    ready!(Pin::new(&mut this.sleep).poll(cx));
+                    *next_backoff =
+                        cmp::min(next_backoff.mul_f64(*this.factor), *this.clamp_backoff);
+                }
+            }
+        }
+
+        match *this.limit {
+            RetryLimit::Tries(max_tries) if *this.i + 1 >= max_tries => *this.next_backoff = None,
+            RetryLimit::Duration(max_duration) => {
+                let elapsed = this.start.elapsed();
+                if elapsed > max_duration {
+                    *this.next_backoff = None;
+                } else if elapsed + this.next_backoff.unwrap() > max_duration {
+                    *this.next_backoff = Some(max_duration - elapsed);
+                }
+            }
+            _ => (),
+        }
+
+        let state = RetryState {
+            i: *this.i,
+            next_backoff: *this.next_backoff,
+        };
+        if let Some(d) = *this.next_backoff {
+            this.sleep.reset(tokio::time::Instant::now() + d);
+        }
+        *this.i += 1;
+        Poll::Ready(Some(state))
     }
 }
 
