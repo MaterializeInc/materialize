@@ -1,0 +1,37 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/8241
+# See https://github.com/MaterializeInc/materialize/issues/8318
+
+# Verify that an index added after a transaction has started complains.
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+
+statement ok
+CREATE INDEX i1 ON t1 (f2);
+
+statement ok
+CREATE VIEW v1 AS SELECT * FROM t1;
+
+simple conn=conn1
+BEGIN;
+SELECT * FROM v1;
+----
+COMPLETE 0
+COMPLETE 0
+
+statement ok
+CREATE INDEX i2 ON t1 (f2);
+
+simple conn=conn1
+SELECT * FROM v1;
+----
+db error: ERROR: transactions can only reference nearby relations; "materialize.public.i2" referenced here, but only the following are available: "materialize.public.i1", "materialize.public.t1", "materialize.public.t1_primary_idx", "materialize.public.v1"

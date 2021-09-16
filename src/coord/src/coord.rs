@@ -2485,24 +2485,22 @@ impl Coordinator {
             let timestamp = session.get_transaction_timestamp(|| {
                 // Determine a timestamp that will be valid for anything in any schema
                 // referenced by the first query.
-                let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
+                let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
                 let (timestamp, timestamp_ids) =
                     self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
+                // Add the used indexes to the recorded ids.
+                timedomain_ids.extend(&timestamp_ids);
                 let mut handles = vec![];
                 for id in timestamp_ids {
                     handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
                 }
-                let mut timedomain_set = HashSet::new();
-                for id in timedomain_ids {
-                    timedomain_set.insert(id);
-                }
                 self.txn_reads.insert(
                     conn_id,
                     TxnReads {
-                        timedomain_ids: timedomain_set,
+                        timedomain_ids: timedomain_ids.into_iter().collect(),
                         _handles: handles,
                     },
                 );
@@ -2510,24 +2508,38 @@ impl Coordinator {
                 Ok(timestamp)
             })?;
 
-            // Verify that the indexes for this query are in the current read transaction.
-            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
-            for id in source_ids {
-                if !txn_reads.timedomain_ids.contains(&id) {
-                    let mut names: Vec<_> = txn_reads
-                        .timedomain_ids
-                        .iter()
-                        // This could filter out a view that has been replaced in another transaction.
-                        .filter_map(|id| self.catalog.try_get_by_id(*id))
-                        .map(|item| item.name().to_string())
-                        .collect();
-                    // Sort so error messages are deterministic.
-                    names.sort();
-                    return Err(CoordError::RelationOutsideTimeDomain {
-                        relation: self.catalog.get_by_id(&id).name().to_string(),
-                        names,
-                    });
-                }
+            // Verify that the references and indexes for this query are in the current
+            // read transaction.
+            let mut stmt_ids = HashSet::new();
+            stmt_ids.extend(source_ids.iter().collect::<HashSet<_>>());
+            // Using nearest_indexes here is a hack until #8318 is fixed. It's used because
+            // that's what determine_timestamp uses.
+            stmt_ids.extend(
+                self.catalog
+                    .nearest_indexes(&source_ids)
+                    .0
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+            );
+            let read_txn = self.txn_reads.get(&conn_id).unwrap();
+            // Find the first reference or index (if any) that is not in the transaction. A
+            // reference could be caused by a user specifying an object in a different
+            // schema than the first query. An index could be caused by a CREATE INDEX
+            // after the transaction started.
+            if let Some(id) = stmt_ids.difference(&read_txn.timedomain_ids).next() {
+                let mut names: Vec<_> = read_txn
+                    .timedomain_ids
+                    .iter()
+                    // This could filter out a view that has been replaced in another transaction.
+                    .filter_map(|id| self.catalog.try_get_by_id(*id))
+                    .map(|item| item.name().to_string())
+                    .collect();
+                // Sort so error messages are deterministic.
+                names.sort();
+                return Err(CoordError::RelationOutsideTimeDomain {
+                    relation: self.catalog.get_by_id(&id).name().to_string(),
+                    names,
+                });
             }
 
             timestamp
