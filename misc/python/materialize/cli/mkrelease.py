@@ -85,11 +85,11 @@ def new_rc(
     tag = get_latest_tag(fetch=True)
     new_version = None
     if level == "rc":
-        if tag.prerelease is None or not tag.prerelease.startswith("-rc"):
+        if tag.prerelease is None or not tag.prerelease.startswith("rc"):
             raise errors.MzConfigurationError(
                 "Attempted to bump an rc version without starting an RC"
             )
-        next_rc = int(tag.prerelease[3:]) + 1
+        next_rc = int(tag.prerelease[2:]) + 1
         new_version = tag.replace(prerelease=f"rc{next_rc}")
     elif level == "biweekly":
         new_version = tag.bump_patch().replace(prerelease="rc1")
