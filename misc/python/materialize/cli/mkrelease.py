@@ -63,7 +63,7 @@ def cli() -> None:
 @OPT_AFFECT_REMOTE
 @click.argument(
     "level",
-    type=click.Choice(["major", "feature", "biweekly", "rc"]),
+    type=click.Choice(["major", "feature", "weekly", "rc"]),
 )
 def new_rc(
     create_branch: Optional[str],
@@ -76,7 +76,7 @@ def new_rc(
     \b
     Arguments:
         level    Which part of the version to change:
-                 * biweekly - The Z in X.Y.Z
+                 * weekly   - The Z in X.Y.Z
                  * feature  - The Y in X.Y.Z
                  * major    - The X in X.Y.Z
                  * rc       - increases the N in -rcN, should only be used if
@@ -91,7 +91,7 @@ def new_rc(
             )
         next_rc = int(tag.prerelease[2:]) + 1
         new_version = tag.replace(prerelease=f"rc{next_rc}")
-    elif level == "biweekly":
+    elif level == "weekly":
         new_version = tag.bump_patch().replace(prerelease="rc1")
     elif level == "feature":
         new_version = tag.bump_minor().replace(prerelease="rc1")
