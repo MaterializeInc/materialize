@@ -48,6 +48,8 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.9.5 %}}
 
+{{% version-header v0.9.4 %}}
+
 - Improve the performance of
   [built-in sources and views](/cli/#introspection-sources) in the
   [system catalog](/sql/system-catalog), which should result in lower latency
@@ -55,8 +57,6 @@ Wrap your release notes at the 80 character mark.
   overall memory consumption. Additionally, the content of the views is now
   consistent at the introspection interval boundaries. Prior to this release,
   some views would reveal more details about ephemeral dataflows and operators.
-
-{{% version-header v0.9.4 %}}
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
 - Trailing newline characters of POSIX compliant files will no longer be
