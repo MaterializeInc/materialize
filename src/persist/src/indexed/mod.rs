@@ -1108,11 +1108,11 @@ impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
     use std::sync::mpsc;
 
-    use crate::error::Error as IndexedError;
+    use crate::error::Error;
     use crate::future::Future;
+    use crate::indexed::runtime::DecodedSnapshot;
     use crate::mem::MemRegistry;
 
     use super::*;
@@ -1120,21 +1120,21 @@ mod tests {
     fn block_on_drain<T, F: FnOnce(&mut Indexed<L, B>, FutureHandle<T>), L: Log, B: Blob>(
         index: &mut Indexed<L, B>,
         f: F,
-    ) -> Result<T, IndexedError> {
+    ) -> Result<T, Error> {
         let (tx, rx) = Future::new();
         f(index, tx.into());
         index.drain_pending()?;
         rx.recv()
     }
 
-    fn block_on<T, F: FnOnce(FutureHandle<T>)>(f: F) -> Result<T, IndexedError> {
+    fn block_on<T, F: FnOnce(FutureHandle<T>)>(f: F) -> Result<T, Error> {
         let (tx, rx) = Future::new();
         f(tx.into());
         rx.recv()
     }
 
     #[test]
-    fn single_stream() -> Result<(), Box<dyn Error>> {
+    fn single_stream() -> Result<(), Error> {
         let updates = vec![
             (("1".into(), "".into()), 1, 1),
             (("2".into(), "".into()), 2, 1),
@@ -1231,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_sorting() -> Result<(), Box<dyn Error>> {
+    fn batch_sorting() -> Result<(), Error> {
         let updates = vec![
             (("1".into(), "".into()), 2, 1),
             (("2".into(), "".into()), 1, 1),
@@ -1262,7 +1262,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_consolidation() -> Result<(), Box<dyn Error>> {
+    fn batch_consolidation() -> Result<(), Error> {
         let updates = vec![
             (("1".into(), "".into()), 1, 1),
             (("1".into(), "".into()), 1, 1),
@@ -1301,7 +1301,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_unsealed_empty() -> Result<(), Box<dyn Error>> {
+    fn batch_unsealed_empty() -> Result<(), Error> {
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 
@@ -1327,7 +1327,7 @@ mod tests {
     // Regression test for two similar bugs causing unsealed batches with
     // non-adjacent seqno boundaries (which violates our invariants).
     #[test]
-    fn regression_non_sequential_unsealed_batches() -> Result<(), IndexedError> {
+    fn regression_non_sequential_unsealed_batches() -> Result<(), Error> {
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
 
         // First is some stream is registered, written to, and step'd, moving
@@ -1359,7 +1359,7 @@ mod tests {
     }
 
     #[test]
-    fn test_destroy() -> Result<(), IndexedError> {
+    fn test_destroy() -> Result<(), Error> {
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
 
         let _ = block_on(|res| i.register("stream", "", "", res))?;
@@ -1373,7 +1373,7 @@ mod tests {
         // Destroy stream that was never created.
         assert_eq!(
             block_on(|res| i.destroy("stream2", res)),
-            Err(IndexedError::from(
+            Err(Error::from(
                 "invalid destroy of stream stream2 that was never registered or destroyed"
             ))
         );
@@ -1381,7 +1381,7 @@ mod tests {
         // Creating a previously destroyed stream.
         assert_eq!(
             block_on(|res| i.register("stream", "", "", res)),
-            Err(IndexedError::from(
+            Err(Error::from(
                 "invalid registration: stream stream already destroyed"
             ))
         );
@@ -1390,7 +1390,7 @@ mod tests {
     }
 
     #[test]
-    fn codec_mismatch() -> Result<(), IndexedError> {
+    fn codec_mismatch() -> Result<(), Error> {
         let mut i = MemRegistry::new().indexed_no_reentrance()?;
 
         let _ = block_on(|res| i.register("stream", "key", "val", res))?;
@@ -1401,7 +1401,7 @@ mod tests {
         // Different key codec
         assert_eq!(
             block_on(|res| i.register("stream", "nope", "val", res)),
-            Err(IndexedError::from(
+            Err(Error::from(
                 "invalid registration: key codec mismatch nope vs previous key"
             ))
         );
@@ -1409,10 +1409,48 @@ mod tests {
         // Different val codec
         assert_eq!(
             block_on(|res| i.register("stream", "key", "nope", res)),
-            Err(IndexedError::from(
+            Err(Error::from(
                 "invalid registration: val codec mismatch nope vs previous val"
             ))
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn regression_8303_snapshot_advance_since() -> Result<(), Error> {
+        let mut i = MemRegistry::new().indexed_no_reentrance()?;
+        let id = block_on(|res| i.register("0", "", "", res))?;
+
+        // Introduce some data, seal it, and advance since. Intentionally don't
+        // call step because might compact it and accidentally produce the right
+        // answer (at the time of the bug, compaction did the right thing, which
+        // is why we didn't catch it initially).
+        let updates = vec![
+            (("1".into(), "".into()), 1, 1),
+            (("1".into(), "".into()), 10, -1),
+            (("2".into(), "".into()), 2, 1),
+        ];
+        block_on_drain(&mut i, |i, res| i.write(vec![(id, updates)], res))?;
+        block_on_drain(&mut i, |i, res| i.seal(vec![id], 4, res))?;
+        block_on_drain(&mut i, |i, res| {
+            i.allow_compaction(vec![(id, Antichain::from_elem(3))], res)
+        })?;
+        let snap = block_on(|res| i.snapshot(id, res))?;
+        // NB: We won't need this hack after the ts advancement logic is moved
+        // to IndexedSnapshot where it should be.
+        let mut snap = DecodedSnapshot::<String, String>::new(snap);
+
+        // Now verify that the snapshot has the right since and that the data in
+        // it has been advanced as expected.
+        assert_eq!(snap.since(), Antichain::from_elem(3));
+        let actual = snap.read_to_end_flattened()?;
+        let expected = vec![
+            (("1".into(), "".into()), 3, 1),
+            (("1".into(), "".into()), 10, -1),
+            (("2".into(), "".into()), 3, 1),
+        ];
+        assert_eq!(actual, expected);
 
         Ok(())
     }

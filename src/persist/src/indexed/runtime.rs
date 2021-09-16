@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use differential_dataflow::lattice::Lattice;
 use log;
 use ore::metrics::MetricsRegistry;
 use timely::progress::Antichain;
@@ -536,7 +537,7 @@ pub struct DecodedSnapshot<K, V> {
 }
 
 impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
-    fn new(snap: IndexedSnapshot) -> Self {
+    pub(crate) fn new(snap: IndexedSnapshot) -> Self {
         DecodedSnapshot {
             snap,
             buf: Vec::new(),
@@ -583,10 +584,23 @@ impl<K: Codec, V: Codec> Snapshot<Result<K, String>, Result<V, String>> for Deco
         &mut self,
         buf: &mut E,
     ) -> Result<bool, Error> {
+        let since = self.since();
         let ret = self.snap.read(&mut self.buf)?;
-        buf.extend(self.buf.drain(..).map(|((k, v), ts, diff)| {
+        buf.extend(self.buf.drain(..).map(|((k, v), mut ts, diff)| {
             let k = K::decode(&k);
             let v = V::decode(&v);
+            // When reading a snapshot, the contract of since is that all update
+            // timestamps will be advanced to it. We do this physically during
+            // compaction, but don't have hard guarantees about how long that
+            // takes, so we have to account for un-advanced batches on reads.
+            //
+            // TODO: This adjustment should logically live in IndexedSnapshot
+            // (where it could be lazy about only doing this on the relevant
+            // batches) but in the short-term it's much easier to do here. I'm
+            // hoping to clean up how snapshots work soon and make them more
+            // like iterators, at which point it will be much simpler to push
+            // this logic where it belongs.
+            ts.advance_by(since.borrow());
             ((k, v), ts, diff)
         }));
         Ok(ret)
