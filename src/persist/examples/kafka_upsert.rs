@@ -18,7 +18,9 @@ use std::{cmp, env, process};
 use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, NowFn};
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
+use persist::indexed::runtime::{
+    self, RuntimeClient, RuntimeConfig, StreamReadHandle, StreamWriteHandle,
+};
 use persist::storage::LockInfo;
 use persist::{Codec, Data};
 use timely::dataflow::channels::pact::Pipeline;
@@ -46,7 +48,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
         let lock_info = LockInfo::new("kafka_upsert".into(), "nonce".into())?;
         let log = FileLog::new(base_dir.join("log"), lock_info.clone())?;
         let blob = FileBlob::new(base_dir.join("blob"), lock_info)?;
-        runtime::start(log, blob, &MetricsRegistry::new())?
+        runtime::start(RuntimeConfig::default(), log, blob, &MetricsRegistry::new())?
     };
 
     timely::execute_directly(|worker| {

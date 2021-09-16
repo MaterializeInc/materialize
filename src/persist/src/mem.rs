@@ -18,7 +18,7 @@ use ore::metrics::MetricsRegistry;
 
 use crate::error::Error;
 use crate::indexed::metrics::Metrics;
-use crate::indexed::runtime::{self, RuntimeClient};
+use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::indexed::Indexed;
 use crate::storage::{Blob, LockInfo, Log, SeqNo};
 use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
@@ -348,7 +348,12 @@ impl MemRegistry {
     pub fn runtime_no_reentrance(&mut self) -> Result<RuntimeClient, Error> {
         let log = self.log_no_reentrance()?;
         let blob = self.blob_no_reentrance()?;
-        runtime::start(log, blob, &MetricsRegistry::new())
+        runtime::start(
+            RuntimeConfig::for_tests(),
+            log,
+            blob,
+            &MetricsRegistry::new(),
+        )
     }
 
     /// Open a [RuntimeClient] with unreliable storage backed by the given
@@ -361,7 +366,12 @@ impl MemRegistry {
         let log = UnreliableLog::from_handle(log, unreliable.clone());
         let blob = self.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(log, blob, &MetricsRegistry::new())
+        runtime::start(
+            RuntimeConfig::for_tests(),
+            log,
+            blob,
+            &MetricsRegistry::new(),
+        )
     }
 }
 
@@ -411,7 +421,12 @@ impl MemMultiRegistry {
         let lock_info = LockInfo::new_no_reentrance(lock_info.to_owned());
         let log = self.log(path, lock_info.clone())?;
         let blob = self.blob(path, lock_info)?;
-        runtime::start(log, blob, &MetricsRegistry::new())
+        runtime::start(
+            RuntimeConfig::for_tests(),
+            log,
+            blob,
+            &MetricsRegistry::new(),
+        )
     }
 }
 
