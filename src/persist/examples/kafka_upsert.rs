@@ -140,9 +140,6 @@ where
     let (bindings_persist_oks, bindings_persist_err) =
         bindings.persist("timestamp_bindings", ts_write.clone());
 
-    let (_bindings_seal_oks, bindings_seal_err) =
-        bindings_persist_oks.seal("timestamp_bindings", ts_write);
-
     bindings.inspect(|b| println!("Binding: {:?}", b));
 
     // Notice how we ignore diff here. Before the upsert uperator, we don't actually have
@@ -155,7 +152,12 @@ where
         PersistentUpsertConfig::new(start_ts, out_read, out_write.clone()),
     );
 
-    let (upsert_oks, upsert_seal_err) = upsert_oks.seal("upsert_state", out_write);
+    let (upsert_oks, seal_err) = upsert_oks.conditional_seal(
+        "timestamp_bindings|upsert_state",
+        &bindings_persist_oks,
+        out_write,
+        ts_write,
+    );
 
     // Wait for persistent collections to be sealed before forwarding results.  We could do this
     // either by listening for `Seal` events on a StreamReadHandle or by waiting for the frontier
@@ -166,9 +168,7 @@ where
     // be held back until data is persisted and sealed by the upstream persist/seal operators.
     let records_persist_ok = upsert_oks.await_frontier("upsert_state");
 
-    let errs = bindings_persist_err
-        .concat(&bindings_seal_err)
-        .concat(&upsert_seal_err);
+    let errs = bindings_persist_err.concat(&seal_err);
 
     Ok((records_persist_ok, errs))
 }
