@@ -16,6 +16,7 @@ use persist_types::Codec;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::{Data as TimelyData, PartialOrder};
@@ -30,6 +31,10 @@ pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// for data to be persisted before allowing the frontier to advance. In other words, this
     /// operator is holding on to capabilities as long as data belonging to their timestamp is not
     /// persisted.
+    ///
+    /// Use this together with [`seal`](Seal::seal) and
+    /// [`await_frontier`](AwaitFrontier::await_frontier) if you want to make sure that data only
+    /// becomes available downstream when persisted and sealed.
     ///
     /// **Note:** If you need to also replay persisted data when restarting, concatenate the output
     /// of this operator with the output of `replay()`.
@@ -300,6 +305,62 @@ where
         });
 
         (data_output_stream, error_output_stream)
+    }
+}
+
+/// Extension trait for [`Stream`].
+pub trait AwaitFrontier<G: Scope<Timestamp = u64>, D> {
+    /// Stashes data until it is no longer beyond the input frontier.
+    ///
+    /// This is similar, in spirit, to what `consolidate()` does for differential collections and
+    /// what `delay()` does for timely streams. However, `consolidate()` does more work than what we
+    /// need and `delay()` deals with changing the timestamp while the behaviour we want is to wait for
+    /// the frontier to pass. The latter is an implementation detail of `delay()` that is not
+    /// advertised in its documentation. We therefore have our own implementation that we control
+    /// to be sure we don't break if `delay()` ever changes.
+    fn await_frontier(&self, name: &str) -> Stream<G, (D, u64, isize)>;
+}
+
+impl<G, D> AwaitFrontier<G, D> for Stream<G, (D, u64, isize)>
+where
+    G: Scope<Timestamp = u64>,
+    D: TimelyData,
+{
+    // Note: This is mostly a copy of the timely delay() operator without the delaying part.
+    fn await_frontier(&self, name: &str) -> Stream<G, (D, u64, isize)> {
+        let operator_name = format!("await_frontier({})", name);
+
+        // The values here are Vecs of Vecs. That's how the original timely code does it, to re-use
+        // allocations and not have to keep extending a single Vec.
+        let mut elements = HashMap::new();
+
+        self.unary_notify(
+            Pipeline,
+            &operator_name,
+            vec![],
+            move |input, output, notificator| {
+                input.for_each(|time, data| {
+                    elements
+                        .entry(time.clone())
+                        .or_insert_with(|| {
+                            notificator.notify_at(time.retain());
+                            Vec::new()
+                        })
+                        .push(data.replace(Vec::new()));
+                });
+
+                // For each available notification, send corresponding set.
+                notificator.for_each(|time, _, _| {
+                    if let Some(mut datas) = elements.remove(&time) {
+                        for mut data in datas.drain(..) {
+                            output.session(&time).give_vec(&mut data);
+                        }
+                    } else {
+                        panic!("Missing data for time {}", time.time());
+                    }
+                });
+            },
+        )
     }
 }
 
