@@ -127,11 +127,13 @@ impl<'a> fmt::Display for Explanation<'a> {
                     .unwrap_or_else(|| "?".to_owned()),
                 id,
             )?;
-            writeln!(
-                f,
-                "| Filter {}",
-                separated(", ", operator.predicates.iter())
-            )?;
+            if !operator.predicates.is_empty() {
+                writeln!(
+                    f,
+                    "| Filter {}",
+                    separated(", ", operator.predicates.iter())
+                )?;
+            }
             writeln!(
                 f,
                 "| Project {}",
