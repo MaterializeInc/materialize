@@ -1521,10 +1521,7 @@ fn get_kafka_sink_consistency_config(
     consistency_topic: Option<String>,
 ) -> Result<Option<(String, KafkaSinkFormat)>, anyhow::Error> {
     let result = match consistency {
-        Some(KafkaConsistency {
-            topic,
-            topic_format,
-        }) => match topic_format {
+        Some(KafkaConsistency { topic, format }) => match format {
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connector:
                     CsrConnector {

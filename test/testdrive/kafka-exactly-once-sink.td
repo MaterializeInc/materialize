@@ -235,23 +235,23 @@ $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_s
 # Can't provide CONSISTENCY FORMAT without a TOPIC
 ! CREATE SINK double_avro FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
-  CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    WITH CONSISTENCY (FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
   WITH (consistency_topic='willfail')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Expected end of statement, found CONSISTENCY
+Expected TOPIC, found FORMAT
 
 # Can't provide CONSISTENCY FORMAT and consistency_topic WITH option
 ! CREATE SINK double_avro FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
-    CONSISTENCY TOPIC 'topicname'
-    WITH (consistency_topic='willfail')
+    WITH CONSISTENCY (TOPIC 'topicname')
+  WITH (consistency_topic='willfail')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Cannot specify consistency_topic and CONSISTENCY options simultaneously
 
 # Can't create sinks with JSON-encoded consistency topics
 ! CREATE SINK double_avro FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
-    CONSISTENCY TOPIC 'consistency-double-avro' CONSISTENCY FORMAT JSON
+    WITH CONSISTENCY (TOPIC 'consistency-double-avro' FORMAT JSON)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 CONSISTENCY FORMAT JSON not yet supported
 
@@ -259,19 +259,19 @@ CONSISTENCY FORMAT JSON not yet supported
 # of the sink, if valid
 > CREATE SINK default_avro FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro'
-    CONSISTENCY TOPIC 'consistency-default-avro'
+    WITH CONSISTENCY (TOPIC 'consistency-default-avro')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Fail to default to JSON
 ! CREATE SINK default_avro FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro'
-    CONSISTENCY TOPIC 'consistency-default-avro'
+    WITH CONSISTENCY (TOPIC 'consistency-default-avro')
   FORMAT JSON
 CONSISTENCY FORMAT JSON not yet supported
 
 > CREATE SINK double_avro FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'double-avro'
-    CONSISTENCY TOPIC 'consistency-double-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    WITH CONSISTENCY (TOPIC 'consistency-double-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=true
@@ -279,7 +279,7 @@ $ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=tru
 
 > CREATE SINK json_avro FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro'
-    CONSISTENCY TOPIC 'consistency-json-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    WITH CONSISTENCY (TOPIC 'consistency-json-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true key=false
@@ -287,32 +287,36 @@ $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true 
 
 ! CREATE SINK json_reuse_topic FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
-    WITH (reuse_topic=true)
+  WITH (reuse_topic=true)
   FORMAT JSON
 For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY TOPIC consistency_topic CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url'. The default of using a JSON consistency topic is not supported.
 
-> CREATE SINK json_reuse_topic FROM unnamed_cols
+! CREATE SINK json_reuse_topic FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
-    CONSISTENCY TOPIC 'consistency-json-avro' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-    WITH (reuse_topic=true)
+    WITH CONSISTENCY (TOPIC 'consistency-json-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
+  WITH (reuse_topic=true)
   FORMAT JSON
+reuse_topic requires that sink input dependencies are sources, materialize.public.unnamed_cols is not
 
-$ kafka-verify format=json sink=materialize.public.json_reuse_topic sort-messages=true key=false
-{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
+> CREATE SINK json_reuse_topic FROM rt_binding_consistency_test_source
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-reuse-topic'
+    WITH CONSISTENCY (TOPIC 'consistency-json-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
+  WITH (reuse_topic=true)
+  FORMAT JSON
 
 # Default consistency format is Avro if consistency_topic is used
 > CREATE SINK default_avro_2 FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'default-avro-2'
-    WITH (consistency_topic='default-consistency-avro')
+  WITH (consistency_topic='default-consistency-avro')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-$ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=true
+$ kafka-verify format=avro sink=materialize.public.default_avro_2 sort-messages=true
 {"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}, "transaction": {"id": "0"}}
 
 > CREATE SINK json_avro_upsert_key FROM unnamed_cols
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-avro-upsert-key'
   KEY (b)
-    CONSISTENCY TOPIC 'consistency-json-avro-upsert-key' CONSISTENCY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    WITH CONSISTENCY (TOPIC 'consistency-json-avro-upsert-key' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
   FORMAT JSON
   ENVELOPE UPSERT
 

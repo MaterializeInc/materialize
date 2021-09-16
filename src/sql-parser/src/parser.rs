@@ -1931,17 +1931,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {
-        if self.parse_keywords(&[CONSISTENCY, TOPIC]) {
+        if self.parse_keywords(&[WITH, CONSISTENCY]) {
+            self.expect_token(&Token::LParen)?;
+            self.expect_keyword(TOPIC)?;
             let topic = self.parse_literal_string()?;
-            let topic_format = if self.parse_keywords(&[CONSISTENCY, FORMAT]) {
+            let format = if self.parse_keyword(FORMAT) {
                 Some(self.parse_format()?)
             } else {
                 None
             };
-            Ok(Some(KafkaConsistency {
-                topic,
-                topic_format,
-            }))
+            self.expect_token(&Token::RParen)?;
+            Ok(Some(KafkaConsistency { topic, format }))
         } else {
             Ok(None)
         }
