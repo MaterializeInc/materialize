@@ -57,9 +57,38 @@ where
     Ok(())
 }
 
+fn rewrite_create_sql<F>(tx: &Transaction, mut f: F) -> Result<(), anyhow::Error>
+where
+    F: FnMut(&mut String) -> Result<(), anyhow::Error>,
+{
+    let items = tx.load_items()?;
+    for (id, name, def) in items {
+        let SerializedCatalogItem::V1 {
+            mut create_sql,
+            eval_env,
+            persist_name,
+        } = serde_json::from_slice(&def)?;
+
+        f(&mut create_sql)?;
+
+        let stmt = sql::parse::parse(&create_sql)?.into_element();
+        let serialized_item = SerializedCatalogItem::V1 {
+            create_sql: stmt.to_ast_string_stable(),
+            eval_env,
+            persist_name,
+        };
+
+        let serialized_item =
+            serde_json::to_vec(&serialized_item).expect("catalog serialization cannot fail");
+        tx.update_item(id, &name.item, &serialized_item)?;
+    }
+    Ok(())
+}
+
 lazy_static! {
     static ref VER_0_9_1: Version = Version::new(0, 9, 1);
     static ref VER_0_9_2: Version = Version::new(0, 9, 2);
+    static ref VER_0_9_4: Version = Version::new(0, 9, 4);
 }
 
 pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
@@ -73,7 +102,16 @@ pub(crate) fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     };
 
     let mut tx = storage.transaction()?;
-    // First, do basic AST -> AST transformations.
+    // First, perform any necessary transformations of the
+    // raw `create_sql` strings.
+    rewrite_create_sql(&tx, |stmt| {
+        if catalog_version < *VER_0_9_4 {
+            syntax_create_sink_consistency_0_9_4(stmt)?;
+        }
+        Ok(())
+    })?;
+
+    // Then, do basic AST -> AST transformations.
     rewrite_items(&tx, |stmt| {
         ast_rewrite_type_references_0_6_1(stmt)?;
         ast_use_pg_catalog_0_7_1(stmt)?;
@@ -550,5 +588,16 @@ fn semantic_use_id_for_table_format_0_7_1(
     // Convert Statement<Aug> to Statement<Raw> (Aug is a subset of Raw's
     // semantics) and reassign to `stmt`.
     *stmt = sql::parse::parse(&create_sql)?.into_element();
+    Ok(())
+}
+
+// ****************************************************************************
+// Syntax migrations -- Weird migrations that update the `create_sql` syntax
+// ****************************************************************************
+
+// todo
+fn syntax_create_sink_consistency_0_9_4(_create_sql: &mut String) -> Result<(), anyhow::Error> {
+    // some regex or parsing function that grabs the right
+    // `CREATE SINK` statements and transforms them?
     Ok(())
 }
