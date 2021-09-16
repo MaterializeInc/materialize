@@ -67,11 +67,6 @@ Wrap your release notes at the 80 character mark.
 - When issuing `COMMIT` or `ROLLBACK` commands outside of an explicit
   transaction, always return a warning. Previously, the warning could be suppressed.
 
-- Persist the `mz_metrics` and `mz_metric_histogram` system tables and rehydrate
-  the previous contents on restart. This is a small test of the system that will
-  power upcoming persistence features. Users are free to opt out of this test
-  by setting the `--disable_persistent_system_tables_test` flag to "true".
-
 {{% version-header v0.9.3 %}}
 
 - Fix a bug that prevented creating Avro sinks on old versions of Confluent Platform
