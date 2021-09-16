@@ -16,6 +16,8 @@ use persist_types::Codec;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::FrontierNotificator;
+use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -32,8 +34,8 @@ pub trait Persist<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
     /// operator is holding on to capabilities as long as data belonging to their timestamp is not
     /// persisted.
     ///
-    /// Use this together with [`seal`](Seal::seal) and
-    /// [`await_frontier`](AwaitFrontier::await_frontier) if you want to make sure that data only
+    /// Use this together with [`seal`](Seal::seal)/[`conditional_seal`](Seal::conditional_seal)
+    /// and [`await_frontier`](AwaitFrontier::await_frontier) if you want to make sure that data only
     /// becomes available downstream when persisted and sealed.
     ///
     /// **Note:** If you need to also replay persisted data when restarting, concatenate the output
@@ -166,6 +168,28 @@ pub trait Seal<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
         Stream<G, ((K, V), u64, isize)>,
         Stream<G, (String, u64, isize)>,
     );
+
+    /// Passes through each element of the stream and seals the given primary and condition
+    /// collections, respectively, when their frontier advances. The primary collection is only
+    /// sealed up to a time `t` when the condition collection has also been sealed up to `t`.
+    ///
+    /// This does not wait for the seals to succeed before passing through the data. We do,
+    /// however, wait for the seals to be successful before allowing the frontier to advance. In
+    /// other words, this operator is holding on to capabilities as long as seals corresponding to
+    /// their timestamp are not done.
+    fn conditional_seal<K2, V2>(
+        &self,
+        name: &str,
+        condition_input: &Stream<G, ((K2, V2), u64, isize)>,
+        primary_write: StreamWriteHandle<K, V>,
+        condition_write: StreamWriteHandle<K2, V2>,
+    ) -> (
+        Stream<G, ((K, V), u64, isize)>,
+        Stream<G, (String, u64, isize)>,
+    )
+    where
+        K2: TimelyData + Codec,
+        V2: TimelyData + Codec;
 }
 
 impl<G, K, V> Seal<G, K, V> for Stream<G, ((K, V), u64, isize)>
@@ -306,6 +330,186 @@ where
 
         (data_output_stream, error_output_stream)
     }
+
+    fn conditional_seal<K2, V2>(
+        &self,
+        name: &str,
+        condition_input: &Stream<G, ((K2, V2), u64, isize)>,
+        primary_write: StreamWriteHandle<K, V>,
+        condition_write: StreamWriteHandle<K2, V2>,
+    ) -> (
+        Stream<G, ((K, V), u64, isize)>,
+        Stream<G, (String, u64, isize)>,
+    )
+    where
+        K2: TimelyData + Codec,
+        V2: TimelyData + Codec,
+    {
+        let operator_name = format!("conditional_seal({})", name);
+        let mut seal_op = OperatorBuilder::new(operator_name.clone(), self.scope());
+
+        let mut primary_data_input = seal_op.new_input(&self, Pipeline);
+        let mut condition_data_input = seal_op.new_input(condition_input, Pipeline);
+
+        let (mut data_output, data_output_stream) = seal_op.new_output();
+
+        let mut primary_data_buffer = Vec::new();
+        let mut condition_data_buffer = Vec::new();
+
+        // We only seal from one worker because sealing from multiple workers could lead to a race
+        // conditions where one worker seals up to time `t` while another worker is still trying to
+        // write data with timestamps that are not beyond `t`.
+        //
+        // Upstream persist() operators will only advance their frontier when writes are succesful.
+        // With timely progress tracking we are therefore sure that when the frontier advances for
+        // worker 0, it has advanced to at least that point for all upstream operators.
+        //
+        // Alternative solutions would be to "teach" persistence to work with seals from multiple
+        // workers, or to use a non-timely solution for keeping track of outstanding write
+        // capabilities.
+        let active_seal_operator = self.scope().index() == 0;
+
+        seal_op.build(move |mut capabilities| {
+            let mut primary_notificator = FrontierNotificator::new();
+            let mut condition_notificator = FrontierNotificator::new();
+
+            if active_seal_operator {
+                let initial_primary_cap = capabilities.pop().expect("missing capability");
+                let initial_condition_cap = initial_primary_cap.clone();
+
+                // We need to start with some notify. Otherwise, we would not seal a collection that
+                // corresponds to an input that never received any data.
+                primary_notificator.notify_at(initial_primary_cap);
+                condition_notificator.notify_at(initial_condition_cap);
+            }
+
+            move |frontiers| {
+                let mut data_output = data_output.activate();
+
+                let frontiers = &[&frontiers[0], &frontiers[1]];
+                let mut primary_notificator = primary_notificator.monotonic(frontiers, &None);
+                let mut condition_notificator = condition_notificator.monotonic(frontiers, &None);
+
+                // Pass through all data.
+                primary_data_input.for_each(|cap, data| {
+                    data.swap(&mut primary_data_buffer);
+
+                    let as_result = primary_data_buffer.drain(..).map(|update| Ok(update));
+
+                    let mut session = data_output.session(&cap);
+                    session.give_iterator(as_result);
+
+                    if active_seal_operator {
+                        // Explicitly seal at the time of received data. We also repeatedly set up
+                        // notifies based on the frontier, below, but also using the
+                        // time/capability of incoming data might make things more fine-grained.
+                        primary_notificator.notify_at(cap.retain());
+                    }
+                });
+
+                // Consume condition input data but throw it away. We only use this
+                // input to track the frontier (to know how far we're sealed up).
+                // TODO: There should be a better way for doing this, maybe?
+                condition_data_input.for_each(|cap, data| {
+                    data.swap(&mut condition_data_buffer);
+                    condition_data_buffer.drain(..);
+
+                    if active_seal_operator {
+                        // Explicitly seal at the time of received data. We also repeatedly set up
+                        // notifies based on the frontier, below, but also using the
+                        // time/capability of incoming data might make things more fine-grained.
+                        condition_notificator.notify_at(cap.retain());
+                    }
+                });
+
+                if !active_seal_operator {
+                    return;
+                }
+
+                (&mut condition_notificator).for_each(|cap, _count, notificator| {
+                    log::trace!(
+                        "In {}, sealing condition input up to {}...",
+                        &operator_name,
+                        cap.time(),
+                    );
+
+                    // Notify when the frontier advances again.
+                    let mut combined_frontier: Antichain<u64> = Antichain::new();
+                    combined_frontier.extend(notificator.frontier(0).iter().cloned());
+                    combined_frontier.extend(notificator.frontier(1).iter().cloned());
+                    for frontier_element in combined_frontier {
+                        notificator.notify_at(cap.delayed(&frontier_element));
+                    }
+
+                    // TODO: Don't block on the seal. Instead, we should yield from the
+                    // operator and/or find some other way to wait for the seal to succeed.
+                    let result = condition_write.seal(*cap.time()).recv();
+
+                    log::trace!(
+                        "In {}, finished sealing condition input up to {}",
+                        &operator_name,
+                        cap.time(),
+                    );
+
+                    if let Err(e) = result {
+                        let mut session = data_output.session(&cap);
+                        log::error!(
+                            "Error sealing {} (condition) up to {}: {:?}",
+                            &operator_name,
+                            cap.time(),
+                            e
+                        );
+                        // TODO: make error retractable? Probably not...
+                        session.give(Err((e.to_string(), *cap.time(), 1)));
+                    }
+                });
+
+                (&mut primary_notificator).for_each(|cap, _count, notificator| {
+                    log::trace!(
+                        "In {}, sealing primary input up to {}...",
+                        &operator_name,
+                        cap.time(),
+                    );
+
+                    // Notify when the frontier advances again.
+                    let mut combined_frontier: Antichain<u64> = Antichain::new();
+                    combined_frontier.extend(notificator.frontier(0).iter().cloned());
+                    combined_frontier.extend(notificator.frontier(1).iter().cloned());
+                    for frontier_element in combined_frontier {
+                        notificator.notify_at(cap.delayed(&frontier_element));
+                    }
+
+                    // TODO: Don't block on the seal. Instead, we should yield from the
+                    // operator and/or find some other way to wait for the seal to succeed.
+                    let result = primary_write.seal(*cap.time()).recv();
+
+                    log::trace!(
+                        "In {}, finished sealing primary input up to {}",
+                        &operator_name,
+                        cap.time(),
+                    );
+
+                    if let Err(e) = result {
+                        let mut session = data_output.session(&cap);
+                        log::error!(
+                            "Error sealing {} (condition) up to {}: {:?}",
+                            &operator_name,
+                            cap.time(),
+                            e
+                        );
+                        // TODO: make error retractable? Probably not...
+                        session.give(Err((e.to_string(), *cap.time(), 1)));
+                    }
+                });
+            }
+        });
+
+        // We use a single, multiplexed output instead of dealing with the hassles of managing
+        // capabilities for a regular output and an error output for the seal operator.
+        let (data_output_stream, error_output_stream) = data_output_stream.ok_err(|x| x);
+
+        (data_output_stream, error_output_stream)
+    }
 }
 
 /// Extension trait for [`Stream`].
@@ -366,13 +570,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::input::Handle;
     use timely::dataflow::operators::probe::Probe;
     use timely::dataflow::operators::Capture;
 
     use crate::error::Error;
-    use crate::indexed::SnapshotExt;
+    use crate::indexed::{ListenEvent, SnapshotExt};
     use crate::mem::MemRegistry;
     use crate::unreliable::UnreliableHandle;
 
@@ -523,6 +729,203 @@ mod tests {
             0,
             1,
         )];
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn conditional_seal() -> Result<(), Error> {
+        let mut registry = MemRegistry::new();
+
+        let p = registry.runtime_no_reentrance()?;
+
+        // Setup listens for both collections and record seal events. Afterwards, we will verify
+        // that we get the expected seals, in the right order.
+        let (_write, primary_read) = p.create_or_load::<(), ()>("primary").unwrap();
+        let (_write, condition_read) = p.create_or_load::<(), ()>("condition").unwrap();
+
+        #[derive(Debug, PartialEq, Eq)]
+        enum Sealed {
+            Primary(u64),
+            Condition(u64),
+        }
+
+        let (listen_tx, listen_rx) = mpsc::channel();
+
+        {
+            let listen_tx = listen_tx.clone();
+            let listen_fn = Box::new(move |e| {
+                match e {
+                    ListenEvent::Sealed(t) => listen_tx.send(Sealed::Primary(t)).unwrap(),
+                    _ => panic!("unexpected data"),
+                };
+                ()
+            });
+
+            primary_read.listen(listen_fn)?;
+        };
+        {
+            let listen_fn = Box::new(move |e| {
+                match e {
+                    ListenEvent::Sealed(t) => listen_tx.send(Sealed::Condition(t)).unwrap(),
+                    _ => panic!("unexpected data"),
+                };
+                ()
+            });
+
+            condition_read.listen(listen_fn)?;
+        };
+
+        timely::execute_directly(move |worker| {
+            let (mut primary_input, mut condition_input, primary_probe, condition_probe) = worker
+                .dataflow(|scope| {
+                    let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
+                    let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+                    let mut primary_input = Handle::new();
+                    let mut condition_input = Handle::new();
+                    let primary_stream = primary_input.to_stream(scope);
+                    let condition_stream = condition_input.to_stream(scope);
+                    let (_, _) = primary_stream.conditional_seal(
+                        "test",
+                        &condition_stream,
+                        primary_write,
+                        condition_write,
+                    );
+
+                    let primary_probe = primary_stream.probe();
+                    let condition_probe = condition_stream.probe();
+
+                    (
+                        primary_input,
+                        condition_input,
+                        primary_probe,
+                        condition_probe,
+                    )
+                });
+
+            // Only send data on the condition input, not on the primary input. This simulates the
+            // case where our primary input never sees any data.
+            condition_input.send((((), ()), 0, 1));
+
+            primary_input.advance_to(1);
+            condition_input.advance_to(1);
+            while primary_probe.less_than(&1) {
+                worker.step();
+            }
+
+            // Pull primary input to 3 already. We're still expecting a seal at 2 for primary,
+            // though, when condition advances to 2.
+            primary_input.advance_to(3);
+            while primary_probe.less_than(&3) {
+                worker.step();
+            }
+
+            condition_input.advance_to(2);
+            while condition_probe.less_than(&2) {
+                worker.step();
+            }
+
+            condition_input.advance_to(3);
+            while condition_probe.less_than(&3) {
+                worker.step();
+            }
+        });
+
+        let actual_seals: Vec<_> = listen_rx.try_iter().collect();
+
+        // Assert that:
+        //  a) We don't seal primary when condition has not sufficiently advanced.
+        //  b) Condition is sealed before primary for the same timestamp.
+        //  c) We seal up, even when never receiving any data.
+        assert_eq!(
+            vec![
+                Sealed::Condition(1),
+                Sealed::Primary(1),
+                Sealed::Condition(2),
+                Sealed::Primary(2),
+                Sealed::Condition(3),
+                Sealed::Primary(3)
+            ],
+            actual_seals
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn conditional_seal_error_stream() -> Result<(), Error> {
+        let mut unreliable = UnreliableHandle::default();
+        let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
+
+        let (primary_write, _read) = p.create_or_load::<(), ()>("primary").unwrap();
+        let (condition_write, _read) = p.create_or_load::<(), ()>("condition").unwrap();
+        unreliable.make_unavailable();
+
+        let recv = timely::execute_directly(move |worker| {
+            let (mut primary_input, mut condition_input, probe, err_stream) =
+                worker.dataflow(|scope| {
+                    let mut primary_input = Handle::new();
+                    let mut condition_input = Handle::new();
+                    let primary_stream = primary_input.to_stream(scope);
+                    let condition_stream = condition_input.to_stream(scope);
+
+                    let (_, err_stream) = primary_stream.conditional_seal(
+                        "test",
+                        &condition_stream,
+                        primary_write,
+                        condition_write,
+                    );
+
+                    let probe = err_stream.probe();
+                    (primary_input, condition_input, probe, err_stream.capture())
+                });
+
+            primary_input.send((((), ()), 0, 1));
+            condition_input.send((((), ()), 0, 1));
+
+            primary_input.advance_to(1);
+            condition_input.advance_to(1);
+
+            while probe.less_than(&1) {
+                worker.step();
+            }
+
+            err_stream
+        });
+
+        let actual = recv
+            .extract()
+            .into_iter()
+            .flat_map(|(_, xs)| xs.into_iter())
+            .collect::<Vec<_>>();
+
+        let expected = vec![
+            (
+                "failed to commit metadata after appending to unsealed: unavailable: blob set"
+                    .to_string(),
+                0,
+                1,
+            ),
+            (
+                "failed to commit metadata after appending to unsealed: unavailable: blob set"
+                    .to_string(),
+                0,
+                1,
+            ),
+            (
+                "failed to commit metadata after appending to unsealed: unavailable: blob set"
+                    .to_string(),
+                1,
+                1,
+            ),
+            (
+                "failed to commit metadata after appending to unsealed: unavailable: blob set"
+                    .to_string(),
+                1,
+                1,
+            ),
+        ];
         assert_eq!(actual, expected);
 
         Ok(())
