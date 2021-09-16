@@ -725,8 +725,12 @@ impl HirScalarExpr {
 
                                 for p in partition {
                                     let key = p.applied_to(id_gen, col_map, &mut get_inner);
-                                    get_inner = get_inner.map(vec![key]);
-                                    group_key.push(get_inner.arity() - 1);
+                                    if let expr::MirScalarExpr::Column(c) = key {
+                                        group_key.push(c);
+                                    } else {
+                                        get_inner = get_inner.map(vec![key]);
+                                        group_key.push(get_inner.arity() - 1);
+                                    }
                                 }
 
                                 get_inner.let_in(id_gen, |id_gen, get_inner| {
@@ -758,8 +762,12 @@ impl HirScalarExpr {
 
                                 for p in partition {
                                     let key = p.applied_to(id_gen, col_map, &mut get_inner);
-                                    get_inner = get_inner.map(vec![key]);
-                                    group_key.push(get_inner.arity() - 1);
+                                    if let expr::MirScalarExpr::Column(c) = key {
+                                        group_key.push(c);
+                                    } else {
+                                        get_inner = get_inner.map(vec![key]);
+                                        group_key.push(get_inner.arity() - 1);
+                                    }
                                 }
 
                                 get_inner.let_in(id_gen, |_id_gen, get_inner| {
