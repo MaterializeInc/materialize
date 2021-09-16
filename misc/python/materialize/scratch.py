@@ -332,6 +332,7 @@ def launch_cluster(
     extra_tags: Dict[str, str],
     delete_after: int,  # Unix timestamp.
     git_rev: str,
+    extra_env: Dict[str, str],
 ) -> List[Instance]:
     """Launch a cluster of instances with a given nonce"""
     instances = [
@@ -378,6 +379,8 @@ def launch_cluster(
         (f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs))
     )
 
+    env = [f"{k}={v}" for k, v in extra_env.items()]
+
     for i in instances:
         ssh.runv(
             [f"echo {shlex.quote(hosts_str)} | sudo tee -a /etc/hosts"],
@@ -393,6 +396,9 @@ def launch_cluster(
                     "cd",
                     "~/materialize",
                     ";",
+                ]
+                + env
+                + [
                     "nohup",
                     "bash",
                     "-c",
