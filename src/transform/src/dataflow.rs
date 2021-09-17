@@ -16,7 +16,7 @@
 
 use dataflow_types::{DataflowDesc, LinearOperator};
 use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::Optimizer;
 
@@ -169,20 +169,26 @@ fn optimize_dataflow_relations(
     }
 }
 
-/// Pushes demand information from published outputs to dataflow inputs.
+/// Pushes demand information from published outputs to dataflow inputs,
+/// projecting away unnecessary columns.
 ///
 /// Dataflows that exist for the sake of generating plan explanations do not
 /// have published outputs. In this case, we push demand information from views
 /// not depended on by other views to dataflow inputs.
 fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
+    // Maps id -> union of known columns demanded from the source/view with the
+    // corresponding id.
     let mut demand = HashMap::new();
+    // Maps id -> The projection that was pushed down on the view with the
+    // corresponding id.
+    let mut applied_projection = HashMap::new();
 
     // Demand all columns of inputs to sinks.
     for (_id, sink) in dataflow.sink_exports.iter() {
         let input_id = sink.from;
         demand
             .entry(Id::Global(input_id))
-            .or_insert_with(HashSet::new)
+            .or_insert_with(BTreeSet::new)
             .extend(0..dataflow.arity_of(&input_id));
     }
 
@@ -191,15 +197,22 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
         let input_id = desc.on_id;
         demand
             .entry(Id::Global(input_id))
-            .or_insert_with(HashSet::new)
+            .or_insert_with(BTreeSet::new)
             .extend(0..dataflow.arity_of(&input_id));
     }
 
+    let transform = crate::projection_pushdown::ProjectionPushdown;
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
-        let transform = crate::demand::Demand;
-        if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-            // Propagate demand information from outputs to inputs.
-            transform.action(build_desc.view.as_inner_mut(), columns.clone(), &mut demand);
+        if let Some(columns) = demand.get(&Id::Global(build_desc.id)) {
+            let projection_pushed_down = columns.iter().map(|c| *c).collect();
+            // Push down the projection consisting of the entries of `columns`
+            // in increasing order.
+            transform.action(
+                build_desc.view.as_inner_mut(),
+                &projection_pushed_down,
+                &mut demand,
+            );
+            applied_projection.insert(Id::Global(build_desc.id), projection_pushed_down);
         } else if build_desc.id == GlobalId::Explain {
             // If there are no outputs (which happens if we just want to build
             // a plan explanation), then demand all columns from views that are
@@ -207,10 +220,15 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             let arity = build_desc.view.arity();
             transform.action(
                 build_desc.view.as_inner_mut(),
-                (0..arity).collect(),
+                &(0..arity).collect(),
                 &mut demand,
             );
         }
+    }
+
+    for build_desc in dataflow.objects_to_build.iter_mut().rev() {
+        // Update column references to views where projections were pushed down.
+        transform.update_projection_around_get(build_desc.view.as_inner_mut(), &applied_projection);
     }
 
     // Push demand information into the SourceDesc.
