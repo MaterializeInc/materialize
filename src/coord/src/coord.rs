@@ -1377,7 +1377,6 @@ impl Coordinator {
             if conn_meta.secret_key != secret_key {
                 return;
             }
-
             // Cancel the peek. We use an `if let` because the peek could be completed
             // and removed before the cancellation is received.
             if let Some((channel, _)) = self.pending_peeks.remove(&conn_id) {

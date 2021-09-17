@@ -897,7 +897,7 @@ where
 
             Command::CancelPeek { conn_id } => {
                 // Note that executing this command does not require responding
-                // to the coordinator, which will cancel the peek on its own.
+                // to the coordinator, which will cancel its copy of the peek itself.
                 let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
