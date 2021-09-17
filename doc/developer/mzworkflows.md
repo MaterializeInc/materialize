@@ -165,8 +165,8 @@ Therefore, the fool-proof sequence for starting the complete Mz stack would be s
 ```
 services = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized()]
 
-def workflow_start_confluents(w: Workflow):
-    w.start_and_wait_for_tcp(services=confluents)
+def workflow_start_services(w: Workflow):
+    w.start_and_wait_for_tcp(services=services)
     w.wait_for_mz()
 ```
 
