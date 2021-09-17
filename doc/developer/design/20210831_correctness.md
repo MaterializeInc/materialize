@@ -1,4 +1,4 @@
-# <Insert Name of Feature>
+# Materialize Correctness Vocabulary
 
 ## Summary
 
@@ -7,7 +7,7 @@ A description of the correctness properties Materialize provides and the terms a
 ## Goals
 
 The main goal is to lay the foundation for ongoing work to clearly articulate correctness properties of Materialize.
-This includes the introduction of concepts that underlie correctess, the components that will enforce them, and how they can communicate clearly.
+This includes the introduction of concepts that underlie correctness, the components that will enforce them, and how they can communicate clearly.
 
 ## Non-Goals
 
@@ -22,30 +22,38 @@ At the heart of this is the idea that the ordering of events can be explicitly r
 The guarantees of Materialize derive from the durability of these recorded data, and the determinism of views over them.
 
 The primary term introduced here is "definite" to modify a collection of data.
-A collection is definite if it is uniquely named or defined such that anyone with the same identification will see the same collection of data at the same logical times.
-A definite collection has had its updates put in a specific order, by way of the timestamps on updates.
-A handle to a collection can be "definite from `since` until `upper`" (names pending) if it reflects the definite results for times greater or equal to `since` but not greater or equal to `upper`.
+A collection of data is "identified" either nominally (by name) or structurally (as a query over named things).
+A collection is *definite* when all uses of any one identification will yield exactly the same time-varying collection of data (identical contents at each logical time).
+A handle to a collection can be "definite from `since` until `upper`" (names pending) if it reflects the definite results for times greater or equal to `since` but not greater or equal to `upper`;
+this intentionally allows for compaction of historical detail and unavailability of future data, without ambiguity about which logical times can be described with certainty.
+
 Among the correctness guarantees of Materialize, a main one will be statements of definiteness over intervals of times for collections it maintains.
+
+Definiteness is a property in part of how we name things.
+The contents of a `CREATE SOURCE` statement may not be enough to make a source definite.
+Such a source may only become definite once its description makes its way to the persistence layer, responsibility is assumed, and a name is returned.
+These names almost certainly want to contain a nonce corresponding to the persistence instance, so that they are not unintentionally equated across instances.
+It is fine to scope definiteness more narrowly, e.g. to session-local name bindings, but if names leak beyond that scope they should be flagged as not definite.
 
 ### Components
 
 There are three components to discuss: storage, compute, and coordination.
 
-The **storage layer** (`persist`, plus potentially others) presents streams of updates to collections to other parts of the system (primary the compute layer).
+A **storage layer** (`persist`, but potentially others like it) presents streams of updates to collections to other parts of the system (primary the compute layer).
 One correctness goal of the `persist` module is to make as many update streams as possible "definite", even if the raw data are indefinite (e.g. perhaps they contain no timestamps, which must be added).
 The storage layer does not need to capture the entire contents of a collection to make it definite; durable "offset"-to-timestamp bindings can suffice if the source data are durable but without timestamps, and no data may be required if the source data are durable with timestamps (e.g. MzCDC sources).
 Update streams that are definite form the "durable storage" of Materialize, and are the basis for Materialize's durability guarantees.
 
-The **compute layer** (`dataflow`, plus potentially others) consumes streams of updates to collections, and computes and then incrementally maintains the results of views over these data.
+A **compute layer** (`dataflow`, but potentially others like it) consumes streams of updates to collections, and computes and then incrementally maintains the results of views over these data.
 A view is ideally "deterministic" in the sense that it acts as a function on the input update streams, and produces a well-defined output on definite input (we can allow "non-deterministic" views but like "indefinite streams" they taint their results).
 One correctness goal of the `dataflow` module is to convert definite inputs into definite outputs, which can be returned to the storage layer or to interactive user sessions.
 Views and their dependencies form the "concurrency control" of Materialize, in that outputs are reported as definite only when, and ideally as soon as, their inputs are definite.
 
-The **coordination layer** (`coord`, plus potentially others) interfaces with user sessions and pilots the storage and compute layers.
+A **coordination layer** (`coord`, but potentially others like it) interfaces with user sessions and pilots the storage and compute layers.
 It maintains mappings from user names to storage and compute objects (source, views, indexes), and dereferences them in ways that provide a consistent experience for users.
 It also chooses timestamps for reads (peeks) and writes (table inserts) to provide the lived experience of continually moving forward through time.
 It pilots the storage and compute layers and is responsible for ensuring they communicate clearly and completely with each other.
-One correctness goal of the `coord` module is to provide "strict sequential consistency" to the interactive users, through the careful use of the storage and compute layers.
+One correctness goal of the `coord` module is to offer [strict serializability](https://jepsen.io/consistency/models/strict-serializable) to the interactive users, through the careful use of the storage and compute layers.
 Another correctness goal of the `coord` module is to ensure that the storage and compute correctly and completely interoperate (e.g. that the compute layer is invoked only on definite inputs, and fully communicates its definite outputs back to storage if appropriate).
 
 ### Approaches
@@ -54,15 +62,26 @@ The plan of record is that source data are made definite by the storage layer, a
 Definite data are both durable, and ordered in time (strictly sequentially consistent), and reflect the stated "order" the system presents as having undergone.
 
 The coordination layer has several constraints on its behavior to present as strictly sequentially consistent.
-The coordination layer should only report definite data, or indefinite data that are clearly presented as such.
+The coordination layer should only report definite data, or indefinite data that are clearly presented as such (the value of definiteness vanishes if there is uncertainty about the definiteness).
 The coordination layer's catalog should advance in a similar timeline as the data it references, to avoid apparent mis-ordering of DDL and DML statements.
 The coordination layer may need to wait on data becoming definite when returning from e.g. INSERT statements where the return communicates durability.
 
-Data that are provided as update streams, not through interactive sessions, are treated as occurring at the time assigned to them.
-They are not subject to the real-time requirements of strict sequential consistency in the same way that foreign tables are not.
-The definiteness of results provide the tools necessary to build strictly sequentially consistent systems out of parts that include but are not limited to Materialize.
-
 Data the are not definite should be clearly marked as such, and there are fewer (no?) guarantees about their results.
+
+### Externalizing Consistency
+
+Materialize interacts with systems through mechanisms other than interactive SQL sessions.
+For example, Materialize may capture the CDC stream from an OLTP system, and correlate its own output with the transaction markers in the CDC stream.
+To provide end-to-end strict serializability guarantees, Materailize must either synchronize its *behavior* to that of the OLTP system, or present its output clearly enough that a user can subsequently synchronize the results.
+Materialize does the latter, by providing explicitly timestamped data in various update streams.
+
+Data that are provided as update streams, not through interactive sessions, are treated as occurring at the time assigned to them.
+They are not subject to the real-time requirements of strict serializability in the same way that foreign tables are not.
+In particular, their *real time occurrence* does not need to overlap with their explicitly recorded logical time.
+Anyone reasoning about the ordering of these events should treat each event as occurring as if at the explicitly recorded logical time, rather than the physical time.
+Anyone who instead "observes" an event substantially before or after it is stated to occur may fail to build a strictly serializable system from parts that include Materialize.
+
+The definiteness of results provide the tools necessary to build strictly serializable systems out of parts that include but are not limited to Materialize.
 
 ### Describing Definite Data
 
@@ -116,6 +135,9 @@ Should any of these components be explicitly agnostic to concepts maintained by 
 Nothing has been said about the specific APIs of the storage, compute, and coordination layers.
 This will probably involve a substantial amount of iteration as we refine who knows what, and who needs to learn it.
 At the least, I imagine storage will need to learn about source descriptions and timestamping policies, compute will need to clearly delineate what data it can act on for which times, and the coordinator will want to have its fingers in all of these pies.
+
+What concepts does each layer need to expose to other layers to ensure their correct operation?
+If each wanted to be a stickler for detail, what would they require to make sure they weren't the source of correctness errors?
 
 Not much is said here about properties of VOLATILE / INDEFINITE collections.
 Perhaps there are correctness requirements we should provide for them.
