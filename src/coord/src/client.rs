@@ -189,7 +189,7 @@ impl ConnClient {
                 conn_id,
                 secret_key,
             })
-            .expect("coordinator unexpectedly canceled request")
+            .expect("coordinator unexpectedly gone");
     }
 
     async fn send<T, F>(&mut self, f: F) -> T
@@ -307,6 +307,11 @@ impl SessionClient {
             tx,
         })
         .await
+    }
+
+    /// Cancels the query currently running on another connection.
+    pub async fn cancel_request(&mut self, conn_id: u32, secret_key: u32) {
+        self.inner.cancel_request(conn_id, secret_key).await
     }
 
     /// Ends a transaction.
