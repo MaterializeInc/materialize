@@ -367,13 +367,15 @@ async fn build_kafka(
     };
     let topic = maybe_append_nonce(&builder.topic_prefix);
 
-    // Create Kafka topic with single partition.
+    // Create Kafka topic
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &builder.broker_addrs.to_string());
     for (k, v) in builder.config_options.iter() {
         // Explicitly reject the statistics interval option here because its not
         // properly supported for this client.
-        if k != "statistics.interval.ms" {
+        // Explicitly reject isolation.level as it's a consumer-specific
+        // parameter and will generate a benign WARN for admin clients
+        if k != "statistics.interval.ms" && k != "isolation.level" {
             config.set(k, v);
         }
     }
