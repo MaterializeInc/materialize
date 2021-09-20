@@ -36,7 +36,7 @@ repr = { path = "../repr" }
 reqwest = "0.11.4"
 rusoto_core = "0.47.0"
 serde = { version = "1.0.130", features = ["derive"] }
-serde_json = "1.0.67"
+serde_json = "1.0.68"
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.2.0"
 tokio = { version = "1.11.0", features = ["fs"] }
