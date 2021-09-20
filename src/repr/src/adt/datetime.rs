@@ -1789,7 +1789,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                 }
                 (Zulu, Zulu) => return Ok(Default::default()),
                 (TzName(val), TzName(_)) => {
-                    return match val.parse() {
+                    return match Tz::from_str_insensitive(val) {
                         Ok(tz) => Ok(Timezone::Tz(tz)),
                         Err(err) => Err(format!(
                             "Invalid timezone string ({}): {}. \
@@ -3429,6 +3429,10 @@ mod test {
             ("Pacific/Auckland", T(Tz::Pacific__Auckland)),
             ("America/New_York", T(Tz::America__New_York)),
             ("America/Los_Angeles", T(Tz::America__Los_Angeles)),
+            ("utc", T(Tz::UTC)),
+            ("pAcIfIc/AUcKlAnD", T(Tz::Pacific__Auckland)),
+            ("AMERICA/NEW_YORK", T(Tz::America__New_York)),
+            ("america/los_angeles", T(Tz::America__Los_Angeles)),
         ];
 
         for (timezone, expected) in test_cases.iter() {
