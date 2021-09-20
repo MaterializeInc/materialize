@@ -37,7 +37,9 @@ $ set-regex match=u\d+ replacement=UID
 
 # basic test: pushing filters down to sources
 
-? EXPLAIN PLAN FOR SELECT * from data where a = 1 and d = 3;
+> CREATE MATERIALIZED VIEW mv as SELECT * from data where a = 1 and d = 3;
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 3)
 | Project (#0..#3)
@@ -47,16 +49,16 @@ Query:
 | Get materialize.public.data (UID)
 | Filter (#0 = 1), (#3 = 3)
 
-> CREATE MATERIALIZED VIEW mv1 as SELECT * from data where a = 1 and d = 3;
-
-> SELECT * FROM mv1
+> SELECT * FROM mv
 1 2 2 3
 
-> DROP VIEW mv1;
+> DROP VIEW mv;
 
 # basic test: pushing demand down to sources
 
-? EXPLAIN PLAN FOR SELECT b from data where b = 1
+> CREATE MATERIALIZED VIEW mv as SELECT b from data where b = 1;
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#1 = 1)
 | Project (#1)
@@ -66,8 +68,6 @@ Query:
 | Get materialize.public.data (UID)
 | Filter (#1 = 1)
 | Project (#1)
-
-> CREATE MATERIALIZED VIEW mv as SELECT b from data where b = 1;
 
 > SELECT * FROM mv
 1
@@ -80,7 +80,9 @@ Query:
 
 # Filter gets pushed through intervening view.
 
-? EXPLAIN PLAN FOR SELECT b from inner_view where a = 1
+> CREATE MATERIALIZED VIEW mv as SELECT b from inner_view where a = 1
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#0 = 1), (#3 = 4)
 | Project (#0, #1, #3)
@@ -91,8 +93,6 @@ Query:
 | Filter (#0 = 1), (#3 = 4)
 | Project (#1)
 
-> CREATE MATERIALIZED VIEW mv as SELECT b from inner_view where a = 1
-
 > SELECT * FROM mv
 1
 
@@ -100,7 +100,9 @@ Query:
 
 # Demand gets pushed through intervening view.
 
-? EXPLAIN PLAN FOR SELECT d from inner_view where a = 1
+> CREATE MATERIALIZED VIEW mv as SELECT d from inner_view where a = 1
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#3 = 4), (#0 = 1)
 | Project (#0, #3)
@@ -111,14 +113,14 @@ Query:
 | Filter (#0 = 1), (#3 = 4)
 | Project (#3)
 
-> CREATE MATERIALIZED VIEW mv as SELECT d from inner_view where a = 1
-
 > SELECT * FROM mv
 4
 
 > DROP VIEW mv;
 
-? EXPLAIN PLAN FOR SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4
+> CREATE MATERIALIZED VIEW mv as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Project (#0, #1, #3)
 
@@ -139,8 +141,6 @@ Query:
 | | implementation = Differential %1 %0.(#0)
 | Project (#0)
 
-> CREATE MATERIALIZED VIEW mv as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4
-
 > SELECT * FROM mv
 1
 1
@@ -149,7 +149,11 @@ Query:
 
 > DROP VIEW mv;
 
-? EXPLAIN PLAN FOR SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4
+# filters and demand can be inferred in more complicated queries
+
+> CREATE MATERIALIZED VIEW mv as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#3 = 4)
 | Project (#0, #1, #3)
@@ -171,15 +175,15 @@ Query:
 | | implementation = Differential %1 %0.(#0)
 | Project (#1)
 
-> CREATE MATERIALIZED VIEW mv as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4
-
 > SELECT * FROM mv
 1
 2
 
 > DROP VIEW mv;
 
-? EXPLAIN PLAN FOR SELECT s2.c from data s1, data s2 where s1.a = s2.a
+> CREATE MATERIALIZED VIEW mv as SELECT s2.c from data s1, data s2 where s1.a = s2.a
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter !(isnull(#0))
 | Project (#0, #2)
@@ -203,8 +207,6 @@ Query:
 | | implementation = Differential %2 %1.(#0)
 | Project (#2)
 
-> CREATE MATERIALIZED VIEW mv as SELECT s2.c from data s1, data s2 where s1.a = s2.a
-
 > SELECT * FROM mv
 3
 5
@@ -215,7 +217,9 @@ Query:
 
 > DROP VIEW mv;
 
-? EXPLAIN PLAN FOR SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1
+> CREATE MATERIALIZED VIEW mv as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Filter (#0 = 1)
 | Project (#0..#2)
@@ -241,14 +245,14 @@ Query:
 %3 =
 | Union %1 %2
 
-> CREATE MATERIALIZED VIEW mv as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1
-
 > SELECT * FROM mv
 1 3
 1 3
 1 4
 
 > DROP VIEW mv;
+
+# multiple source test
 
 $ kafka-create-topic topic=data2
 
@@ -260,7 +264,9 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
-? EXPLAIN PLAN FOR SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null;
+> CREATE MATERIALIZED VIEW mv as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
+
+? EXPLAIN PLAN FOR VIEW mv;
 Source materialize.public.data (UID):
 | Project (#0, #2)
 
@@ -282,8 +288,6 @@ Query:
 %2 =
 | Union %0 %1
 | Threshold
-
-> CREATE MATERIALIZED VIEW mv as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
 
 > SELECT * FROM mv
 1 2

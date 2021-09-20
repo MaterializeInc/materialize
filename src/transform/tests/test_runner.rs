@@ -109,8 +109,8 @@ mod tests {
             FormatType::Explain(args.get(FORMAT))
         };
 
-        let mut logical_opt = Optimizer::for_view();
-        let mut physical_opt = Optimizer::for_dataflow();
+        let mut logical_opt = Optimizer::logical_optimizer();
+        let mut physical_opt = Optimizer::physical_optimizer();
 
         let out = match test_type {
             TestType::Opt => {

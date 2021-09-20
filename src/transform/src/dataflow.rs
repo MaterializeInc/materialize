@@ -18,6 +18,8 @@ use dataflow_types::{DataflowDesc, LinearOperator};
 use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use std::collections::{HashMap, HashSet};
 
+use crate::Optimizer;
+
 /// Optimizes the implementation of each dataflow.
 ///
 /// Inlines views, performs a full optimization pass including physical
@@ -31,7 +33,7 @@ pub fn optimize_dataflow(
     inline_views(dataflow);
 
     // Logical optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes, false);
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer());
 
     optimize_dataflow_filters(dataflow);
     // TODO: when the linear operator contract ensures that propagated
@@ -43,7 +45,7 @@ pub fn optimize_dataflow(
     optimize_dataflow_demand(dataflow);
 
     // Physical optimization pass
-    optimize_dataflow_relations(dataflow, indexes, true);
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer());
 
     monotonic::optimize_dataflow_monotonic(dataflow);
 }
@@ -151,19 +153,12 @@ fn inline_views(dataflow: &mut DataflowDesc) {
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
-    physical: bool,
+    optimizer: &Optimizer,
 ) {
     // Re-optimize each dataflow
     // TODO(mcsherry): we should determine indexes from the optimized representation
     // just before we plan to install the dataflow. This would also allow us to not
     // add indexes imperatively to `DataflowDesc`.
-    let optimizer = if physical {
-        // Perform physical optimizations.
-        crate::Optimizer::for_dataflow()
-    } else {
-        // Perform logical optimizations.
-        crate::Optimizer::for_view()
-    };
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-name bindings to accommodate other analyses, specifically
         // `InlineLet` which probably wants a reworking in any case.

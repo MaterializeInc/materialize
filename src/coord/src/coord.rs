@@ -3773,7 +3773,7 @@ pub async fn serve(
             let mut coord = Coordinator {
                 worker_guards,
                 worker_txs,
-                view_optimizer: Optimizer::for_view(),
+                view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 symbiosis,
                 indexes: ArrangementFrontiers::default(),
@@ -3934,7 +3934,7 @@ pub fn serve_debug(
         let mut coord = Coordinator {
             worker_guards,
             worker_txs: vec![worker_tx],
-            view_optimizer: Optimizer::for_view(),
+            view_optimizer: Optimizer::logical_optimizer(),
             catalog,
             symbiosis: None,
             indexes: ArrangementFrontiers::default(),
