@@ -48,7 +48,9 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.9.5 %}}
 
-- Timezone parsing is now case insensitive to be compatible with PostgreSQL
+- Timezone parsing is now case insensitive to be compatible with PostgreSQL.
+
+- Add support for [bitwise operators on integers](/sql/functions/#numbers).
 
 {{% version-header v0.9.4 %}}
 

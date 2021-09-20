@@ -2226,11 +2226,21 @@ lazy_static! {
         builtins! {
             // Literal OIDs collected from PG 13 using a version of this query
             // ```sql
-            // SELECT oid, oprname, oprleft::regtype, oprright::regtype
-            // FROM pg_operator
-            // WHERE oprname IN (
-            //     '+', '-', '*', '/', '%', '~~', '!~~', '~'
-            // );
+            // SELECT
+            //     oid,
+            //     oprname,
+            //     oprleft::regtype,
+            //     oprright::regtype
+            // FROM
+            //     pg_operator
+            // WHERE
+            //     oprname IN (
+            //         '+', '-', '*', '/', '%',
+            //         '|', '&', '#', '~', '<<', '>>',
+            //         '~~', '!~~'
+            //     )
+            // ORDER BY
+            //     oprname;
             // ```
             // Values are also available through
             // https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_operator.dat
@@ -2336,6 +2346,31 @@ lazy_static! {
                 params!(Float64, Float64) => ModFloat64, oid::OP_MOD_F64_OID;
                 params!(Numeric, Numeric) => ModNumeric, 1762;
             },
+            "&" => Scalar {
+                params!(Int16, Int16) => BitAndInt16, 1874;
+                params!(Int32, Int32) => BitAndInt32, 1880;
+                params!(Int64, Int64) => BitAndInt64, 1886;
+            },
+            "|" => Scalar {
+                params!(Int16, Int16) => BitOrInt16, 1875;
+                params!(Int32, Int32) => BitOrInt32, 1881;
+                params!(Int64, Int64) => BitOrInt64, 1887;
+            },
+            "#" => Scalar {
+                params!(Int16, Int16) => BitXorInt16, 1876;
+                params!(Int32, Int32) => BitXorInt32, 1882;
+                params!(Int64, Int64) => BitXorInt64, 1888;
+            },
+            "<<" => Scalar {
+                params!(Int16, Int32) => BitShiftLeftInt16, 1878;
+                params!(Int32, Int32) => BitShiftLeftInt32, 1884;
+                params!(Int64, Int32) => BitShiftLeftInt64, 1890;
+            },
+            ">>" => Scalar {
+                params!(Int16, Int32) => BitShiftRightInt16, 1879;
+                params!(Int32, Int32) => BitShiftRightInt32, 1885;
+                params!(Int64, Int32) => BitShiftRightInt64, 1891;
+            },
 
             // ILIKE
             "~~*" => Scalar {
@@ -2377,6 +2412,9 @@ lazy_static! {
 
             // REGEX
             "~" => Scalar {
+                params!(Int16) => UnaryFunc::BitNotInt16, 1877;
+                params!(Int32) => UnaryFunc::BitNotInt32, 1883;
+                params!(Int64) => UnaryFunc::BitNotInt64, 1889;
                 params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
@@ -2665,6 +2703,6 @@ pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow
         // JsonDeletePath
         // JsonContainsPath
         // JsonApplyPathPredicate
-        None => bail_unsupported!(op),
+        None => bail_unsupported!(format!("[{}]", op)),
     }
 }

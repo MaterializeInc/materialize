@@ -54,6 +54,12 @@ Operator | Computes
 `*` | Multiplication
 `/` | Division
 `%` | Modulo
+`&` | Bitwise AND
+`|` | Bitwise OR
+`#` | Bitwise XOR
+`~` | Bitwise NOT
+`<<`| Bitwise left shift
+`>>`| Bitwise right shift
 
 ### String
 
