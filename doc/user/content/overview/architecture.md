@@ -42,7 +42,7 @@ to communicate with `materialized`. We have a client called
 [`mzcli`](https://github.com/MaterializeInc/mzcli) that we recommend using, but
 it's just a modified wrapper around `pgcli`.
 
-Because this is a SQL shell, Materialize lets you interact with your node
+Because this is a SQL shell, Materialize lets you interact with your server
 through SQL statements sent over `pgwire` to an internal `queue`, where they are
 dequeued by a `sql` thread that parses the statement.
 
