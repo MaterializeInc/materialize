@@ -51,7 +51,7 @@
 use std::io::Read;
 
 use ore::cast::CastFrom;
-use persist::Codec;
+use persist_types::Codec;
 
 use crate::Row;
 
@@ -119,7 +119,7 @@ impl Codec for Row {
 
 #[cfg(test)]
 mod tests {
-    use persist::Codec;
+    use persist_types::Codec;
 
     use crate::{Datum, Row};
 

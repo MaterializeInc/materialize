@@ -13,6 +13,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use log::debug;
+use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, Map, OkErr, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -21,8 +22,8 @@ use timely::Data as TimelyData;
 
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::ListenEvent;
+use crate::operators;
 use crate::operators::flatten_decoded_update;
-use crate::{operators, Codec};
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
 pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {

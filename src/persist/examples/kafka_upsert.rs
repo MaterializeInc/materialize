@@ -22,7 +22,8 @@ use persist::indexed::runtime::{
     self, RuntimeClient, RuntimeConfig, StreamReadHandle, StreamWriteHandle,
 };
 use persist::storage::LockInfo;
-use persist::{Codec, Data};
+use persist::Data;
+use persist_types::Codec;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator;
@@ -504,7 +505,7 @@ struct SourceTimestamp<P, O>(P, O);
 mod kafka_offset_impls {
     use std::convert::TryFrom;
 
-    use persist::Codec;
+    use persist_types::Codec;
 
     use crate::AssignedTimestamp;
     use crate::KafkaOffset;

@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use abomonation::abomonated::Abomonated;
 use ore::cast::CastFrom;
+use persist_types::Codec;
 
 use crate::error::Error;
 use crate::future::Future;
@@ -24,7 +25,6 @@ use crate::indexed::encoding::{
 };
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::storage::Blob;
-use crate::Codec;
 
 /// A disk-backed cache for objects in [Blob] storage.
 ///

@@ -10,6 +10,7 @@
 //! Timely and Differential Dataflow operators for persisting and replaying
 //! data.
 
+use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
@@ -17,7 +18,6 @@ use timely::Data as TimelyData;
 
 use crate::indexed::runtime::DecodedSnapshot;
 use crate::indexed::Snapshot;
-use crate::Codec;
 
 pub mod input;
 pub mod source;

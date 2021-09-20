@@ -28,7 +28,7 @@ lowertest = { path = "../lowertest"}
 num-traits = "0.2.14"
 ordered-float = { version = "2.8.0", features = ["serde"] }
 ore = { path = "../ore", features = ["bytes"] }
-persist = { path = "../persist" }
+persist-types = { path = "../persist-types" }
 regex = "1.5.4"
 ryu = "1.0.5"
 serde = { version = "1.0.130", features = ["derive"] }
