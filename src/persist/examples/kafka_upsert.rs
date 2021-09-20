@@ -104,9 +104,6 @@ where
     let timestamp_interval_ms = 5000;
     let now_fn = system_time;
 
-    // TODO: This is not correct, because we might not have data or
-    // bindings but still continue sealing up collections based on
-    // processing time.
     let start_ts = cmp::min(sealed_ts(&ts_read)?, sealed_ts(&out_read)?);
     println!("Restored start timestamp: {}", start_ts);
 
