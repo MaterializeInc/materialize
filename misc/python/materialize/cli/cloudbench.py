@@ -79,6 +79,11 @@ def configure_start(parser: argparse.ArgumentParser) -> None:
         nargs=argparse.REMAINDER,
         help="Benchmark script (and optional arguments)",
     )
+    parser.add_argument(
+        "--append_metadata",
+        help="whether to append extra metadata to each CSV row before uploading to S3",
+        action="store_true",
+    )
 
 
 class BenchSuccessResult(NamedTuple):
@@ -197,6 +202,11 @@ def start(ns: argparse.Namespace) -> None:
         pkg_data = f.read()
     os.chdir(os.environ["MZ_ROOT"])
 
+    if ns.append_metadata:
+        munge_result = 'awk \'{ if (NR == 1) { print $0 ",Timestamp,BenchId,ClusterId,GitRef" } else { print $0 "\'$(date +%s)",$MZ_CB_BENCH_ID,$MZ_CB_CLUSTER_ID,$MZ_CB_GIT_REV"\'"}}\''
+    else:
+        munge_result = "cat"
+
     mz_launch_script = f"""echo {shlex.quote(base64.b64encode(pkg_data).decode('utf-8'))} | base64 -d > mz.tar.gz
 python3 -m venv /tmp/mzenv >&2
 . /tmp/mzenv/bin/activate >&2
@@ -206,7 +216,7 @@ MZ_ROOT=/home/ubuntu/materialize python3 -u -m {script_name} {script_args}
 result=$?
 echo $result > ~/bench_exit_code
 if [ $result -eq 0 ]; then
-    aws s3 cp - s3://{BUCKET}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv < ~/mzscratch-startup.out >&2
+    {munge_result} < ~/mzscratch-startup.out | aws s3 cp - s3://{BUCKET}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv >&2
 else
     aws s3 cp - s3://{BUCKET}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.out < ~/mzscratch-startup.out >&2
     aws s3 cp - s3://{BUCKET}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.err < ~/mzscratch-startup.err
@@ -272,7 +282,11 @@ sudo shutdown -h now # save some money
                 "bench_i": str(i),
                 "LaunchedBy": scratch.whoami(),
             },
-            extra_env={"MZ_CB_BENCH_ID": bench_id, "MZ_CB_CLUSTER_ID": f"{i}-{rev}"},
+            extra_env={
+                "MZ_CB_BENCH_ID": bench_id,
+                "MZ_CB_CLUSTER_ID": f"{i}-{rev}",
+                "MZ_CB_GIT_REV": rev,
+            },
             delete_after=scratch.now_plus(timedelta(days=1)),
             git_rev=rev,
         )
