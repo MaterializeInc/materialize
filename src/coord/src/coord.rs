@@ -52,6 +52,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
 use timely::communication::WorkerGuards;
@@ -2526,7 +2527,13 @@ impl Coordinator {
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
             // after the transaction started.
-            if let Some(id) = stmt_ids.difference(&read_txn.timedomain_ids).next() {
+            //
+            // The call to `sorted` ensures the error message is deterministic.
+            if let Some(id) = stmt_ids
+                .difference(&read_txn.timedomain_ids)
+                .sorted()
+                .next()
+            {
                 let mut names: Vec<_> = read_txn
                     .timedomain_ids
                     .iter()

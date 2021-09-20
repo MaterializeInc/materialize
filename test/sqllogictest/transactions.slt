@@ -274,7 +274,7 @@ simple
 SELECT 1;
 SELECT * FROM t;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.public.t_primary_idx" referenced here, but none available
+db error: ERROR: transactions can only reference nearby relations; "materialize.public.t" referenced here, but none available
 
 statement ok
 CREATE SCHEMA other
