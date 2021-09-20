@@ -19,9 +19,11 @@ pub mod trace;
 pub mod unsealed;
 
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
@@ -34,8 +36,8 @@ use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceMeta, UnsealedMeta,
 };
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
-use crate::indexed::trace::{Trace, TraceSnapshot};
-use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot};
+use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
+use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot, UnsealedSnapshotIter};
 use crate::storage::{Blob, Log, SeqNo};
 
 enum PendingResponse {
@@ -829,21 +831,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
 
             // Move a batch of data from unsealed into trace by reading a
             // snapshot from unsealed...
-            let mut updates = Vec::new();
-            {
-                let mut snap =
-                    unsealed.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
-                let mut more = true;
-                while more {
-                    match snap.read(&mut updates) {
-                        Ok(m) => more = m,
-                        Err(err) => {
-                            self.restore();
-                            return Err(format!("failed to fetch snapshot: {}", err).into());
-                        }
-                    };
-                }
-            }
+            let snap = unsealed.snapshot(desc.lower().clone(), desc.upper().clone(), &self.blob)?;
+            let mut updates = snap
+                .into_iter()
+                .collect::<Result<Vec<_>, Error>>()
+                .map_err(|err| format!("failed to fetch snapshot: {}", err))?;
 
             // Don't bother minting empty trace batches that we'll just have to
             // compact later, it's wasteful of precious storage bandwidth and
@@ -1040,28 +1032,31 @@ pub type ListenFn<K, V> = Box<dyn Fn(ListenEvent<K, V>) + Send>;
 /// updates.
 //
 // TODO: This <K, V> allows Snapshot to be generic over both IndexedSnapshot
-// (and friends) and DecodedSnapshot, but does that get us anything? Does
-// Snapshot even get us anything over regular Iterator?
-pub trait Snapshot<K, V> {
-    /// A partial read of the data in the snapshot.
-    ///
-    /// Returns true if read needs to be called again for more data.
-    /// TODO: this API is easy to misuse (callers want to be able to say:
-    /// while foo.read() { do_stuff() }
-    /// where this API requires a more complicated control flow. If we instead
-    /// changed the semantics to "Return false when no more data has been added,
-    /// nor will ever be added to the destination" then we could support the
-    /// desired control flow.
-    fn read<E: Extend<((K, V), u64, isize)>>(&mut self, buf: &mut E) -> Result<bool, Error>;
+// (and friends) and DecodedSnapshot, but does that get us anything?
+pub trait Snapshot<K, V>: Sized {
+    /// The kind of iterator we are turning this into.
+    type Iter: Iterator<Item = Result<((K, V), u64, isize), Error>>;
+
+    /// Returns a set of `num_iters` [Iterator]s that each output roughly
+    /// `1/num_iters` of the data represented by this snapshot.
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter>;
+
+    /// Returns a single [Iterator] that outputs the data represented by this
+    /// snapshot.
+    fn into_iter(self) -> Self::Iter {
+        let mut iters = self.into_iters(NonZeroUsize::new(1).unwrap());
+        assert_eq!(iters.len(), 1);
+        iters.remove(0)
+    }
 }
 
 /// Extension methods on `Snapshot<K, V>` for use in tests.
 #[cfg(test)]
 pub trait SnapshotExt<K: Ord, V: Ord>: Snapshot<K, V> + Sized {
     /// A full read of the data in the snapshot.
-    fn read_to_end(mut self) -> Result<Vec<((K, V), u64, isize)>, Error> {
-        let mut buf = Vec::new();
-        while self.read(&mut buf)? {}
+    fn read_to_end(self) -> Result<Vec<((K, V), u64, isize)>, Error> {
+        let iter = self.into_iter();
+        let mut buf = iter.collect::<Result<Vec<_>, Error>>()?;
         buf.sort();
         Ok(buf)
     }
@@ -1098,11 +1093,52 @@ impl IndexedSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for IndexedSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
-        &mut self,
-        buf: &mut E,
-    ) -> Result<bool, Error> {
-        Ok(self.0.read(buf)? || self.1.read(buf)?)
+    type Iter = IndexedSnapshotIter;
+
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<IndexedSnapshotIter> {
+        let since = self.since();
+        let IndexedSnapshot(unsealed, trace, _, _) = self;
+        let unsealed_iters = unsealed.into_iters(num_iters);
+        let trace_iters = trace.into_iters(num_iters);
+        // I don't love the non-debug asserts, but it doesn't seem worth it to
+        // plumb an error around here.
+        assert_eq!(unsealed_iters.len(), num_iters.get());
+        assert_eq!(trace_iters.len(), num_iters.get());
+        unsealed_iters
+            .into_iter()
+            .zip(trace_iters.into_iter())
+            .map(|(unsealed_iter, trace_iter)| IndexedSnapshotIter {
+                since: since.clone(),
+                iter: trace_iter.chain(unsealed_iter),
+            })
+            .collect()
+    }
+}
+
+/// An [Iterator] representing one part of the data in a [IndexedSnapshot].
+//
+// This intentionally chains trace before unsealed so we get the data in roughly
+// increasing timestamp order, but it's unclear if this is in any way important.
+pub struct IndexedSnapshotIter {
+    since: Antichain<u64>,
+    iter: std::iter::Chain<TraceSnapshotIter, UnsealedSnapshotIter>,
+}
+
+impl Iterator for IndexedSnapshotIter {
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|x| {
+            x.map(|(kv, mut ts, diff)| {
+                // When reading a snapshot, the contract of since is that all
+                // update timestamps will be advanced to it. We do this
+                // physically during compaction, but don't have hard guarantees
+                // about how long that takes, so we have to account for
+                // un-advanced batches on reads.
+                ts.advance_by(self.since.borrow());
+                (kv, ts, diff)
+            })
+        })
     }
 }
 
@@ -1112,7 +1148,6 @@ mod tests {
 
     use crate::error::Error;
     use crate::future::Future;
-    use crate::indexed::runtime::DecodedSnapshot;
     use crate::mem::MemRegistry;
 
     use super::*;
@@ -1437,14 +1472,11 @@ mod tests {
             i.allow_compaction(vec![(id, Antichain::from_elem(3))], res)
         })?;
         let snap = block_on(|res| i.snapshot(id, res))?;
-        // NB: We won't need this hack after the ts advancement logic is moved
-        // to IndexedSnapshot where it should be.
-        let mut snap = DecodedSnapshot::<String, String>::new(snap);
 
         // Now verify that the snapshot has the right since and that the data in
         // it has been advanced as expected.
         assert_eq!(snap.since(), Antichain::from_elem(3));
-        let actual = snap.read_to_end_flattened()?;
+        let actual = snap.read_to_end()?;
         let expected = vec![
             (("1".into(), "".into()), 3, 1),
             (("1".into(), "".into()), 10, -1),

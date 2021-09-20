@@ -10,6 +10,8 @@
 //! A persistent, compacting data structure of `(Key, Value, Time, Diff)`
 //! updates, indexed by time.
 
+use std::collections::VecDeque;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use timely::progress::Antichain;
@@ -314,20 +316,78 @@ pub struct UnsealedSnapshot {
 }
 
 impl Snapshot<Vec<u8>, Vec<u8>> for UnsealedSnapshot {
-    fn read<E: Extend<((Vec<u8>, Vec<u8>), u64, isize)>>(
-        &mut self,
-        buf: &mut E,
-    ) -> Result<bool, Error> {
-        if let Some(batch) = self.batches.pop() {
-            let batch = batch.recv()?;
-            let updates = batch
-                .updates
-                .iter()
-                .filter(|(_, ts, _)| self.ts_lower.less_equal(ts) && !self.ts_upper.less_equal(ts))
-                .map(|((key, val), ts, diff)| ((key.clone(), val.clone()), *ts, *diff));
-            buf.extend(updates);
+    type Iter = UnsealedSnapshotIter;
+
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
+        let mut iters = Vec::with_capacity(num_iters.get());
+        iters.resize_with(num_iters.get(), || UnsealedSnapshotIter {
+            ts_lower: self.ts_lower.clone(),
+            ts_upper: self.ts_upper.clone(),
+            current_batch: Vec::new(),
+            batches: VecDeque::new(),
+        });
+        // TODO: This should probably distribute batches based on size, but for
+        // now it's simpler to round-robin them.
+        for (i, batch) in self.batches.into_iter().enumerate() {
+            let iter_idx = i % num_iters;
+            iters[iter_idx].batches.push_back(batch);
         }
-        Ok(!self.batches.is_empty())
+        iters
+    }
+}
+
+/// An [Iterator] representing one part of the data in a [UnsealedSnapshot].
+//
+// This intentionally stores the batches as a VecDeque so we can return the data
+// in roughly increasing timestamp order, but it's unclear if this is in any way
+// important.
+#[derive(Debug)]
+pub struct UnsealedSnapshotIter {
+    /// A closed lower bound on the times of contained updates.
+    ts_lower: Antichain<u64>,
+    /// An open upper bound on the times of the contained updates.
+    ts_upper: Antichain<u64>,
+
+    current_batch: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+    batches: VecDeque<Future<Arc<BlobUnsealedBatch>>>,
+}
+
+impl Iterator for UnsealedSnapshotIter {
+    type Item = Result<((Vec<u8>, Vec<u8>), u64, isize), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if !self.current_batch.is_empty() {
+                let update = self.current_batch.pop().unwrap();
+                return Some(Ok(update));
+            } else {
+                // current_batch is empty, find a new one.
+                let b = match self.batches.pop_front() {
+                    None => return None,
+                    Some(b) => b,
+                };
+                match b.recv() {
+                    Ok(b) => {
+                        // Reverse the updates so we can pop them off the back
+                        // in roughly increasing time order. At the same time,
+                        // enforce our filter before we clone them.
+                        let ts_lower = self.ts_lower.borrow();
+                        let ts_upper = self.ts_upper.borrow();
+                        self.current_batch.extend(
+                            b.updates
+                                .iter()
+                                .rev()
+                                .filter(|(_, ts, _)| {
+                                    ts_lower.less_equal(&ts) && !ts_upper.less_equal(&ts)
+                                })
+                                .cloned(),
+                        );
+                        continue;
+                    }
+                    Err(err) => return Some(Err(err)),
+                }
+            }
+        }
     }
 }
 

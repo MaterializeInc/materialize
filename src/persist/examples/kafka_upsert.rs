@@ -17,10 +17,12 @@ use std::{cmp, env, process};
 
 use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, NowFn};
+use persist::error::Error as PersistError;
 use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{
     self, RuntimeClient, RuntimeConfig, StreamReadHandle, StreamWriteHandle,
 };
+use persist::indexed::Snapshot;
 use persist::storage::LockInfo;
 use persist::Data;
 use persist_types::Codec;
@@ -161,10 +163,11 @@ where
     S: Source + 'static,
 {
     // Fetch start offsets.
-    // - TODO: Don't use read_to_end_flattened
+    // - TODO: Don't use collect
     let starting_offsets: Vec<_> = bindings_read
         .snapshot()?
-        .read_to_end_flattened()?
+        .into_iter()
+        .collect::<Result<Vec<_>, PersistError>>()?
         .into_iter()
         // TODO: look extra hard at whether we need < or <= here. According
         // to how timely frontiers work we need <.
@@ -297,10 +300,14 @@ where
     G: Scope<Timestamp = u64>,
     S: Source,
 {
-    // TODO: don't use read_to_end_flattened()
+    // TODO: don't use collect()
     // TODO: actually do upserts here, and everywhere
     let mut prev_records = Vec::new();
-    for ((k, v), ts, diff) in records_read.snapshot()?.read_to_end_flattened()? {
+    for ((k, v), ts, diff) in records_read
+        .snapshot()?
+        .into_iter()
+        .collect::<Result<Vec<_>, PersistError>>()?
+    {
         // TODO: look extra hard at whether we need > or >= here. According
         // to how timely frontiers work we need >=.
         if ts >= start_ts {
