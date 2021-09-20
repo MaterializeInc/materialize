@@ -98,15 +98,18 @@ use sql::plan::{
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
     ExplainPlan, FetchPlan, HirRelationExpr, IndexOption, IndexOptionName, InsertPlan,
     MutationKind, Params, PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    SetVariablePlan, ShowVariablePlan, TailPlan,
 };
 use sql::plan::{StatementDesc, View};
 use transform::Optimizer;
 
-use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
+pub use self::arrangement_state::ArrangementFrontiers;
+use self::arrangement_state::{Frontiers, SinkWrites};
 use self::prometheus::Scraper;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
-use crate::catalog::{self, BuiltinTableUpdate, Catalog, CatalogItem, SinkConnectorState, Table};
+use crate::catalog::{
+    self, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem, SinkConnectorState, Table,
+};
 use crate::client::{Client, Handle};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
@@ -2063,24 +2066,6 @@ impl Coordinator {
         session: &mut Session,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        // TODO(petrosagg): remove this check once postgres sources are properly supported
-        if matches!(
-            plan,
-            CreateSourcePlan {
-                source: Source {
-                    connector: SourceConnector::External {
-                        connector: ExternalSourceConnector::Postgres(_),
-                        ..
-                    },
-                    ..
-                },
-                materialized: false,
-                ..
-            }
-        ) {
-            coord_bail!("Unmaterialized Postgres sources are not supported yet");
-        }
-
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, vec![plan])?;
         match self.catalog_transact(ops) {
@@ -2267,7 +2252,7 @@ impl Coordinator {
         view: View,
         replace: Option<GlobalId>,
         materialize: bool,
-    ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
+    ) -> Result<(Vec<catalog::Op>, Option<GlobalId>, OptimizedMirRelationExpr), CoordError> {
         self.validate_timeline(view.expr.global_uses())?;
 
         let mut ops = vec![];
@@ -2282,7 +2267,7 @@ impl Coordinator {
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
-            optimized_expr,
+            optimized_expr: optimized_expr.clone(),
             desc,
             conn_id: if view.temporary {
                 Some(session.conn_id())
@@ -2326,7 +2311,7 @@ impl Coordinator {
             None
         };
 
-        Ok((ops, index_id))
+        Ok((ops, index_id, optimized_expr))
     }
 
     fn sequence_create_view(
@@ -2335,13 +2320,19 @@ impl Coordinator {
         plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let if_not_exists = plan.if_not_exists;
-        let (ops, index_id) = self.generate_view_ops(
+        let (ops, index_id, optimized_expr) = self.generate_view_ops(
             session,
             plan.name,
-            plan.view,
+            plan.view.clone(),
             plan.replace,
             plan.materialize,
         )?;
+
+        if plan.materialize {
+            if let Some(id) = index_id {
+                self.validate_view_single_materializations(id, &plan.view, &optimized_expr)?;
+            }
+        }
 
         match self.catalog_transact(ops) {
             Ok(()) => {
@@ -2374,8 +2365,15 @@ impl Coordinator {
         let mut index_ids = vec![];
 
         for (name, view) in plan.views {
-            let (mut view_ops, index_id) =
-                self.generate_view_ops(session, name, view, None, plan.materialize)?;
+            let (mut view_ops, index_id, expr) =
+                self.generate_view_ops(session, name, view.clone(), None, plan.materialize)?;
+
+            if plan.materialize {
+                if let Some(id) = index_id {
+                    self.validate_view_single_materializations(id, &view, &expr)?;
+                }
+            }
+
             ops.append(&mut view_ops);
             if let Some(index_id) = index_id {
                 index_ids.push(index_id);
@@ -2414,6 +2412,8 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
+        self.validate_idx_single_materializations(&index.depends_on)?;
+
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
         }
@@ -2433,6 +2433,7 @@ impl Coordinator {
             name,
             item: CatalogItem::Index(index),
         };
+
         match self.catalog_transact(vec![op]) {
             Ok(()) => {
                 if let Some((name, description)) = self.prepare_index_build(&id) {
@@ -4150,6 +4151,127 @@ impl Coordinator {
                 .send(Message::WriteLockGrant(guard))
                 .expect("sending to internal_cmd_tx cannot fail");
         });
+    }
+
+    /// Validate that sources which only support a single materialization are only materialized once
+    fn validate_view_single_materializations(
+        &self,
+        index_to_build: GlobalId,
+        index_view: &View,
+        expr: &OptimizedMirRelationExpr,
+    ) -> Result<(), CoordError> {
+        let imports = self
+            .catalog
+            .get_imports::<usize>(&index_to_build, &expr, None);
+        let mut require_single = vec![];
+        self.deps_require_single(imports.iter().map(|idx| idx.dep_id), &mut require_single);
+        if !require_single.is_empty() {
+            for idx in self.catalog.entries().filter_map(|e| e.index()) {
+                if index_view.depends_on.contains(&idx.on) {
+                    continue;
+                }
+                let on = self.catalog.get_by_id(&idx.on);
+
+                self.reuses_single(on, &require_single)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Same kind of thing as [`Self::validate_view_single_materializations()`], but specifically for
+    /// indexes
+    fn validate_idx_single_materializations(
+        &self,
+        depends_on: &[GlobalId],
+    ) -> Result<(), CoordError> {
+        let mut require_single = Vec::new();
+        self.deps_require_single(depends_on.iter().copied(), &mut require_single);
+
+        if !require_single.is_empty() {
+            for idx in self.catalog.entries().filter_map(|e| e.index()) {
+                let on = self.catalog.get_by_id(&idx.on);
+
+                self.reuses_single(on, &require_single)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Recurse through all dependencies finding sources which require single materialization
+    ///
+    /// `required` is populated with all the dependencies that require a single materialization.
+    ///
+    /// The output of this is intended to be passed in to [`Self::reuses_single()`].
+    fn deps_require_single<I: Iterator<Item = GlobalId>>(
+        &self,
+        ids: I,
+        required: &mut Vec<GlobalId>,
+    ) {
+        for id in ids {
+            let item = self.catalog.get_by_id(&id);
+            if let Some(&catalog::Source {
+                connector: SourceConnector::External { ref connector, .. },
+                ..
+            }) = item.source()
+            {
+                if connector.requires_single_materialization() {
+                    required.push(id);
+                }
+            }
+            self.deps_require_single(item.uses().iter().copied(), required)
+        }
+    }
+
+    /// Find reuse of unmaterialized items in the newly-created entry `on`
+    ///
+    /// This searches through all the items that `on` is going to use -- so if this is a view on top
+    /// of a materialized view then `on` will use that materialized view -- in an attempt to find
+    /// all *unmaterialized* items that will be used.
+    ///
+    /// `require_single` is a collection of items that *may not* have any more materializations
+    /// built on them.
+    fn reuses_single(
+        &self,
+        on: &CatalogEntry,
+        require_single: &[GlobalId],
+    ) -> Result<(), CoordError> {
+        for gid in on.uses() {
+            let dep_entry = self.catalog.get_by_id(gid);
+            // Reusing an entry with an index reuses the index, and does not create a new
+            // materialization
+            if dep_entry.index().is_some() {
+                continue;
+            }
+
+            if require_single.contains(&gid) {
+                return Err(CoordError::InvalidMultipleMaterialization {
+                    base_source: self.catalog.get_by_id(&gid).name().item.clone(),
+                    existing_index: on.name().item.clone(),
+                    existing_id: on.id(),
+                });
+            }
+
+            // Return the "highest" name of any materialization of a source that requires_single
+            //
+            // Highest meaning "last in the chain of materialization that we discovered in this
+            // round". We need to do at least a little name lifting here because the first thing
+            // that we discover in this chain may be unmaterialized.
+            //
+            // In practice this currently finds the first thing that was materialized on top of a
+            // source.
+            if let Err(CoordError::InvalidMultipleMaterialization { base_source, .. }) =
+                self.reuses_single(dep_entry, require_single)
+            {
+                return Err(CoordError::InvalidMultipleMaterialization {
+                    base_source,
+                    existing_index: on.name().item.clone(),
+                    existing_id: on.id(),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

@@ -38,6 +38,8 @@ services:
       - bash
     volumes:
       - .:/workdir
+    environment:
+      - TD_TEST
     depends_on: [materialized, postgres]
 
   materialized:

@@ -10,7 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
-use expr::EvalError;
+use expr::{EvalError, GlobalId};
 use ore::str::StrExt;
 use repr::NotNullViolation;
 use transform::TransformError;
@@ -43,6 +43,12 @@ pub enum CoordError {
     IncompleteTimestamp(Vec<expr::GlobalId>),
     /// Specified index is disabled, but received non-enabling update request
     InvalidAlterOnDisabledIndex(String),
+    /// Attempted to build a materialization on a source that does not allow multiple materializatons
+    InvalidMultipleMaterialization {
+        base_source: String,
+        existing_index: String,
+        existing_id: GlobalId,
+    },
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The selection value for a table mutation operation refers to an invalid object.
@@ -237,6 +243,17 @@ impl fmt::Display for CoordError {
             ),
             CoordError::InvalidAlterOnDisabledIndex(name) => {
                 write!(f, "invalid ALTER on disabled index {}", name.quoted())
+            }
+            CoordError::InvalidMultipleMaterialization {
+                base_source,
+                existing_index,
+                existing_id,
+            } => {
+                write!(
+                    f,
+                    "Cannot create second materialization on {}, already materialized by {} ({})",
+                    base_source, existing_index, existing_id
+                )
             }
             CoordError::InvalidParameterType(p) => write!(
                 f,

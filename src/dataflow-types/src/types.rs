@@ -805,6 +805,14 @@ impl SourceConnector {
             SourceConnector::Local { timeline, .. } => timeline.clone(),
         }
     }
+
+    pub fn requires_single_materialization(&self) -> bool {
+        if let SourceConnector::External { connector, .. } = self {
+            connector.requires_single_materialization()
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -882,6 +890,19 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::Kinesis(_) => true,
             ExternalSourceConnector::Postgres(_) => true,
             ExternalSourceConnector::PubNub(_) => true,
+        }
+    }
+
+    pub fn requires_single_materialization(&self) -> bool {
+        match self {
+            ExternalSourceConnector::S3(c) => c.requires_single_materialization(),
+            ExternalSourceConnector::Postgres(_) => true,
+
+            ExternalSourceConnector::Kafka(_)
+            | ExternalSourceConnector::Kinesis(_)
+            | ExternalSourceConnector::File(_)
+            | ExternalSourceConnector::AvroOcf(_)
+            | ExternalSourceConnector::PubNub(_) => false,
         }
     }
 }
@@ -1033,6 +1054,19 @@ pub enum S3KeySource {
     /// S3 notifications channels can be configured to go to SQS, which is the
     /// only target we currently support.
     SqsNotifications { queue: String },
+}
+
+impl S3SourceConnector {
+    fn requires_single_materialization(&self) -> bool {
+        // SQS Notifications are not durable, multiple sources depending on them will get
+        // non-intersecting subsets of objects to read
+        for key_source in &self.key_sources {
+            if matches!(key_source, S3KeySource::SqsNotifications { .. }) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

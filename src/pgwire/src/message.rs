@@ -348,6 +348,8 @@ impl ErrorResponse {
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::IncompleteTimestamp(_) => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
+            // TODO: is there a better error code?
+            CoordError::InvalidMultipleMaterialization { .. } => SqlState::UNIQUE_VIOLATION,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,

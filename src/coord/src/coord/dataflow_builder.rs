@@ -163,27 +163,11 @@ impl<'a> DataflowBuilder<'a> {
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
     ) {
-        // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        for get_id in view.global_uses() {
-            self.import_into_dataflow(&get_id, dataflow);
+        for desc in self.catalog.get_imports(view_id, view, Some(&self.indexes)) {
+            self.import_into_dataflow(&desc.dep_id, dataflow);
 
-            // TODO: indexes should be imported after the optimization process, and only those
-            // actually used by the optimized plan
-            if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
-                for (id, keys) in indexes.iter() {
-                    // Ensure only valid indexes (i.e. those in self.indexes) are imported.
-                    // TODO(#8318): Ensure this logic is accounted for.
-                    if !self.indexes.contains_key(*id) {
-                        continue;
-                    }
-                    let on_entry = self.catalog.get_by_id(&get_id);
-                    let on_type = on_entry.desc().unwrap().typ().clone();
-                    let index_desc = IndexDesc {
-                        on_id: get_id,
-                        keys: keys.clone(),
-                    };
-                    dataflow.import_index(*id, index_desc, on_type, *view_id);
-                }
+            for idx in desc.indexes {
+                dataflow.import_index(idx.id, idx.index, idx.typ, idx.requesting_view);
             }
         }
         dataflow.insert_view(*view_id, view.clone());

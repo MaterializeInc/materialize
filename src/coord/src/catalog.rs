@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::{ExternalSourceConnector, MzOffset, SinkEnvelope};
+use dataflow_types::{ExternalSourceConnector, IndexDesc, MzOffset, SinkEnvelope};
 use expr::{Id, PartitionId};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -26,7 +26,7 @@ use ore::metrics::MetricsRegistry;
 use ore::now::{to_datetime, EpochMillis, NowFn};
 use persist::indexed::runtime::MultiWriteHandle;
 use regex::Regex;
-use repr::Timestamp;
+use repr::{RelationType, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
@@ -54,6 +54,7 @@ use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
     PG_CATALOG_SCHEMA,
 };
+use crate::coord::ArrangementFrontiers;
 use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
 use crate::session::{PreparedStatement, Session};
 
@@ -534,6 +535,11 @@ impl CatalogItem {
 
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
+    pub fn typ(&self) -> SqlCatalogItemType {
+        self.item.typ()
+    }
+
+    /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
         self.item.desc(&self.name)
     }
@@ -552,6 +558,21 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is a table.
     pub fn is_table(&self) -> bool {
         matches!(self.item(), CatalogItem::Table(_))
+    }
+
+    /// Returns the index if the item is an index, otherwise None
+    pub fn index(&self) -> Option<&Index> {
+        match self.item() {
+            CatalogItem::Index(idx) => Some(idx),
+            _ => None,
+        }
+    }
+
+    pub fn source(&self) -> Option<&Source> {
+        match self.item() {
+            CatalogItem::Source(src) => Some(src),
+            _ => None,
+        }
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
@@ -1164,12 +1185,56 @@ impl Catalog {
     }
 
     pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
-        &self.by_id[id]
+        &self
+            .by_id
+            .get(id)
+            .unwrap_or_else(|| panic!("catalog item should exist: {}", id))
     }
 
     pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
         let id = &self.by_oid[oid];
         &self.by_id[id]
+    }
+
+    pub fn get_imports<T: timely::progress::Timestamp>(
+        &self,
+        view_id: &GlobalId,
+        view: &OptimizedMirRelationExpr,
+        df_indexes: Option<&ArrangementFrontiers<T>>,
+    ) -> Vec<IndexImportDesc> {
+        let mut imports = Vec::new();
+        // TODO: We only need to import Get arguments for which we cannot find arrangements.
+        for get_id in view.global_uses() {
+            // TODO: indexes should be imported after the optimization process, and only those
+            // actually used by the optimized plan
+            let mut enabled_indexes = Vec::new();
+            if let Some(indexes) = self.enabled_indexes().get(&get_id) {
+                for (id, keys) in indexes.iter() {
+                    // Ensure only valid indexes (i.e. those in self.indexes) are imported.
+                    // TODO(#8318): Ensure this logic is accounted for.
+                    if !df_indexes.map(|i| i.contains_key(*id)).unwrap_or(true) {
+                        continue;
+                    }
+                    let on_entry = self.get_by_id(&get_id);
+                    let on_type = on_entry.desc().unwrap().typ().clone();
+                    let index = IndexDesc {
+                        on_id: get_id,
+                        keys: keys.clone(),
+                    };
+                    enabled_indexes.push(EnabledIndexDesc {
+                        id: *id,
+                        index,
+                        typ: on_type,
+                        requesting_view: *view_id,
+                    });
+                }
+            }
+            imports.push(IndexImportDesc {
+                dep_id: get_id,
+                indexes: enabled_indexes,
+            })
+        }
+        imports
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
@@ -2280,6 +2345,11 @@ impl Catalog {
         &self.config
     }
 
+    /// All entries with their Global IDs
+    pub fn items(&self) -> impl Iterator<Item = (&GlobalId, &CatalogEntry)> {
+        self.by_id.iter()
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.by_id.values()
     }
@@ -2870,4 +2940,16 @@ mod tests {
         let catalog = Catalog::open_debug(catalog_file.path(), ore::now::now_zero).unwrap();
         assert_eq!(catalog.transient_revision(), 1);
     }
+}
+
+pub struct IndexImportDesc {
+    pub dep_id: GlobalId,
+    pub indexes: Vec<EnabledIndexDesc>,
+}
+
+pub struct EnabledIndexDesc {
+    pub id: GlobalId,
+    pub index: IndexDesc,
+    pub typ: RelationType,
+    pub requesting_view: GlobalId,
 }
