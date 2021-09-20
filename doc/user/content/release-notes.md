@@ -48,6 +48,8 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.9.5 %}}
 
+- Timezone parsing is now case insensitive to be compatible with PostgreSQL
+
 {{% version-header v0.9.4 %}}
 
 - Improve the performance of
