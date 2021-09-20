@@ -84,6 +84,7 @@ def configure_start(parser: argparse.ArgumentParser) -> None:
         help="whether to append extra metadata to each CSV row before uploading to S3",
         action="store_true",
     )
+    parser.add_argument("--s3_root", type=str, default=DEFAULT_BUCKET)
 
 
 class BenchSuccessResult(NamedTuple):
@@ -96,16 +97,16 @@ class BenchFailureLogs(NamedTuple):
 
 
 def configure_check(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--s3_root", type=str, default=DEFAULT_BUCKET)
     parser.add_argument("bench_id", type=str, nargs=1)
 
 
-BUCKET = "mz-cloudbench"
+DEFAULT_BUCKET = "mz-cloudbench"
 
-
-def try_get_object(key: str) -> Optional[str]:
+def try_get_object(key: str, bucket: str) -> Optional[str]:
     client = boto3.client("s3")
     try:
-        result = client.get_object(Bucket=BUCKET, Key=key)
+        result = client.get_object(Bucket=bucket, Key=key)
         return result["Body"].read().decode("utf-8")
     except client.exceptions.NoSuchKey:
         return None
@@ -117,7 +118,7 @@ def check(ns: argparse.Namespace) -> None:
 
     manifest = (
         boto3.client("s3")
-        .get_object(Bucket=BUCKET, Key=f"{bench_id}/MANIFEST")["Body"]
+        .get_object(Bucket=ns.s3_root, Key=f"{bench_id}/MANIFEST")["Body"]
         .read()
         .decode("utf-8")
         .strip()
@@ -131,10 +132,10 @@ def check(ns: argparse.Namespace) -> None:
     not_done = list(range(len(results)))
     while not_done:
         for i in not_done:
-            maybe_result = try_get_object(f"{bench_id}/{insts[i]}.csv")
+            maybe_result = try_get_object(f"{bench_id}/{insts[i]}.csv", ns.s3_root)
             if maybe_result is None:
-                maybe_out = try_get_object(f"{bench_id}/{insts[i]}-FAILURE.out")
-                maybe_err = try_get_object(f"{bench_id}/{insts[i]}-FAILURE.err")
+                maybe_out = try_get_object(f"{bench_id}/{insts[i]}-FAILURE.out", ns.s3_root)
+                maybe_err = try_get_object(f"{bench_id}/{insts[i]}-FAILURE.err", ns.s3_root)
                 if (maybe_out is None) or (maybe_err is None):
                     continue
                 results[i] = BenchFailureLogs(stdout=maybe_out, stderr=maybe_err)
@@ -203,7 +204,7 @@ def start(ns: argparse.Namespace) -> None:
     os.chdir(os.environ["MZ_ROOT"])
 
     if ns.append_metadata:
-        munge_result = 'awk \'{ if (NR == 1) { print $0 ",Timestamp,BenchId,ClusterId,GitRef" } else { print $0 "\'$(date +%s)",$MZ_CB_BENCH_ID,$MZ_CB_CLUSTER_ID,$MZ_CB_GIT_REV"\'"}}\''
+        munge_result = 'awk \'{ if (NR == 1) { print $0 ",Timestamp,BenchId,ClusterId,GitRef,S3Root" } else { print $0 ",\'$(date +%s)",$MZ_CB_BENCH_ID,$MZ_CB_CLUSTER_ID,$MZ_CB_GIT_REV,$MZ_CB_S3_ROOT"\'"}}\''
     else:
         munge_result = "cat"
 
@@ -216,10 +217,10 @@ MZ_ROOT=/home/ubuntu/materialize python3 -u -m {script_name} {script_args}
 result=$?
 echo $result > ~/bench_exit_code
 if [ $result -eq 0 ]; then
-    {munge_result} < ~/mzscratch-startup.out | aws s3 cp - s3://{BUCKET}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv >&2
+    {munge_result} < ~/mzscratch-startup.out | aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID.csv >&2
 else
-    aws s3 cp - s3://{BUCKET}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.out < ~/mzscratch-startup.out >&2
-    aws s3 cp - s3://{BUCKET}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.err < ~/mzscratch-startup.err
+    aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.out < ~/mzscratch-startup.out >&2
+    aws s3 cp - s3://{ns.s3_root}/$MZ_CB_BENCH_ID/$MZ_CB_CLUSTER_ID-FAILURE.err < ~/mzscratch-startup.err
 fi
 sudo shutdown -h now # save some money
 """
@@ -286,6 +287,7 @@ sudo shutdown -h now # save some money
                 "MZ_CB_BENCH_ID": bench_id,
                 "MZ_CB_CLUSTER_ID": f"{i}-{rev}",
                 "MZ_CB_GIT_REV": rev,
+                "MZ_CB_S3_ROOT": ns.s3_root,
             },
             delete_after=scratch.now_plus(timedelta(days=1)),
             git_rev=rev,
