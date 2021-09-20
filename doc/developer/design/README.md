@@ -59,3 +59,7 @@ thinking. Err on the side of writing a design document.
 6. Announce the intent to close commenting on the design document in #eng-announce.
 7. Allow two business days for any final comments.
 8. If no comments have raised new issues or if no one has asked for additional time to review, merge the design document.
+
+## How should you push back on aspects of a design document?
+
+Consult the draft [Raising an objection about a design](https://rustacean-principles.netlify.app/how_to_rustacean/show_up/raising_an_objection.html) Rustacean doc for guidance.
