@@ -98,54 +98,6 @@ impl crate::Transform for PredicatePushdown {
 }
 
 impl PredicatePushdown {
-    /// Pushes predicates down through the operator tree and extracts
-    /// The ones that should be pushed down to the next dataflow object
-    pub fn dataflow_transform(
-        &self,
-        relation: &mut MirRelationExpr,
-        get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
-    ) {
-        // TODO(#2592): we want to replace everything inside the braces
-        // with the single line below
-        // `self.action(e, &mut get_predicates);`
-        // This is so that you have a series of dependent views
-        // A->B->C, you want to push propagated filters
-        // from A all the way past B to C if possible.
-        // Before this replacement can be done, we need to figure out
-        // replanning joins after the new predicates are pushed down.
-        match relation {
-            MirRelationExpr::Filter { input, predicates } => {
-                if let MirRelationExpr::Get { id, .. } = **input {
-                    // We can report the predicates upward in `get_predicates`,
-                    // but we are not yet able to delete them from the `Filter`.
-                    get_predicates
-                        .entry(id)
-                        .or_insert_with(|| predicates.iter().cloned().collect())
-                        .retain(|p| predicates.contains(p));
-                } else {
-                    self.dataflow_transform(input, get_predicates);
-                }
-            }
-            MirRelationExpr::Get { id, .. } => {
-                // If we encounter a `Get` that is not wrapped by a `Filter`,
-                // we should purge all predicates associated with the id.
-                // This is because it is as if there is an empty `Filter`
-                // just around the `Get`, and so no predicates can be pushed.
-                get_predicates
-                    .entry(*id)
-                    .or_insert_with(HashSet::new)
-                    .clear();
-            }
-            x => {
-                x.visit1_mut(|e| self.dataflow_transform(e, get_predicates));
-                // Prevent local predicate lists from escaping.
-                if let MirRelationExpr::Let { id, .. } = x {
-                    get_predicates.remove(&Id::Local(*id));
-                }
-            }
-        }
-    }
-
     /// Predicate pushdown
     ///
     /// This method looks for opportunities to push predicates toward
@@ -156,7 +108,7 @@ impl PredicatePushdown {
     /// applied to each `Get` expression, so that the predicate can
     /// then be pushed through to a `Let` binding, or to the external
     /// source of the data if the `Get` binds to another view.
-    fn action(
+    pub fn action(
         &self,
         relation: &mut MirRelationExpr,
         get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,

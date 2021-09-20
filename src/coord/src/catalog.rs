@@ -2015,7 +2015,7 @@ impl Catalog {
                 })
             }
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
-                let mut optimizer = Optimizer::for_view();
+                let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(source.expr, self.enabled_indexes())?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
@@ -2027,7 +2027,7 @@ impl Catalog {
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let mut optimizer = Optimizer::for_view();
+                let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr, self.enabled_indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
