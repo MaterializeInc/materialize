@@ -125,7 +125,7 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
         &[("enable.idempotence", "true")],
     )?;
     Retry::default()
-        .max_duration(Duration::from_secs(60))
+        .max_duration(Duration::from_secs(120))
         .retry(|_| {
             kafka_client.create_topic(
                 &topic,
