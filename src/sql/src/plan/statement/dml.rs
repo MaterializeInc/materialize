@@ -242,10 +242,8 @@ pub fn plan_explain(
         Some(finishing)
     };
     expr.bind_parameters(&params)?;
-    let decorrelated_expr = expr.clone().lower();
     Ok(Plan::Explain(ExplainPlan {
         raw_plan: expr,
-        decorrelated_plan: decorrelated_expr,
         row_set_finishing: finishing,
         stage,
         options,

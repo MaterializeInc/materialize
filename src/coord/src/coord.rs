@@ -3200,7 +3200,6 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let ExplainPlan {
             raw_plan,
-            decorrelated_plan,
             row_set_finishing,
             stage,
             options,
@@ -3219,6 +3218,7 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
+                let decorrelated_plan = raw_plan.clone().lower();
                 let catalog = self.catalog.for_session(session);
                 let mut explanation =
                     dataflow_types::Explanation::new(&decorrelated_plan, &catalog);
@@ -3231,6 +3231,7 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
+                let decorrelated_plan = raw_plan.clone().lower();
                 self.validate_timeline(decorrelated_plan.global_uses())?;
                 let optimized_plan =
                     self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
