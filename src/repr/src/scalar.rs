@@ -25,8 +25,8 @@ use lowertest::MzEnumReflect;
 use crate::adt::array::Array;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
-use crate::Row;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
+use crate::{Row, RowArena};
 
 /// A single value.
 ///
@@ -532,32 +532,32 @@ impl<'a> From<bool> for Datum<'a> {
     }
 }
 
-impl From<i16> for Datum<'static> {
-    fn from(i: i16) -> Datum<'static> {
+impl<'a> From<i16> for Datum<'a> {
+    fn from(i: i16) -> Datum<'a> {
         Datum::Int16(i)
     }
 }
 
-impl From<i32> for Datum<'static> {
-    fn from(i: i32) -> Datum<'static> {
+impl<'a> From<i32> for Datum<'a> {
+    fn from(i: i32) -> Datum<'a> {
         Datum::Int32(i)
     }
 }
 
-impl From<i64> for Datum<'static> {
-    fn from(i: i64) -> Datum<'static> {
+impl<'a> From<i64> for Datum<'a> {
+    fn from(i: i64) -> Datum<'a> {
         Datum::Int64(i)
     }
 }
 
-impl From<OrderedFloat<f32>> for Datum<'static> {
-    fn from(f: OrderedFloat<f32>) -> Datum<'static> {
+impl<'a> From<OrderedFloat<f32>> for Datum<'a> {
+    fn from(f: OrderedFloat<f32>) -> Datum<'a> {
         Datum::Float32(f)
     }
 }
 
-impl From<OrderedFloat<f64>> for Datum<'static> {
-    fn from(f: OrderedFloat<f64>) -> Datum<'static> {
+impl<'a> From<OrderedFloat<f64>> for Datum<'a> {
+    fn from(f: OrderedFloat<f64>) -> Datum<'a> {
         Datum::Float64(f)
     }
 }
@@ -574,20 +574,20 @@ impl<'a> From<f64> for Datum<'a> {
     }
 }
 
-impl From<i128> for Datum<'static> {
-    fn from(d: i128) -> Datum<'static> {
+impl<'a> From<i128> for Datum<'a> {
+    fn from(d: i128) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
 
-impl From<Numeric> for Datum<'static> {
-    fn from(n: Numeric) -> Datum<'static> {
+impl<'a> From<Numeric> for Datum<'a> {
+    fn from(n: Numeric) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(n))
     }
 }
 
-impl From<chrono::Duration> for Datum<'static> {
-    fn from(duration: chrono::Duration) -> Datum<'static> {
+impl<'a> From<chrono::Duration> for Datum<'a> {
+    fn from(duration: chrono::Duration) -> Datum<'a> {
         Datum::Interval(
             Interval::new(
                 0,
@@ -599,8 +599,8 @@ impl From<chrono::Duration> for Datum<'static> {
     }
 }
 
-impl From<Interval> for Datum<'static> {
-    fn from(other: Interval) -> Datum<'static> {
+impl<'a> From<Interval> for Datum<'a> {
+    fn from(other: Interval) -> Datum<'a> {
         Datum::Interval(other)
     }
 }
@@ -641,8 +641,8 @@ impl<'a> From<DateTime<Utc>> for Datum<'a> {
     }
 }
 
-impl From<Uuid> for Datum<'static> {
-    fn from(uuid: Uuid) -> Datum<'static> {
+impl<'a> From<Uuid> for Datum<'a> {
+    fn from(uuid: Uuid) -> Datum<'a> {
         Datum::Uuid(uuid)
     }
 }
@@ -656,6 +656,58 @@ where
             d.into()
         } else {
             Datum::Null
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct WithArena<'a, T> {
+    arena: &'a RowArena,
+    data: T,
+}
+
+impl<'a, T> WithArena<'a, T> {
+    pub fn new(arena: &'a RowArena, data: T) -> Self {
+        WithArena { arena, data }
+    }
+}
+
+/// Blanket implementation for types that don't need access to an allocation context
+impl<'a, T> From<WithArena<'a, T>> for Datum<'a>
+where
+    Datum<'a>: From<T>,
+{
+    fn from(context: WithArena<'a, T>) -> Datum<'a> {
+        context.data.into()
+    }
+}
+
+impl<'a> From<WithArena<'a, String>> for Datum<'a> {
+    fn from(context: WithArena<'a, String>) -> Datum<'a> {
+        Datum::String(context.arena.push_string(context.data))
+    }
+}
+
+impl<'a> From<WithArena<'a, Option<String>>> for Datum<'a> {
+    fn from(context: WithArena<'a, Option<String>>) -> Datum<'a> {
+        match context.data {
+            Some(b) => Datum::String(context.arena.push_string(b)),
+            None => Datum::Null,
+        }
+    }
+}
+
+impl<'a> From<WithArena<'a, Vec<u8>>> for Datum<'a> {
+    fn from(context: WithArena<'a, Vec<u8>>) -> Datum<'a> {
+        Datum::Bytes(context.arena.push_bytes(context.data))
+    }
+}
+
+impl<'a> From<WithArena<'a, Option<Vec<u8>>>> for Datum<'a> {
+    fn from(context: WithArena<'a, Option<Vec<u8>>>) -> Datum<'a> {
+        match context.data {
+            Some(b) => Datum::Bytes(context.arena.push_bytes(b)),
+            None => Datum::Null,
         }
     }
 }
@@ -873,6 +925,12 @@ impl FromTy<bool> for ScalarType {
 impl FromTy<String> for ScalarType {
     fn from_ty() -> Self {
         Self::String
+    }
+}
+
+impl FromTy<Vec<u8>> for ScalarType {
+    fn from_ty() -> Self {
+        Self::Bytes
     }
 }
 

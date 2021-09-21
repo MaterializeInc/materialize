@@ -183,7 +183,7 @@ lazy_static! {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(s)))
             }),
-            (Float32, String) => Assignment: CastFloat32ToString,
+            (Float32, String) => Assignment: CastFloat32ToString(func::CastFloat32ToString),
 
             // FLOAT64
             (Float64, Int16) => Assignment: CastFloat64ToInt16(func::CastFloat64ToInt16),

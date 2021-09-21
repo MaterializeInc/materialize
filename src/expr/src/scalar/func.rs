@@ -273,12 +273,6 @@ fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_float32(&mut buf, a.unwrap_float32());
-    Datum::String(temp_storage.push_string(buf))
-}
-
 fn cast_float32_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float32();
     if a.is_infinite() {
@@ -3602,7 +3596,7 @@ pub enum UnaryFunc {
     CastFloat32ToInt32(CastFloat32ToInt32),
     CastFloat32ToInt64(CastFloat32ToInt64),
     CastFloat32ToFloat64(CastFloat32ToFloat64),
-    CastFloat32ToString,
+    CastFloat32ToString(CastFloat32ToString),
     CastFloat32ToNumeric(Option<u8>),
     CastFloat64ToNumeric(Option<u8>),
     CastFloat64ToInt16(CastFloat64ToInt16),
@@ -3792,6 +3786,7 @@ derive_unary!(
     CastFloat64ToInt64,
     CastFloat32ToFloat64,
     CastFloat64ToFloat32,
+    CastFloat32ToString,
     PgColumnSize,
     MzRowSize,
     IsNull
@@ -3832,6 +3827,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | CastFloat32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             BitNotInt16 => Ok(bit_not_int16(a)),
             BitNotInt32 => Ok(bit_not_int32(a)),
@@ -3875,7 +3871,6 @@ impl UnaryFunc {
             CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
             CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
             CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
-            CastFloat32ToString => Ok(cast_float32_to_string(a, temp_storage)),
             CastFloat64ToString => Ok(cast_float64_to_string(a, temp_storage)),
             CastStringToBool => cast_string_to_bool(a),
             CastStringToBytes => cast_string_to_bytes(a, temp_storage),
@@ -4032,6 +4027,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | CastFloat32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4053,7 +4049,6 @@ impl UnaryFunc {
             | CastInt16ToString
             | CastInt32ToString
             | CastInt64ToString
-            | CastFloat32ToString
             | CastFloat64ToString
             | CastNumericToString
             | CastDateToString
@@ -4231,6 +4226,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | CastFloat32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4264,7 +4260,6 @@ impl UnaryFunc {
             | CastInt16ToString
             | CastInt32ToString
             | CastInt64ToString
-            | CastFloat32ToString
             | CastFloat64ToString
             | CastNumericToString
             | CastDateToString
@@ -4358,6 +4353,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | CastFloat32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInt16
             | NegInt32
@@ -4374,7 +4370,6 @@ impl UnaryFunc {
             | CastInt32ToInt64
             | CastInt32ToString
             | CastInt64ToString
-            | CastFloat32ToString
             | CastFloat64ToString
             | CastStringToBytes
             | CastDateToTimestamp
@@ -4410,6 +4405,7 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | CastFloat32ToString(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             BitNotInt16 => f.write_str("~"),
             BitNotInt32 => f.write_str("~"),
@@ -4451,7 +4447,6 @@ impl UnaryFunc {
             CastInt64ToFloat32 => f.write_str("i64tof32"),
             CastInt64ToFloat64 => f.write_str("i64tof64"),
             CastInt64ToString => f.write_str("i64tostr"),
-            CastFloat32ToString => f.write_str("f32tostr"),
             CastFloat32ToNumeric(_) => f.write_str("f32tonumeric"),
             CastFloat64ToString => f.write_str("f64tostr"),
             CastFloat64ToNumeric(_) => f.write_str("f32tonumeric"),
