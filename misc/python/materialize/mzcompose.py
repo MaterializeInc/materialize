@@ -682,7 +682,6 @@ class Materialized(PythonService):
         data_directory: str = "/share/mzdata",
         options: str = "",
         environment: List[str] = [
-            "MZ_DEV=1",
             "MZ_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
             "AWS_ACCESS_KEY_ID",
@@ -693,6 +692,10 @@ class Materialized(PythonService):
         ],
         volumes: List[str] = ["mzdata:/share/mzdata", "tmp:/share/tmp"],
     ) -> None:
+        # Make sure MZ_DEV=1 is always present
+        if "MZ_DEV=1" not in environment:
+            environment.append("MZ_DEV=1")
+
         command = f"--data-directory={data_directory} {options} --disable-telemetry --experimental --listen-addr 0.0.0.0:{port}"
 
         config: PythonServiceConfig = (
@@ -854,6 +857,44 @@ class Debezium(PythonService):
         )
 
 
+class Toxiproxy(PythonService):
+    def __init__(
+        self,
+        name: str = "toxiproxy",
+        image: str = "shopify/toxiproxy:2.1.4",
+        port: int = 8474,
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+            },
+        )
+
+
+class Localstack(PythonService):
+    def __init__(
+        self,
+        name: str = "localstack",
+        image: str = f"localstack/localstack:0.12.5",
+        port: int = 4566,
+        services: List[str] = ["sts", "iam", "s3", "sqs", "kinesis"],
+        environment: List[str] = ["HOSTNAME_EXTERNAL=localstack"],
+        volumes: List[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
+    ) -> None:
+        environment.append("SERVICES=" + ",".join(services))
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "ports": [port],
+                "environment": environment,
+                "volumes": volumes,
+            },
+        )
+
+
 class Testdrive(PythonService):
     def __init__(
         self,
@@ -877,6 +918,7 @@ class Testdrive(PythonService):
             "AWS_SECRET_ACCESS_KEY",
             "AWS_SESSION_TOKEN",
             "SA_PASSWORD",
+            "TOXIPROXY_BYTES_ALLOWED",
         ],
         volumes: List[str] = [".:/workdir", "mzdata:/share/mzdata", "tmp:/share/tmp"],
     ) -> None:
