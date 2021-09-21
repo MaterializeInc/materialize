@@ -186,7 +186,7 @@ services:
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
   redpanda:
-    image: vectorized/redpanda:v21.7.1
+    image: vectorized/redpanda:v21.8.2
     # Most of these options are simply required when using Redpanda in Docker.
     # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
     # The `enable_transactions` and `enable_idempotence` feature flags enable
