@@ -66,7 +66,15 @@ fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Code
             };
             for update in buf.drain(..) {
                 match flatten_decoded_update(update) {
-                    Ok(u) => ok.push(u),
+                    Ok(u) => {
+                        // The raw update data held internally in the snapshot
+                        // may not be physically compacted up to the logical
+                        // compaction frontier of since. Snapshot handles
+                        // advancing any necessary data but we double check that
+                        // invariant here.
+                        debug_assert!(snapshot.since().less_equal(&u.1));
+                        ok.push(u)
+                    }
                     Err(errs) => errors.extend(errs),
                 }
             }
