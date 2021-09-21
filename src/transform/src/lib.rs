@@ -100,7 +100,7 @@ impl Error for TransformError {}
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
-    transforms: Vec<Box<dyn crate::Transform + Send>>,
+    transforms: Vec<Box<dyn crate::Transform + Send + Sync>>,
     limit: usize,
 }
 
@@ -147,7 +147,7 @@ impl Transform for Fixpoint {
 /// A sequence of transformations that simplify the `MirRelationExpr`
 #[derive(Debug)]
 pub struct FuseAndCollapse {
-    transforms: Vec<Box<dyn crate::Transform + Send>>,
+    transforms: Vec<Box<dyn crate::Transform + Send + Sync>>,
 }
 
 impl Default for FuseAndCollapse {
@@ -224,13 +224,13 @@ impl Transform for FuseAndCollapse {
 #[derive(Debug)]
 pub struct Optimizer {
     /// The list of transforms to apply to an input relation.
-    pub transforms: Vec<Box<dyn crate::Transform + Send>>,
+    pub transforms: Vec<Box<dyn crate::Transform + Send + Sync>>,
 }
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
-        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
+        let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
             Box::new(crate::nonnull_requirements::NonNullRequirements),
@@ -293,11 +293,7 @@ impl Optimizer {
     /// rendering.
     pub fn physical_optimizer() -> Self {
         // Implementation transformations
-        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
-            Box::new(crate::projection_pushdown::ProjectionPushdown),
-            // Types need to be updates after ProjectionPushdown
-            // because the width of local values may have changed.
-            Box::new(crate::update_let::UpdateLet),
+        let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
             // Inline Let expressions whose values are just Maps, Filters, and
             // Projects around a Get because JoinImplementation cannot lift them
             // through a Let expression.
@@ -326,7 +322,7 @@ impl Optimizer {
 
     /// Simple fusion and elision transformations to render the query readable.
     pub fn pre_optimization() -> Self {
-        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
+        let transforms: Vec<Box<dyn crate::Transform + Send + Sync>> = vec![
             Box::new(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet { inline_mfp: false }),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),

@@ -22,6 +22,7 @@ mod tests {
     use anyhow::{anyhow, Error};
     use expr::MirRelationExpr;
     use expr_test_util::{build_rel, json_to_spec, TestCatalog};
+    use lazy_static::lazy_static;
     use ore::str::separated;
     use transform::{Optimizer, Transform, TransformArgs};
 
@@ -31,6 +32,22 @@ mod tests {
     // Values that can be supplied for global options
     const JSON: &str = "json";
     const TEST: &str = "test";
+
+    lazy_static! {
+        static ref FULL_TRANSFORM_LIST: Vec<Box<dyn Transform + Send + Sync>> =
+            Optimizer::logical_optimizer()
+                .transforms
+                .into_iter()
+                .chain(std::iter::once(
+                    Box::new(transform::projection_pushdown::ProjectionPushdown)
+                        as Box<dyn Transform + Send + Sync>,
+                ))
+                .chain(std::iter::once(
+                    Box::new(transform::update_let::UpdateLet) as Box<dyn Transform + Send + Sync>
+                ))
+                .chain(Optimizer::physical_optimizer().transforms.into_iter())
+                .collect::<Vec<_>>();
+    }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     enum FormatType<'a> {
@@ -109,14 +126,17 @@ mod tests {
             FormatType::Explain(args.get(FORMAT))
         };
 
-        let mut logical_opt = Optimizer::logical_optimizer();
-        let mut physical_opt = Optimizer::physical_optimizer();
-
         let out = match test_type {
             TestType::Opt => {
-                rel = logical_opt.optimize(rel).unwrap().into_inner();
-                rel = physical_opt.optimize(rel).unwrap().into_inner();
-
+                for transform in FULL_TRANSFORM_LIST.iter() {
+                    transform.transform(
+                        &mut rel,
+                        TransformArgs {
+                            id_gen: &mut id_gen,
+                            indexes: &indexes,
+                        },
+                    )?;
+                }
                 convert_rel_to_string(&rel, &cat, &format_type)
             }
             TestType::Build => convert_rel_to_string(&rel, &cat, &format_type),
@@ -130,11 +150,7 @@ mod tests {
                 writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
                 writeln!(out, "====")?;
 
-                for transform in logical_opt
-                    .transforms
-                    .iter()
-                    .chain(physical_opt.transforms.iter())
-                {
+                for transform in FULL_TRANSFORM_LIST.iter() {
                     let prev = rel.clone();
                     transform.transform(
                         &mut rel,
