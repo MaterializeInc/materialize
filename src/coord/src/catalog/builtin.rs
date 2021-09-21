@@ -895,7 +895,7 @@ lazy_static! {
         id: GlobalId::System(4043),
         index_id: GlobalId::System(4044),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable_persistent_system_tables_test) also has to be true
+        // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
         persistent: true,
     };
@@ -926,7 +926,7 @@ lazy_static! {
         id: GlobalId::System(4047),
         index_id: GlobalId::System(4048),
         // Note that the `system_table_enabled` field of PersistConfig (hooked
-        // up to --disable_persistent_system_tables_test) also has to be true
+        // up to --disable-persistent-system-tables-test) also has to be true
         // for this to be persisted.
         persistent: true,
     };
