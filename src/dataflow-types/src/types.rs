@@ -142,20 +142,11 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     /// Imports a source and makes it available as `id`.
     pub fn import_source(
         &mut self,
-        name: String,
         id: GlobalId,
-        connector: SourceConnector,
-        bare_desc: RelationDesc,
+        description: SourceDesc,
         orig_id: GlobalId,
     ) {
-        let source_description = SourceDesc {
-            name,
-            connector,
-            operators: None,
-            bare_desc,
-        };
-        self.source_imports
-            .insert(id, (source_description, orig_id));
+        self.source_imports.insert(id, (description, orig_id));
     }
 
     /// Binds to `id` the relation expression `expr`.
@@ -191,21 +182,11 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     pub fn export_sink(
         &mut self,
         id: GlobalId,
-        from_id: GlobalId,
-        from_desc: RelationDesc,
-        connector: SinkConnector,
-        envelope: Option<SinkEnvelope>,
-        as_of: SinkAsOf,
+        description: SinkDesc,
     ) {
         self.sink_exports.push((
             id,
-            SinkDesc {
-                from: from_id,
-                from_desc,
-                connector,
-                envelope,
-                as_of,
-            },
+            description,
         ));
     }
 
