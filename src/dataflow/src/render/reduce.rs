@@ -682,6 +682,7 @@ where
         } = key_val_plan;
         let key_arity = key_plan.projection.len();
         let mut row_packer = Row::default();
+        let mut row_mfp = Row::default();
         let mut datums = DatumVec::new();
         let (key_val_input, err_input): (
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
@@ -697,8 +698,7 @@ where
             }
 
             // Evaluate the key expressions.
-            row_packer.clear();
-            let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
+            let key = match key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_mfp) {
                 Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
                 Ok(key) => key.expect("Row expected as no predicate was used"),
             };
@@ -709,6 +709,7 @@ where
                 Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
                 Ok(val) => val.expect("Row expected as no predicate was used"),
             };
+            row_packer.clear();
             row_packer.extend(val);
             drop(datums_local);
 

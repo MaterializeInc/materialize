@@ -334,13 +334,18 @@ where
                         if let Some(initial_closure) = initial_closure {
                             let (stream, errs) =
                                 update_stream.flat_map_fallible("DeltaJoinInitialization", {
+                                    let mut row_builder = Row::default();
                                     let mut datums = DatumVec::new();
                                     move |row| {
                                         let temp_storage = RowArena::new();
                                         let mut datums_local = datums.borrow_with(&row);
                                         // TODO(mcsherry): re-use `row` allocation.
                                         initial_closure
-                                            .apply(&mut datums_local, &temp_storage)
+                                            .apply(
+                                                &mut datums_local,
+                                                &temp_storage,
+                                                &mut row_builder,
+                                            )
                                             .transpose()
                                     }
                                 });
@@ -442,12 +447,13 @@ where
                             update_stream.flat_map_fallible("DeltaJoinFinalization", {
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
+                                let mut row_builder = Row::default();
                                 move |row| {
                                     let temp_storage = RowArena::new();
                                     let mut datums_local = datums.borrow_with(&row);
                                     // TODO(mcsherry): re-use `row` allocation.
                                     final_closure
-                                        .apply(&mut datums_local, &temp_storage)
+                                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
                                         .map_err(DataflowError::from)
                                         .transpose()
                                 }
@@ -536,6 +542,7 @@ where
     use timely::dataflow::operators::OkErr;
 
     let mut datums = DatumVec::new();
+    let mut row_builder = Row::default();
     let (oks, errs2) = dogsdogsdogs::operators::half_join(
         &updates,
         trace,
@@ -547,7 +554,7 @@ where
             let mut datums_local = datums.borrow();
             datums_local.extend(stream_row.iter());
             datums_local.extend(lookup_row.iter());
-            closure.apply(&mut datums_local, &temp_storage)
+            closure.apply(&mut datums_local, &temp_storage, &mut row_builder)
         },
     )
     .inner
@@ -586,6 +593,8 @@ where
     use differential_dataflow::AsCollection;
     use timely::dataflow::channels::pact::Pipeline;
 
+    let mut row_builder = Row::default();
+
     let (ok_stream, err_stream) =
         trace
             .stream
@@ -609,7 +618,11 @@ where
                                                 let temp_storage = RowArena::new();
                                                 let mut datums_local = datums.borrow_with(&val);
                                                 match initial_closure
-                                                    .apply(&mut datums_local, &temp_storage)
+                                                    .apply(
+                                                        &mut datums_local,
+                                                        &temp_storage,
+                                                        &mut row_builder,
+                                                    )
                                                     .transpose()
                                                 {
                                                     Some(Ok(row)) => ok_session.give((

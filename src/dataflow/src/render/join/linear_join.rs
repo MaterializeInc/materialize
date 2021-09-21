@@ -220,12 +220,13 @@ where
                     let (j, errs) = joined.flat_map_fallible("LinearJoinInitialization", {
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
+                        let mut row_builder = Row::default();
                         move |row| {
                             let temp_storage = RowArena::new();
                             let mut datums_local = datums.borrow_with(&row);
                             // TODO(mcsherry): re-use `row` allocation.
                             closure
-                                .apply(&mut datums_local, &temp_storage)
+                                .apply(&mut datums_local, &temp_storage, &mut row_builder)
                                 .map_err(DataflowError::from)
                                 .transpose()
                         }
@@ -262,12 +263,13 @@ where
                 let (updates, errs) = joined.flat_map_fallible("LinearJoinFinalization", {
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
+                    let mut row_builder = Row::default();
                     move |row| {
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums.borrow_with(&row);
                         // TODO(mcsherry): re-use `row` allocation.
                         closure
-                            .apply(&mut datums_local, &temp_storage)
+                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
                             .map_err(DataflowError::from)
                             .transpose()
                     }
@@ -393,6 +395,7 @@ where
 
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
+        let mut row_builder = Row::default();
         let (oks, err) = prev_keyed
             .join_core(&next_input, move |_keys, old, new| {
                 let temp_storage = RowArena::new();
@@ -401,7 +404,7 @@ where
                 datums_local.extend(new.iter());
 
                 closure
-                    .apply(&mut datums_local, &temp_storage)
+                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .map_err(DataflowError::from)
                     .transpose()
             })

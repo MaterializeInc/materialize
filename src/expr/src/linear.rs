@@ -82,7 +82,7 @@ impl MapFilterProject {
         self
     }
 
-    /// Retain only rows satisfing these predicates.
+    /// Retain only rows satisfying these predicates.
     ///
     /// This method introduces predicates as eagerly as they can be evaluated,
     /// which may not be desired for predicates that may cause exceptions.
@@ -1176,6 +1176,26 @@ pub mod plan {
                 let mut row = Row::with_capacity(capacity);
                 row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
                 Ok(Some(row))
+            }
+        }
+
+        /// A version of `evaluate` which reuses an allocated Row.
+        ///
+        /// This version can be usefulwhen one wants to capture the resulting datums into an
+        /// existing allocated Row.
+        #[inline(always)]
+        pub fn evaluate_into<'a>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            row: &'a mut Row,
+        ) -> Result<Option<Row>, EvalError> {
+            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            if !passed_predicates {
+                Ok(None)
+            } else {
+                row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
+                Ok(Some(row.finish_and_reuse()))
             }
         }
 
