@@ -1694,7 +1694,7 @@ lazy_static! {
                 }), 3787;
             },
             "to_timestamp" => Scalar {
-                params!(Float64) => UnaryFunc::ToTimestamp, 1158;
+                params!(Float64) => UnaryFunc::ToTimestamp(func::ToTimestamp), 1158;
             },
             "upper" => Scalar {
                 params!(String) => UnaryFunc::Upper, 871;
@@ -2147,7 +2147,7 @@ lazy_static! {
                 params!() => Operation::nullary(mz_session_id), oid::FUNC_MZ_SESSION_ID_OID;
             },
             "mz_sleep" => Scalar {
-                params!(Float64) => UnaryFunc::Sleep, oid::FUNC_MZ_SLEEP_OID;
+                params!(Float64) => UnaryFunc::Sleep(func::Sleep), oid::FUNC_MZ_SLEEP_OID;
             }
         }
     };

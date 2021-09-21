@@ -13,7 +13,6 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::str;
-use std::thread;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -1745,12 +1744,6 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     }
 }
 
-fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let duration = std::time::Duration::from_secs_f64(a.unwrap_float64());
-    thread::sleep(duration);
-    Ok(Datum::Null)
-}
-
 fn rescale_numeric<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     let mut d = a.unwrap_numeric();
     if numeric::rescale(&mut d.0, scale).is_err() {
@@ -2588,24 +2581,6 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
         Err(EvalError::InvalidTimezoneInterval)
     } else {
         Ok((b.unwrap_timestamptz().naive_utc() + interval.duration_as_chrono()).into())
-    }
-}
-
-fn to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    let f = a.unwrap_float64();
-    if !f.is_finite() {
-        return Datum::Null;
-    }
-    let secs = f.trunc() as i64;
-    // NOTE(benesch): PostgreSQL has microsecond precision in its timestamps,
-    // while chrono has nanosecond precision. While we normally accept
-    // nanosecond precision, here we round to the nearest microsecond because
-    // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
-    // with common Unix timestamp values (> 1 billion).
-    let nanosecs = ((f.fract() * 1_000_000.0).round() as u32) * 1_000;
-    match NaiveDateTime::from_timestamp_opt(secs as i64, nanosecs as u32) {
-        None => Datum::Null,
-        Some(ts) => Datum::TimestampTz(DateTime::<Utc>::from_utc(ts, Utc)),
     }
 }
 
@@ -3732,7 +3707,7 @@ pub enum UnaryFunc {
         tz: Timezone,
         wall_time: NaiveDateTime,
     },
-    ToTimestamp,
+    ToTimestamp(ToTimestamp),
     JsonbArrayLength,
     JsonbTypeof,
     JsonbStripNulls,
@@ -3760,7 +3735,7 @@ pub enum UnaryFunc {
     LnNumeric,
     Exp,
     ExpNumeric,
-    Sleep,
+    Sleep(Sleep),
     RescaleNumeric(u8),
     PgColumnSize(PgColumnSize),
     MzRowSize(MzRowSize),
@@ -3789,7 +3764,9 @@ derive_unary!(
     CastFloat32ToString,
     PgColumnSize,
     MzRowSize,
-    IsNull
+    IsNull,
+    Sleep,
+    ToTimestamp
 );
 
 impl UnaryFunc {
@@ -3828,6 +3805,8 @@ impl UnaryFunc {
             | MzRowSize(_)
             | IsNull(_)
             | CastFloat32ToString(_)
+            | Sleep(_)
+            | ToTimestamp(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             BitNotInt16 => Ok(bit_not_int16(a)),
             BitNotInt32 => Ok(bit_not_int32(a)),
@@ -3965,7 +3944,6 @@ impl UnaryFunc {
             TimezoneTimestamp(tz) => timezone_timestamp(*tz, a.unwrap_timestamp()),
             TimezoneTimestampTz(tz) => Ok(timezone_timestamptz(*tz, a.unwrap_timestamptz())),
             TimezoneTime { tz, wall_time } => Ok(timezone_time(*tz, a.unwrap_time(), wall_time)),
-            ToTimestamp => Ok(to_timestamp(a)),
             JsonbArrayLength => Ok(jsonb_array_length(a)),
             JsonbTypeof => Ok(jsonb_typeof(a)),
             JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
@@ -3991,7 +3969,6 @@ impl UnaryFunc {
             LnNumeric => log_numeric(a, dec::Context::ln, "ln"),
             Exp => exp(a),
             ExpNumeric => exp_numeric(a),
-            Sleep => sleep(a),
             RescaleNumeric(scale) => rescale_numeric(a, *scale),
         }
     }
@@ -4028,6 +4005,8 @@ impl UnaryFunc {
             | MzRowSize(_)
             | IsNull(_)
             | CastFloat32ToString(_)
+            | Sleep(_)
+            | ToTimestamp(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
@@ -4154,8 +4133,6 @@ impl UnaryFunc {
             DateTruncTimestamp(_) => ScalarType::Timestamp.nullable(nullable),
             DateTruncTimestampTz(_) => ScalarType::TimestampTz.nullable(nullable),
 
-            ToTimestamp => ScalarType::TimestampTz.nullable(nullable),
-
             JsonbArrayLength => ScalarType::Int64.nullable(nullable),
             JsonbTypeof => ScalarType::String.nullable(nullable),
             JsonbStripNulls => ScalarType::Jsonb.nullable(nullable),
@@ -4177,7 +4154,6 @@ impl UnaryFunc {
             SqrtFloat64 | CbrtFloat64 => ScalarType::Float64.nullable(nullable),
             Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot => ScalarType::Float64.nullable(nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(nullable),
-            Sleep => ScalarType::TimestampTz.nullable(nullable),
             RescaleNumeric(scale) => (ScalarType::Numeric {
                 scale: Some(*scale),
             })
@@ -4227,6 +4203,8 @@ impl UnaryFunc {
             | MzRowSize(_)
             | IsNull(_)
             | CastFloat32ToString(_)
+            | Sleep(_)
+            | ToTimestamp(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             // These return null when their input is SQL null.
             CastJsonbToString | CastJsonbToInt16 | CastJsonbToInt32 | CastJsonbToInt64
@@ -4234,14 +4212,10 @@ impl UnaryFunc {
             // Return null if the inner field is null
             RecordGet(_) => true,
             // Always returns null
-            Sleep => true,
             // Returns null if the regex did not match
             RegexpMatch(_) => true,
             // Returns null on non-array input
             JsonbArrayLength => true,
-
-            // Returns null on infinite input
-            ToTimestamp => true,
 
             Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
             | ByteLengthString => false,
@@ -4354,6 +4328,8 @@ impl UnaryFunc {
             | MzRowSize(_)
             | IsNull(_)
             | CastFloat32ToString(_)
+            | Sleep(_)
+            | ToTimestamp(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             NegInt16
             | NegInt32
@@ -4406,6 +4382,8 @@ impl UnaryFunc {
             | MzRowSize(_)
             | IsNull(_)
             | CastFloat32ToString(_)
+            | Sleep(_)
+            | ToTimestamp(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
             BitNotInt16 => f.write_str("~"),
             BitNotInt32 => f.write_str("~"),
@@ -4530,7 +4508,6 @@ impl UnaryFunc {
             TimezoneTimestamp(tz) => write!(f, "timezone_{}_ts", tz),
             TimezoneTimestampTz(tz) => write!(f, "timezone_{}_tstz", tz),
             TimezoneTime { tz, .. } => write!(f, "timezone_{}_t", tz),
-            ToTimestamp => f.write_str("tots"),
             JsonbArrayLength => f.write_str("jsonb_array_length"),
             JsonbTypeof => f.write_str("jsonb_typeof"),
             JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
@@ -4556,7 +4533,6 @@ impl UnaryFunc {
             LnNumeric => f.write_str("lnnumeric"),
             ExpNumeric => f.write_str("expnumeric"),
             Exp => f.write_str("expf64"),
-            Sleep => f.write_str("mz_sleep"),
             RescaleNumeric(..) => f.write_str("rescale_numeric"),
         }
     }
