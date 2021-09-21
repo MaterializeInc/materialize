@@ -52,6 +52,11 @@ Wrap your release notes at the 80 character mark.
 
 - Add support for [bitwise operators on integers](/sql/functions/#numbers).
 
+- Persist the `mz_metrics` and `mz_metric_histogram` system tables and rehydrate
+  the previous contents on restart. This is a small test of the system that will
+  power upcoming persistence features. Users are free to opt out of this test
+  by setting the `--disable_persistent_system_tables_test` flag to "true".
+
 {{% version-header v0.9.4 %}}
 
 - Improve the performance of
