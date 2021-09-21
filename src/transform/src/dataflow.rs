@@ -15,7 +15,7 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use expr::{GlobalId, Id, IdGen, LocalId, MirRelationExpr, MirScalarExpr};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::Optimizer;
@@ -201,16 +201,24 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             .extend(0..dataflow.arity_of(&input_id));
     }
 
-    let transform = crate::projection_pushdown::ProjectionPushdown;
+    let projection_pushdown = crate::projection_pushdown::ProjectionPushdown;
+    // Types need to be updated after ProjectionPushdown
+    // because the width of local values may have changed.
+    let typ_update = crate::update_let::UpdateLet;
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         if let Some(columns) = demand.get(&Id::Global(build_desc.id)) {
             let projection_pushed_down = columns.iter().map(|c| *c).collect();
             // Push down the projection consisting of the entries of `columns`
             // in increasing order.
-            transform.action(
+            projection_pushdown.action(
                 build_desc.view.as_inner_mut(),
                 &projection_pushed_down,
                 &mut demand,
+            );
+            typ_update.action(
+                build_desc.view.as_inner_mut(),
+                &mut HashMap::new(),
+                &mut IdGen::default(),
             );
             applied_projection.insert(Id::Global(build_desc.id), projection_pushed_down);
         } else if build_desc.id == GlobalId::Explain {
@@ -218,17 +226,23 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             // a plan explanation), then demand all columns from views that are
             // not depended on by another view.
             let arity = build_desc.view.arity();
-            transform.action(
+            projection_pushdown.action(
                 build_desc.view.as_inner_mut(),
                 &(0..arity).collect(),
                 &mut demand,
+            );
+            typ_update.action(
+                build_desc.view.as_inner_mut(),
+                &mut HashMap::new(),
+                &mut IdGen::default(),
             );
         }
     }
 
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         // Update column references to views where projections were pushed down.
-        transform.update_projection_around_get(build_desc.view.as_inner_mut(), &applied_projection);
+        projection_pushdown
+            .update_projection_around_get(build_desc.view.as_inner_mut(), &applied_projection);
     }
 
     // Push demand information into the SourceDesc.
