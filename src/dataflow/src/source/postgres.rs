@@ -18,7 +18,7 @@ use futures::TryStreamExt;
 use lazy_static::lazy_static;
 
 use postgres_protocol::message::backend::{
-    LogicalReplicationMessage, ReplicationMessage, Tuple, TupleData,
+    LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
@@ -235,13 +235,19 @@ impl PostgresSourceReader {
     /// Converts a Tuple received in the replication stream into a Row instance. The logical
     /// replication protocol doesn't use the binary encoding for column values so contrary to the
     /// initial snapshot here we need to parse the textual form of each column.
-    fn row_from_tuple(&mut self, rel_id: u32, tuple: &Tuple) -> Result<Row, anyhow::Error> {
+    ///
+    /// The `old_tuple` argument can be used as a source of data to use when encountering unchanged
+    /// TOAST values.
+    fn row_from_tuple<'a, T>(&mut self, rel_id: u32, tuple_data: T) -> Result<Row, anyhow::Error>
+    where
+        T: IntoIterator<Item = &'a TupleData>,
+    {
         let mut row = Row::default();
 
         let rel_id: Datum = (rel_id as i32).into();
         row.push(rel_id);
-        row.push_list_with(|packer| {
-            for val in tuple.tuple_data() {
+        row.push_list_with(move |packer| {
+            for val in tuple_data.into_iter() {
                 let datum = match val {
                     TupleData::Null => Datum::Null,
                     TupleData::UnchangedToast => bail!("Unsupported TOAST value"),
@@ -320,26 +326,39 @@ impl PostgresSourceReader {
                         }
                         Insert(insert) => {
                             let rel_id = insert.rel_id();
-                            let row = try_fatal!(self.row_from_tuple(rel_id, insert.tuple()));
+                            let new_tuple = insert.tuple().tuple_data();
+                            let row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(row);
                         }
                         Update(update) => {
                             let rel_id = update.rel_id();
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from update")));
+                                .ok_or_else(|| anyhow!("full row missing from update")))
+                            .tuple_data();
                             let old_row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(old_row);
 
-                            let new_row =
-                                try_fatal!(self.row_from_tuple(rel_id, update.new_tuple()));
+                            // If the new tuple contains unchanged toast values, reuse the ones
+                            // from the old tuple
+                            let new_tuple = update
+                                .new_tuple()
+                                .tuple_data()
+                                .iter()
+                                .zip(old_tuple.iter())
+                                .map(|(new, old)| match new {
+                                    TupleData::UnchangedToast => old,
+                                    _ => new,
+                                });
+                            let new_row = try_fatal!(self.row_from_tuple(rel_id, new_tuple));
                             inserts.push(new_row);
                         }
                         Delete(delete) => {
                             let rel_id = delete.rel_id();
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missing from delete")));
+                                .ok_or_else(|| anyhow!("full row missing from delete")))
+                            .tuple_data();
                             let row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(row);
                         }

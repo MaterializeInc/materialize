@@ -67,13 +67,6 @@ If you stop or delete Materialize without first dropping the Postgres source, th
 
 - Materialize does not support changes to schemas for existing publications. You will need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
 - Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types will fail with an error.
-- Materialize does not support [TOASTED](https://www.postgresql.org/docs/current/storage-toast.html) values except in append-only tables. Practically speaking, you can include rows with TOASTED values as long as they are never updated or deleted, or you can disable TOAST on the original Postgres table. If a TOASTED column is updated, the source will enter an errored state that renders all per-table views inaccessible.
-
-  To disable TOAST on a column, use the following command in Postgres:
-  ```
-  ALTER TABLE table_name ALTER COLUMN column_name
-  SET STORAGE PLAIN;
-  ```
 - Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is re-created.
 - Since Postgres sources are materialized by default, Postgres table sources must be smaller than the available memory.
 
