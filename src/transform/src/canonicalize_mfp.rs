@@ -47,9 +47,7 @@ impl crate::Transform for CanonicalizeMfp {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
+        self.action(relation);
         Ok(())
     }
 }
