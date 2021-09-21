@@ -1161,6 +1161,27 @@ pub mod plan {
         /// As the evaluation exits early with failed predicates, it may
         /// miss some errors that would occur later in evaluation.
         #[inline(always)]
+        pub fn evaluate_into<'a>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            row: &'a mut Row,
+        ) -> Result<Option<Row>, EvalError> {
+            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            if !passed_predicates {
+                Ok(None)
+            } else {
+                row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
+                Ok(Some(row.finish_and_reuse()))
+            }
+        }
+
+        /// A version of `evaluate_into` which allocates a new Row.
+        ///
+        /// This version can be useful when one wants to capture the resulting datums into a new
+        /// row.
+        #[inline(always)]
+        #[deprecated]
         pub fn evaluate<'a>(
             &'a self,
             datums: &mut Vec<Datum<'a>>,
@@ -1176,26 +1197,6 @@ pub mod plan {
                 let mut row = Row::with_capacity(capacity);
                 row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
                 Ok(Some(row))
-            }
-        }
-
-        /// A version of `evaluate` which reuses an allocated Row.
-        ///
-        /// This version can be usefulwhen one wants to capture the resulting datums into an
-        /// existing allocated Row.
-        #[inline(always)]
-        pub fn evaluate_into<'a>(
-            &'a self,
-            datums: &mut Vec<Datum<'a>>,
-            arena: &'a RowArena,
-            row: &'a mut Row,
-        ) -> Result<Option<Row>, EvalError> {
-            let passed_predicates = self.evaluate_inner(datums, arena)?;
-            if !passed_predicates {
-                Ok(None)
-            } else {
-                row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
-                Ok(Some(row.finish_and_reuse()))
             }
         }
 

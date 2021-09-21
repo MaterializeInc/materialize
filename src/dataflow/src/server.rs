@@ -1248,6 +1248,8 @@ impl PendingPeek {
             cursor.seek_key(&storage, literal);
         }
 
+        let mut row_builder = Row::default();
+
         while cursor.key_valid(&storage) {
             while cursor.val_valid(&storage) {
                 // TODO: This arena could be maintained and reuse for longer
@@ -1263,7 +1265,7 @@ impl PendingPeek {
                 let mut datums = row.unpack();
                 if let Some(result) = self
                     .map_filter_project
-                    .evaluate(&mut datums, &arena)
+                    .evaluate_into(&mut datums, &arena, &mut row_builder)
                     .map_err_to_string()?
                 {
                     let mut copies = 0;
