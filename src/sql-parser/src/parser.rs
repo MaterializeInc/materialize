@@ -2692,6 +2692,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_boolean_value(&mut self) -> Result<bool, ParserError> {
+        match self.next_token() {
+            Some(t) => match t {
+                Token::Keyword(TRUE) => Ok(true),
+                Token::Keyword(FALSE) => Ok(false),
+                _ => self.expected(self.peek_prev_pos(), "boolean value", Some(t)),
+            },
+            None => self.expected(self.peek_prev_pos(), "boolean value", None),
+        }
+    }
+
     fn parse_value_array(&mut self) -> Result<Value, ParserError> {
         let mut values = vec![];
         loop {
@@ -4025,9 +4036,28 @@ impl<'a> Parser<'a> {
     /// has already been consumed.
     fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserError> {
         // (TYPED)?
-        let options = ExplainOptions {
-            typed: self.parse_keyword(TYPED),
-        };
+        let typed = self.parse_keyword(TYPED);
+        let mut timing = false;
+
+        // options: ( '(' TIMING (true|false) ')' )?
+        if let Some(Token::LParen) = self.peek_token() {
+            // Check whether a valid option is after the parentheses, since the
+            // parentheses may belong to the actual query to be explained.
+            match self.peek_nth_token(1) {
+                Some(Token::Keyword(TIMING)) => {
+                    self.next_token(); // Consume the LParen
+                    self.parse_comma_separated(|s| match s.expect_one_of_keywords(&[TIMING])? {
+                        TIMING => {
+                            timing = s.parse_boolean_value()?;
+                            Ok(())
+                        }
+                        _ => unreachable!(),
+                    })?;
+                    self.expect_token(&Token::RParen)?;
+                }
+                _ => {}
+            }
+        }
 
         // (RAW | DECORRELATED | OPTIMIZED)? PLAN
         let stage = match self.parse_one_of_keywords(&[RAW, DECORRELATED, OPTIMIZED, PLAN]) {
@@ -4058,6 +4088,7 @@ impl<'a> Parser<'a> {
             Explainee::Query(self.parse_query()?)
         };
 
+        let options = ExplainOptions { typed, timing };
         Ok(Statement::Explain(ExplainStatement {
             stage,
             explainee,
