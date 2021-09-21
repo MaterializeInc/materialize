@@ -382,6 +382,11 @@ impl<'a> Parser<'a> {
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
+            Token::Op(op) if op == "~" => Ok(Expr::Op {
+                op,
+                expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
+                expr2: None,
+            }),
             Token::Number(_) | Token::String(_) | Token::HexString(_) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))

@@ -1166,6 +1166,96 @@ fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
         .map(Datum::from)
 }
 
+fn bit_not_int16<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(!a.unwrap_int16())
+}
+
+fn bit_not_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(!a.unwrap_int32())
+}
+
+fn bit_not_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(!a.unwrap_int64())
+}
+
+fn bit_and_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int16() & b.unwrap_int16())
+}
+
+fn bit_and_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int32() & b.unwrap_int32())
+}
+
+fn bit_and_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int64() & b.unwrap_int64())
+}
+
+fn bit_or_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int16() | b.unwrap_int16())
+}
+
+fn bit_or_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int32() | b.unwrap_int32())
+}
+
+fn bit_or_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int64() | b.unwrap_int64())
+}
+
+fn bit_xor_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int16() ^ b.unwrap_int16())
+}
+
+fn bit_xor_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int32() ^ b.unwrap_int32())
+}
+
+fn bit_xor_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int64() ^ b.unwrap_int64())
+}
+
+fn bit_shift_left_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    // widen to i32 and then cast back to i16 in order emulate the C promotion rules used in by Postgres
+    // when the rhs in the 16-31 range, e.g. (1 << 17 should evaluate to 0)
+    // see https://github.com/postgres/postgres/blob/REL_14_STABLE/src/backend/utils/adt/int.c#L1460-L1476
+    let lhs: i32 = a.unwrap_int16() as i32;
+    let rhs: u32 = b.unwrap_int32() as u32;
+    Datum::from(lhs.wrapping_shl(rhs) as i16)
+}
+
+fn bit_shift_left_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_int32();
+    let rhs = b.unwrap_int32() as u32;
+    Datum::from(lhs.wrapping_shl(rhs))
+}
+
+fn bit_shift_left_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_int64();
+    let rhs = b.unwrap_int32() as u32;
+    Datum::from(lhs.wrapping_shl(rhs))
+}
+
+fn bit_shift_right_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    // widen to i32 and then cast back to i16 in order emulate the C promotion rules used in by Postgres
+    // when the rhs in the 16-31 range, e.g. (-32767 >> 17 should evaluate to -1)
+    // see https://github.com/postgres/postgres/blob/REL_14_STABLE/src/backend/utils/adt/int.c#L1460-L1476
+    let lhs = a.unwrap_int16() as i32;
+    let rhs = b.unwrap_int32() as u32;
+    Datum::from(lhs.wrapping_shr(rhs) as i16)
+}
+
+fn bit_shift_right_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_int32();
+    let rhs = b.unwrap_int32() as u32;
+    Datum::from(lhs.wrapping_shr(rhs))
+}
+
+fn bit_shift_right_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_int64();
+    let rhs = b.unwrap_int32() as u32;
+    Datum::from(lhs.wrapping_shr(rhs))
+}
+
 fn sub_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int16()
         .checked_sub(b.unwrap_int16())
@@ -2595,6 +2685,21 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddNumeric,
+    BitAndInt16,
+    BitAndInt32,
+    BitAndInt64,
+    BitOrInt16,
+    BitOrInt32,
+    BitOrInt64,
+    BitXorInt16,
+    BitXorInt32,
+    BitXorInt64,
+    BitShiftLeftInt16,
+    BitShiftLeftInt32,
+    BitShiftLeftInt64,
+    BitShiftRightInt16,
+    BitShiftRightInt32,
+    BitShiftRightInt64,
     SubInt16,
     SubInt32,
     SubInt64,
@@ -2730,6 +2835,21 @@ impl BinaryFunc {
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddNumeric => eager!(add_numeric),
             BinaryFunc::AddInterval => eager!(add_interval),
+            BinaryFunc::BitAndInt16 => Ok(eager!(bit_and_int16)),
+            BinaryFunc::BitAndInt32 => Ok(eager!(bit_and_int32)),
+            BinaryFunc::BitAndInt64 => Ok(eager!(bit_and_int64)),
+            BinaryFunc::BitOrInt16 => Ok(eager!(bit_or_int16)),
+            BinaryFunc::BitOrInt32 => Ok(eager!(bit_or_int32)),
+            BinaryFunc::BitOrInt64 => Ok(eager!(bit_or_int64)),
+            BinaryFunc::BitXorInt16 => Ok(eager!(bit_xor_int16)),
+            BinaryFunc::BitXorInt32 => Ok(eager!(bit_xor_int32)),
+            BinaryFunc::BitXorInt64 => Ok(eager!(bit_xor_int64)),
+            BinaryFunc::BitShiftLeftInt16 => Ok(eager!(bit_shift_left_int16)),
+            BinaryFunc::BitShiftLeftInt32 => Ok(eager!(bit_shift_left_int32)),
+            BinaryFunc::BitShiftLeftInt64 => Ok(eager!(bit_shift_left_int64)),
+            BinaryFunc::BitShiftRightInt16 => Ok(eager!(bit_shift_right_int16)),
+            BinaryFunc::BitShiftRightInt32 => Ok(eager!(bit_shift_right_int32)),
+            BinaryFunc::BitShiftRightInt64 => Ok(eager!(bit_shift_right_int64)),
             BinaryFunc::SubInt16 => eager!(sub_int16),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
@@ -2897,7 +3017,8 @@ impl BinaryFunc {
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Left | Right | Trim
             | TrimLeading | TrimTrailing => ScalarType::String.nullable(in_nullable),
 
-            AddInt16 | SubInt16 | MulInt16 | DivInt16 | ModInt16 => {
+            AddInt16 | SubInt16 | MulInt16 | DivInt16 | ModInt16 | BitAndInt16 | BitOrInt16
+            | BitXorInt16 | BitShiftLeftInt16 | BitShiftRightInt16 => {
                 ScalarType::Int16.nullable(in_nullable || is_div_mod)
             }
 
@@ -2906,10 +3027,16 @@ impl BinaryFunc {
             | MulInt32
             | DivInt32
             | ModInt32
+            | BitAndInt32
+            | BitOrInt32
+            | BitXorInt32
+            | BitShiftLeftInt32
+            | BitShiftRightInt32
             | EncodedBytesCharLength
             | SubDate => ScalarType::Int32.nullable(in_nullable || is_div_mod),
 
-            AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 => {
+            AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 | BitAndInt64 | BitOrInt64
+            | BitXorInt64 | BitShiftLeftInt64 | BitShiftRightInt64 => {
                 ScalarType::Int64.nullable(in_nullable || is_div_mod)
             }
 
@@ -3059,6 +3186,21 @@ impl BinaryFunc {
                 | AddDateInterval
                 | AddTimeInterval
                 | AddInterval
+                | BitAndInt16
+                | BitAndInt32
+                | BitAndInt64
+                | BitOrInt16
+                | BitOrInt32
+                | BitOrInt64
+                | BitXorInt16
+                | BitXorInt32
+                | BitXorInt64
+                | BitShiftLeftInt16
+                | BitShiftLeftInt32
+                | BitShiftLeftInt64
+                | BitShiftRightInt16
+                | BitShiftRightInt32
+                | BitShiftRightInt64
                 | SubInterval
                 | MulInterval
                 | DivInterval
@@ -3113,6 +3255,21 @@ impl BinaryFunc {
             | AddDateInterval
             | AddTimeInterval
             | AddInterval
+            | BitAndInt16
+            | BitAndInt32
+            | BitAndInt64
+            | BitOrInt16
+            | BitOrInt32
+            | BitOrInt64
+            | BitXorInt16
+            | BitXorInt32
+            | BitXorInt64
+            | BitShiftLeftInt16
+            | BitShiftLeftInt32
+            | BitShiftLeftInt64
+            | BitShiftRightInt16
+            | BitShiftRightInt32
+            | BitShiftRightInt64
             | SubInterval
             | MulInterval
             | DivInterval
@@ -3247,6 +3404,21 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddDateTime => f.write_str("+"),
             BinaryFunc::AddDateInterval => f.write_str("+"),
             BinaryFunc::AddTimeInterval => f.write_str("+"),
+            BinaryFunc::BitAndInt16 => f.write_str("&"),
+            BinaryFunc::BitAndInt32 => f.write_str("&"),
+            BinaryFunc::BitAndInt64 => f.write_str("&"),
+            BinaryFunc::BitOrInt16 => f.write_str("|"),
+            BinaryFunc::BitOrInt32 => f.write_str("|"),
+            BinaryFunc::BitOrInt64 => f.write_str("|"),
+            BinaryFunc::BitXorInt16 => f.write_str("#"),
+            BinaryFunc::BitXorInt32 => f.write_str("#"),
+            BinaryFunc::BitXorInt64 => f.write_str("#"),
+            BinaryFunc::BitShiftLeftInt16 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftInt32 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftInt64 => f.write_str("<<"),
+            BinaryFunc::BitShiftRightInt16 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightInt32 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightInt64 => f.write_str(">>"),
             BinaryFunc::SubInt16 => f.write_str("-"),
             BinaryFunc::SubInt32 => f.write_str("-"),
             BinaryFunc::SubInt64 => f.write_str("-"),
@@ -3379,6 +3551,9 @@ trait UnaryFuncTrait {
 pub enum UnaryFunc {
     Not(Not),
     IsNull(IsNull),
+    BitNotInt16,
+    BitNotInt32,
+    BitNotInt64,
     NegInt16,
     NegInt32,
     NegInt64,
@@ -3658,6 +3833,9 @@ impl UnaryFunc {
             | MzRowSize(_)
             | IsNull(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
+            BitNotInt16 => Ok(bit_not_int16(a)),
+            BitNotInt32 => Ok(bit_not_int32(a)),
+            BitNotInt64 => Ok(bit_not_int64(a)),
             NegInt16 => Ok(neg_int16(a)),
             NegInt32 => Ok(neg_int32(a)),
             NegInt64 => Ok(neg_int64(a)),
@@ -3971,9 +4149,8 @@ impl UnaryFunc {
                 ScalarType::VarChar { length: *length }.nullable(nullable)
             }
 
-            NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => {
-                input_type
-            }
+            BitNotInt16 | BitNotInt32 | BitNotInt64 | NegInt16 | NegInt32 | NegInt64
+            | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => input_type,
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(nullable)
@@ -4145,6 +4322,7 @@ impl UnaryFunc {
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
             NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => false,
+            BitNotInt16 | BitNotInt32 | BitNotInt64 => false,
             Log10 | Ln | Exp | Cos | Cosh | Sin | Sinh | Tan | Tanh | Cot | SqrtFloat64
             | CbrtFloat64 => false,
             AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
@@ -4233,6 +4411,9 @@ impl UnaryFunc {
             | MzRowSize(_)
             | IsNull(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
+            BitNotInt16 => f.write_str("~"),
+            BitNotInt32 => f.write_str("~"),
+            BitNotInt64 => f.write_str("~"),
             NegInt16 => f.write_str("-"),
             NegInt32 => f.write_str("-"),
             NegInt64 => f.write_str("-"),
