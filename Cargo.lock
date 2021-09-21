@@ -2973,6 +2973,7 @@ dependencies = [
  "futures-util",
  "log",
  "ore",
+ "persist-types",
  "rand 0.8.4",
  "serde",
  "serde_json",
@@ -2980,6 +2981,10 @@ dependencies = [
  "timely",
  "tokio",
 ]
+
+[[package]]
+name = "persist-types"
+version = "0.0.0"
 
 [[package]]
 name = "pgrepr"
@@ -3738,7 +3743,7 @@ dependencies = [
  "num-traits",
  "ordered-float",
  "ore",
- "persist",
+ "persist-types",
  "proptest",
  "rand 0.8.4",
  "regex",

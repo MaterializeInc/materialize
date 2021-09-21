@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use log;
 use ore::metrics::MetricsRegistry;
+use persist_types::Codec;
 use timely::progress::Antichain;
 
 use crate::error::Error;
@@ -29,7 +30,6 @@ use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{Indexed, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
 use crate::storage::{Blob, Log, SeqNo};
-use crate::Codec;
 
 enum Cmd {
     Register(String, (&'static str, &'static str), FutureHandle<Id>),

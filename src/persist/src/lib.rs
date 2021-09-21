@@ -18,7 +18,6 @@
 
 use std::fmt;
 
-pub mod codec_impls;
 pub mod error;
 pub mod file;
 pub mod future;
@@ -60,41 +59,5 @@ pub mod nemesis;
 // - Equality edge cases around all the various timestamp/frontier checks.
 
 /// A type usable as a persisted key or value.
-pub trait Data: Clone + Codec + fmt::Debug + Ord {}
-impl<T: Clone + Codec + fmt::Debug + Ord> Data for T {}
-
-/// Encoding and decoding operations for a type usable as a persisted key or
-/// value.
-pub trait Codec: Sized + 'static {
-    /// Name of the codec.
-    ///
-    /// This name is stored for the key and value when a stream is first created
-    /// and the same key and value codec must be used for that stream afterward.
-    fn codec_name() -> &'static str;
-    /// A hint of the encoded size of self.
-    ///
-    /// No correctness guarantees are made about the return value of this
-    /// function, it's used purely to pre-size buffers.
-    //
-    // TODO: Give this the same signature and semantics as Iterator::size_hint.
-    fn size_hint(&self) -> usize;
-    /// Encode a key or value for permanent storage.
-    ///
-    /// This must perfectly round-trip Self through [Codec::decode]. If the
-    /// encode function for this codec ever changes, decode must be able to
-    /// handle bytes output by all previous versions of encode.
-    fn encode<E: for<'a> Extend<&'a u8>>(&self, buf: &mut E);
-    /// Decode a key or value previous encoded with this codec's
-    /// [Codec::encode].
-    ///
-    /// This must perfectly round-trip Self through [Codec::encode]. If the
-    /// encode function for this codec ever changes, decode must be able to
-    /// handle bytes output by all previous versions of encode.
-    ///
-    /// It should also gracefully handle data encoded by future versions of
-    /// encode (likely with an error).
-    //
-    // TODO: Mechanically, this could return a ref to the original bytes
-    // without any copies, see if we can make the types work out for that.
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
-}
+pub trait Data: Clone + persist_types::Codec + fmt::Debug + Ord {}
+impl<T: Clone + persist_types::Codec + fmt::Debug + Ord> Data for T {}
