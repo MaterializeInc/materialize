@@ -24,7 +24,7 @@ use timely::Config;
 use ore::metrics::MetricsRegistry;
 use persist;
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::runtime::{self, RuntimeClient, StreamWriteHandle};
+use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamWriteHandle};
 use persist::operators::source::PersistedSource;
 use persist::storage::LockInfo;
 
@@ -149,6 +149,7 @@ fn create_runtime(base_path: &Path, nonce: &str) -> Result<RuntimeClient, Error>
     let blob_dir = base_path.join(format!("blob_{}", nonce));
     let lock_info = LockInfo::new(format!("reentrance_{}", nonce), "no_details".to_owned())?;
     let runtime = runtime::start(
+        RuntimeConfig::default(),
         FileLog::new(log_dir, lock_info.clone())?,
         FileBlob::new(blob_dir, lock_info)?,
         &MetricsRegistry::new(),

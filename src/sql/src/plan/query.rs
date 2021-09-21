@@ -3016,7 +3016,7 @@ fn plan_is_null_expr<'a>(
     // means we wind up supporting both.
     let expr = plan_expr(ecx, inner)?.type_as_any(ecx)?;
     let mut expr = HirScalarExpr::CallUnary {
-        func: UnaryFunc::IsNull,
+        func: UnaryFunc::IsNull(expr_func::IsNull),
         expr: Box::new(expr),
     };
     if not {

@@ -87,6 +87,7 @@ mzworkflows:
            - configure-toxiproxy.td
            - s3-create.td
            - s3-insert-long.td
+           - s3-insert-long-gzip.td
            - configure-materialize.td
 
            # Confirm that short network interruptions are tolerated

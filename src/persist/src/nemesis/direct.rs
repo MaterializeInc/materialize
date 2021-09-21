@@ -272,6 +272,7 @@ mod tests {
     use ore::metrics::MetricsRegistry;
 
     use crate::file::{FileBlob, FileLog};
+    use crate::indexed::runtime::RuntimeConfig;
     use crate::mem::MemRegistry;
     use crate::nemesis;
     use crate::nemesis::generator::GeneratorConfig;
@@ -296,7 +297,12 @@ mod tests {
             let log = UnreliableLog::from_handle(log, unreliable.clone());
             let blob = FileBlob::new(blob_dir, ("reentrance0", "direct_file").into())?;
             let blob = UnreliableBlob::from_handle(blob, unreliable);
-            runtime::start(log, blob, &MetricsRegistry::new())
+            runtime::start(
+                RuntimeConfig::for_tests(),
+                log,
+                blob,
+                &MetricsRegistry::new(),
+            )
         })
         .expect("initial start failed");
         // TODO: At the moment, running this for 100 steps takes a bit over a

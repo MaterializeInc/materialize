@@ -229,7 +229,7 @@ pub struct Optimizer {
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
-    pub fn for_view() -> Self {
+    pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
@@ -291,7 +291,7 @@ impl Optimizer {
     /// This is meant to be used for optimizing each view within a dataflow
     /// once view inlining has already happened, right before dataflow
     /// rendering.
-    pub fn for_dataflow() -> Self {
+    pub fn physical_optimizer() -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             Box::new(crate::projection_pushdown::ProjectionPushdown),
@@ -321,9 +321,7 @@ impl Optimizer {
             Box::new(crate::update_let::UpdateLet),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
-        let mut optimizer = Self::for_view();
-        optimizer.transforms.extend(transforms);
-        optimizer
+        Self { transforms }
     }
 
     /// Simple fusion and elision transformations to render the query readable.

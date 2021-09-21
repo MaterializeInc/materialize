@@ -234,12 +234,12 @@ END $$;
                     desc,
                     defaults,
                     temporary,
+                    depends_on,
                 };
                 Plan::CreateTable(CreateTablePlan {
                     name,
                     table,
                     if_not_exists: *if_not_exists,
-                    depends_on,
                 })
             }
             Statement::CreateSchema(CreateSchemaStatement {

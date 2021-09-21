@@ -417,6 +417,28 @@ Google's overriding principle for code reviewers is as follows:
 This principle does a good job balancing the need of engineers to be
 productive with the need of code owners to keep the codebase maintainable.
 
+### Tips On Giving PR Feedback
+
+* Review the code, not the author.
+* Explain the 'why' behind your suggestions and comments.
+* Err on the side of giving too much rather than too little feedback, even if
+  this slows things down in the short-term.
+* Strive for in-depth feedback, but don't let that stop you from giving
+  feedback. Suggested solutions, sample code, etc. are all great, but not
+  required.
+* If something isn't clear and you need it explained, then the code needs to be
+  better documented or rewritten for clarity. Push for documentation rather
+  than PR conversations/explanations.
+* Aim for continuous incremental improvement of the codebase, not necessarily
+  perfection on every diff.
+
+### Tips On Receiving PR Feedback
+
+* The code is not you.
+* Take time to understand the reasoning behind feedback you receive as opposed
+  to only the changes that need to be made.
+* When appropriate, give reviewers feedback on their feedback.
+
 ### Ensuring codebase health
 
 See the dedicated [Software engineering

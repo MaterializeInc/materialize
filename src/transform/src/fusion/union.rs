@@ -16,6 +16,7 @@ use std::iter;
 
 use crate::TransformArgs;
 use expr::MirRelationExpr;
+use repr::RelationType;
 
 /// Fuses multiple `Union` operators into one.
 #[derive(Debug)]
@@ -39,7 +40,6 @@ impl Union {
     /// Nested negated unions are merged into the parent one by pushing
     /// the Negate to all their branches.
     pub fn action(&self, relation: &mut MirRelationExpr) {
-        let relation_type = relation.typ();
         if let MirRelationExpr::Union { base, inputs } = relation {
             let can_fuse = iter::once(&**base).chain(&*inputs).any(|input| -> bool {
                 match input {
@@ -76,7 +76,10 @@ impl Union {
                         _ => new_inputs.push(outer_input),
                     }
                 }
-                *relation = MirRelationExpr::union_many(new_inputs, relation_type);
+                // A valid relation type is only needed for empty unions, but an existing union
+                // is guaranteed to be non-empty given that it always has at least a base branch.
+                assert!(!new_inputs.is_empty());
+                *relation = MirRelationExpr::union_many(new_inputs, RelationType::empty());
             }
         }
     }

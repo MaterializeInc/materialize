@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
 use crate::error::{Error, ErrorLog};
-use crate::indexed::runtime::{self, RuntimeClient};
+use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
 use crate::mem::{MemBlob, MemRegistry};
 use crate::nemesis::direct::Direct;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
@@ -134,7 +134,12 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
     if let Err(err) = Blobs::deserialize_to(blob_json, &mut blob) {
         log::error!("error deserializing golden: {}", err);
     }
-    let mut persist = runtime::start(ErrorLog, blob, &MetricsRegistry::new())?;
+    let mut persist = runtime::start(
+        RuntimeConfig::for_tests(),
+        ErrorLog,
+        blob,
+        &MetricsRegistry::new(),
+    )?;
     let state = PersistState::slurp_from(&persist)?;
     persist.stop()?;
     Ok(state)
@@ -146,7 +151,12 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
     let mut persist = Direct::new(move |unreliable| {
         let blob = runtime_reg.blob_no_reentrance()?;
         let blob = UnreliableBlob::from_handle(blob, unreliable);
-        runtime::start(ErrorLog, blob, &MetricsRegistry::new())
+        runtime::start(
+            RuntimeConfig::for_tests(),
+            ErrorLog,
+            blob,
+            &MetricsRegistry::new(),
+        )
     })?;
     for req in reqs.iter() {
         let _ = persist.run(req.clone());

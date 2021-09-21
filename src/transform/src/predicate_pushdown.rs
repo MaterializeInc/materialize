@@ -98,54 +98,6 @@ impl crate::Transform for PredicatePushdown {
 }
 
 impl PredicatePushdown {
-    /// Pushes predicates down through the operator tree and extracts
-    /// The ones that should be pushed down to the next dataflow object
-    pub fn dataflow_transform(
-        &self,
-        relation: &mut MirRelationExpr,
-        get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
-    ) {
-        // TODO(#2592): we want to replace everything inside the braces
-        // with the single line below
-        // `self.action(e, &mut get_predicates);`
-        // This is so that you have a series of dependent views
-        // A->B->C, you want to push propagated filters
-        // from A all the way past B to C if possible.
-        // Before this replacement can be done, we need to figure out
-        // replanning joins after the new predicates are pushed down.
-        match relation {
-            MirRelationExpr::Filter { input, predicates } => {
-                if let MirRelationExpr::Get { id, .. } = **input {
-                    // We can report the predicates upward in `get_predicates`,
-                    // but we are not yet able to delete them from the `Filter`.
-                    get_predicates
-                        .entry(id)
-                        .or_insert_with(|| predicates.iter().cloned().collect())
-                        .retain(|p| predicates.contains(p));
-                } else {
-                    self.dataflow_transform(input, get_predicates);
-                }
-            }
-            MirRelationExpr::Get { id, .. } => {
-                // If we encounter a `Get` that is not wrapped by a `Filter`,
-                // we should purge all predicates associated with the id.
-                // This is because it is as if there is an empty `Filter`
-                // just around the `Get`, and so no predicates can be pushed.
-                get_predicates
-                    .entry(*id)
-                    .or_insert_with(HashSet::new)
-                    .clear();
-            }
-            x => {
-                x.visit1_mut(|e| self.dataflow_transform(e, get_predicates));
-                // Prevent local predicate lists from escaping.
-                if let MirRelationExpr::Let { id, .. } = x {
-                    get_predicates.remove(&Id::Local(*id));
-                }
-            }
-        }
-    }
-
     /// Predicate pushdown
     ///
     /// This method looks for opportunities to push predicates toward
@@ -156,7 +108,7 @@ impl PredicatePushdown {
     /// applied to each `Get` expression, so that the predicate can
     /// then be pushed through to a `Let` binding, or to the external
     /// source of the data if the `Get` binds to another view.
-    fn action(
+    pub fn action(
         &self,
         relation: &mut MirRelationExpr,
         get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
@@ -248,14 +200,14 @@ impl PredicatePushdown {
                                         pred_not_translated.push(
                                             expr1
                                                 .clone()
-                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                 .call_unary(UnaryFunc::Not(func::Not)),
                                         );
                                     } else if expr2.typ(&input_type).nullable {
                                         pred_not_translated.push(
                                             expr2
                                                 .clone()
-                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::IsNull(func::IsNull))
                                                 .call_unary(UnaryFunc::Not(func::Not)),
                                         );
                                     }
@@ -534,7 +486,7 @@ impl PredicatePushdown {
                             for constant in runtime_constants.iter() {
                                 let pred = if constant.is_literal_null() {
                                     MirScalarExpr::CallUnary {
-                                        func: expr::UnaryFunc::IsNull,
+                                        func: expr::UnaryFunc::IsNull(func::IsNull),
                                         expr: Box::new(expr.clone()),
                                     }
                                 } else {
@@ -666,11 +618,11 @@ impl PredicatePushdown {
                                         expr2: Box::new(MirScalarExpr::CallBinary {
                                             func: BinaryFunc::And,
                                             expr1: Box::new(MirScalarExpr::CallUnary {
-                                                func: UnaryFunc::IsNull,
+                                                func: UnaryFunc::IsNull(func::IsNull),
                                                 expr: Box::new(expr2.clone()),
                                             }),
                                             expr2: Box::new(MirScalarExpr::CallUnary {
-                                                func: UnaryFunc::IsNull,
+                                                func: UnaryFunc::IsNull(func::IsNull),
                                                 expr: Box::new(expr1.clone()),
                                             }),
                                         }),
@@ -806,8 +758,12 @@ impl PredicatePushdown {
                 expr2: eqinnerexpr2,
             } = &mut **expr2
             {
-                let isnull1 = eqinnerexpr1.clone().call_unary(UnaryFunc::IsNull);
-                let isnull2 = eqinnerexpr2.clone().call_unary(UnaryFunc::IsNull);
+                let isnull1 = eqinnerexpr1
+                    .clone()
+                    .call_unary(UnaryFunc::IsNull(func::IsNull));
+                let isnull2 = eqinnerexpr2
+                    .clone()
+                    .call_unary(UnaryFunc::IsNull(func::IsNull));
                 let both_null = isnull1.call_binary(isnull2, BinaryFunc::And);
 
                 if Self::extract_reduced_conjunction_terms(both_null, relation_type)

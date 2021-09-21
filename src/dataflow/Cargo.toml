@@ -23,7 +23,7 @@ dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.
 enum-iterator = "0.7.0"
 enum-kinds = "0.5.1"
 expr = { path = "../expr" }
-flate2 = "1.0.21"
+flate2 = "1.0.22"
 futures = "0.3.17"
 globset = "0.4.8"
 inotify = "0.9.3"
@@ -51,7 +51,7 @@ rusoto_kinesis = "0.47.0"
 rusoto_s3 = "0.47.0"
 rusoto_sqs = "0.47.0"
 serde = { version = "1.0.130", features = ["derive"] }
-serde_json = "1.0.67"
+serde_json = "1.0.68"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.11.0", features = ["fs", "rt", "sync"] }

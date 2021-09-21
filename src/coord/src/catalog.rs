@@ -2003,21 +2003,19 @@ impl Catalog {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
-            Plan::CreateTable(CreateTablePlan {
-                table, depends_on, ..
-            }) => {
+            Plan::CreateTable(CreateTablePlan { table, .. }) => {
                 let persist = self.persist.details_from_name(persist_name)?;
                 CatalogItem::Table(Table {
                     create_sql: table.create_sql,
                     desc: table.desc,
                     defaults: table.defaults,
                     conn_id: None,
-                    depends_on,
+                    depends_on: table.depends_on,
                     persist,
                 })
             }
             Plan::CreateSource(CreateSourcePlan { source, .. }) => {
-                let mut optimizer = Optimizer::for_view();
+                let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(source.expr, self.enabled_indexes())?;
                 let transformed_desc = RelationDesc::new(optimized_expr.typ(), source.column_names);
                 CatalogItem::Source(Source {
@@ -2028,10 +2026,8 @@ impl Catalog {
                     desc: transformed_desc,
                 })
             }
-            Plan::CreateView(CreateViewPlan {
-                view, depends_on, ..
-            }) => {
-                let mut optimizer = Optimizer::for_view();
+            Plan::CreateView(CreateViewPlan { view, .. }) => {
+                let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr, self.enabled_indexes())?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -2039,23 +2035,20 @@ impl Catalog {
                     optimized_expr,
                     desc,
                     conn_id: None,
-                    depends_on,
+                    depends_on: view.depends_on,
                 })
             }
-            Plan::CreateIndex(CreateIndexPlan {
-                index, depends_on, ..
-            }) => CatalogItem::Index(Index {
+            Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
                 keys: index.keys,
                 conn_id: None,
-                depends_on,
+                depends_on: index.depends_on,
                 enabled: self.index_enabled_by_default(&id),
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
-                depends_on,
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -2063,14 +2056,12 @@ impl Catalog {
                 connector: SinkConnectorState::Pending(sink.connector_builder),
                 envelope: sink.envelope,
                 with_snapshot,
-                depends_on,
+                depends_on: sink.depends_on,
             }),
-            Plan::CreateType(CreateTypePlan {
-                typ, depends_on, ..
-            }) => CatalogItem::Type(Type {
+            Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 inner: typ.inner.into(),
-                depends_on,
+                depends_on: typ.depends_on,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
@@ -2171,8 +2162,10 @@ impl Catalog {
                 return;
             }
 
-            if let Some((index_id, _)) = catalog.enabled_indexes[&id].first() {
-                indexes.push(*index_id);
+            // Include all indexes on an id so the dataflow builder can safely use any
+            // of them.
+            if !catalog.enabled_indexes[&id].is_empty() {
+                indexes.extend(catalog.enabled_indexes[&id].iter().map(|(id, _)| id));
                 return;
             }
 

@@ -17,7 +17,7 @@ harness = false
 anyhow = "1.0.44"
 byteorder = "1.4.3"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
-chrono-tz = { version = "0.5.0", features = ["serde"] }
+chrono-tz = { version = "0.6.0", features = ["serde", "case-insensitive"] }
 dec = "0.4.5"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
@@ -32,7 +32,7 @@ persist = { path = "../persist" }
 regex = "1.5.4"
 ryu = "1.0.5"
 serde = { version = "1.0.130", features = ["derive"] }
-serde_json = "1.0.67"
+serde_json = "1.0.68"
 serde_regex = "1.1.0"
 smallvec = { version = "1.5.1", features = ["serde", "union"] }
 uuid = "0.8.2"

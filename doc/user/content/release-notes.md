@@ -46,7 +46,21 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.9.5 %}}
+
+- Timezone parsing is now case insensitive to be compatible with PostgreSQL.
+
+- Add support for [bitwise operators on integers](/sql/functions/#numbers).
+
 {{% version-header v0.9.4 %}}
+
+- Improve the performance of
+  [built-in sources and views](/cli/#introspection-sources) in the
+  [system catalog](/sql/system-catalog), which should result in lower latency
+  spikes and increased throughput when issuing many small queries, and reduce
+  overall memory consumption. Additionally, the content of the views is now
+  consistent at the introspection interval boundaries. Prior to this release,
+  some views would reveal more details about ephemeral dataflows and operators.
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
 - Trailing newline characters of POSIX compliant files will no longer be

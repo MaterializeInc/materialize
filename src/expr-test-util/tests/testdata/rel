@@ -189,3 +189,36 @@ build format=types
 | Map (err: more than one record produced in subquery)
 | | types = (Int32?, Int64?, Int64)
 | | keys = ()
+
+# constant_err
+build format=types
+(constant_err
+  division_by_zero
+  [int64 int32 int64])
+----
+%0 =
+| Constant Err("division by zero")
+| | types = (Int64?, Int32?, Int64?)
+| | keys = ()
+
+
+build format=types
+(constant_err
+  (division_by_zero)
+  [int64 int32 int64])
+----
+%0 =
+| Constant Err("division by zero")
+| | types = (Int64?, Int32?, Int64?)
+| | keys = ()
+
+# constant_err
+build format=types
+(constant_err
+  (invalid_dimension 10 100)
+  [int64 int32 int64])
+----
+%0 =
+| Constant Err("invalid dimension: 100; must use value within [1, 10]")
+| | types = (Int64?, Int32?, Int64?)
+| | keys = ()

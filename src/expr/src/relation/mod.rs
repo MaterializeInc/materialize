@@ -416,7 +416,7 @@ impl MirRelationExpr {
                     } = predicate
                     {
                         if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull,
+                            func: UnaryFunc::IsNull(scalar_func::IsNull),
                             expr,
                         } = &**expr
                         {
@@ -628,7 +628,30 @@ impl MirRelationExpr {
     /// This number is determined from the type, which is determined recursively
     /// at non-trivial cost.
     pub fn arity(&self) -> usize {
-        self.typ().column_types.len()
+        match self {
+            MirRelationExpr::Constant { rows: _, typ } => typ.arity(),
+            MirRelationExpr::Get { typ, .. } => typ.arity(),
+            MirRelationExpr::Let { body, .. } => body.arity(),
+            MirRelationExpr::Project { input: _, outputs } => outputs.len(),
+            MirRelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
+            MirRelationExpr::FlatMap { input, func, .. } => {
+                input.arity() + func.output_type().column_types.len()
+            }
+            MirRelationExpr::Filter { input, .. } => input.arity(),
+            MirRelationExpr::Join { inputs, .. } => inputs.iter().map(|i| i.arity()).sum(),
+            MirRelationExpr::Reduce {
+                input: _,
+                group_key,
+                aggregates,
+                ..
+            } => group_key.len() + aggregates.len(),
+            MirRelationExpr::TopK { input, .. } => input.arity(),
+            MirRelationExpr::Negate { input } => input.arity(),
+            MirRelationExpr::Threshold { input } => input.arity(),
+            MirRelationExpr::Union { base, inputs: _ } => base.arity(),
+            MirRelationExpr::ArrangeBy { input, .. } => input.arity(),
+            MirRelationExpr::DeclareKeys { input, .. } => input.arity(),
+        }
     }
 
     /// Constructs a constant collection from specific rows and schema, where

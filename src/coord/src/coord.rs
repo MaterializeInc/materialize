@@ -52,6 +52,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
 use timely::communication::WorkerGuards;
@@ -89,7 +90,6 @@ use sql::ast::{
 };
 use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
-use sql::plan::StatementDesc;
 use sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
@@ -98,6 +98,7 @@ use sql::plan::{
     FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
     Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
+use sql::plan::{StatementDesc, View};
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers, SinkWrites};
@@ -1729,7 +1730,6 @@ impl Coordinator {
             name,
             table,
             if_not_exists,
-            depends_on,
         } = plan;
 
         let conn_id = if table.temporary {
@@ -1738,7 +1738,7 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog.allocate_id()?;
-        let mut index_depends_on = depends_on.clone();
+        let mut index_depends_on = table.depends_on.clone();
         index_depends_on.push(table_id);
         let persist = self
             .catalog
@@ -1749,7 +1749,7 @@ impl Coordinator {
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
-            depends_on,
+            depends_on: table.depends_on,
             persist,
         };
         let index_id = self.catalog.allocate_id()?;
@@ -1930,7 +1930,6 @@ impl Coordinator {
             sink,
             with_snapshot,
             if_not_exists,
-            depends_on,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
@@ -1965,7 +1964,7 @@ impl Coordinator {
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
                 envelope: sink.envelope,
                 with_snapshot,
-                depends_on,
+                depends_on: sink.depends_on,
             }),
         };
         match self.catalog_transact(vec![op]) {
@@ -2003,17 +2002,11 @@ impl Coordinator {
     fn generate_view_ops(
         &mut self,
         session: &Session,
-        plan: CreateViewPlan,
+        name: FullName,
+        view: View,
+        replace: Option<GlobalId>,
+        materialize: bool,
     ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
-        let CreateViewPlan {
-            name,
-            view,
-            replace,
-            materialize,
-            if_not_exists: _,
-            depends_on,
-        } = plan;
-
         self.validate_timeline(view.expr.global_uses())?;
 
         let mut ops = vec![];
@@ -2035,7 +2028,7 @@ impl Coordinator {
             } else {
                 None
             },
-            depends_on,
+            depends_on: view.depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2081,7 +2074,13 @@ impl Coordinator {
         plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let if_not_exists = plan.if_not_exists;
-        let (ops, index_id) = self.generate_view_ops(session, plan)?;
+        let (ops, index_id) = self.generate_view_ops(
+            session,
+            plan.name,
+            plan.view,
+            plan.replace,
+            plan.materialize,
+        )?;
 
         match self.catalog_transact(ops) {
             Ok(()) => {
@@ -2108,8 +2107,9 @@ impl Coordinator {
         let mut ops = vec![];
         let mut index_ids = vec![];
 
-        for view_plan in plan.views {
-            let (mut view_ops, index_id) = self.generate_view_ops(session, view_plan)?;
+        for (name, view) in plan.views {
+            let (mut view_ops, index_id) =
+                self.generate_view_ops(session, name, view, None, plan.materialize)?;
             ops.append(&mut view_ops);
             if let Some(index_id) = index_id {
                 index_ids.push(index_id);
@@ -2127,8 +2127,7 @@ impl Coordinator {
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
-            // TODO somehow check this or remove if not exists modifiers
-            // Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -2142,7 +2141,6 @@ impl Coordinator {
             mut index,
             options,
             if_not_exists,
-            depends_on,
         } = plan;
 
         for key in &mut index.keys {
@@ -2154,7 +2152,7 @@ impl Coordinator {
             keys: index.keys,
             on: index.on,
             conn_id: None,
-            depends_on,
+            depends_on: index.depends_on,
             enabled: self.catalog.index_enabled_by_default(&id),
         };
         let oid = self.catalog.allocate_oid()?;
@@ -2188,7 +2186,7 @@ impl Coordinator {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
             inner: plan.typ.inner.into(),
-            depends_on: plan.depends_on,
+            depends_on: plan.typ.depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2488,24 +2486,22 @@ impl Coordinator {
             let timestamp = session.get_transaction_timestamp(|| {
                 // Determine a timestamp that will be valid for anything in any schema
                 // referenced by the first query.
-                let timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
+                let mut timedomain_ids = self.timedomain_for(&source_ids, &timeline, conn_id)?;
 
                 // We want to prevent compaction of the indexes consulted by
                 // determine_timestamp, not the ones listed in the query.
                 let (timestamp, timestamp_ids) =
                     self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
+                // Add the used indexes to the recorded ids.
+                timedomain_ids.extend(&timestamp_ids);
                 let mut handles = vec![];
                 for id in timestamp_ids {
                     handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
                 }
-                let mut timedomain_set = HashSet::new();
-                for id in timedomain_ids {
-                    timedomain_set.insert(id);
-                }
                 self.txn_reads.insert(
                     conn_id,
                     TxnReads {
-                        timedomain_ids: timedomain_set,
+                        timedomain_ids: timedomain_ids.into_iter().collect(),
                         _handles: handles,
                     },
                 );
@@ -2513,24 +2509,44 @@ impl Coordinator {
                 Ok(timestamp)
             })?;
 
-            // Verify that the indexes for this query are in the current read transaction.
-            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
-            for id in source_ids {
-                if !txn_reads.timedomain_ids.contains(&id) {
-                    let mut names: Vec<_> = txn_reads
-                        .timedomain_ids
-                        .iter()
-                        // This could filter out a view that has been replaced in another transaction.
-                        .filter_map(|id| self.catalog.try_get_by_id(*id))
-                        .map(|item| item.name().to_string())
-                        .collect();
-                    // Sort so error messages are deterministic.
-                    names.sort();
-                    return Err(CoordError::RelationOutsideTimeDomain {
-                        relation: self.catalog.get_by_id(&id).name().to_string(),
-                        names,
-                    });
-                }
+            // Verify that the references and indexes for this query are in the current
+            // read transaction.
+            let mut stmt_ids = HashSet::new();
+            stmt_ids.extend(source_ids.iter().collect::<HashSet<_>>());
+            // Using nearest_indexes here is a hack until #8318 is fixed. It's used because
+            // that's what determine_timestamp uses.
+            stmt_ids.extend(
+                self.catalog
+                    .nearest_indexes(&source_ids)
+                    .0
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+            );
+            let read_txn = self.txn_reads.get(&conn_id).unwrap();
+            // Find the first reference or index (if any) that is not in the transaction. A
+            // reference could be caused by a user specifying an object in a different
+            // schema than the first query. An index could be caused by a CREATE INDEX
+            // after the transaction started.
+            //
+            // The call to `sorted` ensures the error message is deterministic.
+            if let Some(id) = stmt_ids
+                .difference(&read_txn.timedomain_ids)
+                .sorted()
+                .next()
+            {
+                let mut names: Vec<_> = read_txn
+                    .timedomain_ids
+                    .iter()
+                    // This could filter out a view that has been replaced in another transaction.
+                    .filter_map(|id| self.catalog.try_get_by_id(*id))
+                    .map(|item| item.name().to_string())
+                    .collect();
+                // Sort so error messages are deterministic.
+                names.sort();
+                return Err(CoordError::RelationOutsideTimeDomain {
+                    relation: self.catalog.get_by_id(&id).name().to_string(),
+                    names,
+                });
             }
 
             timestamp
@@ -3757,7 +3773,7 @@ pub async fn serve(
             let mut coord = Coordinator {
                 worker_guards,
                 worker_txs,
-                view_optimizer: Optimizer::for_view(),
+                view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
                 symbiosis,
                 indexes: ArrangementFrontiers::default(),
@@ -3918,7 +3934,7 @@ pub fn serve_debug(
         let mut coord = Coordinator {
             worker_guards,
             worker_txs: vec![worker_tx],
-            view_optimizer: Optimizer::for_view(),
+            view_optimizer: Optimizer::logical_optimizer(),
             catalog,
             symbiosis: None,
             indexes: ArrangementFrontiers::default(),

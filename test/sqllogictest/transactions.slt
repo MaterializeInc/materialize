@@ -286,7 +286,7 @@ simple
 SELECT * FROM t;
 SELECT * FROM other.t;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.other.t" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727"
+db error: ERROR: transactions can only reference nearby relations; "materialize.other.t" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.t5727_primary_idx", "materialize.public.t_primary_idx"
 
 # Verify that changed tables and views don't change during a transaction.
 
@@ -360,7 +360,7 @@ simple conn=t1
 SELECT * FROM v1;
 COMMIT;
 ----
-db error: ERROR: transactions can only reference nearby relations; "materialize.public.v1" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.v", "materialize.public.v_primary_idx"
+db error: ERROR: transactions can only reference nearby relations; "materialize.public.v1" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.t5727_primary_idx", "materialize.public.t_primary_idx", "materialize.public.v", "materialize.public.v_primary_idx"
 
 simple conn=t1
 ROLLBACK;

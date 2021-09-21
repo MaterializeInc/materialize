@@ -18,7 +18,9 @@ use std::{cmp, env, process};
 use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, NowFn};
 use persist::file::{FileBlob, FileLog};
-use persist::indexed::runtime::{self, RuntimeClient, StreamReadHandle, StreamWriteHandle};
+use persist::indexed::runtime::{
+    self, RuntimeClient, RuntimeConfig, StreamReadHandle, StreamWriteHandle,
+};
 use persist::storage::LockInfo;
 use persist::{Codec, Data};
 use timely::dataflow::channels::pact::Pipeline;
@@ -46,7 +48,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
         let lock_info = LockInfo::new("kafka_upsert".into(), "nonce".into())?;
         let log = FileLog::new(base_dir.join("log"), lock_info.clone())?;
         let blob = FileBlob::new(base_dir.join("blob"), lock_info)?;
-        runtime::start(log, blob, &MetricsRegistry::new())?
+        runtime::start(RuntimeConfig::default(), log, blob, &MetricsRegistry::new())?
     };
 
     timely::execute_directly(|worker| {
@@ -102,9 +104,6 @@ where
     let timestamp_interval_ms = 5000;
     let now_fn = system_time;
 
-    // TODO: This is not correct, because we might not have data or
-    // bindings but still continue sealing up collections based on
-    // processing time.
     let start_ts = cmp::min(sealed_ts(&ts_read)?, sealed_ts(&out_read)?);
     println!("Restored start timestamp: {}", start_ts);
 

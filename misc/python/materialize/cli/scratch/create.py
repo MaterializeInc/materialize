@@ -107,6 +107,7 @@ def run(args: argparse.Namespace) -> None:
         extra_tags,
         delete_after,
         args.git_rev,
+        extra_env={},
     )
 
     print("Launched instances:")

@@ -232,7 +232,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                 continue;
             }
         } else if let MirScalarExpr::CallUnary {
-            func: UnaryFunc::IsNull,
+            func: UnaryFunc::IsNull(func::IsNull),
             expr,
         } = &predicate_to_apply
         {
@@ -370,7 +370,7 @@ fn is_not_null(predicate: &MirScalarExpr) -> Option<MirScalarExpr> {
     } = &predicate
     {
         if let MirScalarExpr::CallUnary {
-            func: UnaryFunc::IsNull,
+            func: UnaryFunc::IsNull(func::IsNull),
             expr,
         } = &**expr
         {

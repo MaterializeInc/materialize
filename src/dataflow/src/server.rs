@@ -426,38 +426,44 @@ where
                 unix,
                 self.timely_worker.index(),
                 move |time, data: &mut Vec<(Duration, usize, TrackerEvent)>| {
-                    let mut massaged_source_updates = Vec::new();
-                    for event in data.iter() {
-                        match &event.2 {
+                    let mut converted_updates = Vec::new();
+                    for event in data.drain(..) {
+                        match event.2 {
                             TrackerEvent::SourceUpdate(update) => {
-                                for u in update.updates.iter() {
-                                    let massaged = (
-                                        update.tracker_id.clone(),
-                                        u.0.clone(),
-                                        u.1.clone(),
-                                        "source".to_owned(),
-                                        format!("{:?}", u.2),
-                                        u.3.clone() as isize,
-                                    );
-                                    massaged_source_updates.push((event.0, event.1, massaged));
-                                }
+                                let massaged: Vec<_> = update
+                                    .updates
+                                    .iter()
+                                    .map(|u| {
+                                        let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
+                                        (*u.0, *u.1, true, ts, *u.3 as isize)
+                                    })
+                                    .collect();
+
+                                converted_updates.push((
+                                    event.0,
+                                    event.1,
+                                    (update.tracker_id, massaged),
+                                ));
                             }
                             TrackerEvent::TargetUpdate(update) => {
-                                for u in update.updates.iter() {
-                                    let massaged = (
-                                        update.tracker_id.clone(),
-                                        u.0.clone(),
-                                        u.1.clone(),
-                                        "target".to_owned(),
-                                        format!("{:?}", u.2),
-                                        u.3.clone() as isize,
-                                    );
-                                    massaged_source_updates.push((event.0, event.1, massaged));
-                                }
+                                let massaged: Vec<_> = update
+                                    .updates
+                                    .iter()
+                                    .map(|u| {
+                                        let ts = u.2.as_any().downcast_ref::<Timestamp>().copied();
+                                        (*u.0, *u.1, true, ts, *u.3 as isize)
+                                    })
+                                    .collect();
+
+                                converted_updates.push((
+                                    event.0,
+                                    event.1,
+                                    (update.tracker_id, massaged),
+                                ));
                             }
                         }
                     }
-                    r_logger.publish_batch(time, &mut massaged_source_updates)
+                    r_logger.publish_batch(time, &mut converted_updates)
                 },
             ),
         );

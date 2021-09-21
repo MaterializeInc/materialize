@@ -73,11 +73,13 @@ create_source_csv_file ::=
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' 'CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS')
   ('DELIMITED BY' char)?
+  ('ENVELOPE NONE')?
 create_source_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? with_options?
   'FORMAT' 'BYTES'
+  ('ENVELOPE NONE')?
 create_source_csv_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -92,11 +94,13 @@ create_source_csv_kinesis ::=
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' 'CSV WITH' ( 'HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS')
   ('DELIMITED BY' char)?
+  ('ENVELOPE NONE')?
 create_source_json_kinesis ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' 'BYTES'
+  ('ENVELOPE NONE')?
 create_source_json_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -124,6 +128,7 @@ create_source_protobuf_kinesis ::=
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' 'PROTOBUF MESSAGE' message_name
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
+  ('ENVELOPE NONE')?
 create_source_pubnub_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -153,6 +158,7 @@ create_source_s3_text ::=
     'TEXT' |
     'BYTES'
   )
+  ('ENVELOPE NONE')?
 create_source_s3_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'S3' 'DISCOVER OBJECTS'
@@ -171,25 +177,27 @@ create_source_s3_json ::=
       aws_credentials?
   ')'
   'FORMAT' ('TEXT' | 'BYTES')
+  ('ENVELOPE NONE')?
 create_source_s3_csv ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
   src_name ( '(' col_name (',' col_name)* ')' ( ',' key_constraint )? )?
   'FROM' 'S3' 'DISCOVER OBJECTS'
   ('MATCHING' pattern)?
   'USING' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-  ) ( ',' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-    )
-  )*
-  ('COMPRESSION' ('NONE' | 'GZIP'))?
-  'WITH' '('
-      'region =' region
-      aws_credentials?
-  ')'
-  'FORMAT' 'CSV' 'WITH' column_count 'COLUMNS'
+    'BUCKET SCAN' bucket_name |
+    'SQS NOTIFICATIONS' queue_name
+    ) ( ',' (
+    'BUCKET SCAN' bucket_name |
+    'SQS NOTIFICATIONS' queue_name
+      )
+    )*
+    ('COMPRESSION' ('NONE' | 'GZIP'))?
+    'WITH' '('
+        'region =' region
+        aws_credentials?
+    ')'
+    'FORMAT' 'CSV' 'WITH' column_count 'COLUMNS'
+    ('ENVELOPE NONE')?
 create_source_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -199,6 +207,7 @@ create_source_text ::=
     'TEXT' |
     'BYTES'
   )
+('ENVELOPE NONE')?
 create_source_text_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?

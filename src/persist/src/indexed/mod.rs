@@ -845,6 +845,14 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 }
             }
 
+            // Don't bother minting empty trace batches that we'll just have to
+            // compact later, it's wasteful of precious storage bandwidth and
+            // everything works perfectly well when the trace upper hasn't yet
+            // caught up to sealed.
+            if updates.is_empty() {
+                continue;
+            }
+
             // Trace batches are required to be sorted and consolidated by ((k, v), t)
             differential_dataflow::consolidation::consolidate_updates(&mut updates);
             updates_by_id.push((*id, seal, updates.clone()));
