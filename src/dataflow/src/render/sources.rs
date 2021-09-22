@@ -459,11 +459,18 @@ where
                                         .unwrap_or_else(|e| panic!("{}", e));
                                 // Reusable allocation for unpacking datums.
                                 let mut datums = crate::render::datum_vec::DatumVec::new();
+                                let mut row_builder = Row::default();
                                 // Closure that applies the linear operators to each `input_row`.
                                 move |(input_row, time, diff)| {
                                     let arena = repr::RowArena::new();
                                     let mut datums_local = datums.borrow_with(&input_row);
-                                    linear_op_mfp.evaluate(&mut datums_local, &arena, time, diff)
+                                    linear_op_mfp.evaluate(
+                                        &mut datums_local,
+                                        &arena,
+                                        time,
+                                        diff,
+                                        &mut row_builder,
+                                    )
                                 }
                             });
 
