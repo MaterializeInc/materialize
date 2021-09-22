@@ -66,4 +66,4 @@ This policy draws heavily from model policies offered by the [National Telecommu
 
 ## Version notes
 
-**Version	1.1**	This document	was	created	26-September-2021.
+**Version	1.0**	This document	was	created	4-October-2021.
