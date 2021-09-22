@@ -205,7 +205,7 @@ def dashboard_links(start_time: str, env: str) -> None:
     purpose = "load_test"
 
     tests = []
-    for test in ("chbench", "kinesis", "billing-demo"):
+    for test in ("chbench", "perf-kinesis", "billing-demo"):
         url = template.format(
             time_from=time_from, time_to=time_to, test=test, purpose=purpose, env=env
         )
