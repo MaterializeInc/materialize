@@ -46,6 +46,8 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.9.6 %}}
+
 {{% version-header v0.9.5 %}}
 
 - Timezone parsing is now case insensitive to be compatible with PostgreSQL.
@@ -55,7 +57,7 @@ Wrap your release notes at the 80 character mark.
 - Persist the `mz_metrics` and `mz_metric_histogram` system tables and rehydrate
   the previous contents on restart. This is a small test of the system that will
   power upcoming persistence features. Users are free to opt out of this test
-  by setting the `--disable_persistent_system_tables_test` flag to "true".
+  by starting `materialized` with the `--disable-persistent-system-tables-test` flag.
 
 - PostgreSQL sources can now correctly handle TOAST columns when `REPLICA
   IDENTITY` is set to `FULL`.
