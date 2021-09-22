@@ -1379,15 +1379,6 @@ impl Coordinator {
                 return;
             }
 
-            // Cancel the peek. We use an `if let` because the peek could be completed
-            // and removed before the cancellation is received.
-            if let Some((channel, count)) = self.pending_peeks.get(&conn_id) {
-                for _ in 0..*count {
-                    channel
-                        .send(PeekResponse::Canceled)
-                        .expect("Peek channel closed prematurely");
-                }
-            }
             // Allow dataflow to cancel any pending peeks.
             self.broadcast(dataflow::Command::CancelPeek { conn_id });
 

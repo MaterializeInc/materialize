@@ -877,18 +877,7 @@ where
                 }
                 // Attempt to fulfill the peek.
                 if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
-                    // Respond with the response.
-                    self.feedback_tx
-                        .send(Response {
-                            worker_id: self.timely_worker.index(),
-                            message: WorkerFeedback::PeekResponse(peek.conn_id, response),
-                        })
-                        .expect("feedback receiver should not drop first");
-
-                    // Log the fulfillment of the peek.
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
-                    }
+                    self.send_peek_response(peek, response);
                 } else {
                     self.pending_peeks.push(peek);
                 }
@@ -896,17 +885,18 @@ where
             }
 
             Command::CancelPeek { conn_id } => {
-                let logger = &mut self.materialized_logger;
-                self.pending_peeks.retain(|peek| {
+                let pending_peeks_len = self.pending_peeks.len();
+                let mut pending_peeks = std::mem::replace(
+                    &mut self.pending_peeks,
+                    Vec::with_capacity(pending_peeks_len),
+                );
+                for peek in pending_peeks.drain(..) {
                     if peek.conn_id == conn_id {
-                        if let Some(logger) = logger {
-                            logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
-                        }
-                        false // don't retain
+                        self.send_peek_response(peek, PeekResponse::Canceled);
                     } else {
-                        true // retain
+                        self.pending_peeks.push(peek);
                     }
-                })
+                }
             }
 
             Command::AdvanceAllLocalInputs { advance_to } => {
@@ -1116,21 +1106,29 @@ where
         );
         for mut peek in pending_peeks.drain(..) {
             if let Some(response) = peek.seek_fulfillment(&mut upper) {
-                // Respond with the response.
-                self.feedback_tx
-                    .send(Response {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::PeekResponse(peek.conn_id, response),
-                    })
-                    .expect("feedback receiver should not drop first");
-
-                // Log the fulfillment of the peek.
-                if let Some(logger) = self.materialized_logger.as_mut() {
-                    logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
-                }
+                self.send_peek_response(peek, response);
             } else {
                 self.pending_peeks.push(peek);
             }
+        }
+    }
+
+    /// Sends a response for this peek's resolution to the coordinator.
+    ///
+    /// Note that this function takes ownership of the `PendingPeek`, which is
+    /// meant to prevent multiple responses to the same peek.
+    fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
+        // Respond with the response.
+        self.feedback_tx
+            .send(Response {
+                worker_id: self.timely_worker.index(),
+                message: WorkerFeedback::PeekResponse(peek.conn_id, response),
+            })
+            .expect("feedback receiver should not drop first");
+
+        // Log responding to the peek request.
+        if let Some(logger) = self.materialized_logger.as_mut() {
+            logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
         }
     }
 
@@ -1154,7 +1152,9 @@ pub struct LocalInput {
 }
 
 /// An in-progress peek, and data to eventually fulfill it.
-#[derive(Clone)]
+///
+/// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
+/// as each `PendingPeek` is meant to be dropped after it's responded to.
 struct PendingPeek {
     /// The identifier of the dataflow to peek.
     id: GlobalId,

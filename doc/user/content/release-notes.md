@@ -50,6 +50,9 @@ Wrap your release notes at the 80 character mark.
 
 - Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}
 
+- Return control of canceled sessions (`ctrl + c`) while `SELECT` statements
+  await results. Previously, this could cause the session to never terminate.
+
 {{% version-header v0.9.5 %}}
 
 - Accept case insensitive timezones to be compatible with PostgreSQL.
