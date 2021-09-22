@@ -429,8 +429,7 @@ members must also have a length of 2.
 ### Custom types
 
 You can create [custom `list` types](/sql/types/#custom-types), which lets you
-create a named entry in your Materialize nodes' catalogs for a specific type of
-list.
+create a named entry in the catalog for a specific type of list.
 
 Currently, custom types only provides a shorthand for referring to
 otherwise-annoying-to-type names, but in the future will provide [binary
