@@ -26,7 +26,7 @@ The follow types of attack are out of scope:
 
 ## How to report
 
-E-mail your findings to <a href="mailto:security@materialize.com">security@materialize.com</a>. You may encrypt your findings using our [PGP key]() to prevent critical information from falling into the wrong hands.
+E-mail your findings to <a href="mailto:security@materialize.com">security@materialize.com</a>.  
 
 Please include:
 
