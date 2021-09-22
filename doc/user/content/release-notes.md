@@ -46,11 +46,20 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.9.6 %}}
+
+- Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}
+
 {{% version-header v0.9.5 %}}
 
-- Timezone parsing is now case insensitive to be compatible with PostgreSQL.
+- Accept case insensitive timezones to be compatible with PostgreSQL.
 
 - Add support for [bitwise operators on integers](/sql/functions/#numbers).
+
+- Persist the `mz_metrics` and `mz_metric_histogram` system tables and rehydrate
+  the previous contents on restart. This is a small test of the system that will
+  power upcoming persistence features. Users are free to opt out of this test
+  by starting `materialized` with the `--disable-persistent-system-tables-test` flag.
 
 {{% version-header v0.9.4 %}}
 
@@ -63,8 +72,9 @@ Wrap your release notes at the 80 character mark.
   some views would reveal more details about ephemeral dataflows and operators.
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
-- Trailing newline characters of POSIX compliant files will no longer be
-  decoded as an empty byte row {{% gh 8142 %}}
+
+- Ignore the trailing newline character of POSIX compliant files instead of
+  decoding it as an empty byte row. {{% gh 8142 %}}
 
 - Support `ORDER BY` in aggregate functions.
 
@@ -342,7 +352,7 @@ Wrap your release notes at the 80 character mark.
   versions, setting these parameters required a separate call to [`ALTER
   INDEX`](/sql/alter-index).
 
-- Fix a bug that prevented upgrading v0.6.1 or earlier nodes to v0.7.0 if they
+- Fix a bug that prevented upgrading deployments from v0.6.1 or earlier to v0.7.0 if they
   contained:
   -  Views whose embdedded queries contain functions whose arguments are functions {{% gh 5802 %}}.
   -  Sinks using `WITH SNAPSHOT AS OF` {{% gh 5808 %}}.
@@ -364,7 +374,7 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.0 %}}
 
-- **Known issue.** You cannot upgrade nodes created with versions v0.6.1 or
+- **Known issue.** You cannot upgrade deployments created with versions v0.6.1 or
   earlier to v0.7.0 if they contain:
 
   -  Views whose embdedded queries contain functions whose arguments are functions {{% gh 5802 %}}.

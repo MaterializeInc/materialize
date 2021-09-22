@@ -17,7 +17,7 @@ use persist::file::{FileBlob, FileLog};
 use persist::indexed::runtime::{self, RuntimeClient, RuntimeConfig, StreamReadHandle};
 use persist::mem::MemRegistry;
 use persist::storage::LockInfo;
-use persist::Codec;
+use persist_types::Codec;
 
 fn read_full_snapshot<K: Codec + Ord, V: Codec + Ord>(
     read: &StreamReadHandle<K, V>,

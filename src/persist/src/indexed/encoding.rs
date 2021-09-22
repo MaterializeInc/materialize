@@ -21,12 +21,12 @@ use abomonation::abomonated::Abomonated;
 use abomonation_derive::Abomonation;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
+use persist_types::Codec;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::storage::SeqNo;
-use crate::Codec;
 
 /// An internally unique id for a persisted stream. External users identify
 /// streams with a string, which is then mapped internally to this.

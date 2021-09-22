@@ -66,6 +66,7 @@ impl JoinClosure {
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
+        row: &'a mut Row,
     ) -> Result<Option<Row>, expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
@@ -76,7 +77,7 @@ impl JoinClosure {
                 }
             }
         }
-        self.before.evaluate(datums, &temp_storage)
+        self.before.evaluate_into(datums, &temp_storage, row)
     }
 
     /// Construct an instance of the closure from available columns.

@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use crate::EvalError;
+use chrono::{DateTime, NaiveDateTime, Utc};
+use repr::strconv;
 
 sqlfunc!(
     #[sqlname = "-"]
@@ -197,5 +199,44 @@ sqlfunc!(
     #[sqlname = "f32tof64"]
     fn cast_float32_to_float64(a: f32) -> f64 {
         a.into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "f32tostr"]
+    fn cast_float32_to_string(a: f32) -> String {
+        let mut s = String::new();
+        strconv::format_float32(&mut s, a);
+        s
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "mz_sleep"]
+    fn sleep(a: f64) -> Option<DateTime<Utc>> {
+        let duration = std::time::Duration::from_secs_f64(a);
+        std::thread::sleep(duration);
+        None
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "tots"]
+    fn to_timestamp(f: f64) -> Option<DateTime<Utc>> {
+        if !f.is_finite() {
+            None
+        } else {
+            let secs = f.trunc() as i64;
+            // NOTE(benesch): PostgreSQL has microsecond precision in its timestamps,
+            // while chrono has nanosecond precision. While we normally accept
+            // nanosecond precision, here we round to the nearest microsecond because
+            // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
+            // with common Unix timestamp values (> 1 billion).
+            let nanosecs = ((f.fract() * 1_000_000.0).round() as u32) * 1_000;
+            match NaiveDateTime::from_timestamp_opt(secs as i64, nanosecs as u32) {
+                Some(ts) => Some(DateTime::<Utc>::from_utc(ts, Utc)),
+                None => None,
+            }
+        }
     }
 );

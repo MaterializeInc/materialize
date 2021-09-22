@@ -18,7 +18,7 @@ Flag | Default | Modifies
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--metrics-scraping-interval`](#prometheus-metrics) | 30s | The update interval for the `mz_metrics` table, see [prometheus metrics](#prometheus-metrics).
-[`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
+[`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
 [`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where to emit log messages
 [`--log-filter`](#log-filter) | `info` | Which log messages to emit
@@ -30,7 +30,7 @@ Flag | Default | Modifies
 [`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
 `-v` / `--version` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
-[`--disable-user-indexes`](#disable-user-indexes) | Disabled | Starts the node without creating any dataflows for user indexes.
+[`--disable-user-indexes`](#disable-user-indexes) | Disabled | Start without creating any dataflows for user indexes.
 
 If a command line flag takes an argument, you can alternatively set that flag
 via an environment variable named after the flag. If both the environment
@@ -316,8 +316,8 @@ your sources and views within Materialize** and will have to recreate them and
 re-ingest all of your data.
 
 Because of this volatility:
-- You can only start new nodes in experimental mode.
-- Nodes started in experimental mode must always be started in experimental
+- You can only initialize new servers in experimental mode.
+- Servers started in experimental mode must always be started in experimental
   mode.
 
 We recommend only using experimental mode to explore Materialize, i.e.
@@ -326,9 +326,9 @@ or things you'd like to see changed, let us know on [GitHub][gh-feature].
 
 #### Disabling experimental mode
 
-You cannot disable experimental mode for a node. You can, however, extract your
+You cannot disable experimental mode for a server. You can, however, extract your
 view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
-etc.), and then create a new node with those items.
+etc.), and then create a new server with those items.
 
 ### Telemetry
 
@@ -376,12 +376,12 @@ should only set these parameters in consultation with Materialize engineers.
 This feature is primarily meant for advanced administrators of Materialize.
 {{< /warning >}}
 
-If you cannot boot a Materialize node because it runs out of memory, you can use
+If you cannot boot a Materialize server because it runs out of memory, you can use
 the `--disable-user-indexes` to prevent Materialize from creating any
 [indexes][api-indexes] on user-created objects. For
-example, if you add a view that contains a cross join that causes your node to
+example, if you add a view that contains a cross join that causes your server to
 immediately run out of memory on boot, you can use `--disable-user-indexes` to
-boot the node and then drop the offending view.
+boot the server and then drop the offending view.
 
 In this mode users...
 

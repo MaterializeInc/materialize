@@ -9,6 +9,7 @@
 
 //! A Timely Dataflow operator that synchronously persists stream input.
 
+use persist_types::Codec;
 use timely::dataflow::channels::pushers::buffer::AutoflushSession;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::operator;
@@ -20,8 +21,8 @@ use timely::Data as TimelyData;
 
 use crate::future::Future;
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
+use crate::operators;
 use crate::storage::SeqNo;
-use crate::{operators, Codec};
 
 /// A persistent equivalent of [UnorderedInput].
 pub trait PersistentUnorderedInput<G: Scope<Timestamp = u64>, K: TimelyData> {

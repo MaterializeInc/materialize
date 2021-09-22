@@ -44,10 +44,6 @@ Materialize Cloud doesn't support using local files as sources; you can otherwis
   **Local Files**  |  No |  Yes
   **Postgres**  | Yes | Yes
 
-#### Deployments
-
-The Materialize executable  is source-available and free on a single node, so deployment limits only depend on your hardware.
-
 #### Session termination
 
 We reserve the right to terminate a session in your Cloud deployment. This may happen after prolonged inactivity or in the event of planned maintenance work on Materialize Cloud, and doesn't affect catalog items (which are persisted across sessions).

@@ -10,13 +10,14 @@
 //! A Timely Dataflow operator that passes through its input after persisting
 //! it.
 
+use persist_types::Codec;
 use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::{Concat, OkErr, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::Data as TimelyData;
 
 use crate::indexed::runtime::{StreamReadHandle, StreamWriteHandle};
-use crate::{operators, Codec};
+use crate::operators;
 
 /// A Timely Dataflow operator that passes through its input after persisting
 /// it.

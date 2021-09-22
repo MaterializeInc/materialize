@@ -341,19 +341,9 @@ fn updates_eq(
 ) -> bool {
     // TODO: This is also used by the implementation. Write a slower but more
     // obvious impl of consolidation here and use it for validation.
-    //
-    // TODO: The actual snapshot will eventually be compacted up to some since
-    // frontier and the expected snapshot will need to account for that when
-    // checking equality.
 
-    for (_, t, _) in actual.iter_mut() {
-        for ts in since.elements().iter() {
-            if *t < *ts {
-                *t = *ts;
-            }
-        }
-    }
-
+    // The snapshot has been logically compacted to since, so update our
+    // expected to match.
     for (_, t, _) in expected.iter_mut() {
         for ts in since.elements().iter() {
             if *t < *ts {

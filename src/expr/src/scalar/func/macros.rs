@@ -81,7 +81,7 @@ macro_rules! sqlfunc {
                 use std::convert::TryInto;
                 use std::fmt;
 
-                use repr::{ColumnType, Datum, FromTy, RowArena, ScalarType};
+                use repr::{ColumnType, Datum, FromTy, RowArena, ScalarType, WithArena};
                 use serde::{Deserialize, Serialize};
                 use lowertest::MzStructReflect;
 
@@ -90,6 +90,13 @@ macro_rules! sqlfunc {
 
                 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzStructReflect)]
                 pub struct [<$fn_name:camel>];
+
+                /// Utility function that converts the return type the passed function into its
+                /// runtime representation
+                fn output_type_of<T, R, E>(_: fn(T) -> Result<Option<R>, E>) -> ScalarType
+                where ScalarType: FromTy<R> {
+                    <ScalarType as FromTy<R>>::from_ty()
+                }
 
                 impl UnaryFuncTrait for [<$fn_name:camel>] {
                     fn eval<'a>(
@@ -106,13 +113,20 @@ macro_rules! sqlfunc {
                             .try_into()
                             .expect("expression already typechecked");
 
-                        super::$fn_name(a).map(|r| r.into())
+                        // Then we call the provided function that will return a Result<T, _>,
+                        // where T is some concrete, owned type
+                        let result = super::$fn_name(a);
+
+                        // Finally, we convert T into a Datum<'a> by wrapping the returned value
+                        // into a `WithArena` with the temporary storage provided to eval and
+                        // delegating to the respective `Into` implementation
+                        result.map(move |r| WithArena::new(temp_storage, r).into())
                     }
 
                     fn output_type(&self, input_type: ColumnType) -> ColumnType {
-                        // Use the FromTy trait to convert the Rust type into our runtime type
-                        // representation
-                        <ScalarType as FromTy<$ret_ty>>::from_ty()
+                        // Use the FromTy trait to convert the Rust return type into our runtime
+                        // type representation
+                        output_type_of(super::$fn_name)
                             .nullable($propagates_nulls && input_type.nullable || $introduces_nulls)
                     }
 
@@ -139,7 +153,10 @@ macro_rules! sqlfunc {
         }
     };
 
-    // First, expand the function name into an attribute, if it was omitted
+    // Here follow 3 stages of transformations for the cases where the user didn't provide a fully
+    // specified function signature as expected by the rule above.
+
+    // Stage 0: Expand the function name into an attribute, if it was omitted
     (
         fn $fn_name:ident $($tail:tt)*
     ) => {
@@ -148,35 +165,73 @@ macro_rules! sqlfunc {
             fn $fn_name $($tail)*
         );
     };
-    // Then, make the function fallible if it wasn't
+
+    // Stage 1: Convert function to fallible, if it wasn't already
+
+    // It is important that we check if the return type matches Result<Option<T>>, Result<T>,
+    // Option<T>, and T in that order because once a type is matched by a `ty` typed metavariable
+    // it can no longer be destructured syntactically. So if `$ret_ty:ty` matched
+    // `Result<Option<T>>` as a unit we would no longer be able to infer information about the
+    // structure of the type and therefore wouldn't be able to apply the elision rules.
     (
         #[sqlname = $name:expr]
-        fn $fn_name:ident $params:tt -> $ret_ty:tt
+        fn $fn_name:ident $params:tt -> Result<Option<$ret_ty:ty>, EvalError>
             $body:block
     ) => {
         sqlfunc!(
+            @stage2
             #[sqlname = $name]
-            fn $fn_name $params -> Result<$ret_ty, EvalError> {
-                Ok($body)
+            fn $fn_name $params -> Result<Option<$ret_ty>, EvalError> {
+                $body
             }
         );
     };
     (
         #[sqlname = $name:expr]
-        fn $fn_name:ident $params:tt -> Option<$ret_ty:tt>
+        fn $fn_name:ident $params:tt -> Result<$ret_ty:ty, EvalError>
             $body:block
     ) => {
         sqlfunc!(
+            @stage2
+            #[sqlname = $name]
+            fn $fn_name $params -> Result<$ret_ty, EvalError> {
+                $body
+            }
+        );
+    };
+    (
+        #[sqlname = $name:expr]
+        fn $fn_name:ident $params:tt -> Option<$ret_ty:ty>
+            $body:block
+    ) => {
+        sqlfunc!(
+            @stage2
             #[sqlname = $name]
             fn $fn_name $params -> Result<Option<$ret_ty>, EvalError> {
                 Ok($body)
             }
         );
     };
-
-
-    // Then, check if omitting the attributes is ok
     (
+        #[sqlname = $name:expr]
+        fn $fn_name:ident $params:tt -> $ret_ty:ty
+            $body:block
+    ) => {
+        sqlfunc!(
+            @stage2
+            #[sqlname = $name]
+            fn $fn_name $params -> Result<$ret_ty, EvalError> {
+                Ok($body)
+            }
+        );
+    };
+
+
+    // Stage 2: Apply the elision rules to find out if the function propagates or introduces nulls
+
+    // We can't infer in this case, bail out with a nice error message
+    (
+        @stage2
         #[sqlname = $name:expr]
         fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Result<Option<$ret_ty:ty>, EvalError>
             $body:block
@@ -190,6 +245,7 @@ macro_rules! sqlfunc {
     // The function takes optional arguments and returns non optional, therefore it doesn't
     // propagate nulls
     (
+        @stage2
         #[sqlname = $name:expr]
         fn $fn_name:ident($param_name:ident: Option<$param_ty:ty>) -> Result<$ret_ty:ty, EvalError>
             $body:block
@@ -208,6 +264,7 @@ macro_rules! sqlfunc {
     // The function takes non-optional arguments and returns optional, therefore it propagates
     // nulls and introduces nulls too
     (
+        @stage2
         #[sqlname = $name:expr]
         fn $fn_name:ident($param_name:ident: $param_ty:ty) -> Result<Option<$ret_ty:ty>, EvalError>
             $body:block
@@ -230,6 +287,7 @@ macro_rules! sqlfunc {
     // The function takes non-optional arguments and returns non optional, therefore it propagates
     // nulls but doesn't introduce them
     (
+        @stage2
         #[sqlname = $name:expr]
         fn $fn_name:ident($param_name:ident: $param_ty:ty) -> Result<$ret_ty:ty, EvalError>
             $body:block
