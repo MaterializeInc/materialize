@@ -233,14 +233,14 @@ steps:
           composition: catalog-compat
           run: catalog-compat
 
-  - id: disable-user-indexes
-    label: ":chart_with_downwards_trend: disable user indexes"
+  - id: restarts
+    label: ":arrows_clockwise: restarts"
     depends_on: build
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: disable-user-indexes
-          run: disable-user-indexes
+          composition: restart
+          run: all-restart
 
   - id: upgrade
     label: "Upgrade testing"
