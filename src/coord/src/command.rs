@@ -205,6 +205,10 @@ pub enum ExecuteResponse {
     },
     /// The requested type was created.
     CreatedType,
+    /// The requested prepared statement was removed.
+    Deallocate {
+        all: bool,
+    },
     /// The requested cursor was declared.
     DeclaredCursor,
     /// The specified number of rows were deleted from the requested table.
@@ -244,6 +248,8 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
+    /// The specified prepared statement was created.
+    Prepare,
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.

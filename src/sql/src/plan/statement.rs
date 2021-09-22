@@ -140,6 +140,9 @@ pub fn describe(
         Statement::Declare(stmt) => scl::describe_declare(&scx, stmt)?,
         Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
         Statement::Close(stmt) => scl::describe_close(&scx, stmt)?,
+        Statement::Prepare(stmt) => scl::describe_prepare(&scx, stmt)?,
+        Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
+        Statement::Deallocate(stmt) => scl::describe_deallocate(&scx, stmt)?,
 
         // DML statements.
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -233,6 +236,9 @@ pub fn plan(
         Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
+        Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
+        Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
+        Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
 
         // TCL statements.
         Statement::StartTransaction(stmt) => tcl::plan_start_transaction(scx, stmt),

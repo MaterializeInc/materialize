@@ -237,6 +237,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
                 Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
                 Token::Keyword(CLOSE) => Ok(self.parse_close()?),
+                Token::Keyword(PREPARE) => Ok(self.parse_prepare()?),
+                Token::Keyword(EXECUTE) => Ok(self.parse_execute()?),
+                Token::Keyword(DEALLOCATE) => Ok(self.parse_deallocate()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -4040,6 +4043,52 @@ impl<'a> Parser<'a> {
     fn parse_close(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         Ok(Statement::Close(CloseStatement { name }))
+    }
+
+    /// Parse a `PREPARE` statement, assuming that the `PREPARE` token
+    /// has already been consumed.
+    fn parse_prepare(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword(AS)?;
+        let pos = self.peek_pos();
+        //
+        let stmt = match self.parse_statement()? {
+            stmt @ Statement::Select(_)
+            | stmt @ Statement::Insert(_)
+            | stmt @ Statement::Delete(_)
+            | stmt @ Statement::Update(_) => stmt,
+            _ => return parser_err!(self, pos, "unpreparable statement"),
+        };
+        Ok(Statement::Prepare(PrepareStatement {
+            name,
+            stmt: Box::new(stmt),
+        }))
+    }
+
+    /// Parse a `EXECUTE` statement, assuming that the `EXECUTE` token
+    /// has already been consumed.
+    fn parse_execute(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        let params = if self.consume_token(&Token::LParen) {
+            let params = self.parse_comma_separated(Parser::parse_expr)?;
+            self.expect_token(&Token::RParen)?;
+            params
+        } else {
+            Vec::new()
+        };
+        Ok(Statement::Execute(ExecuteStatement { name, params }))
+    }
+
+    /// Parse a `DEALLOCATE` statement, assuming that the `DEALLOCATE` token
+    /// has already been consumed.
+    fn parse_deallocate(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let _ = self.parse_keyword(PREPARE);
+        let name = if self.parse_keyword(ALL) {
+            None
+        } else {
+            Some(self.parse_identifier()?)
+        };
+        Ok(Statement::Deallocate(DeallocateStatement { name }))
     }
 
     /// Parse a `FETCH` statement, assuming that the `FETCH` token

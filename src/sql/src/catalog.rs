@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{FullName, PartialName, SchemaName};
+use crate::plan::statement::StatementDesc;
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -60,6 +61,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
 
     /// Returns the name of the user who is issuing the query.
     fn user(&self) -> &str;
+
+    /// Returns the descriptor of the named prepared statement on the session, or
+    /// None if the prepared statement does not exist.
+    fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc>;
 
     /// Returns the database to use if one is not explicitly specified.
     fn default_database(&self) -> &str;
@@ -386,6 +391,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn user(&self) -> &str {
         "dummy"
+    }
+
+    fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
+        None
     }
 
     fn default_database(&self) -> &str {
