@@ -1160,6 +1160,9 @@ pub mod plan {
         /// occurs in the evaluation it is returned as an `Err` variant.
         /// As the evaluation exits early with failed predicates, it may
         /// miss some errors that would occur later in evaluation.
+        ///
+        /// The `row` is not cleared first, but emptied if the function
+        /// returns `Ok(Some(row)).
         #[inline(always)]
         pub fn evaluate_into<'a>(
             &'a self,
@@ -1171,6 +1174,7 @@ pub mod plan {
             if !passed_predicates {
                 Ok(None)
             } else {
+                row.clear();
                 row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
                 Ok(Some(row.finish_and_reuse()))
             }
