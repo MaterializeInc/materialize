@@ -44,7 +44,7 @@ impl crate::Transform for InlineLet {
             *relation = MirRelationExpr::Let {
                 id,
                 value: Box::new(value),
-                body: Box::new(relation.take_safely()),
+                body: Box::new(relation.take_dangerous()),
             };
         }
         Ok(())
@@ -53,6 +53,12 @@ impl crate::Transform for InlineLet {
 
 impl InlineLet {
     /// Install replace certain `Get` operators with their `Let` value.
+    ///
+    /// IMPORTANT: This transform is used for cleaning up after `RelationCSE`, which
+    /// adds `Let` operators pretty aggressively, leading to very deep dataflows. Nothing
+    /// in this transform should lead to expensive recursive traversal of the subgraph,
+    /// such as the one in `MirRelationExpr::typ`, since that may result in a stack
+    /// overflow.
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
@@ -89,10 +95,10 @@ impl InlineLet {
                 });
             } else {
                 // otherwise lift it to the top so it's out of the way
-                lets.push((*id, value.take_safely()));
+                lets.push((*id, value.take_dangerous()));
             }
 
-            *relation = body.take_safely();
+            *relation = body.take_dangerous();
             // might be another Let in the body so have to recur here
             self.action(relation, lets);
         } else {
