@@ -1180,36 +1180,11 @@ pub mod plan {
             }
         }
 
-        /// A version of `evaluate_into` which allocates a new Row.
-        ///
-        /// This version can be useful when one wants to capture the resulting datums into a new
-        /// row.
-        #[inline(always)]
-        #[deprecated]
-        pub fn evaluate<'a>(
-            &'a self,
-            datums: &mut Vec<Datum<'a>>,
-            arena: &'a RowArena,
-        ) -> Result<Option<Row>, EvalError> {
-            let passed_predicates = self.evaluate_inner(datums, arena)?;
-            if !passed_predicates {
-                Ok(None)
-            } else {
-                // We determine the capacity first, to ensure that we right-size
-                // the row allocation and need not re-allocate once it is formed.
-                let capacity = repr::datums_size(self.mfp.projection.iter().map(|c| datums[*c]));
-                let mut row = Row::with_capacity(capacity);
-                row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
-                Ok(Some(row))
-            }
-        }
-
         /// A version of `evaluate` which produces an iterator over `Datum`
         /// as output.
         ///
-        /// This version is used internally by `evaluate` and can be useful
-        /// when one wants to capture the resulting datums without packing
-        /// and then unpacking a row.
+        /// This version can be usefulwhen one wants to capture the resulting
+        /// datums without packing and then unpacking a row.
         #[inline(always)]
         pub fn evaluate_iter<'b, 'a: 'b>(
             &'a self,
