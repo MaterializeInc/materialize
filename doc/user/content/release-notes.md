@@ -48,9 +48,11 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.9.6 %}}
 
+- Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}
+
 {{% version-header v0.9.5 %}}
 
-- Timezone parsing is now case insensitive to be compatible with PostgreSQL.
+- Accept case insensitive timezones to be compatible with PostgreSQL.
 
 - Add support for [bitwise operators on integers](/sql/functions/#numbers).
 
@@ -58,9 +60,6 @@ Wrap your release notes at the 80 character mark.
   the previous contents on restart. This is a small test of the system that will
   power upcoming persistence features. Users are free to opt out of this test
   by starting `materialized` with the `--disable-persistent-system-tables-test` flag.
-
-- PostgreSQL sources can now correctly handle TOAST columns when `REPLICA
-  IDENTITY` is set to `FULL`.
 
 {{% version-header v0.9.4 %}}
 
@@ -73,8 +72,9 @@ Wrap your release notes at the 80 character mark.
   some views would reveal more details about ephemeral dataflows and operators.
 
 - Fix a bug that caused a panic when computing the `max` of `int2` values.
-- Trailing newline characters of POSIX compliant files will no longer be
-  decoded as an empty byte row {{% gh 8142 %}}
+
+- Ignore the trailing newline character of POSIX compliant files instead of
+  decoding it as an empty byte row. {{% gh 8142 %}}
 
 - Support `ORDER BY` in aggregate functions.
 
