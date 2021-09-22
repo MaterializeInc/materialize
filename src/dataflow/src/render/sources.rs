@@ -498,10 +498,7 @@ where
                                     output_row.extend(iterator);
                                     // Each produced (time, diff) results in a copy of `output_row` in the output.
                                     // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
-                                    times_diffs.map(move |time_diff| {
-                                        time_diff
-                                            .map_err(|(e, t, d)| (DataflowError::from(e), t, d))
-                                    })
+                                    times_diffs
                                 }
                             });
 

@@ -1401,17 +1401,17 @@ pub mod plan {
         /// If `self` contains only non-temporal predicates, the result will either be `(time, diff)`,
         /// or an evaluation error. If `self contains temporal predicates, the results can be times
         /// that are greater than the input `time`, and may contain negated `diff` values.
-        pub fn evaluate<'b, 'a: 'b>(
+        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             time: repr::Timestamp,
             diff: Diff,
-        ) -> impl Iterator<Item = Result<(Row, repr::Timestamp, Diff), (EvalError, repr::Timestamp, Diff)>>
+        ) -> impl Iterator<Item = Result<(Row, repr::Timestamp, Diff), (E, repr::Timestamp, Diff)>>
         {
             match self.mfp.evaluate_inner(datums, &arena) {
                 Err(e) => {
-                    return Some(Err((e, time, diff)))
+                    return Some(Err((e.into(), time, diff)))
                         .into_iter()
                         .chain(None.into_iter());
                 }
@@ -1437,7 +1437,7 @@ pub mod plan {
                 if lower_bound.is_some() {
                     match l.eval(datums, &arena) {
                         Err(e) => {
-                            return Some(Err((e, time, diff)))
+                            return Some(Err((e.into(), time, diff)))
                                 .into_iter()
                                 .chain(None.into_iter());
                         }
@@ -1480,7 +1480,7 @@ pub mod plan {
                 if upper_bound != lower_bound {
                     match u.eval(datums, &arena) {
                         Err(e) => {
-                            return Some(Err((e, time, diff)))
+                            return Some(Err((e.into(), time, diff)))
                                 .into_iter()
                                 .chain(None.into_iter());
                         }
