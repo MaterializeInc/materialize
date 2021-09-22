@@ -26,7 +26,7 @@ The follow types of attack are out of scope:
 
 ## How to report
 
-E-mail your findings to <a href="mailto:security@materialize.com">security@materialize.com</a>.  
+E-mail your findings to <a href="mailto:security@materialize.com">security@materialize.com</a>.
 
 Please include:
 
