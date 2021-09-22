@@ -35,7 +35,7 @@ use sql_parser::ast::{
 };
 use sql_parser::parser::parse_columns;
 
-use crate::catalog::Catalog;
+use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::normalize;
 
@@ -46,10 +46,10 @@ use crate::normalize;
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
 /// time to complete. As a result purification does *not* have access to a
-/// [`Catalog`](crate::catalog::Catalog), as that would require locking access
-/// to the catalog for an unbounded amount of time.
+/// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
+/// locking access to the catalog for an unbounded amount of time.
 pub fn purify(
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     mut stmt: Statement<Raw>,
 ) -> impl Future<Output = Result<Statement<Raw>, anyhow::Error>> {
     // If we're dealing with a CREATE VIEWS statement we need to query the catalog for the

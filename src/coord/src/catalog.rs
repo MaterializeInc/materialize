@@ -38,8 +38,8 @@ use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
 use sql::catalog::{
-    Catalog as SqlCatalog, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, SessionCatalog,
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
@@ -2485,7 +2485,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 }
 
-impl SqlCatalog for ConnCatalog<'_> {
+impl SessionCatalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()

@@ -22,7 +22,9 @@ use ore::collections::CollectionExt;
 use repr::{ColumnType, RelationDesc, ScalarType};
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
-use crate::catalog::{Catalog, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema};
+use crate::catalog::{
+    CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
+};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -86,7 +88,7 @@ impl StatementDesc {
 /// See the documentation of [`StatementDesc`] for details.
 pub fn describe(
     pcx: &PlanContext,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
     param_types_in: &[Option<pgrepr::Type>],
 ) -> Result<StatementDesc, anyhow::Error> {
@@ -170,7 +172,7 @@ pub fn describe(
 /// guaranteed.
 pub fn plan(
     pcx: Option<&PlanContext>,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
@@ -242,7 +244,7 @@ pub fn plan(
 
 pub fn plan_copy_from(
     pcx: &PlanContext,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     id: GlobalId,
     columns: Vec<usize>,
     rows: Vec<repr::Row>,
@@ -284,7 +286,7 @@ pub struct StatementContext<'a> {
     /// awkward field and should probably be relocated to a place that fits our
     /// execution model more closely.
     pcx: Option<&'a PlanContext>,
-    pub catalog: &'a dyn Catalog,
+    pub catalog: &'a dyn SessionCatalog,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
@@ -293,7 +295,7 @@ pub struct StatementContext<'a> {
 impl<'a> StatementContext<'a> {
     pub fn new(
         pcx: Option<&'a PlanContext>,
-        catalog: &'a dyn Catalog,
+        catalog: &'a dyn SessionCatalog,
         param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
     ) -> StatementContext<'a> {
         StatementContext {

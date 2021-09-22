@@ -87,7 +87,7 @@ use sql::ast::{
     CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
-use sql::catalog::{Catalog as _, CatalogError};
+use sql::catalog::{CatalogError, SessionCatalog as _};
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -4457,7 +4457,7 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// supports describing FETCH statements which need access to bound portals
 /// through the session.
 pub fn describe(
-    catalog: &dyn sql::catalog::Catalog,
+    catalog: &dyn sql::catalog::SessionCatalog,
     stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
     session: &mut Session,

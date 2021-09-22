@@ -48,7 +48,7 @@ use repr::{
     Timestamp,
 };
 
-use crate::catalog::{Catalog, CatalogItemType};
+use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::PartialName;
 use crate::normalize;
@@ -119,7 +119,7 @@ impl AstInfo for Aug {
 
 #[derive(Debug)]
 struct NameResolver<'a> {
-    catalog: &'a dyn Catalog,
+    catalog: &'a dyn SessionCatalog,
     ctes: HashMap<String, LocalId>,
     status: Result<(), anyhow::Error>,
     ids: HashSet<GlobalId>,
@@ -251,7 +251,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 }
 
 pub fn resolve_names_stmt(
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
 ) -> Result<Statement<Aug>, anyhow::Error> {
     let mut n = NameResolver {
@@ -616,7 +616,7 @@ pub fn plan_copy_from(
 /// the datums in the given rows to match the order in the target table.
 pub fn plan_copy_from_rows(
     pcx: &PlanContext,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     id: GlobalId,
     columns: Vec<usize>,
     rows: Vec<repr::Row>,
@@ -3615,7 +3615,7 @@ pub struct ExprContext<'a> {
 }
 
 impl<'a> ExprContext<'a> {
-    pub fn catalog(&self) -> &dyn Catalog {
+    pub fn catalog(&self) -> &dyn SessionCatalog {
         self.qcx.scx.catalog
     }
 

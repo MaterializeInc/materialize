@@ -29,7 +29,8 @@ use uuid::Uuid;
 use crate::func::Func;
 use crate::names::{FullName, PartialName, SchemaName};
 
-/// A catalog keeps track of SQL objects available to the planner.
+/// A catalog keeps track of SQL objects and session state available to the
+/// planner.
 ///
 /// The `sql` crate is agnostic to any particular catalog implementation. This
 /// trait describes the required interface.
@@ -44,7 +45,7 @@ use crate::names::{FullName, PartialName, SchemaName};
 ///     components based upon connection defaults, e.g., resolving the partial
 ///     name `view42` to the fully-specified name `materialize.public.view42`.
 ///
-///   * Lookup operations, like [`Catalog::list_items`] or [`Catalog::get_item_by_id`]. These retrieve
+///   * Lookup operations, like [`SessionCatalog::list_items`] or [`SessionCatalog::get_item_by_id`]. These retrieve
 ///     metadata about a catalog entity based on a fully-specified name that is
 ///     known to be valid (i.e., because the name was successfully resolved,
 ///     or was constructed based on the output of a prior lookup operation).
@@ -52,8 +53,8 @@ use crate::names::{FullName, PartialName, SchemaName};
 ///
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
-/// [`resolve_item`]: Catalog::resolve_item
-pub trait Catalog: fmt::Debug + ExprHumanizer {
+/// [`resolve_item`]: SessionCatalog::resolve_item
+pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     /// Returns the search path used by the catalog.
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
 
@@ -99,7 +100,7 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// of the search schemas. The catalog implementation must choose one.
     fn resolve_item(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
-    /// Performs the same operation as [`Catalog::resolve_item`] but for
+    /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
@@ -189,7 +190,7 @@ pub struct CatalogConfig {
     pub disable_user_indexes: bool,
 }
 
-/// A database in a [`Catalog`].
+/// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.
     fn name(&self) -> &str;
@@ -198,7 +199,7 @@ pub trait CatalogDatabase {
     fn id(&self) -> i64;
 }
 
-/// A schema in a [`Catalog`].
+/// A schema in a [`SessionCatalog`].
 pub trait CatalogSchema {
     /// Returns a fully-specified name of the schema.
     fn name(&self) -> &SchemaName;
@@ -207,7 +208,7 @@ pub trait CatalogSchema {
     fn id(&self) -> i64;
 }
 
-/// A role in a [`Catalog`].
+/// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
     fn name(&self) -> &str;
@@ -216,7 +217,7 @@ pub trait CatalogRole {
     fn id(&self) -> i64;
 }
 
-/// An item in a [`Catalog`].
+/// An item in a [`SessionCatalog`].
 ///
 /// Note that "item" has a very specific meaning in the context of a SQL
 /// catalog, and refers to the various entities that belong to a schema.
@@ -354,7 +355,7 @@ impl fmt::Display for CatalogError {
 
 impl Error for CatalogError {}
 
-/// A dummy [`Catalog`] implementation.
+/// A dummy [`SessionCatalog`] implementation.
 ///
 /// This implementation is suitable for use in tests that plan queries which are
 /// not demanding of the catalog, as many methods are unimplemented.
@@ -378,7 +379,7 @@ lazy_static! {
     };
 }
 
-impl Catalog for DummyCatalog {
+impl SessionCatalog for DummyCatalog {
     fn search_path(&self, _: bool) -> Vec<&str> {
         vec!["dummy"]
     }
