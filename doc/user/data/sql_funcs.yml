@@ -145,7 +145,7 @@
   - signature: 'log10(x: numeric) -> numeric'
     description: Base 10 logarithm of `x`, same as `log`
 
-  - signature: 'log(x: numeric, b: numeric) -> numeric'
+  - signature: 'log(b: numeric, x: numeric) -> numeric'
     description: Base `b` logarithm of `x`
 
   - signature: 'mod(x: N, y: N) -> N'
