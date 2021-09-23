@@ -127,29 +127,34 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
         }
     }
 
-    /// Imports an index and makes it available as `id`.
+    /// Imports a previously exported index.
+    ///
+    /// This method makes available an index previously exported as `id`, identified
+    /// to the query by `description` (which names the view the index arranges, and
+    /// the keys by which it is arranged).
+    ///
+    /// The `requesting_view` argument is currently necessary to correctly track the
+    /// dependencies of views on indexes.
     pub fn import_index(
         &mut self,
         id: GlobalId,
-        index: IndexDesc,
+        description: IndexDesc,
         typ: RelationType,
         requesting_view: GlobalId,
     ) {
-        self.index_imports.insert(id, (index, typ));
+        self.index_imports.insert(id, (description, typ));
         self.record_depends_on(requesting_view, id);
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(
-        &mut self,
-        id: GlobalId,
-        description: SourceDesc,
-        orig_id: GlobalId,
-    ) {
+    ///
+    /// The `orig_id` identifier must be set correctly, and is used to index various
+    /// internal data structures. Little else is known about it.
+    pub fn import_source(&mut self, id: GlobalId, description: SourceDesc, orig_id: GlobalId) {
         self.source_imports.insert(id, (description, orig_id));
     }
 
-    /// Binds to `id` the relation expression `expr`.
+    /// Binds to `id` the relation expression `view`.
     pub fn insert_view(&mut self, id: GlobalId, view: OptimizedMirRelationExpr) {
         for get_id in view.global_uses() {
             self.record_depends_on(id, get_id);
@@ -158,36 +163,28 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
     }
 
     /// Exports as `id` an index on `on_id`.
-    pub fn export_index(
-        &mut self,
-        id: GlobalId,
-        on_id: GlobalId,
-        on_type: RelationType,
-        keys: Vec<MirScalarExpr>,
-    ) {
+    ///
+    /// Future uses of `import_index` in other dataflow descriptions may use `id`,
+    /// as long as this dataflow has not been terminated in the meantime.
+    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: RelationType) {
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_view(
             id,
             OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::ArrangeBy {
-                input: Box::new(MirRelationExpr::global_get(on_id, on_type.clone())),
-                keys: vec![keys.clone()],
+                input: Box::new(MirRelationExpr::global_get(
+                    description.on_id,
+                    on_type.clone(),
+                )),
+                keys: vec![description.keys.clone()],
             }),
         );
-        self.index_exports
-            .push((id, IndexDesc { on_id, keys }, on_type));
+        self.index_exports.push((id, description, on_type));
     }
 
-    /// Exports as `id` a sink on `from_id`.
-    pub fn export_sink(
-        &mut self,
-        id: GlobalId,
-        description: SinkDesc,
-    ) {
-        self.sink_exports.push((
-            id,
-            description,
-        ));
+    /// Exports as `id` a sink described by `description`.
+    pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc) {
+        self.sink_exports.push((id, description));
     }
 
     /// Records a dependency of `view_id` on `depended_upon`.
@@ -201,7 +198,7 @@ impl DataflowDescription<OptimizedMirRelationExpr> {
             .push(depended_upon);
     }
 
-    /// Returns true iff the id is already imported.
+    /// Returns true iff `id` is already imported.
     pub fn is_imported(&self, id: &GlobalId) -> bool {
         self.objects_to_build.iter().any(|bd| &bd.id == id)
             || self.source_imports.iter().any(|(i, _)| i == id)

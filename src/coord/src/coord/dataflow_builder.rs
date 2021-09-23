@@ -185,7 +185,7 @@ impl<'a> DataflowBuilder<'a> {
         let on_id = index.on;
         let keys = index.keys.clone();
         self.import_into_dataflow(&on_id, &mut dataflow);
-        dataflow.export_index(id, on_id, on_type, keys);
+        dataflow.export_index(id, IndexDesc { on_id, keys }, on_type);
         Some(dataflow)
     }
 
