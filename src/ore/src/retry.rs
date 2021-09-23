@@ -58,9 +58,14 @@
 
 use std::cmp;
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
-use tokio::time::{self, Duration};
+use futures::{ready, Stream, StreamExt};
+use pin_project::pin_project;
+use tokio::io::{AsyncRead, ReadBuf};
+use tokio::time::Duration;
 
 // TODO(benesch): remove this if the `duration_constants` feature stabilizes.
 // See: https://github.com/rust-lang/rust/issues/57391
@@ -81,12 +86,19 @@ pub struct RetryState {
 /// Configures a retry operation.
 ///
 /// See the [module documentation](self) for usage examples.
+#[pin_project]
 #[derive(Debug)]
 pub struct Retry {
     initial_backoff: Duration,
     factor: f64,
     clamp_backoff: Duration,
     limit: RetryLimit,
+
+    i: usize,
+    next_backoff: Option<Duration>,
+    #[pin]
+    sleep: tokio::time::Sleep,
+    start: Instant,
 }
 
 impl Retry {
@@ -153,6 +165,16 @@ impl Retry {
         self
     }
 
+    /// Resets the start time and try counters of this Retry instance to their initial values to
+    /// allow re-using it for another retryable operation
+    pub fn reset(self: Pin<&mut Self>) {
+        let mut this = self.project();
+        *this.i = 0;
+        *this.next_backoff = None;
+        *this.start = Instant::now();
+        this.sleep.set(tokio::time::sleep(Duration::default()));
+    }
+
     /// Retries the asynchronous, fallible operation `f` according to the
     /// configured policy.
     ///
@@ -177,36 +199,16 @@ impl Retry {
         F: FnMut(RetryState) -> U,
         U: Future<Output = Result<T, E>>,
     {
-        let start = Instant::now();
-        let mut i = 0;
-        let mut next_backoff = Some(cmp::min(self.initial_backoff, self.clamp_backoff));
-        loop {
-            match self.limit {
-                RetryLimit::Tries(max_tries) if i + 1 >= max_tries => next_backoff = None,
-                RetryLimit::Duration(max_duration) => {
-                    let elapsed = start.elapsed();
-                    if elapsed > max_duration {
-                        next_backoff = None;
-                    } else if elapsed + next_backoff.unwrap() > max_duration {
-                        next_backoff = Some(max_duration - elapsed);
-                    }
-                }
-                _ => (),
-            }
-            let state = RetryState { i, next_backoff };
+        let this = self;
+        tokio::pin!(this);
+        let mut err = None;
+        while let Some(state) = this.next().await {
             match f(state).await {
-                Ok(t) => return Ok(t),
-                Err(e) => match &mut next_backoff {
-                    None => return Err(e),
-                    Some(next_backoff) => {
-                        time::sleep(*next_backoff).await;
-                        *next_backoff =
-                            cmp::min(next_backoff.mul_f64(self.factor), self.clamp_backoff);
-                    }
-                },
+                Ok(v) => return Ok(v),
+                Err(e) => err = Some(e),
             }
-            i += 1;
         }
+        Err(err.expect("retry produces at least one element"))
     }
 }
 
@@ -219,6 +221,163 @@ impl Default for Retry {
             factor: 2.0,
             clamp_backoff: MAX_DURATION,
             limit: RetryLimit::Duration(Duration::from_secs(30)),
+
+            i: 0,
+            next_backoff: None,
+            start: Instant::now(),
+            sleep: tokio::time::sleep(Duration::default()),
+        }
+    }
+}
+
+impl Stream for Retry {
+    type Item = RetryState;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+        if *this.i == 0 {
+            *this.start = Instant::now();
+            *this.next_backoff = Some(cmp::min(*this.initial_backoff, *this.clamp_backoff));
+        } else {
+            match this.next_backoff {
+                None => return Poll::Ready(None),
+                Some(next_backoff) => {
+                    ready!(Pin::new(&mut this.sleep).poll(cx));
+                    *next_backoff =
+                        cmp::min(next_backoff.mul_f64(*this.factor), *this.clamp_backoff);
+                }
+            }
+        }
+
+        match *this.limit {
+            RetryLimit::Tries(max_tries) if *this.i + 1 >= max_tries => *this.next_backoff = None,
+            RetryLimit::Duration(max_duration) => {
+                let elapsed = this.start.elapsed();
+                if elapsed > max_duration {
+                    *this.next_backoff = None;
+                } else if elapsed + this.next_backoff.unwrap() > max_duration {
+                    *this.next_backoff = Some(max_duration - elapsed);
+                }
+            }
+            _ => (),
+        }
+
+        let state = RetryState {
+            i: *this.i,
+            next_backoff: *this.next_backoff,
+        };
+        if let Some(d) = *this.next_backoff {
+            this.sleep.reset(tokio::time::Instant::now() + d);
+        }
+        *this.i += 1;
+        Poll::Ready(Some(state))
+    }
+}
+
+/// Wrapper of a `Reader` factory that will automatically retry and resume reading an underlying
+/// resource in the events of errors according to a retry schedule.
+#[pin_project]
+#[derive(Debug)]
+pub struct RetryReader<F, U, R> {
+    factory: F,
+    offset: usize,
+    error: Option<std::io::Error>,
+    #[pin]
+    retry: Retry,
+    #[pin]
+    state: RetryReaderState<U, R>,
+}
+
+#[pin_project(project = RetryReaderStateProj)]
+#[derive(Debug)]
+enum RetryReaderState<U, R> {
+    Waiting,
+    Creating(#[pin] U),
+    Reading(#[pin] R),
+}
+
+impl<F, U, R> RetryReader<F, U, R>
+where
+    F: FnMut(RetryState, usize) -> U,
+    U: Future<Output = Result<R, std::io::Error>>,
+    R: AsyncRead,
+{
+    /// Uses the provided `Reader` factory to construct a `RetryReader` with the default `Retry`
+    /// settings.
+    ///
+    /// The factory will be called once at the beginning and subsequently every time a retry
+    /// attempt is made. The factory will be called with a single `usize` argument representing the
+    /// offset at which the returned `Reader` should resume reading from.
+    pub fn new(factory: F) -> Self {
+        Self::with_retry(factory, Retry::default())
+    }
+
+    /// Uses the provided `Reader` factory to construct a `RetryReader` with the passed `Retry`
+    /// settings. See the documentation of [RetryReader::new] for more detais.
+    pub fn with_retry(factory: F, retry: Retry) -> Self {
+        Self {
+            factory,
+            offset: 0,
+            error: None,
+            retry,
+            state: RetryReaderState::Waiting,
+        }
+    }
+}
+
+impl<F, U, R> AsyncRead for RetryReader<F, U, R>
+where
+    F: FnMut(RetryState, usize) -> U,
+    U: Future<Output = Result<R, std::io::Error>>,
+    R: AsyncRead,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        loop {
+            let mut this = self.as_mut().project();
+            use RetryReaderState::*;
+            match this.state.as_mut().project() {
+                RetryReaderStateProj::Waiting => match ready!(this.retry.as_mut().poll_next(cx)) {
+                    None => {
+                        return Poll::Ready(Err(this
+                            .error
+                            .take()
+                            .expect("retry produces at least one element")))
+                    }
+                    Some(state) => {
+                        this.state
+                            .set(Creating((*this.factory)(state, *this.offset)));
+                    }
+                },
+                RetryReaderStateProj::Creating(reader_fut) => match ready!(reader_fut.poll(cx)) {
+                    Ok(reader) => {
+                        this.state.set(Reading(reader));
+                    }
+                    Err(err) => {
+                        *this.error = Some(err);
+                        this.state.set(Waiting);
+                    }
+                },
+                RetryReaderStateProj::Reading(reader) => {
+                    let filled_end = buf.filled().len();
+                    match ready!(reader.poll_read(cx, buf)) {
+                        Ok(()) => {
+                            if let Some(_) = this.error.take() {
+                                this.retry.reset();
+                            }
+                            *this.offset += buf.filled().len() - filled_end;
+                            return Poll::Ready(Ok(()));
+                        }
+                        Err(err) => {
+                            *this.error = Some(err);
+                            this.state.set(Waiting);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -374,5 +533,46 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_retry_reader() {
+        use tokio::io::AsyncReadExt;
+
+        /// Reader that errors out after the first read
+        struct FlakyReader {
+            offset: usize,
+            should_error: bool,
+        }
+
+        impl AsyncRead for FlakyReader {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                buf: &mut ReadBuf<'_>,
+            ) -> Poll<Result<(), std::io::Error>> {
+                if self.should_error {
+                    Poll::Ready(Err(std::io::ErrorKind::ConnectionReset.into()))
+                } else if self.offset < 256 {
+                    buf.put_slice(&[b'A']);
+                    self.should_error = true;
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Ready(Ok(()))
+                }
+            }
+        }
+
+        let reader = RetryReader::new(|_state, offset| async move {
+            Ok(FlakyReader {
+                offset,
+                should_error: false,
+            })
+        });
+        tokio::pin!(reader);
+
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data).await.unwrap();
+        assert_eq!(data, vec![b'A'; 256]);
     }
 }
