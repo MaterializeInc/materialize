@@ -62,6 +62,8 @@ We need extension points in the existing source pipeline:
 
 Here's a visual representation of the changes in the source pipeline:
 
+![kafka-source](./static/persistent-kafka-upsert-v0.png)
+
 Existing operators are in blue and new additions in green.
 
 ## Alternatives
