@@ -55,6 +55,10 @@ Put breaking changes before other release notes.
 - Return control of canceled sessions (`ctrl + c`) while `SELECT` statements
   await results. Previously, this could cause the session to never terminate.
 
+- Fix a bug that could prevent Materialize from booting when importing views
+  into dataflows whose indexes had not yet been converted to dataflows
+  themselves. {{% gh 8021 %}}
+
 {{% version-header v0.9.5 %}}
 
 - Accept case insensitive timezones to be compatible with PostgreSQL.
