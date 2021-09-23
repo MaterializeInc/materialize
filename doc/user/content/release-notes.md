@@ -85,7 +85,7 @@ Put breaking changes before other release notes.
 - Ignore the trailing newline character of POSIX compliant files instead of
   decoding it as an empty byte row. {{% gh 8142 %}}
 
-- Support `ORDER BY` in aggregate functions.
+- Support `ORDER BY` in [aggregate functions](/sql/functions/#aggregate-func).
 
 - When issuing `COMMIT` or `ROLLBACK` commands outside of an explicit
   transaction, always return a warning. Previously, the warning could be suppressed.
