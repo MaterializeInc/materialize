@@ -44,6 +44,8 @@ Use relative links (/path/to/doc), not absolute links
 (https://materialize.com/docs/path/to/doc).
 
 Wrap your release notes at the 80 character mark.
+
+Put breaking changes before other release notes.
 {{< /comment >}}
 
 {{% version-header v0.9.6 %}}
