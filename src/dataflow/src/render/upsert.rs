@@ -123,6 +123,82 @@ where
         None
     };
 
+    let result_stream = upsert_core(
+        stream,
+        source_arity,
+        predicates,
+        position_or,
+        as_of_frontier,
+    );
+
+    let (mut oks, mut errs) = result_stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    // If we have temporal predicates do the thing they have to do.
+    if let Some(plan) = temporal_plan {
+        let (oks2, errs2) = oks.flat_map_fallible("UpsertTemporalOperators", {
+            let mut datums = crate::render::datum_vec::DatumVec::new();
+            move |(row, time, diff)| {
+                let arena = repr::RowArena::new();
+                let mut datums_local = datums.borrow_with(&row);
+                let times_diffs = plan.evaluate(&mut datums_local, &arena, time, diff);
+                // Explicitly drop `datums_local` to release the borrow.
+                drop(datums_local);
+                times_diffs.map(move |time_diff| {
+                    time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
+                })
+            }
+        });
+
+        oks = oks2;
+        errs = errs.concat(&errs2);
+    }
+
+    (oks.as_collection(), Some(errs.as_collection()))
+}
+
+/// Evaluates predicates and dummy column information.
+///
+/// This method takes decoded datums and prepares as output
+/// a row which contains only those positions of `position_or`.
+/// If any predicate is failed, no row is produced, and if an
+/// error is encounted it is returned instead.
+fn evaluate(
+    datums: &[Datum],
+    predicates: &[MirScalarExpr],
+    position_or: &[Option<usize>],
+    row_packer: &mut repr::Row,
+) -> Result<Option<Row>, EvalError> {
+    let arena = RowArena::new();
+    // Each predicate is tested in order.
+    for predicate in predicates.iter() {
+        if predicate.eval(&datums[..], &arena)? != Datum::True {
+            return Ok(None);
+        }
+    }
+    // We pack dummy values in locations that do not reference
+    // specific columns.
+    row_packer.clear();
+    row_packer.extend(position_or.iter().map(|x| match x {
+        Some(column) => datums[*column],
+        None => Datum::Dummy,
+    }));
+    Ok(Some(row_packer.finish_and_reuse()))
+}
+
+/// Internal core upsert logic.
+fn upsert_core<G>(
+    stream: &Stream<G, DecodeResult>,
+    source_arity: usize,
+    predicates: Vec<MirScalarExpr>,
+    position_or: Vec<Option<usize>>,
+    as_of_frontier: Antichain<Timestamp>,
+) -> Stream<G, (Result<Row, DataflowError>, u64, isize)>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
     let result_stream = stream.unary_frontier(
         Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
         "Upsert",
@@ -265,59 +341,5 @@ where
         },
     );
 
-    let (mut oks, mut errs) = result_stream.ok_err(|(data, time, diff)| match data {
-        Ok(data) => Ok((data, time, diff)),
-        Err(err) => Err((err, time, diff)),
-    });
-
-    // If we have temporal predicates do the thing they have to do.
-    if let Some(plan) = temporal_plan {
-        let (oks2, errs2) = oks.flat_map_fallible("UpsertTemporalOperators", {
-            let mut datums = crate::render::datum_vec::DatumVec::new();
-            move |(row, time, diff)| {
-                let arena = repr::RowArena::new();
-                let mut datums_local = datums.borrow_with(&row);
-                let times_diffs = plan.evaluate(&mut datums_local, &arena, time, diff);
-                // Explicitly drop `datums_local` to release the borrow.
-                drop(datums_local);
-                times_diffs.map(move |time_diff| {
-                    time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
-                })
-            }
-        });
-
-        oks = oks2;
-        errs = errs.concat(&errs2);
-    }
-
-    (oks.as_collection(), Some(errs.as_collection()))
-}
-
-/// Evaluates predicates and dummy column information.
-///
-/// This method takes decoded datums and prepares as output
-/// a row which contains only those positions of `position_or`.
-/// If any predicate is failed, no row is produced, and if an
-/// error is encounted it is returned instead.
-fn evaluate(
-    datums: &[Datum],
-    predicates: &[MirScalarExpr],
-    position_or: &[Option<usize>],
-    row_packer: &mut repr::Row,
-) -> Result<Option<Row>, EvalError> {
-    let arena = RowArena::new();
-    // Each predicate is tested in order.
-    for predicate in predicates.iter() {
-        if predicate.eval(&datums[..], &arena)? != Datum::True {
-            return Ok(None);
-        }
-    }
-    // We pack dummy values in locations that do not reference
-    // specific columns.
-    row_packer.clear();
-    row_packer.extend(position_or.iter().map(|x| match x {
-        Some(column) => datums[*column],
-        None => Datum::Dummy,
-    }));
-    Ok(Some(row_packer.finish_and_reuse()))
+    result_stream
 }
