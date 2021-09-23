@@ -143,12 +143,7 @@ where
             move |(row, time, diff)| {
                 let arena = repr::RowArena::new();
                 let mut datums_local = datums.borrow_with(&row);
-                let times_diffs = plan.evaluate(&mut datums_local, &arena, time, diff);
-                // Explicitly drop `datums_local` to release the borrow.
-                drop(datums_local);
-                times_diffs.map(move |time_diff| {
-                    time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
-                })
+                plan.evaluate(&mut datums_local, &arena, time, diff)
             }
         });
 

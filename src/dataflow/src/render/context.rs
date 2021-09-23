@@ -465,9 +465,7 @@ where
                 move |data, time, diff| {
                     let temp_storage = repr::RowArena::new();
                     let mut datums_local = datums.borrow_with(&data);
-                    mfp_plan
-                        .evaluate(&mut datums_local, &temp_storage, time.clone(), diff.clone())
-                        .map(|x| x.map_err(|(e, t, d)| (e.into(), t, d)))
+                    mfp_plan.evaluate(&mut datums_local, &temp_storage, time.clone(), diff.clone())
                 }
             });
 

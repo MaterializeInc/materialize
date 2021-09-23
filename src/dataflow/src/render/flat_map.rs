@@ -9,7 +9,6 @@
 
 use timely::dataflow::Scope;
 
-use dataflow_types::*;
 use expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use repr::{Row, RowArena};
 
@@ -65,7 +64,6 @@ where
                         datums_local.extend(output_row.iter());
                         mfp_plan
                             .evaluate(&mut datums_local, temp_storage, time, diff * *r)
-                            .map(|x| x.map_err(|(e, t, r)| (DataflowError::from(e), t, r)))
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>()
