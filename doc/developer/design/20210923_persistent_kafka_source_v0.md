@@ -51,7 +51,7 @@ same state that they had _as of_ the time at which we persisted.
 We need extension points in the existing source pipeline:
 
 - Sources must be able to emit finished timestamp bindings as a `Stream`, which
-  will allow us to persist them. 
+  will allow us to persist them.
 - Sources (`SourceReader` only, in our initial v0 version) must be able to
   initialize from given timestamp bindings. The bindings include
   partition/offset information, which allows the Kafka source to set an initial
