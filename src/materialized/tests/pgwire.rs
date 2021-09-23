@@ -424,12 +424,7 @@ fn test_record_types() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
-fn test_pgtest() -> Result<(), Box<dyn Error>> {
-    ore::test::init_logging();
-
-    let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-
+fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
         let server = util::start_server(util::Config::default()).unwrap();
@@ -447,6 +442,23 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
     });
 
     Ok(())
+}
+
+#[test]
+fn test_pgtest() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
+    pg_test_inner(dir)
+}
+
+#[test]
+// Materialize's differences from Postgres' responses.
+fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
+    pg_test_inner(dir)
 }
 
 #[tokio::test]

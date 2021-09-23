@@ -18,7 +18,9 @@ use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
 use repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use repr::{
+    ColumnName, Datum, NotNullViolation, RelationDesc, RelationType, Row, RowArena, ScalarType,
+};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -346,6 +348,7 @@ impl ErrorResponse {
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::IncompleteTimestamp(_) => SqlState::SQL_STATEMENT_NOT_YET_COMPLETE,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+            CoordError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,

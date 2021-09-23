@@ -17,6 +17,7 @@ use std::mem;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::Stream;
+use tokio::sync::OwnedMutexGuard;
 
 use expr::GlobalId;
 use repr::{Datum, Diff, Row, ScalarType, Timestamp};
@@ -91,6 +92,7 @@ impl Session {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: PlanContext::new(wall_time),
                     ops: TransactionOps::None,
+                    write_lock_guard: None,
                 });
             }
             TransactionStatus::InTransactionImplicit(txn) => {
@@ -109,6 +111,7 @@ impl Session {
             let txn = Transaction {
                 pcx: PlanContext::new(wall_time),
                 ops: TransactionOps::None,
+                write_lock_guard: None,
             };
             match stmts {
                 1 => self.transaction = TransactionStatus::Started(txn),
@@ -208,6 +211,7 @@ impl Session {
             Some(Transaction {
                 pcx: _,
                 ops: TransactionOps::Peeks(ts),
+                write_lock_guard: _,
             }) => *ts,
             _ => get_ts()?,
         };
@@ -313,6 +317,24 @@ impl Session {
     pub fn vars_mut(&mut self) -> &mut Vars {
         &mut self.vars
     }
+
+    /// Grants the coordinator's write lock guard to this session's inner
+    /// transaction.
+    ///
+    /// # Panics
+    /// If the inner transaction is idle. See
+    /// [`TransactionStatus::grant_write_lock`].
+    pub fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
+        self.transaction.grant_write_lock(guard);
+    }
+
+    /// Returns whether or not this session currently holds the write lock.
+    pub fn has_write_lock(&self) -> bool {
+        match self.transaction.inner() {
+            None => false,
+            Some(txn) => txn.write_lock_guard.is_some(),
+        }
+    }
 }
 
 /// A prepared statement.
@@ -376,7 +398,7 @@ pub type RowBatchStream = Box<dyn Stream<Item = Vec<Row>> + Send + Unpin>;
 /// The transaction status of a session.
 ///
 /// PostgreSQL's transaction states are in backend/access/transam/xact.c.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum TransactionStatus {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
@@ -425,6 +447,22 @@ impl TransactionStatus {
             | TransactionStatus::Failed(_) => false,
         }
     }
+
+    /// Grants the write lock to the inner transaction.
+    ///
+    /// # Panics
+    /// If `self` is `TransactionStatus::Default`, which indicates that the
+    /// transaction is idle, which is not appropriate to assign the
+    /// coordinator's write lock to.
+    pub fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
+        match self {
+            TransactionStatus::Default => panic!("cannot grant write lock to txn not yet started"),
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.grant_write_lock(guard),
+        }
+    }
 }
 
 impl Default for TransactionStatus {
@@ -434,12 +472,21 @@ impl Default for TransactionStatus {
 }
 
 /// State data for transactions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct Transaction {
     /// Plan context.
     pub pcx: PlanContext,
     /// Transaction operations.
     pub ops: TransactionOps,
+    /// Holds the coordinator's write lock.
+    write_lock_guard: Option<OwnedMutexGuard<()>>,
+}
+
+impl Transaction {
+    /// Grants the write lock to this transaction for the remainder of its lifetime.
+    fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
+        self.write_lock_guard = Some(guard);
+    }
 }
 
 /// The type of operation being performed by the transaction.
@@ -471,7 +518,7 @@ pub struct WriteOp {
 }
 
 /// The action to take during end_transaction.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum EndTransactionAction {
     /// Commit the transaction.
     Commit,

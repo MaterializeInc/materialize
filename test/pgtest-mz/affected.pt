@@ -1,0 +1,56 @@
+# Test affected row counts.
+
+send
+Query {"query": "CREATE TABLE t (i int)"}
+Query {"query": "INSERT INTO t VALUES (1), (1)"}
+Query {"query": "INSERT INTO t SELECT * FROM generate_series(1, 10)"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 2"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 10"}
+ReadyForQuery {"status":"I"}
+
+# Our response to UPDATE reflects the number of rows changed by the operation;
+# not the number of rows processed by the operation as in PG
+send
+Query {"query": "UPDATE t SET i = i + 1"}
+----
+
+# The preceding command only changes 3 rows, two of the rows that were 1 are now
+# 2, and one of the rows that was 1 is now 11. The remaining rows remain
+# unchanged from DD's perspective.
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"UPDATE 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE u (i int, t text)"}
+Query {"query": "INSERT INTO u SELECT generate_series, generate_series::text FROM generate_series(1, 10)"}
+Query {"query": "UPDATE u SET i = i + 1"}
+----
+
+# The preceding update changes all 10 rows because their column `t` values
+# remain unchanged, while the `i` values increment.
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 10"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"UPDATE 10"}
+ReadyForQuery {"status":"I"}

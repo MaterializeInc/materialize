@@ -35,10 +35,10 @@ use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource,
-    JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem,
-    SetExpr, SetOperator, Statement, TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName,
-    Value, Values,
+    Assignment, AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident,
+    InsertSource, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select,
+    SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor, TableWithJoins,
+    UnresolvedObjectName, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -669,6 +669,121 @@ pub fn plan_copy_from_rows(
     }
 
     Ok(expr.map(map_exprs).project(project_key))
+}
+
+/// Common information used for DELETE and UPDATE plans. assignments is None
+/// for DELETE.
+pub struct ReadThenWritePlan {
+    pub id: GlobalId,
+    /// WHERE filter.
+    pub selection: HirRelationExpr,
+    /// Map from column index to SET expression.
+    pub assignments: Option<HashMap<usize, HirScalarExpr>>,
+    pub finishing: RowSetFinishing,
+}
+
+pub fn plan_mutation_query(
+    scx: &StatementContext,
+    table_name: UnresolvedObjectName,
+    selection: Option<Expr<Raw>>,
+    assignments: Option<Vec<Assignment<Raw>>>,
+) -> Result<ReadThenWritePlan, anyhow::Error> {
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let table = scx.resolve_item(table_name)?;
+
+    // Validate the target of the mutation.
+    if table.item_type() != CatalogItemType::Table {
+        bail!("cannot mutate {} '{}'", table.item_type(), table.name());
+    }
+    let desc = table.desc()?;
+
+    if table.id().is_system() {
+        bail!("cannot mutate system table '{}'", table.name());
+    }
+
+    let get = HirRelationExpr::Get {
+        id: Id::Global(table.id()),
+        typ: desc.typ().clone(),
+    };
+
+    let selection: HirRelationExpr = match selection {
+        Some(mut expr) => {
+            transform_ast::transform_expr(scx, &mut expr)?;
+            let expr = resolve_names_expr(&mut qcx, expr)?;
+            let ecx = &ExprContext {
+                qcx: &qcx,
+                name: "WHERE clause",
+                scope: &Scope::from_source(
+                    Some(PartialName::from(table.name().clone())),
+                    desc.iter_names(),
+                    None,
+                ),
+                relation_type: &RelationType::new(desc.iter_types().cloned().collect()),
+                allow_aggregates: false,
+                allow_subqueries: true,
+            };
+            let expr = plan_expr(&ecx, &expr)?.type_as(&ecx, &ScalarType::Bool)?;
+            HirRelationExpr::Filter {
+                input: Box::new(get),
+                predicates: vec![expr],
+            }
+        }
+        None => get,
+    };
+
+    let assignments = if let Some(assignments) = assignments {
+        let mut sets = HashMap::new();
+        for Assignment { id, mut value } in assignments {
+            // Get the index and type of the column.
+            let name = normalize::column_name(id);
+            match desc.get_by_name(&name) {
+                Some((idx, typ)) => {
+                    transform_ast::transform_expr(scx, &mut value)?;
+                    let expr = resolve_names_expr(&mut qcx, value)?;
+                    let ecx = &ExprContext {
+                        qcx: &qcx,
+                        name: "SET clause",
+                        scope: &Scope::from_source(
+                            Some(PartialName::from(table.name().clone())),
+                            desc.iter_names(),
+                            None,
+                        ),
+                        relation_type: &RelationType::new(desc.iter_types().cloned().collect()),
+                        allow_aggregates: false,
+                        allow_subqueries: false,
+                    };
+                    let expr = plan_expr(&ecx, &expr)?.cast_to(
+                        "SET clause",
+                        ecx,
+                        CastContext::Assignment,
+                        &typ.scalar_type,
+                    )?;
+
+                    if sets.insert(idx, expr).is_some() {
+                        bail!("column {} set twice", name)
+                    }
+                }
+                None => bail!("unknown column {}", name),
+            };
+        }
+        Some(sets)
+    } else {
+        None
+    };
+
+    let finishing = RowSetFinishing {
+        order_by: vec![],
+        limit: None,
+        offset: 0,
+        project: (0..desc.arity()).collect(),
+    };
+
+    Ok(ReadThenWritePlan {
+        id: table.id(),
+        selection,
+        finishing,
+        assignments,
+    })
 }
 
 struct CastRelationError {

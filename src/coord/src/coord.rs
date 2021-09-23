@@ -37,7 +37,7 @@
 
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::future::Future;
 use std::path::Path;
@@ -75,13 +75,13 @@ use expr::{
     EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
+use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
 use ore::retry::Retry;
-use ore::str::StrExt;
 use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
 use repr::adt::numeric;
-use repr::{ColumnName, Datum, Diff, RelationDesc, Row, Timestamp};
+use repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
@@ -96,7 +96,7 @@ use sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan,
     FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
-    Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    Plan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use sql::plan::{StatementDesc, View};
 use transform::Optimizer;
@@ -113,7 +113,8 @@ use crate::coord::antichain::AntichainToken;
 use crate::error::CoordError;
 use crate::persistcfg::PersistConfig;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
+    TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
 use crate::timestamp::{TimestampMessage, Timestamper};
@@ -132,7 +133,20 @@ pub enum Message {
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
     ScrapeMetrics,
+    SendDiffs(SendDiffs),
+    WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     Shutdown,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct SendDiffs {
+    session: Session,
+    #[derivative(Debug = "ignore")]
+    tx: ClientTransmitter<ExecuteResponse>,
+    pub id: GlobalId,
+    pub diffs: Result<Vec<(Row, Diff)>, CoordError>,
+    pub kind: MutationKind,
 }
 
 #[derive(Debug)]
@@ -149,6 +163,17 @@ pub struct StatementReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub result: Result<sql::ast::Statement<Raw>, CoordError>,
     pub params: Params,
+}
+
+/// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
+/// could theoretically be used to queue any deferred plan.
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct DeferredPlan {
+    #[derivative(Debug = "ignore")]
+    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub session: Session,
+    pub plan: Plan,
 }
 
 #[derive(Derivative)]
@@ -253,6 +278,11 @@ pub struct Coordinator {
     ///
     /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
     pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
+
+    /// Serializes accesses to write critical sections.
+    write_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Holds plans deferred due to write lock.
+    write_lock_wait_group: VecDeque<DeferredPlan>,
 }
 
 /// Metadata about an active connection.
@@ -274,6 +304,34 @@ struct ConnMeta {
 struct TxnReads {
     timedomain_ids: HashSet<GlobalId>,
     _handles: Vec<AntichainToken<Timestamp>>,
+}
+
+/// Enforces critical section invariants for functions that perform writes to
+/// tables, e.g. `INSERT`, `UPDATE`.
+///
+/// If the provided session doesn't currently hold the write lock, attempts to
+/// grant it. If the coord cannot immediately grant the write lock, defers
+/// executing the provided plan until the write lock is available, and exits the
+/// function.
+///
+/// # Parameters
+/// - `$coord: &mut Coord`
+/// - `$tx: ClientTransmitter<ExecuteResponse>`
+/// - `mut $session: Session`
+/// - `$plan_to_defer: Plan`
+///
+/// Note that making this a macro rather than a function lets us avoid taking
+/// ownership of e.g. session and lets us unilaterally enforce the return when
+/// deferring work.
+macro_rules! guard_write_critical_section {
+    ($coord:expr, $tx:expr, $session:expr, $plan_to_defer: expr) => {
+        if !$session.has_write_lock() {
+            if $coord.try_grant_session_write_lock(&mut $session).is_err() {
+                $coord.defer_write($tx, $session, $plan_to_defer);
+                return;
+            }
+        }
+    };
 }
 
 impl Coordinator {
@@ -524,6 +582,17 @@ impl Coordinator {
                 Message::Worker(worker) => self.message_worker(worker),
                 Message::StatementReady(ready) => self.message_statement_ready(ready).await,
                 Message::SinkConnectorReady(ready) => self.message_sink_connector_ready(ready),
+                Message::WriteLockGrant(write_lock_guard) => {
+                    // It's possible to have more incoming write lock grants
+                    // than pending writes because of cancellations.
+                    self.write_lock_wait_group.pop_front().map(|mut ready| {
+                        ready.session.grant_write_lock(write_lock_guard);
+                        self.sequence_plan(ready.tx, ready.session, ready.plan);
+                    });
+                    // N.B. if no deferred plans, write lock is released by drop
+                    // here.
+                }
+                Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
                 Message::AdvanceSourceTimestamp(advance) => {
                     self.message_advance_source_timestamp(advance)
                 }
@@ -784,6 +853,36 @@ impl Coordinator {
     fn message_shutdown(&mut self) {
         self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
         self.broadcast(dataflow::Command::Shutdown);
+    }
+
+    fn message_send_diffs(
+        &mut self,
+        SendDiffs {
+            mut session,
+            tx,
+            id,
+            diffs,
+            kind,
+        }: SendDiffs,
+    ) {
+        match diffs {
+            Ok(diffs) => {
+                tx.send(
+                    self.sequence_send_diffs(
+                        &mut session,
+                        SendDiffsPlan {
+                            id,
+                            updates: diffs,
+                            kind,
+                        },
+                    ),
+                    session,
+                );
+            }
+            Err(e) => {
+                tx.send(Err(e), session);
+            }
+        }
     }
 
     fn message_advance_source_timestamp(
@@ -1284,6 +1383,8 @@ impl Coordinator {
         //  - CREATE SCHEMA
         //  - DROP TABLE
         //  - INSERT
+        //  - UPDATE
+        //  - DELETE
         // When these statements are routed through symbiosis, table information
         // is created and maintained locally, which is required for other statements
         // to be executed correctly.
@@ -1293,6 +1394,8 @@ impl Coordinator {
             ..
         })
         | Statement::CreateSchema(CreateSchemaStatement { .. })
+        | Statement::Update { .. }
+        | Statement::Delete { .. }
         | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
@@ -1387,6 +1490,16 @@ impl Coordinator {
 
             // Allow dataflow to cancel any pending peeks.
             self.broadcast(dataflow::Command::CancelPeek { conn_id });
+
+            // Cancel deferred writes. There is at most one pending write per session.
+            if let Some(idx) = self
+                .write_lock_wait_group
+                .iter()
+                .position(|ready| ready.session.conn_id() == conn_id)
+            {
+                let ready = self.write_lock_wait_group.remove(idx).unwrap();
+                ready.tx.send(Ok(ExecuteResponse::Cancelled), ready.session);
+            }
 
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
@@ -1591,6 +1704,9 @@ impl Coordinator {
             }
             Plan::Insert(plan) => {
                 tx.send(self.sequence_insert(&mut session, plan), session);
+            }
+            Plan::ReadThenWrite(plan) => {
+                self.sequence_read_then_write(tx, session, plan);
             }
             Plan::AlterNoop(plan) => {
                 tx.send(
@@ -2287,6 +2403,20 @@ impl Coordinator {
         mut session: Session,
         mut action: EndTransactionAction,
     ) {
+        if EndTransactionAction::Commit == action {
+            let txn = session
+                .transaction()
+                .inner()
+                .expect("must be in a transaction");
+            if let Transaction {
+                ops: TransactionOps::Writes(_),
+                ..
+            } = txn
+            {
+                guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
+            }
+        }
+
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
             (&action, session.transaction())
@@ -2351,6 +2481,10 @@ impl Coordinator {
                                         id.to_string(),
                                     ))
                                 })?;
+                            // This can be empty if, say, a DELETE's WHERE clause had 0 results.
+                            if rows.is_empty() {
+                                continue;
+                            }
                             match catalog_entry.item() {
                                 CatalogItem::Table(Table {
                                     persist: Some(persist),
@@ -3066,20 +3200,42 @@ impl Coordinator {
         session: &mut Session,
         plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
-            id: plan.id,
-            rows: plan.updates,
-        }]))?;
+        // Take a detour through ChangeBatch so we can consolidate updates. Useful
+        // especially for UPDATE where a row shouldn't change.
+        let mut rows = ChangeBatch::with_capacity(plan.updates.len());
+        rows.extend(
+            plan.updates
+                .into_iter()
+                .map(|(v, sz)| (v, i64::cast_from(sz))),
+        );
+
+        // The number of affected rows is not the number of rows we see, but the
+        // sum of the abs of their diffs, i.e. we see `INSERT INTO t VALUES (1),
+        // (1)` as a row with a value of 1 and a diff of +2.
+        let mut affected_rows = 0isize;
+        let rows = rows
+            .into_inner()
+            .into_iter()
+            .map(|(v, sz)| {
+                let diff = isize::cast_from(sz);
+                affected_rows += diff.abs();
+                (v, diff)
+            })
+            .collect();
+
+        let affected_rows = usize::try_from(affected_rows).expect("positive isize must fit");
+
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id: plan.id, rows }]))?;
         Ok(match plan.kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
+            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
             MutationKind::Insert => {
                 if self.catalog.config().disable_user_indexes {
                     self.catalog.ensure_default_index_enabled(plan.id)?;
                 }
 
-                ExecuteResponse::Inserted(plan.affected_rows)
+                ExecuteResponse::Inserted(affected_rows)
             }
-            MutationKind::Update => ExecuteResponse::Updated(plan.affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
         })
     }
 
@@ -3094,28 +3250,23 @@ impl Coordinator {
         {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
-                let desc = self.catalog.get_by_id(&plan.id).desc()?;
-                let mut affected_rows: usize = 0;
-                for (row, diff) in &rows {
-                    for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
-                        if datum == &Datum::Null && !typ.nullable {
-                            coord_bail!(
-                                "null value in column {} violates not-null constraint",
-                                name.unwrap_or(&ColumnName::from("unnamed column"))
-                                    .as_str()
-                                    .quoted()
-                            )
-                        }
+                // Insert can be queued, so we need to re-verify the id exists.
+                let table = match self.catalog.try_get_by_id(plan.id) {
+                    Some(table) => table,
+                    None => {
+                        return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                            plan.id.to_string(),
+                        )))
                     }
-                    // repeat_rows could cause diff to be negative. In that (already non-standard
-                    // case), still report the total number of diffs, not the sum of diffs. We have
-                    // to send a u32 over the wire anyway, so it wouldn't make sense to even try to
-                    // sum them and send that.
-                    affected_rows += usize::try_from(diff.abs()).expect("positive isize must fit");
+                };
+                let desc = table.desc()?;
+                for (row, _) in &rows {
+                    for (i, datum) in row.unpack().iter().enumerate() {
+                        desc.constraints_met(i, datum)?;
+                    }
                 }
                 let diffs_plan = SendDiffsPlan {
                     id: plan.id,
-                    affected_rows,
                     updates: rows,
                     kind: MutationKind::Insert,
                 };
@@ -3146,6 +3297,111 @@ impl Coordinator {
             values: values.lower(),
         };
         self.sequence_insert(session, plan)
+    }
+
+    // ReadThenWrite is a plan whose writes depend on the results of a
+    // read. This works by doing a Peek then queuing a SendDiffs. No writes
+    // or read-then-writes can occur between the Peek and SendDiff otherwise a
+    // serializability violation could occur.
+    fn sequence_read_then_write(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
+        plan: ReadThenWritePlan,
+    ) {
+        guard_write_critical_section!(self, tx, session, Plan::ReadThenWrite(plan));
+
+        let ReadThenWritePlan {
+            id,
+            kind,
+            selection,
+            assignments,
+            finishing,
+        } = plan;
+
+        // Delete can be queued, so re-verify the id exists.
+        let desc = match self.catalog.try_get_by_id(id) {
+            Some(table) => table.desc().expect("desc called on table").clone(),
+            None => {
+                tx.send(
+                    Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                        id.to_string(),
+                    ))),
+                    session,
+                );
+                return;
+            }
+        };
+
+        let ts = self.get_read_ts();
+        let peek_response = match self.sequence_peek(
+            &mut session,
+            PeekPlan {
+                source: selection,
+                when: PeekWhen::AtTimestamp(ts),
+                finishing,
+                copy_to: None,
+            },
+        ) {
+            Ok(resp) => resp,
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return;
+            }
+        };
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        tokio::spawn(async move {
+            let arena = RowArena::new();
+            let diffs = match peek_response {
+                ExecuteResponse::SendingRows(batch) => match batch.await {
+                    PeekResponse::Rows(rows) => {
+                        |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
+                            // Use 2x row len incase there's some assignments.
+                            let mut diffs = Vec::with_capacity(rows.len() * 2);
+                            for row in rows {
+                                if let Some(ref assignments) = assignments {
+                                    let mut datums = row.unpack();
+                                    let mut updates = vec![];
+                                    for (idx, expr) in assignments {
+                                        let updated = match expr.eval(&datums, &arena) {
+                                            Ok(updated) => updated,
+                                            Err(e) => {
+                                                return Err(CoordError::Unstructured(anyhow!(e)))
+                                            }
+                                        };
+                                        desc.constraints_met(*idx, &updated)?;
+                                        updates.push((*idx, updated));
+                                    }
+                                    for (idx, new_value) in updates {
+                                        datums[idx] = new_value;
+                                    }
+                                    let updated = Row::pack_slice(&datums);
+                                    diffs.push((updated, 1));
+                                }
+                                // Any read is either being deleted or updated, so always remove one row.
+                                diffs.push((row, -1));
+                            }
+                            Ok(diffs)
+                        }(rows)
+                    }
+                    PeekResponse::Canceled => {
+                        Err(CoordError::Unstructured(anyhow!("execution canceled")))
+                    }
+                    PeekResponse::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
+                },
+                _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
+            };
+            internal_cmd_tx
+                .send(Message::SendDiffs(SendDiffs {
+                    session,
+                    tx,
+                    id,
+                    diffs,
+                    kind,
+                }))
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
     }
 
     fn sequence_alter_item_rename(
@@ -3669,6 +3925,39 @@ impl Coordinator {
         }
         Ok(timelines.into_iter().next())
     }
+
+    /// Attempts to immediately grant `session` access to the write lock or
+    /// errors if the lock is currently held.
+    fn try_grant_session_write_lock(
+        &self,
+        session: &mut Session,
+    ) -> Result<(), tokio::sync::TryLockError> {
+        self.write_lock.clone().try_lock_owned().map(|p| {
+            session.grant_write_lock(p);
+        })
+    }
+
+    /// Defers executing `plan` until the write lock becomes available; waiting
+    /// occurs in a greenthread, so callers of this function likely want to
+    /// return after calling it.
+    fn defer_write(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        plan: Plan,
+    ) {
+        let plan = DeferredPlan { tx, session, plan };
+        self.write_lock_wait_group.push_back(plan);
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let write_lock = Arc::clone(&self.write_lock);
+        tokio::spawn(async move {
+            let guard = write_lock.lock_owned().await;
+            internal_cmd_tx
+                .send(Message::WriteLockGrant(guard))
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
@@ -3794,6 +4083,8 @@ pub async fn serve(
                 now,
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
+                write_lock: Arc::new(tokio::sync::Mutex::new(())),
+                write_lock_wait_group: VecDeque::new(),
             };
             if let Some(config) = &logging {
                 coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
@@ -3954,6 +4245,8 @@ pub fn serve_debug(
             now: get_debug_timestamp,
             pending_peeks: HashMap::new(),
             pending_tails: HashMap::new(),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            write_lock_wait_group: VecDeque::new(),
         };
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();
