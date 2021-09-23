@@ -139,6 +139,11 @@ impl<'a> DataflowBuilder<'a> {
             // actually used by the optimized plan
             if let Some(indexes) = self.catalog.enabled_indexes().get(&get_id) {
                 for (id, keys) in indexes.iter() {
+                    // Ensure only valid indexes (i.e. those in self.indexes) are imported.
+                    // TODO(#8318): Ensure this logic is accounted for.
+                    if !self.indexes.contains_key(*id) {
+                        continue;
+                    }
                     let on_entry = self.catalog.get_by_id(&get_id);
                     let on_type = on_entry.desc().unwrap().typ().clone();
                     let index_desc = IndexDesc {

@@ -16,16 +16,11 @@ from materialize.mzcompose import (
     Zookeeper,
 )
 
-prerequisites = [
+confluent = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
 ]
-
-mz_standard = Materialized(
-    name="mz_standard",
-    hostname="materialized",
-)
 
 mz_disable_user_indexes = Materialized(
     name="mz_disable_user_indexes",
@@ -33,31 +28,45 @@ mz_disable_user_indexes = Materialized(
     options="--disable-user-indexes",
 )
 
+testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
+
 services = [
-    *prerequisites,
-    mz_standard,
+    *confluent,
+    Materialized(),
     mz_disable_user_indexes,
-    Testdrive(no_reset=True),
+    Testdrive(),
+    testdrive_no_reset,
 ]
 
 
 def workflow_disable_user_indexes(w: Workflow):
-    w.start_and_wait_for_tcp(services=prerequisites)
+    w.start_and_wait_for_tcp(services=confluent)
 
     # Create catalog with vanilla MZ
-    w.start_services(services=["mz_standard"])
-
-    w.wait_for_mz(service="mz_standard")
-
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
     w.run_service(service="testdrive-svc", command="user-indexes-enabled.td")
-
-    w.kill_services(services=["mz_standard"])
+    w.kill_services(services=["materialized"])
 
     # Test semantics of disabling user indexes
     w.start_services(services=["mz_disable_user_indexes"])
-
     w.wait_for_mz(service="mz_disable_user_indexes")
-
-    w.run_service(service="testdrive-svc", command="user-indexes-disabled.td")
-
+    w.run_service(service="testdrive_no_reset", command="user-indexes-disabled.td")
     w.kill_services(services=["mz_disable_user_indexes"])
+
+
+def workflow_github_8021(w: Workflow) -> None:
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+    w.run_service(service="testdrive-svc", command="github-8021.td")
+
+    # Ensure MZ can boot
+    w.kill_services(services=["materialized"])
+    w.start_services(services=["materialized"])
+    w.wait_for_mz(service="materialized")
+    w.kill_services(services=["materialized"])
+
+
+def workflow_all_restart(w: Workflow) -> None:
+    workflow_disable_user_indexes(w)
+    workflow_github_8021(w)
