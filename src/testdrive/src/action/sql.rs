@@ -37,9 +37,14 @@ pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
     context: Context,
+    term_width: Option<usize>,
 }
 
-pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, String> {
+pub fn build_sql(
+    mut cmd: SqlCommand,
+    context: Context,
+    term_width: Option<usize>,
+) -> Result<SqlAction, String> {
     let stmts = sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
@@ -53,6 +58,7 @@ pub fn build_sql(mut cmd: SqlCommand, context: Context) -> Result<SqlAction, Str
         cmd,
         stmt: stmts.into_element(),
         context,
+        term_width,
     })
 }
 
@@ -106,7 +112,7 @@ impl Action for SqlAction {
         use Statement::*;
 
         let query = &self.cmd.query;
-        print_query(&query);
+        print_query(&query, state.term_width);
 
         let should_retry = match &self.stmt {
             // Do not retry FETCH statements as subsequent executions are likely
@@ -202,7 +208,7 @@ impl SqlAction {
         pgclient: &mut tokio_postgres::Client,
         query: &str,
     ) -> Result<(), String> {
-        print_query(&query);
+        print_query(&query, self.term_width);
         match pgclient.query(query, &[]).await {
             Err(err) => Err(err.to_string()),
             Ok(_) => Ok(()),
@@ -304,12 +310,18 @@ impl SqlAction {
 pub struct FailSqlAction {
     cmd: FailSqlCommand,
     context: Context,
+    term_width: Option<usize>,
 }
 
-pub fn build_fail_sql(cmd: FailSqlCommand, context: Context) -> Result<FailSqlAction, String> {
+pub fn build_fail_sql(
+    cmd: FailSqlCommand,
+    context: Context,
+    term_width: Option<usize>,
+) -> Result<FailSqlAction, String> {
     Ok(FailSqlAction {
         cmd,
-        context: context,
+        context,
+        term_width,
     })
 }
 
@@ -321,7 +333,7 @@ impl Action for FailSqlAction {
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         let query = &self.cmd.query;
-        print_query(&query);
+        print_query(&query, self.term_width);
 
         let pgclient = &state.pgclient;
         Retry::default()
@@ -389,9 +401,10 @@ impl FailSqlAction {
     }
 }
 
-pub fn print_query(query: &str) {
-    if query.len() > 72 {
-        println!("> {}...", &query[..72]);
+pub fn print_query(query: &str, max: Option<usize>) {
+    let max = max.unwrap_or(74) - 2;
+    if query.len() > std::cmp::max(max, 72) {
+        println!("> {}...", &query[..std::cmp::max(max - 3, 72)]);
     } else {
         println!("> {}", &query);
     }

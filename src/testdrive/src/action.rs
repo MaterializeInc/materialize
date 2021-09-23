@@ -117,6 +117,7 @@ pub struct State {
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
+    term_width: Option<usize>,
     default_timeout: Duration,
     postgres_clients: HashMap<String, tokio_postgres::Client>,
     sql_server_clients:
@@ -140,7 +141,7 @@ impl State {
         {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
-            sql::print_query(&query);
+            sql::print_query(&query, self.term_width);
             self.pgclient.batch_execute(&query).await.err_ctx(format!(
                 "resetting materialized state: DROP DATABASE {}",
                 db_name,
@@ -161,7 +162,7 @@ impl State {
                     continue;
                 }
                 let query = format!("DROP ROLE {}", role_name);
-                sql::print_query(&query);
+                sql::print_query(&query, self.term_width);
                 self.pgclient.batch_execute(&query).await.err_ctx(format!(
                     "resetting materialized state: DROP ROLE {}",
                     role_name,
@@ -529,12 +530,15 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         }
                     }
                 }
-                Box::new(sql::build_sql(sql, context.clone()).map_err(wrap_err)?)
+                Box::new(sql::build_sql(sql, context.clone(), state.term_width).map_err(wrap_err)?)
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
                 sql.expected_error = subst(&sql.expected_error)?;
-                Box::new(sql::build_fail_sql(sql, context.clone()).map_err(wrap_err)?)
+                Box::new(
+                    sql::build_fail_sql(sql, context.clone(), state.term_width)
+                        .map_err(wrap_err)?,
+                )
             }
         };
         out.push(PosAction {
@@ -754,6 +758,7 @@ pub async fn create_state(
         s3_buckets_created: BTreeSet::new(),
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
+        term_width: term_size::dimensions().map(|(w, _)| w),
         default_timeout: config.default_timeout,
         postgres_clients: HashMap::new(),
         sql_server_clients: HashMap::new(),

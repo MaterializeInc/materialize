@@ -4680,6 +4680,7 @@ dependencies = [
  "sql-parser",
  "structopt",
  "tempfile",
+ "term_size",
  "termcolor",
  "tiberius",
  "tokio",
