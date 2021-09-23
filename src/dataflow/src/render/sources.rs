@@ -27,7 +27,7 @@ use ore::cast::CastFrom;
 use ore::now::NowFn;
 use repr::RelationDesc;
 use repr::ScalarType;
-use repr::{Datum, Row, Timestamp};
+use repr::{Row, Timestamp};
 
 use crate::decode::decode_cdcv2;
 use crate::decode::render_decode;
@@ -457,48 +457,24 @@ where
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
                 // to demonstrate the intended use.
-                if let Some(mut operators) = linear_operators {
-                    // Determine replacement values for unused columns.
-                    let source_type = src.bare_desc.typ();
-                    let position_or = (0..source_type.arity())
-                        .map(|col| {
-                            if operators.projection.contains(&col) {
-                                Some(col)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
-
+                if let Some(operators) = linear_operators {
                     // Apply predicates and insert dummy values into undemanded columns.
                     let (collection2, errors) =
                         collection
                             .inner
                             .flat_map_fallible("SourceLinearOperators", {
-                                let mut datums = crate::render::datum_vec::DatumVec::new();
-                                let predicates = std::mem::take(&mut operators.predicates);
-                                // The predicates may be temporal, which requires the nuance
-                                // of an explicit plan capable of evaluating the predicates.
-                                let filter_plan = expr::MapFilterProject::new(source_type.arity())
-                                    .filter(predicates)
+                                // Produce an executable plan reflecting the linear operators.
+                                let source_type = src.bare_desc.typ();
+                                let linear_op_mfp = crate::render::plan::linear_to_mfp(operators, source_type)
                                     .into_plan()
                                     .unwrap_or_else(|e| panic!("{}", e));
+                                // Reusable allocation for unpacking datums.
+                                let mut datums = crate::render::datum_vec::DatumVec::new();
+                                // Closure that applies the linear operators to each `input_row`.
                                 move |(input_row, time, diff)| {
                                     let arena = repr::RowArena::new();
                                     let mut datums_local = datums.borrow_with(&input_row);
-                                    let times_diffs =
-                                        filter_plan.evaluate(&mut datums_local, &arena, time, diff);
-                                    // Name the iterator, to capture total size and datums.
-                                    let iterator = position_or.iter().map(|pos_or| match pos_or {
-                                        Some(index) => datums_local[*index],
-                                        None => Datum::Dummy,
-                                    });
-                                    let total_size = repr::datums_size(iterator.clone());
-                                    let mut output_row = Row::with_capacity(total_size);
-                                    output_row.extend(iterator);
-                                    // Each produced (time, diff) results in a copy of `output_row` in the output.
-                                    // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
-                                    times_diffs
+                                    linear_op_mfp.evaluate(&mut datums_local, &arena, time, diff)
                                 }
                             });
 
