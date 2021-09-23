@@ -1,0 +1,9 @@
+{
+    "com.acme.avro.inner::f1": [0, 1000000000],
+    "com.acme.avro.inner::f2.len": [0, 100],
+    "com.acme.avro.inner::f3": [1, 2],
+    "com.acme.avro.inner::f3.1.len": [0, 100],
+    "com.acme.avro.inner::f4": [0, 1],
+    "com.acme.avro.inner::f5": [10000, 100000000000],
+    "com.acme.avro.testrecord::outer_array.len": [0, 1000]
+}
