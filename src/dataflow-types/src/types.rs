@@ -36,6 +36,9 @@ use kafka_util::KafkaAddrs;
 use repr::{ColumnName, ColumnType, Diff, RelationDesc, RelationType, Row, ScalarType, Timestamp};
 
 /// The response from a `Peek`.
+///
+/// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
+/// we expect a 1:1 contract between `Peek` and `PeekResponse`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
     Rows(Vec<Row>),

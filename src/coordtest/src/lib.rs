@@ -7,40 +7,53 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! coordtest attempts to be a deterministic Coordinator tester using
-//! datadriven test files. Many parts of dataflow run in their own tokio task
-//! and we aren't able to observe their output until we bump a timestamp and
-//! see if new data are available. For example, the FILE source on mac polls
-//! every 100ms, making writing a fully deterministic test difficult. Instead
-//! coordtest attempts to provide enough knobs that it can test interesting
-//! cases without race conditions.
+//! coordtest attempts to be a deterministic Coordinator tester using datadriven
+//! test files. Many parts of dataflow run in their own tokio task and we aren't
+//! able to observe their output until we bump a timestamp and see if new data
+//! are available. For example, the FILE source on mac polls every 100ms, making
+//! writing a fully deterministic test difficult. Instead coordtest attempts to
+//! provide enough knobs that it can test interesting cases without race
+//! conditions.
 //!
 //! The coordinator is started with logical compaction disabled. If you want to
 //! add it to an index (to allow sinces to advance past 0), use `ALTER INDEX`.
 //!
 //! The following datadriven directives are supported:
-//! - `sql`: Executes the SQL using transaction rules similar to the
-//! simple pgwire protocol in a new session (that is, multiple `sql`
-//! directives are not in the same session). Output is formatted
-//! [`ExecuteResponse`](coord::ExecuteResponse). The input can contain the
-//! string `<TEMP>` which will be replaced with a temporary directory.
-//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout which
-//! will panic) until all datums returned (all columns in all rows in all
-//! statements) are `true`. Prior to each attempt, all pending feedback
-//! messages from the dataflow server are sent to the Coordinator. Messages
-//! for specified items can be skipped (but requeued) by specifying
-//! `exclude-uppers=database.schema.item` as an argument. After each failed
-//! attempt, the timestamp is incremented by 1 to give any new data an
-//! opportunity to be observed.
+//! - `sql`: Executes the SQL using transaction rules similar to the simple
+//!   pgwire protocol in a new session (that is, multiple `sql` directives are
+//!   not in the same session). Output is formatted
+//!   [`ExecuteResponse`](coord::ExecuteResponse). The input can contain the
+//!   string `<TEMP>` which will be replaced with a temporary directory.
+//! - `wait-sql`: Executes all SQL in a retry loop (with 5s timeout which will
+//!   panic) until all datums returned (all columns in all rows in all
+//!   statements) are `true`. Prior to each attempt, all pending feedback
+//!   messages from the dataflow server are sent to the Coordinator. Messages
+//!   for specified items can be skipped (but requeued) by specifying
+//!   `exclude-uppers=database.schema.item` as an argument. After each failed
+//!   attempt, the timestamp is incremented by 1 to give any new data an
+//!   opportunity to be observed.
+//! - `async-sql`: Requires a `session=name` argument. Creates a named session,
+//!   and executes the provided statements similarly to `sql`, except that the
+//!   results are not immediately returned. Instead, await the results using the
+//!   `await-sql` directive naming this session. The input can contain the
+//!   string `<TEMP>` which will be replaced with a temporary directory when
+//!   returned with `await-sql`. No output.
+//! - `async-cancel`: Requires a `session=name` argument. Cancels the named
+//!   session. No output.
+//! - `await-sql`: Requires a `session=name` argument. Awaits the results of the
+//!   named session. Output is formatted
+//!   [`ExecuteResponse`](coord::ExecuteResponse). If the input to the awaited
+//!   session contained the string `<TEMP>`, it will be replaced with a
+//!   temporary directory.
 //! - `update-upper`: Sends a batch of
-//! [`FrontierUppers`](dataflow::WorkerFeedback::FrontierUppers)
-//! to the Coordinator. Input is one update per line of the format
-//! `database.schema.item N` where N is some numeric timestamp. No output.
+//!   [`FrontierUppers`](dataflow::WorkerFeedback::FrontierUppers) to the
+//!   Coordinator. Input is one update per line of the format
+//!   `database.schema.item N` where N is some numeric timestamp. No output.
 //! - `inc-timestamp`: Increments the timestamp by number in the input. No
-//! output.
+//!   output.
 //! - `create-file`: Requires a `name=filename` argument. Creates and truncates
-//! a file with the specified name in the TEMP directory with contents as the
-//! input. No output.
+//!   a file with the specified name in the TEMP directory with contents as the
+//!   input. No output.
 //! - `append-file`: Same as `create-file`, but appends.
 //! - `print-catalog`: Outputs the catalog. Generally for debugging.
 
@@ -59,7 +72,7 @@ use tokio::sync::mpsc;
 
 use coord::{
     session::{EndTransactionAction, Session},
-    Client, ExecuteResponse, SessionClient,
+    Client, ExecuteResponse, SessionClient, StartupResponse,
 };
 use dataflow::WorkerFeedback;
 use dataflow_types::PeekResponse;
@@ -91,6 +104,8 @@ pub struct CoordTest {
     timestamp: Arc<Mutex<u64>>,
     _verbose: bool,
     _metrics_registry: MetricsRegistry,
+    persisted_sessions: HashMap<String, (SessionClient, StartupResponse)>,
+    deferred_results: HashMap<String, Vec<ExecuteResponse>>,
 }
 
 impl CoordTest {
@@ -111,15 +126,16 @@ impl CoordTest {
             timestamp,
             _metrics_registry: metrics_registry,
             queued_feedback: Vec::new(),
+            persisted_sessions: HashMap::new(),
+            deferred_results: HashMap::new(),
         };
         Ok(coordtest)
     }
 
-    async fn connect(&self) -> anyhow::Result<SessionClient> {
+    async fn connect(&self) -> anyhow::Result<(SessionClient, StartupResponse)> {
         let conn_client = self.client.as_ref().unwrap().new_conn()?;
         let session = Session::new(conn_client.conn_id(), "materialize".into());
-        let (session_client, _startup_response) = conn_client.startup(session).await?;
-        Ok(session_client)
+        Ok(conn_client.startup(session).await?)
     }
 
     fn rewrite_query(&self, query: &str) -> String {
@@ -130,14 +146,38 @@ impl CoordTest {
 
     // This very odd signature is some of us figured out as a way to achieve
     // this. Is there a better way to do this?
-    async fn with_sc<F, T>(&self, f: F) -> T
+    async fn with_sc_inner<F, T>(&mut self, session_name: Option<String>, f: F) -> T
     where
         F: for<'a> FnOnce(&'a mut SessionClient) -> std::pin::Pin<Box<dyn Future<Output = T> + 'a>>,
     {
-        let mut sc = self.connect().await.unwrap();
+        let (mut sc, sr) = self.connect().await.unwrap();
         let r = f(&mut sc).await;
-        sc.terminate().await;
+        match session_name {
+            Some(session_name) => {
+                let r = self.persisted_sessions.insert(session_name, (sc, sr));
+                assert!(r.is_none(), "duplicate named sessions started");
+            }
+            None => sc.terminate().await,
+        }
         r
+    }
+
+    /// Provide a [`SessionClient`] to `f`, but terminate the client after
+    /// executing `f`.
+    async fn with_sc<F, T>(&mut self, f: F) -> T
+    where
+        F: for<'a> FnOnce(&'a mut SessionClient) -> std::pin::Pin<Box<dyn Future<Output = T> + 'a>>,
+    {
+        self.with_sc_inner(None, f).await
+    }
+
+    /// Rather than terminating the [`SessionClient`] after executing `f`, store
+    /// it on `self` using some name.
+    async fn with_persisted_sc<F, T>(&mut self, session_name: String, f: F) -> T
+    where
+        F: for<'a> FnOnce(&'a mut SessionClient) -> std::pin::Pin<Box<dyn Future<Output = T> + 'a>>,
+    {
+        self.with_sc_inner(Some(session_name), f).await
     }
 
     fn drain_feedback_msgs(&mut self) {
@@ -210,7 +250,7 @@ impl CoordTest {
         self.queued_feedback = to_queue;
     }
 
-    async fn make_catalog(&self) -> Catalog {
+    async fn make_catalog(&mut self) -> Catalog {
         let catalog = self
             .with_sc(|sc| Box::pin(async move { sc.dump_catalog().await.unwrap() }))
             .await;
@@ -348,6 +388,68 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                         }
                     }
                     "".into()
+                }
+                "async-sql" => {
+                    let session_name = tc.args["session"][0].clone();
+                    let query = ct.rewrite_query(&tc.input);
+                    let results = ct
+                        .with_persisted_sc(session_name.clone(), |sc| {
+                            Box::pin(async move { sql(sc, query).await })
+                        })
+                        .await
+                        .unwrap();
+
+                    ct.deferred_results.insert(session_name, results);
+
+                    "".into()
+                }
+                "async-cancel" => {
+                    let session_name = tc.args["session"][0].clone();
+
+                    assert!(tc.input.is_empty(), "async-cancel only takes an argument");
+
+                    let (sc, sr) = ct
+                        .persisted_sessions
+                        .get_mut(&session_name)
+                        .expect("named session persisted");
+
+                    let conn_id = sc.session().conn_id();
+                    let secret_key = sr.secret_key;
+
+                    let _ = ct
+                        .with_sc(|sc| Box::pin(sc.cancel_request(conn_id, secret_key)))
+                        .await;
+                    "".into()
+                }
+                "await-sql" => {
+                    let session_name = tc.args["session"][0].clone();
+
+                    assert!(tc.input.is_empty(), "await-sql only takes an argument");
+
+                    let (sc, _sr) = ct
+                        .persisted_sessions
+                        .remove(&session_name)
+                        .expect("named session persisted");
+
+                    let results = ct
+                        .deferred_results
+                        .remove(&session_name)
+                        .expect("named session async");
+
+                    let mut strs = vec![];
+                    for r in results {
+                        strs.push(match r {
+                            ExecuteResponse::SendingRows(rows) => {
+                                format!("{:#?}", ct.wait_for_peek(rows).await)
+                            }
+                            r => format!("{:#?}", r),
+                        });
+                    }
+
+                    sc.terminate().await;
+
+                    strs.push("".to_string());
+                    strs.join("\n")
                 }
                 "update-upper" => {
                     let catalog = ct.make_catalog().await;

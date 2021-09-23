@@ -246,9 +246,9 @@ pub struct Coordinator {
     /// Tracks write frontiers for active exactly-once sinks.
     sink_writes: HashMap<GlobalId, SinkWrites<Timestamp>>,
 
-    /// A map from pending peeks to the queue into which responses are sent, and the
-    /// pending response count (initialized to the number of dataflow workers).
-    pending_peeks: HashMap<u32, (mpsc::UnboundedSender<PeekResponse>, usize)>,
+    /// A map from pending peeks to the queue into which responses are sent, and
+    /// the IDs of workers who have responded.
+    pending_peeks: HashMap<u32, (mpsc::UnboundedSender<PeekResponse>, HashSet<usize>)>,
     /// A map from pending tails to the queue into which responses are sent.
     ///
     /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
@@ -588,25 +588,31 @@ impl Coordinator {
         }
     }
 
-    fn message_worker(
-        &mut self,
-        dataflow::Response {
-            worker_id: _,
-            message,
-        }: dataflow::Response,
-    ) {
+    fn message_worker(&mut self, dataflow::Response { worker_id, message }: dataflow::Response) {
         match message {
             WorkerFeedback::PeekResponse(conn_id, response) => {
-                // We use an `if let` here because the peek could have been cancelled already.
-                if let Some((channel, countdown)) = self.pending_peeks.get_mut(&conn_id) {
-                    channel
-                        .send(response)
-                        .expect("Peek endpoint terminated prematurely");
-                    *countdown -= 1;
-                    if *countdown == 0 {
-                        self.pending_peeks.remove(&conn_id);
-                    }
-                }
+                let (channel, workers_responded) = self
+                    .pending_peeks
+                    .get_mut(&conn_id)
+                    .expect("no more PeekResponses after closing peek channel");
+
+                // Each worker may respond only once to each peek.
+                assert!(
+                    workers_responded.insert(worker_id),
+                    "worker {} responded more than once on conn {}",
+                    worker_id,
+                    conn_id
+                );
+
+                channel
+                    .send(response)
+                    .expect("Peek endpoint terminated prematurely");
+
+                // We've gotten responses from all workers, close peek
+                // channel to propagate response to those awaiting.
+                if workers_responded.len() == self.num_workers() {
+                    self.pending_peeks.remove(&conn_id);
+                };
             }
             WorkerFeedback::TailResponse(sink_id, response) => {
                 // We use an `if let` here because the peek could have been cancelled already.
@@ -1379,15 +1385,6 @@ impl Coordinator {
                 return;
             }
 
-            // Cancel the peek. We use an `if let` because the peek could be completed
-            // and removed before the cancellation is received.
-            if let Some((channel, count)) = self.pending_peeks.get(&conn_id) {
-                for _ in 0..*count {
-                    channel
-                        .send(PeekResponse::Canceled)
-                        .expect("Peek channel closed prematurely");
-                }
-            }
             // Allow dataflow to cancel any pending peeks.
             self.broadcast(dataflow::Command::CancelPeek { conn_id });
 
@@ -2667,9 +2664,9 @@ impl Coordinator {
                     ))
                 })?;
 
-            // Insert the pending peek, and initialize to expect the number of workers.
+            // Insert the pending peek, and indicate that no workers have responded yet.
             self.pending_peeks
-                .insert(session.conn_id(), (rows_tx, self.num_workers()));
+                .insert(session.conn_id(), (rows_tx, HashSet::new()));
             self.broadcast(dataflow::Command::Peek {
                 id: index_id,
                 key: literal_row,
