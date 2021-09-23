@@ -72,23 +72,32 @@ impl<'a> DataflowBuilder<'a> {
             match entry.item() {
                 CatalogItem::Table(table) => {
                     dataflow.import_source(
-                        entry.name().to_string(),
                         *id,
-                        SourceConnector::Local {
-                            timeline: table.timeline(),
-                            persisted_name: table.persist.as_ref().map(|p| p.stream_name.clone()),
+                        dataflow_types::SourceDesc {
+                            name: entry.name().to_string(),
+                            connector: SourceConnector::Local {
+                                timeline: table.timeline(),
+                                persisted_name: table
+                                    .persist
+                                    .as_ref()
+                                    .map(|p| p.stream_name.clone()),
+                            },
+                            operators: None,
+                            bare_desc: table.desc.clone(),
                         },
-                        table.desc.clone(),
                         *id,
                     );
                 }
                 CatalogItem::Source(source) => {
                     if source.optimized_expr.0.is_trivial_source() {
                         dataflow.import_source(
-                            entry.name().to_string(),
                             *id,
-                            source.connector.clone(),
-                            source.bare_desc.clone(),
+                            dataflow_types::SourceDesc {
+                                name: entry.name().to_string(),
+                                connector: source.connector.clone(),
+                                operators: None,
+                                bare_desc: source.bare_desc.clone(),
+                            },
                             *id,
                         );
                     } else {
@@ -96,10 +105,13 @@ impl<'a> DataflowBuilder<'a> {
                         // Install it as such (giving the source a global transient ID by which the view/transformation can refer to it)
                         let bare_source_id = GlobalId::Transient(transient_id);
                         dataflow.import_source(
-                            entry.name().to_string(),
                             bare_source_id,
-                            source.connector.clone(),
-                            source.bare_desc.clone(),
+                            dataflow_types::SourceDesc {
+                                name: entry.name().to_string(),
+                                connector: source.connector.clone(),
+                                operators: None,
+                                bare_desc: source.bare_desc.clone(),
+                            },
                             *id,
                         );
                         let mut transformation = source.optimized_expr.clone();
@@ -178,7 +190,7 @@ impl<'a> DataflowBuilder<'a> {
         let on_id = index.on;
         let keys = index.keys.clone();
         self.import_into_dataflow(&on_id, &mut dataflow);
-        dataflow.export_index(id, on_id, on_type, keys);
+        dataflow.export_index(id, IndexDesc { on_id, keys }, on_type);
         Some(dataflow)
     }
 
@@ -196,8 +208,17 @@ impl<'a> DataflowBuilder<'a> {
         let mut dataflow = DataflowDesc::new(name);
         dataflow.set_as_of(as_of.frontier.clone());
         self.import_into_dataflow(&from, &mut dataflow);
-        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.export_sink(id, from, from_type, connector, envelope, as_of);
+        let from_desc = self.catalog.get_by_id(&from).desc().unwrap().clone();
+        dataflow.export_sink(
+            id,
+            dataflow_types::SinkDesc {
+                from,
+                from_desc,
+                connector,
+                envelope,
+                as_of,
+            },
+        );
         dataflow
     }
 }
