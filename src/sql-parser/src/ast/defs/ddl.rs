@@ -602,14 +602,15 @@ pub struct KafkaConsistency<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(" CONSISTENCY TOPIC '");
+        f.write_str(" CONSISTENCY (TOPIC '");
         f.write_node(&display::escape_single_quote_string(&self.topic));
         f.write_str("'");
 
         if let Some(format) = self.topic_format.as_ref() {
-            f.write_str(" CONSISTENCY FORMAT ");
+            f.write_str(" FORMAT ");
             f.write_node(format);
         }
+        f.write_str(")");
     }
 }
 impl_display_t!(KafkaConsistency);

@@ -90,6 +90,9 @@ Put breaking changes before other release notes.
 - When issuing `COMMIT` or `ROLLBACK` commands outside of an explicit
   transaction, always return a warning. Previously, the warning could be suppressed.
 
+- Fix a bug in the `CREATE SINK` syntax by updating the optional `CONSISTENCY`
+  clause.
+
 {{% version-header v0.9.3 %}}
 
 - Fix a bug that prevented creating Avro sinks on old versions of Confluent Platform
@@ -698,7 +701,7 @@ Put breaking changes before other release notes.
 
 - When creating a Kafka sink, permit specifying the columns to include in the
   key of each record via the new `KEY` connector option in [`CREATE
-  SINK`](/sql/create-sink/#kafka-connector).
+  SINK`](/sql/create-sink).
 
 - Default to using a worker thread count equal to half of the machine's
   physical cores if the [`--workers`](/cli/#worker-threads) command-line
