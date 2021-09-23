@@ -461,13 +461,7 @@ where
                     // Determine replacement values for unused columns.
                     let source_type = src.bare_desc.typ();
                     let position_or = (0..source_type.arity())
-                        .map(|col| {
-                            if operators.projection.contains(&col) {
-                                Some(col)
-                            } else {
-                                None
-                            }
-                        })
+                        .filter(|col| operators.projection.contains(&col))
                         .collect::<Vec<_>>();
 
                     // Apply predicates and insert dummy values into undemanded columns.
@@ -486,18 +480,11 @@ where
                                 move |(input_row, time, diff)| {
                                     let arena = repr::RowArena::new();
                                     let mut datums_local = datums.borrow_with(&input_row);
+                                    for index in &position_or {
+                                        datums_local[*index] = Datum::Dummy;
+                                    }
                                     let times_diffs =
                                         filter_plan.evaluate(&mut datums_local, &arena, time, diff);
-                                    // Name the iterator, to capture total size and datums.
-                                    let iterator = position_or.iter().map(|pos_or| match pos_or {
-                                        Some(index) => datums_local[*index],
-                                        None => Datum::Dummy,
-                                    });
-                                    let total_size = repr::datums_size(iterator.clone());
-                                    let mut output_row = Row::with_capacity(total_size);
-                                    output_row.extend(iterator);
-                                    // Each produced (time, diff) results in a copy of `output_row` in the output.
-                                    // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
                                     times_diffs.map(move |time_diff| {
                                         time_diff
                                             .map_err(|(e, t, d)| (DataflowError::from(e), t, d))
