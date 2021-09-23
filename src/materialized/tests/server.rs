@@ -11,6 +11,8 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::thread;
+use std::time::Duration;
 
 use reqwest::{blocking::Client, StatusCode, Url};
 use tempfile::NamedTempFile;
@@ -314,5 +316,35 @@ fn test_metrics_registry_hygiene() -> Result<(), Box<dyn Error>> {
     let default_metrics = prometheus::default_registry().gather();
     assert_eq!(0, default_metrics.len());
     assert_ne!(0, server.metrics_registry.gather().len());
+    Ok(())
+}
+
+// Test that the server properly handles cancellation requests.
+#[test]
+fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut client = server.connect(postgres::NoTls)?;
+    let cancel_token = client.cancel_token();
+
+    thread::spawn(move || {
+        // Abort the query after 2s.
+        thread::sleep(Duration::from_secs(2));
+        let _ = cancel_token.cancel_query(postgres::NoTls);
+    });
+
+    client.batch_execute("CREATE TABLE t (i INT)")?;
+
+    match client.simple_query("SELECT * FROM t AS OF now()+'1h'") {
+        Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    client
+        .simple_query("SELECT 1")
+        .expect("simple query succeeds after cancellation");
+
     Ok(())
 }
