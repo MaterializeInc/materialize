@@ -341,7 +341,7 @@ impl MemRegistry {
         let log = self.log_no_reentrance()?;
         let metrics = Metrics::register_with(&MetricsRegistry::new());
         let blob = BlobCache::new(metrics.clone(), self.blob_no_reentrance()?);
-        let compacter = Compacter::new(blob.clone(), Arc::new(Runtime::new()?));
+        let compacter = Compacter::new(blob.clone(), Arc::new(Runtime::new()?), metrics.clone());
         Indexed::new(log, blob, compacter, metrics)
     }
 

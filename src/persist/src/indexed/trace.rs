@@ -23,7 +23,7 @@ use timely::PartialOrder;
 use crate::error::Error;
 use crate::future::Future;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::compact::{CompactReq, Compacter};
+use crate::indexed::compact::{CompactReq, CompactRes, Compacter};
 use crate::indexed::encoding::{TraceBatchMeta, TraceMeta};
 use crate::indexed::{BlobTraceBatch, Id, Snapshot};
 use crate::storage::Blob;
@@ -250,10 +250,9 @@ impl Trace {
     pub fn step<B: Blob>(
         &mut self,
         compacter: &Compacter<B>,
-    ) -> Result<(u64, Vec<TraceBatchMeta>), Error> {
-        let mut written_bytes = 0;
-        let mut deleted = vec![];
+    ) -> Result<Option<Future<CompactRes>>, Error> {
         // TODO: should we remember our position in this list?
+
         for i in 1..self.batches.len() {
             if (self.batches[i - 1].level == self.batches[i].level)
                 && PartialOrder::less_equal(self.batches[i].desc.upper(), &self.since)
@@ -262,28 +261,60 @@ impl Trace {
                 let b1 = self.batches[i].clone();
 
                 let req = CompactReq {
+                    id: self.id,
                     b0,
                     b1,
                     since: self.since.clone(),
                     output_key: self.new_blob_key(),
                 };
-                let res = compacter.compact(req).recv()?;
-                let mut new_batch = res.merged;
-                written_bytes += new_batch.size_bytes;
 
-                // TODO: more performant way to do this?
-                deleted.push(self.batches.remove(i));
-                mem::swap(&mut self.batches[i - 1], &mut new_batch);
-                deleted.push(new_batch);
-
-                // Sanity check that the modified list of batches satisfies
-                // all invariants.
-                if cfg!(any(debug_assertions, test)) {
-                    self.meta().validate()?;
-                }
-
-                break;
+                let res = compacter.compact(req);
+                return Ok(Some(res));
             }
+        }
+        Ok(None)
+    }
+
+    pub fn compact_res<B: Blob>(
+        &mut self,
+        res: CompactRes,
+        _blob: &mut BlobCache<B>,
+    ) -> Result<(u64, Vec<TraceBatchMeta>), Error> {
+        if res.req.id != self.id {
+            return Err(Error::from(format!(
+                "compaction result {:?} for wrong trace {:?}",
+                res.req.id, self.id
+            )));
+        }
+
+        let i0 = self
+            .batches
+            .iter()
+            .enumerate()
+            .find(|(_, b)| &b.key == &res.req.b0.key)
+            .ok_or_else(|| format!("compaction result no longer relevant"))?
+            .0;
+        let i1 = self
+            .batches
+            .iter()
+            .enumerate()
+            .find(|(_, b)| &b.key == &res.req.b1.key)
+            .ok_or_else(|| format!("compaction result no longer relevant"))?
+            .0;
+        debug_assert_eq!(i1, i0 + 1);
+        // WIP more sanity checking here
+
+        let mut new_batch = res.merged;
+        let written_bytes = new_batch.size_bytes;
+        let mut deleted = Vec::with_capacity(2);
+        deleted.push(self.batches.remove(i1));
+        mem::swap(&mut self.batches[i0], &mut new_batch);
+        deleted.push(new_batch);
+
+        // Sanity check that the modified list of batches satisfies
+        // all invariants.
+        if cfg!(any(debug_assertions, test)) {
+            self.meta().validate()?;
         }
         Ok((written_bytes, deleted))
     }
@@ -460,7 +491,7 @@ mod tests {
     #[test]
     fn trace_compact() -> Result<(), Error> {
         let mut blob = BlobCache::new(Metrics::default(), MemRegistry::new().blob_no_reentrance()?);
-        let compacter = Compacter::new(blob.clone(), Arc::new(Runtime::new()?));
+        let compacter = Compacter::new(blob.clone(), Arc::new(Runtime::new()?), Metrics::default());
         let mut t = Trace::new(TraceMeta::new(Id(0)));
         t.update_seal(10);
 
@@ -490,7 +521,9 @@ mod tests {
 
         t.validate_allow_compaction(&Antichain::from_elem(3))?;
         t.allow_compaction(Antichain::from_elem(3));
-        let (written_bytes, deleted_batches) = t.step(&compacter)?;
+        let compact_res = t.step(&compacter)?;
+        let compact_res = compact_res.expect("compaction work was found").recv()?;
+        let (written_bytes, deleted_batches) = t.compact_res(compact_res, &mut blob)?;
         // Change this to a >0 check if it starts to be a maintenance burden.
         assert_eq!(written_bytes, 322);
         assert_eq!(
@@ -502,9 +535,8 @@ mod tests {
         );
 
         // Check that step doesn't do anything when there's nothing to compact.
-        let (written_bytes, deleted_batches) = t.step(&compacter)?;
-        assert_eq!(written_bytes, 0);
-        assert_eq!(deleted_batches, vec![]);
+        let compact_res = t.step(&compacter)?;
+        assert!(compact_res.is_none());
 
         assert_eq!(
             t.batches,
@@ -549,7 +581,9 @@ mod tests {
         assert_eq!(t.append(batch, &mut blob), Ok(()));
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
-        let (written_bytes, deleted_batches) = t.step(&compacter)?;
+        let compact_res = t.step(&compacter)?;
+        let compact_res = compact_res.expect("compaction work was found").recv()?;
+        let (written_bytes, deleted_batches) = t.compact_res(compact_res, &mut blob)?;
         assert_eq!(written_bytes, 186);
         assert_eq!(
             deleted_batches

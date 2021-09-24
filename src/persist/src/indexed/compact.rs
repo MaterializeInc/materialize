@@ -7,9 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persistence compaction runtime.
-
 use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -20,11 +19,15 @@ use tokio::runtime::Runtime;
 use crate::error::Error;
 use crate::future::Future;
 use crate::indexed::cache::BlobCache;
-use crate::indexed::encoding::{BlobTraceBatch, TraceBatchMeta};
+use crate::indexed::encoding::{BlobTraceBatch, Id, TraceBatchMeta};
+use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::storage::Blob;
 
 /// A request to merge two trace batches and write the results to blob storage.
 pub struct CompactReq {
+    /// The Id of the collection containing these batches. Not used by
+    /// compaction, but used when processing the CompactRes.
+    pub id: Id,
     /// One of the batches to be merged.
     pub b0: TraceBatchMeta,
     /// One of the batches to be merged.
@@ -55,14 +58,15 @@ pub struct Compacter<B: Blob> {
     // thread. Perhaps we should split the Meta parts out of BlobCache.
     blob: Arc<BlobCache<B>>,
     runtime: Arc<Runtime>,
+    metrics: Metrics,
 }
 
 impl<B: Blob> Compacter<B> {
-    /// Returns a new [Compacter].
-    pub fn new(blob: BlobCache<B>, runtime: Arc<Runtime>) -> Self {
+    pub fn new(blob: BlobCache<B>, runtime: Arc<Runtime>, metrics: Metrics) -> Self {
         Compacter {
             blob: Arc::new(blob),
             runtime,
+            metrics,
         }
     }
 
@@ -70,12 +74,17 @@ impl<B: Blob> Compacter<B> {
     /// at construction time.
     pub fn compact(&self, req: CompactReq) -> Future<CompactRes> {
         let (tx, rx) = Future::new();
+        let compaction_start = Instant::now();
         let blob = self.blob.clone();
-        // Ignore the response since we communicate success/failure through the
-        // returned Future.
-        let _ = self
-            .runtime
-            .spawn_blocking(move || tx.fill(Self::compact_blocking(blob, req)));
+        // WIP oof this metrics clone is pretty expensive. pass around an
+        // Arc<Metrics> everywhere instead.
+        let metrics = self.metrics.clone();
+        let _ = self.runtime.spawn_blocking(move || {
+            tx.fill(Self::compact_blocking(blob, req));
+            metrics
+                .compaction_ms
+                .inc_by(metric_duration_ms(compaction_start.elapsed()));
+        });
         rx
     }
 

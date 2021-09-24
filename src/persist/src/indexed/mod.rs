@@ -22,7 +22,6 @@ pub mod unsealed;
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::ops::Range;
-use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -31,13 +30,13 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
-use crate::future::FutureHandle;
+use crate::future::{Future, FutureHandle};
 use crate::indexed::cache::BlobCache;
-use crate::indexed::compact::Compacter;
+use crate::indexed::compact::{CompactRes, Compacter};
 use crate::indexed::encoding::{
     BlobMeta, BlobTraceBatch, BlobUnsealedBatch, Id, StreamRegistration, TraceMeta, UnsealedMeta,
 };
-use crate::indexed::metrics::{metric_duration_ms, Metrics};
+use crate::indexed::metrics::Metrics;
 use crate::indexed::trace::{Trace, TraceSnapshot, TraceSnapshotIter};
 use crate::indexed::unsealed::{Unsealed, UnsealedSnapshot, UnsealedSnapshotIter};
 use crate::storage::{Blob, Log, SeqNo};
@@ -73,6 +72,28 @@ impl PendingResponse {
             }
         }
     }
+}
+
+pub enum ExternalWorkReq {
+    Compact(Future<CompactRes>),
+}
+
+impl ExternalWorkReq {
+    pub fn run_blocking(self) -> ExternalWorkRes {
+        match self {
+            ExternalWorkReq::Compact(req) => ExternalWorkRes::Compact(req.recv()),
+        }
+    }
+
+    pub async fn run(self) -> ExternalWorkRes {
+        match self {
+            ExternalWorkReq::Compact(req) => ExternalWorkRes::Compact(req.into_future().await),
+        }
+    }
+}
+
+pub enum ExternalWorkRes {
+    Compact(Result<CompactRes, Error>),
 }
 
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
@@ -502,29 +523,60 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         ret
     }
 
-    fn compact_inner(&mut self) -> Result<(), Error> {
-        let mut total_written_bytes = 0;
+    fn compact_inner(&mut self) -> Result<Vec<ExternalWorkReq>, Error> {
+        let mut async_reqs = vec![];
         let mut deleted_unsealed_batches = vec![];
-        let mut deleted_trace_batches = vec![];
         for (id, trace) in self.traces.iter_mut() {
             let unsealed = self
                 .unsealeds
                 .get_mut(&id)
                 .ok_or_else(|| Error::from(format!("never registered: {:?}", id)))?;
             deleted_unsealed_batches.extend(unsealed.truncate(trace.ts_upper())?);
-            let (written_bytes, deleted_batches) = trace.step(&self.compacter)?;
-            total_written_bytes += written_bytes;
-            deleted_trace_batches.extend(deleted_batches);
+            if let Some(res) = trace.step(&self.compacter)? {
+                async_reqs.push(ExternalWorkReq::Compact(res));
+            }
         }
 
         self.try_set_meta()?;
 
-        if !deleted_unsealed_batches.is_empty() || !deleted_trace_batches.is_empty() {
+        if !deleted_unsealed_batches.is_empty() {
             self.metrics.compaction_count.inc();
         }
-        self.metrics
-            .compaction_write_bytes
-            .inc_by(total_written_bytes);
+        Ok(async_reqs)
+    }
+
+    /// Compact all traces and truncate all unsealeds, if possible.
+    ///
+    /// TODO: currently we do not attempt to compact unsealed batches and instead
+    /// logically delete them from unsealed after all updates contained within a
+    /// given unsealed batch have been moved over to trace. This policy works fine
+    /// assuming data mostly arrives in order, or not very far in advance of the
+    /// currently sealed time. We will need to revisit the unsealed compaction if
+    /// that assumption stops being true.
+    fn compact(&mut self) -> Result<Vec<ExternalWorkReq>, Error> {
+        match self.compact_inner() {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                self.restore();
+                Err(e)
+            }
+        }
+    }
+
+    fn compact_res_inner(&mut self, res: CompactRes) -> Result<(), Error> {
+        self.drain_pending()?;
+
+        // WIP possible that we get a compaction result for a stream that's been
+        // destroyed. test for this
+        let trace = self
+            .traces
+            .get_mut(&res.req.id)
+            .ok_or_else(|| Error::from(format!("never registered: {:?}", &res.req.id)))?;
+        let (written_bytes, deleted_trace_batches) = trace.compact_res(res, &mut self.blob)?;
+
+        self.try_set_meta()?;
+        self.metrics.compaction_count.inc();
+        self.metrics.compaction_write_bytes.inc_by(written_bytes);
 
         // After we've committed our logical deletions to durable storage, we can
         // physically delete the data.
@@ -536,41 +588,35 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // method on blob and have a periodic cleanup task that attempts to find
         // and delete unused blobs. We could also use the list method to verify
         // that all referenced blobs exist.
-        for batch in deleted_unsealed_batches {
-            self.blob.delete_unsealed_batch(&batch)?;
-        }
-
         for batch in deleted_trace_batches {
             self.blob.delete_trace_batch(&batch)?;
         }
-
         Ok(())
     }
 
-    /// Compact all traces and truncate all unsealeds, if possible.
-    ///
-    /// TODO: currently we do not attempt to compact unsealed batches and instead
-    /// logically delete them from unsealed after all updates contained within a
-    /// given unsealed batch have been moved over to trace. This policy works fine
-    /// assuming data mostly arrives in order, or not very far in advance of the
-    /// currently sealed time. We will need to revisit the unsealed compaction if
-    /// that assumption stops being true.
-    fn compact(&mut self) -> Result<(), Error> {
-        let compaction_start = Instant::now();
-
-        let ret = match self.compact_inner() {
+    fn compact_res(&mut self, res: CompactRes) -> Result<(), Error> {
+        match self.compact_res_inner(res) {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.restore();
                 Err(e)
             }
-        };
+        }
+    }
 
-        self.metrics
-            .compaction_ms
-            .inc_by(metric_duration_ms(compaction_start.elapsed()));
-
-        ret
+    pub fn async_res(&mut self, res: ExternalWorkRes) {
+        match res {
+            ExternalWorkRes::Compact(Ok(res)) => {
+                if let Err(err) = self.compact_res(res) {
+                    // WIP metric for this too
+                    log::warn!("error processing compaction result: {:?}", err);
+                }
+            }
+            ExternalWorkRes::Compact(Err(err)) => {
+                // WIP metric for this too
+                log::warn!("error during compaction: {:?}", err);
+            }
+        }
     }
 
     /// Drains writes from the log into the unsealed and does any necessary
@@ -579,11 +625,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// In production, step should just be called in a loop (probably with some
     /// smarts about waiting to call it only after there have been some writes),
     /// but it's exposed this way so we can write deterministic tests.
-    pub fn step(&mut self) -> Result<(), Error> {
+    pub fn step(&mut self) -> Result<Vec<ExternalWorkReq>, Error> {
         self.drain_pending()?;
         self.drain_unsealed()?;
-        self.compact()?;
-        Ok(())
+        let res = self.compact()?;
+        Ok(res)
     }
 
     fn validate_write(
@@ -605,7 +651,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         Ok(self.unsealeds_seqno_upper)
     }
 
-    /// Asynchronously persists (Key, Value, Time, Diff) updates for the stream
+    /// ExternalWorkhronously persists (Key, Value, Time, Diff) updates for the stream
     /// with the given id.
     pub fn write(
         &mut self,

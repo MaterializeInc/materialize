@@ -33,7 +33,7 @@ use crate::indexed::compact::Compacter;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{
-    Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenEvent, ListenFn, Snapshot,
+    ExternalWorkRes, Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenEvent, ListenFn, Snapshot,
 };
 use crate::storage::{Blob, Log, SeqNo};
 
@@ -48,6 +48,7 @@ enum Cmd {
     AllowCompaction(Vec<(Id, Antichain<u64>)>, FutureHandle<()>),
     Snapshot(Id, FutureHandle<IndexedSnapshot>),
     Listen(Id, ListenFn<Vec<u8>, Vec<u8>>, FutureHandle<()>),
+    ExternalWorkRes(ExternalWorkRes),
     Stop(FutureHandle<()>),
     /// A no-op command sent on a regular interval so the runtime has an
     /// opportunity to do periodic maintenance work.
@@ -84,6 +85,10 @@ where
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
     let metrics = Metrics::register_with(reg);
+    let sender = RuntimeSender {
+        tx,
+        metrics: metrics.clone(),
+    };
 
     // Any usage of S3Blob requires a runtime context to be set. `Indexed::new`
     // use the blob impl to start the recovery process, so make sure this stays
@@ -96,9 +101,10 @@ where
 
     // Start up the runtime.
     let blob = BlobCache::new(metrics.clone(), blob);
-    let compacter = Compacter::new(blob.clone(), pool.clone());
+    let compacter = Compacter::new(blob.clone(), pool.clone(), metrics.clone());
     let indexed = Indexed::new(log, blob, compacter, metrics.clone())?;
-    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
+    let mut runtime =
+        RuntimeImpl::new(config.clone(), indexed, sender.clone(), rx, metrics.clone());
     let id = RuntimeId::new();
     let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
@@ -114,7 +120,7 @@ where
     //
     // TODO: Now that we have a runtime threaded here, we could use async stuff
     // to do this.
-    let ticker_tx = tx.clone();
+    let ticker_tx = sender.tx.clone();
     let ticker_handle = thread::Builder::new()
         .name(format!("persist-ticker"))
         .spawn(move || {
@@ -140,11 +146,7 @@ where
         impl_handle,
         ticker_handle,
     }));
-    let core = RuntimeCore {
-        handles,
-        tx,
-        metrics,
-    };
+    let core = RuntimeCore { handles, sender };
     let client = RuntimeClient {
         id,
         core: Arc::new(core),
@@ -173,14 +175,13 @@ struct RuntimeHandles {
     ticker_handle: JoinHandle<()>,
 }
 
-#[derive(Debug)]
-struct RuntimeCore {
-    handles: Mutex<Option<RuntimeHandles>>,
+#[derive(Debug, Clone)]
+struct RuntimeSender {
     tx: crossbeam_channel::Sender<Cmd>,
     metrics: Metrics,
 }
 
-impl RuntimeCore {
+impl RuntimeSender {
     fn send(&self, cmd: Cmd) {
         self.metrics.cmd_queue_in.inc();
         if let Err(crossbeam_channel::SendError(cmd)) = self.tx.send(cmd) {
@@ -200,15 +201,24 @@ impl RuntimeCore {
                 Cmd::AllowCompaction(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Snapshot(_, res) => res.fill(Err(Error::RuntimeShutdown)),
                 Cmd::Listen(_, _, res) => res.fill(Err(Error::RuntimeShutdown)),
+                Cmd::ExternalWorkRes(_) => {}
                 Cmd::Tick => {}
             }
         }
     }
+}
 
+#[derive(Debug)]
+struct RuntimeCore {
+    handles: Mutex<Option<RuntimeHandles>>,
+    sender: RuntimeSender,
+}
+
+impl RuntimeCore {
     fn stop(&self) -> Result<(), Error> {
         if let Some(handles) = self.handles.lock()?.take() {
             let (tx, rx) = Future::new();
-            self.send(Cmd::Stop(tx));
+            self.sender.send(Cmd::Stop(tx));
             // NB: Make sure there are no early returns before this `join`,
             // otherwise the runtime thread might still be cleaning up when this
             // returns (flushing out final writes, cleaning up LOCK files, etc).
@@ -287,7 +297,7 @@ impl RuntimeClient {
         id: &str,
     ) -> Result<(StreamWriteHandle<K, V>, StreamReadHandle<K, V>), Error> {
         let (tx, rx) = Future::new();
-        self.core.send(Cmd::Register(
+        self.core.sender.send(Cmd::Register(
             id.to_owned(),
             (K::codec_name(), V::codec_name()),
             tx,
@@ -307,7 +317,7 @@ impl RuntimeClient {
         updates: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
         res: FutureHandle<SeqNo>,
     ) {
-        self.core.send(Cmd::Write(updates, res))
+        self.core.sender.send(Cmd::Write(updates, res))
     }
 
     /// Asynchronously advances the "sealed" frontier for the streams with the
@@ -316,7 +326,7 @@ impl RuntimeClient {
     ///
     /// The ids must have previously been registered.
     fn seal(&self, ids: &[Id], ts: u64, res: FutureHandle<()>) {
-        self.core.send(Cmd::Seal(ids.to_vec(), ts, res))
+        self.core.sender.send(Cmd::Seal(ids.to_vec(), ts, res))
     }
 
     /// Asynchronously advances the compaction frontier for the streams with the
@@ -327,6 +337,7 @@ impl RuntimeClient {
     /// The ids must have previously been registered.
     fn allow_compaction(&self, id_sinces: &[(Id, Antichain<u64>)], res: FutureHandle<()>) {
         self.core
+            .sender
             .send(Cmd::AllowCompaction(id_sinces.to_vec(), res))
     }
 
@@ -337,13 +348,13 @@ impl RuntimeClient {
     ///
     /// The id must have previously been registered.
     fn snapshot(&self, id: Id, res: FutureHandle<IndexedSnapshot>) {
-        self.core.send(Cmd::Snapshot(id, res))
+        self.core.sender.send(Cmd::Snapshot(id, res))
     }
 
     /// Asynchronously registers a callback to be invoked on successful writes
     /// and seals.
     fn listen(&self, id: Id, listen_fn: ListenFn<Vec<u8>, Vec<u8>>, res: FutureHandle<()>) {
-        self.core.send(Cmd::Listen(id, listen_fn, res))
+        self.core.sender.send(Cmd::Listen(id, listen_fn, res))
     }
 
     /// Synchronously closes the runtime, releasing exclusive-writer locks and
@@ -360,7 +371,7 @@ impl RuntimeClient {
     /// destroyed, false if the stream had already been destroyed previously.
     pub fn destroy(&mut self, id: &str) -> Result<bool, Error> {
         let (tx, rx) = Future::new();
-        self.core.send(Cmd::Destroy(id.to_owned(), tx));
+        self.core.sender.send(Cmd::Destroy(id.to_owned(), tx));
         rx.recv()
     }
 }
@@ -703,6 +714,7 @@ impl<K: Codec, V: Codec> StreamReadHandle<K, V> {
 
 struct RuntimeImpl<L: Log, B: Blob> {
     indexed: Indexed<L, B>,
+    sender: RuntimeSender,
     rx: crossbeam_channel::Receiver<Cmd>,
     metrics: Metrics,
     prev_step: Instant,
@@ -739,11 +751,13 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
     fn new(
         config: RuntimeConfig,
         indexed: Indexed<L, B>,
+        sender: RuntimeSender,
         rx: crossbeam_channel::Receiver<Cmd>,
         metrics: Metrics,
     ) -> Self {
         RuntimeImpl {
             indexed,
+            sender,
             rx,
             metrics,
             // Initialize this so it's ready to trigger immediately.
@@ -825,6 +839,9 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
                     // opportunity to hit the step logic below on some minimum
                     // interval, even when no other commands are coming in.
                 }
+                Cmd::ExternalWorkRes(res) => {
+                    self.indexed.async_res(res);
+                }
             }
             self.metrics.cmd_run_count.inc()
         }
@@ -879,12 +896,27 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
         if need_step {
             self.prev_step = step_start;
-            if let Err(e) = self.indexed.step() {
-                self.metrics.cmd_step_error_count.inc();
-                // TODO: revisit whether we need to move this to a different log level
-                // depending on how spammy it ends up being. Alternatively, we
-                // may want to rate-limit our logging here.
-                log::warn!("error running step: {:?}", e);
+            match self.indexed.step() {
+                Ok(reqs) => {
+                    for req in reqs {
+                        let sender = self.sender.clone();
+                        // WIP use an async runtime here
+                        let _ = thread::Builder::new()
+                            .name("persist-compact-res-wait".to_owned())
+                            .spawn(move || {
+                                let res = req.run_blocking();
+                                sender.send(Cmd::ExternalWorkRes(res));
+                            })
+                            .expect("valid thread name");
+                    }
+                }
+                Err(err) => {
+                    self.metrics.cmd_step_error_count.inc();
+                    // TODO: revisit whether we need to move this to a different log level
+                    // depending on how spammy it ends up being. Alternatively, we
+                    // may want to rate-limit our logging here.
+                    log::warn!("error running step: {:?}", err);
+                }
             }
 
             self.metrics

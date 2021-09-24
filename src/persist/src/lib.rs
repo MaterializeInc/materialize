@@ -9,7 +9,7 @@
 
 //! Persistence for Materialize dataflows.
 
-#![warn(missing_docs)]
+// WIP #![warn(missing_docs)]
 #![warn(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
