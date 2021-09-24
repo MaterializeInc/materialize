@@ -28,7 +28,7 @@ Records that arrive late (that is, with a timestamp that is too old to pass the 
 
 ## Interactions with Materialize compaction
 
-Materialize periodically [compacts](/ops/deploymennt/#compaction) data to prevent memory usage from growing without bounds. This compaction does not affect temporal filters.
+Materialize periodically [compacts](/ops/deployment/#compaction) data to prevent memory usage from growing without bounds. This compaction does not affect temporal filters.
 
 ## Example
 
