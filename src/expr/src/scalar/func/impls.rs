@@ -8,14 +8,16 @@
 // by the Apache License, Version 2.0.
 
 mod datum;
-mod float;
+mod float32;
+mod float64;
 mod int16;
 mod int32;
 mod int64;
 mod not;
 
 pub use datum::*;
-pub use float::*;
+pub use float32::*;
+pub use float64::*;
 pub use int16::*;
 pub use int32::*;
 pub use int64::*;
