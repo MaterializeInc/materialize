@@ -3361,17 +3361,13 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let catalog = self.catalog.for_session(session);
         let values = sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
-        let plan = InsertPlan {
-            id,
-            values: values.lower(),
-        };
 
         let constants = self
-            .prep_relation_expr(plan.values, ExprPrepStyle::Write)?
+            .prep_relation_expr(values.lower(), ExprPrepStyle::Write)?
             .into_inner();
 
         // Copied rows must always be constants.
-        self.sequence_insert_constant(session, plan.id, constants)
+        self.sequence_insert_constant(session, id, constants)
     }
 
     // ReadThenWrite is a plan whose writes depend on the results of a
@@ -3407,6 +3403,20 @@ impl Coordinator {
                 return;
             }
         };
+
+        // Ensure selection targets are valid, i.e. user-defined tables, or
+        // objects local to the dataflow.
+        for id in selection.global_uses() {
+            let valid = match self.catalog.try_get_by_id(id) {
+                // TODO: Widen this check when supporting temporary tables.
+                Some(entry) if id.is_user() => entry.is_table(),
+                _ => false,
+            };
+            if !valid {
+                tx.send(Err(CoordError::InvalidTableMutationSelection), session);
+                return;
+            }
+        }
 
         let ts = self.get_read_ts();
         let peek_response = match self.sequence_peek(

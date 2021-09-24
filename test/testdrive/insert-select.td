@@ -72,6 +72,20 @@ cannot be run inside a transaction block
 
 > COMMIT
 
+> CREATE MATERIALIZED VIEW v (a, b, c) AS SELECT 11, 12::real, 'f';
+
+! INSERT INTO t SELECT * FROM v;
+invalid selection
+
+# Table check descends into select targets
+! INSERT INTO t (i, f, t) SELECT column1, column2, column3
+    FROM ( VALUES (11, 12, 'f') )
+    LEFT JOIN (
+        SELECT a, b, c FROM v
+    ) AS y
+    ON y.a = column1
+invalid selection
+
 # Multiple connections
 
 > CREATE TABLE c (a int);
