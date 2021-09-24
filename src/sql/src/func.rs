@@ -1848,7 +1848,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg")), 3545;
             },
             "sum" => Aggregate {
-                params!(Int16) => AggregateFunc::SumInt32, 2109;
+                params!(Int16) => AggregateFunc::SumInt16, 2109;
                 params!(Int32) => AggregateFunc::SumInt32, 2108;
                 params!(Int64) => AggregateFunc::SumInt64, 2107;
                 params!(Float32) => AggregateFunc::SumFloat32, 2110;
