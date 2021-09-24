@@ -45,7 +45,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 
 - [Version 0.9.5 Release Notes](release-notes/#v0.9.5)
 - [Change Data Capture with Postgres Guide](/guides/cdc-postgres/)
-- [Kafka Sink Topic Reuse (Exactly-Once) Sinks Guide](/guides/reuse-topic-for-kafka-sink)
+- [Kafka Sink Topic Reuse (Exactly-Once Sinks) Guide](/guides/reuse-topic-for-kafka-sink)
 
 ## Learn more
 
