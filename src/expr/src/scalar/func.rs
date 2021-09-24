@@ -114,18 +114,6 @@ pub fn or<'a>(
     }
 }
 
-fn abs_int16<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int16().abs())
-}
-
-fn abs_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32().abs())
-}
-
-fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64().abs())
-}
-
 fn abs_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
     let mut a = a.unwrap_numeric();
     numeric::cx_datum().abs(&mut a.0);
@@ -1153,18 +1141,6 @@ fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
         .map(Datum::from)
 }
 
-fn bit_not_int16<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(!a.unwrap_int16())
-}
-
-fn bit_not_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(!a.unwrap_int32())
-}
-
-fn bit_not_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(!a.unwrap_int64())
-}
-
 fn bit_and_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int16() & b.unwrap_int16())
 }
@@ -1510,18 +1486,6 @@ fn mod_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     cx.rem(&mut a.0, &b.0);
     numeric::munge_numeric(&mut a.0).unwrap();
     Ok(Datum::Numeric(a))
-}
-
-fn neg_int16<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_int16())
-}
-
-fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_int32())
-}
-
-fn neg_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_int64())
 }
 
 fn neg_numeric<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -3434,12 +3398,12 @@ trait UnaryFuncTrait {
 pub enum UnaryFunc {
     Not(Not),
     IsNull(IsNull),
-    BitNotInt16,
-    BitNotInt32,
-    BitNotInt64,
-    NegInt16,
-    NegInt32,
-    NegInt64,
+    BitNotInt16(BitNotInt16),
+    BitNotInt32(BitNotInt32),
+    BitNotInt64(BitNotInt64),
+    NegInt16(NegInt16),
+    NegInt32(NegInt32),
+    NegInt64(NegInt64),
     NegFloat32(NegFloat32),
     NegFloat64(NegFloat64),
     NegNumeric,
@@ -3447,9 +3411,9 @@ pub enum UnaryFunc {
     SqrtFloat64(SqrtFloat64),
     SqrtNumeric,
     CbrtFloat64(CbrtFloat64),
-    AbsInt16,
-    AbsInt32,
-    AbsInt64,
+    AbsInt16(AbsInt16),
+    AbsInt32(AbsInt32),
+    AbsInt64(AbsInt64),
     AbsFloat32(AbsFloat32),
     AbsFloat64(AbsFloat64),
     AbsNumeric,
@@ -3659,8 +3623,17 @@ derive_unary!(
     Not,
     NegFloat32,
     NegFloat64,
+    NegInt16,
+    NegInt32,
+    NegInt64,
     AbsFloat32,
     AbsFloat64,
+    AbsInt16,
+    AbsInt32,
+    AbsInt64,
+    BitNotInt16,
+    BitNotInt32,
+    BitNotInt64,
     RoundFloat32,
     RoundFloat64,
     CeilFloat32,
@@ -3713,8 +3686,17 @@ impl UnaryFunc {
             Not(_)
             | NegFloat32(_)
             | NegFloat64(_)
+            | NegInt16(_)
+            | NegInt32(_)
+            | NegInt64(_)
             | AbsFloat32(_)
             | AbsFloat64(_)
+            | AbsInt16(_)
+            | AbsInt32(_)
+            | AbsInt64(_)
+            | BitNotInt16(_)
+            | BitNotInt32(_)
+            | BitNotInt64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
             | CeilFloat32(_)
@@ -3748,17 +3730,8 @@ impl UnaryFunc {
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            BitNotInt16 => Ok(bit_not_int16(a)),
-            BitNotInt32 => Ok(bit_not_int32(a)),
-            BitNotInt64 => Ok(bit_not_int64(a)),
-            NegInt16 => Ok(neg_int16(a)),
-            NegInt32 => Ok(neg_int32(a)),
-            NegInt64 => Ok(neg_int64(a)),
             NegNumeric => Ok(neg_numeric(a)),
             NegInterval => Ok(neg_interval(a)),
-            AbsInt16 => Ok(abs_int16(a)),
-            AbsInt32 => Ok(abs_int32(a)),
-            AbsInt64 => Ok(abs_int64(a)),
             AbsNumeric => Ok(abs_numeric(a)),
             CastBoolToString => Ok(cast_bool_to_string(a)),
             CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
@@ -3913,8 +3886,17 @@ impl UnaryFunc {
             Not(_)
             | NegFloat32(_)
             | NegFloat64(_)
+            | NegInt16(_)
+            | NegInt32(_)
+            | NegInt64(_)
             | AbsFloat32(_)
             | AbsFloat64(_)
+            | AbsInt16(_)
+            | AbsInt32(_)
+            | AbsInt64(_)
+            | BitNotInt16(_)
+            | BitNotInt32(_)
+            | BitNotInt64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
             | CeilFloat32(_)
@@ -4062,8 +4044,7 @@ impl UnaryFunc {
                 ScalarType::VarChar { length: *length }.nullable(nullable)
             }
 
-            BitNotInt16 | BitNotInt32 | BitNotInt64 | NegInt16 | NegInt32 | NegInt64
-            | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => input_type,
+            NegInterval => input_type,
 
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
                 ScalarType::Float64.nullable(nullable)
@@ -4120,8 +4101,17 @@ impl UnaryFunc {
             Not(_)
             | NegFloat32(_)
             | NegFloat64(_)
+            | NegInt16(_)
+            | NegInt32(_)
+            | NegInt64(_)
             | AbsFloat32(_)
             | AbsFloat64(_)
+            | AbsInt16(_)
+            | AbsInt32(_)
+            | AbsInt64(_)
+            | BitNotInt16(_)
+            | BitNotInt32(_)
+            | BitNotInt64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
             | CeilFloat32(_)
@@ -4238,8 +4228,7 @@ impl UnaryFunc {
             JsonbTypeof | JsonbStripNulls | JsonbPretty | ListLength => false,
             DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => false,
             DateTruncTimestamp(_) | DateTruncTimestampTz(_) => false,
-            NegInt16 | NegInt32 | NegInt64 | NegInterval | AbsInt16 | AbsInt32 | AbsInt64 => false,
-            BitNotInt16 | BitNotInt32 | BitNotInt64 => false,
+            NegInterval => false,
             AbsNumeric | CeilNumeric | ExpNumeric | FloorNumeric | LnNumeric | Log10Numeric
             | NegNumeric | RoundNumeric | SqrtNumeric | RescaleNumeric(_) => false,
         }
@@ -4255,8 +4244,14 @@ impl UnaryFunc {
             Not(_)
             | NegFloat32(_)
             | NegFloat64(_)
+            | NegInt16(_)
+            | NegInt32(_)
+            | NegInt64(_)
             | AbsFloat32(_)
             | AbsFloat64(_)
+            | AbsInt16(_)
+            | AbsInt32(_)
+            | AbsInt64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
             | CeilFloat32(_)
@@ -4290,10 +4285,7 @@ impl UnaryFunc {
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            NegInt16
-            | NegInt32
-            | NegInt64
-            | NegNumeric
+            NegNumeric
             | CastBoolToString
             | CastBoolToStringNonstandard
             | CastCharToString
@@ -4321,8 +4313,17 @@ impl UnaryFunc {
             Not(_)
             | NegFloat32(_)
             | NegFloat64(_)
+            | NegInt16(_)
+            | NegInt32(_)
+            | NegInt64(_)
             | AbsFloat32(_)
             | AbsFloat64(_)
+            | AbsInt16(_)
+            | AbsInt32(_)
+            | AbsInt64(_)
+            | BitNotInt16(_)
+            | BitNotInt32(_)
+            | BitNotInt64(_)
             | RoundFloat32(_)
             | RoundFloat64(_)
             | CeilFloat32(_)
@@ -4356,17 +4357,8 @@ impl UnaryFunc {
             | SqrtFloat64(_)
             | CbrtFloat64(_)
             | CastFloat32ToFloat64(_) => unreachable!(),
-            BitNotInt16 => f.write_str("~"),
-            BitNotInt32 => f.write_str("~"),
-            BitNotInt64 => f.write_str("~"),
-            NegInt16 => f.write_str("-"),
-            NegInt32 => f.write_str("-"),
-            NegInt64 => f.write_str("-"),
             NegNumeric => f.write_str("-"),
             NegInterval => f.write_str("-"),
-            AbsInt16 => f.write_str("abs"),
-            AbsInt32 => f.write_str("abs"),
-            AbsInt64 => f.write_str("abs"),
             AbsNumeric => f.write_str("abs"),
             CastBoolToString => f.write_str("booltostr"),
             CastBoolToStringNonstandard => f.write_str("booltostrns"),

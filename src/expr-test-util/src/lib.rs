@@ -14,7 +14,7 @@ use proc_macro2::TokenTree;
 use serde_json::Value;
 
 use expr::explain::ViewExplanation;
-use expr::func::{IsNull, Not};
+use expr::func::{IsNull, NegInt32, Not};
 use expr::*;
 use lowertest::*;
 use ore::result::ResultExt;
@@ -43,6 +43,7 @@ gen_reflect_info_func!(
         ColumnType,
         RelationType,
         IsNull,
+        NegInt32,
         Not
     ]
 );

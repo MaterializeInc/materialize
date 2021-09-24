@@ -377,7 +377,7 @@ mod tests {
         );
 
         let key20 = MirScalarExpr::CallUnary {
-            func: UnaryFunc::NegInt32,
+            func: UnaryFunc::NegInt32(crate::func::NegInt32),
             expr: Box::new(MirScalarExpr::Column(1)),
         };
         let key21 = MirScalarExpr::CallBinary {

@@ -7,16 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod datum;
-mod float;
-mod int16;
-mod int32;
-mod int64;
-mod not;
+sqlfunc!(
+    #[sqlname = "-"]
+    fn neg_int16(a: i16) -> i16 {
+        -a
+    }
+);
 
-pub use datum::*;
-pub use float::*;
-pub use int16::*;
-pub use int32::*;
-pub use int64::*;
-pub use not::Not;
+sqlfunc!(
+    #[sqlname = "~"]
+    fn bit_not_int16(a: i16) -> i16 {
+        !a
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "abs"]
+    fn abs_int16(a: i16) -> i16 {
+        a.abs()
+    }
+);
