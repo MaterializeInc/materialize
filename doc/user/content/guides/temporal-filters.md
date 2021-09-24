@@ -11,7 +11,7 @@ You can use temporal filters to perform time-windowed computations over temporal
 
 Windows can be sliding or tumbling. Sliding windows are fixed-size time intervals that you drag over temporal data, like "Show me updates from the last ten seconds". Tumbling or hopping windows are sliding windows that slide one unit at a time, like "Show me updates from the last day for each one-hour interval".
 
-Temporal filters are defined using the function [`mz_logical_timestamp`](/sql/functions/now_and_mz_logical_timestamp). For a more detailed overview, see our blog post on [temporal filters](https://materialize.com/temporal-filters/).
+Temporal filters are defined using the function [`mz_logical_timestamp`](/sql/functions/now_and_mz_logical_timestamp), which represents the logical time at which the query executes, based on the system time defined by the system on which `materialized` is installed. For a more detailed overview, see our blog post on [temporal filters](https://materialize.com/temporal-filters/).
 
 ## Restrictions
 
@@ -21,6 +21,14 @@ You can only use `mz_logical_timestamp()` to establish a temporal filter in the 
 * As part of a conjunction phrase (`AND`), where `mz_logical_timestamp()` must be directly compared to [`numeric`](/sql/types/numeric) expressions not containing `mz_logical_timestamp()`.
 
 At the moment, you can't use the `!=` operator with `mz_logical_timestamp` (we're working on it).
+
+## Late-arriving data
+
+Records that arrive late (that is, with a timestamp that is too old to pass the filter) are not shown in the current window. Think of a temporal filter as being like a query to a database for records updated between certain timestamps: if the record is added to the database with a time before the earlier timestamp boundary, it will not appear in the query results.
+
+## Interactions with Materialize compaction
+
+Materialize periodically [compacts](/ops/deploymennt/#compaction) data to prevent memory usage from growing without bounds. This compaction does not affect temporal filters.
 
 ## Example
 
@@ -77,3 +85,7 @@ content |   insert_ts   |   delete_ts   | mz_logical_timestamp
 ```
 
 If you run the query again after 1.67 minutes, you'll see only two results, because the first result has aged out of the view.
+
+## Related pages
+
+* [`now` and `mz_logical_timestamp`](/sql/functions/now_and_mz_logical_timestamp)

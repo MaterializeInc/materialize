@@ -104,3 +104,7 @@ SELECT * FROM valid
  goodbye | 1621279636402 | 1621279836402
  welcome | 1621279636400 | 1621279786400
 ```
+
+## Related pages
+
+- [Temporal filters](/guides/temporal-filters)
