@@ -28,6 +28,8 @@ use tokio::runtime::Runtime;
 
 use crate::error::Error;
 use crate::future::{Future, FutureHandle};
+use crate::indexed::background::Maintainer;
+use crate::indexed::cache::BlobCache;
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
 use crate::indexed::{
@@ -93,7 +95,9 @@ where
     let pool_guard = pool.enter();
 
     // Start up the runtime.
-    let indexed = Indexed::new(log, blob, metrics.clone())?;
+    let blob = BlobCache::new(metrics.clone(), blob);
+    let maintainer = Maintainer::new(blob.clone(), pool.clone());
+    let indexed = Indexed::new(log, blob, maintainer, metrics.clone())?;
     let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
     let runtime_pool = pool.clone();
