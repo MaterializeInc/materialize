@@ -351,6 +351,7 @@ impl MemRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 
@@ -369,6 +370,7 @@ impl MemRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }
@@ -424,6 +426,7 @@ impl MemMultiRegistry {
             log,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     }
 }

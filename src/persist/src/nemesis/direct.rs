@@ -303,6 +303,7 @@ mod tests {
                 log,
                 blob,
                 &MetricsRegistry::new(),
+                None,
             )
         })
         .expect("initial start failed");

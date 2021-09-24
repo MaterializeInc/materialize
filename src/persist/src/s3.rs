@@ -9,7 +9,8 @@
 
 //! An S3 implementation of [Blob] storage.
 
-use rusoto_core::{ByteStream, RusotoError};
+use aws_util::aws::ConnectInfo;
+use rusoto_core::{ByteStream, Region, RusotoError};
 use rusoto_s3::{
     DeleteObjectRequest, GetObjectError, GetObjectRequest, PutObjectRequest, S3Client, S3,
 };
@@ -29,6 +30,24 @@ pub struct Config {
 impl Config {
     #[cfg(test)]
     const EXTERNAL_TESTS_S3_BUCKET: &'static str = "MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET";
+
+    /// Returns a new [Config] for use in production.
+    ///
+    /// Stores objects in the given bucket prepended with the (possibly empty)
+    /// prefix. S3 credentials and region must be available in the process or
+    /// environment.
+    pub fn new(bucket: String, prefix: String) -> Result<Self, Error> {
+        let region = Region::default();
+        let connect_info = ConnectInfo::new(region, None, None, None)
+            .map_err(|err| format!("invalid s3 connection info: {}", err))?;
+        let client = aws_util::client::s3(connect_info)
+            .map_err(|err| format!("connecting client: {}", err))?;
+        Ok(Config {
+            client,
+            bucket,
+            prefix,
+        })
+    }
 
     /// Returns a new [Config] for use in unit tests.
     ///
@@ -77,7 +96,6 @@ impl Config {
     /// bucket.
     #[cfg(test)]
     pub fn new_for_test() -> Result<Option<Self>, Error> {
-        use aws_util::aws::ConnectInfo;
         use uuid::Uuid;
 
         let bucket = match std::env::var(Self::EXTERNAL_TESTS_S3_BUCKET) {
