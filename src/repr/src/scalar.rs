@@ -170,6 +170,69 @@ impl TryFrom<Datum<'_>> for Option<f64> {
     }
 }
 
+impl TryFrom<Datum<'_>> for i16 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Int16(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<i16> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Int16(i) => Ok(Some(i)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for i32 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Int32(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<i32> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Int32(i) => Ok(Some(i)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for i64 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Int64(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<i64> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Int64(i) => Ok(Some(i)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {

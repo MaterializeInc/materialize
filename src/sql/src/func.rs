@@ -1264,9 +1264,9 @@ lazy_static! {
 
             // Scalars.
             "abs" => Scalar {
-                params!(Int16) => UnaryFunc::AbsInt16, 1398;
-                params!(Int32) => UnaryFunc::AbsInt32, 1397;
-                params!(Int64) => UnaryFunc::AbsInt64, 1396;
+                params!(Int16) => UnaryFunc::AbsInt16(func::AbsInt16), 1398;
+                params!(Int32) => UnaryFunc::AbsInt32(func::AbsInt32), 1397;
+                params!(Int64) => UnaryFunc::AbsInt64(func::AbsInt64), 1396;
                 params!(Numeric) => UnaryFunc::AbsNumeric, 1705;
                 params!(Float32) => UnaryFunc::AbsFloat32(func::AbsFloat32), 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64), 1395;
@@ -1848,7 +1848,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg")), 3545;
             },
             "sum" => Aggregate {
-                params!(Int16) => AggregateFunc::SumInt32, 2109;
+                params!(Int16) => AggregateFunc::SumInt16, 2109;
                 params!(Int32) => AggregateFunc::SumInt32, 2108;
                 params!(Int64) => AggregateFunc::SumInt64, 2107;
                 params!(Float32) => AggregateFunc::SumFloat32, 2110;
@@ -2291,9 +2291,9 @@ lazy_static! {
                 params!(Numeric, Numeric) => AddNumeric, 1758;
             },
             "-" => Scalar {
-                params!(Int16) => UnaryFunc::NegInt32, 559;
-                params!(Int32) => UnaryFunc::NegInt32, 558;
-                params!(Int64) => UnaryFunc::NegInt64, 484;
+                params!(Int16) => UnaryFunc::NegInt16(func::NegInt16), 559;
+                params!(Int32) => UnaryFunc::NegInt32(func::NegInt32), 558;
+                params!(Int64) => UnaryFunc::NegInt64(func::NegInt64), 484;
                 params!(Float32) => UnaryFunc::NegFloat32(func::NegFloat32), 584;
                 params!(Float64) => UnaryFunc::NegFloat64(func::NegFloat64), 585;
                 params!(Numeric) => UnaryFunc::NegNumeric, 17510;
@@ -2412,9 +2412,9 @@ lazy_static! {
 
             // REGEX
             "~" => Scalar {
-                params!(Int16) => UnaryFunc::BitNotInt16, 1877;
-                params!(Int32) => UnaryFunc::BitNotInt32, 1883;
-                params!(Int64) => UnaryFunc::BitNotInt64, 1889;
+                params!(Int16) => UnaryFunc::BitNotInt16(func::BitNotInt16), 1877;
+                params!(Int32) => UnaryFunc::BitNotInt32(func::BitNotInt32), 1883;
+                params!(Int64) => UnaryFunc::BitNotInt64(func::BitNotInt64), 1889;
                 params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
                 params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                     let length = ecx.scalar_type(&lhs).unwrap_char_varchar_length();
