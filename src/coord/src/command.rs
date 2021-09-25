@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use dataflow_types::PeekResponse;
 use expr::GlobalId;
@@ -25,7 +25,7 @@ use sql::plan::ExecuteTimeout;
 use tokio::sync::watch;
 
 use crate::error::CoordError;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, RowBatchStream, Session};
 
 #[derive(Debug)]
 pub enum Command {
@@ -257,7 +257,7 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
-        rx: mpsc::UnboundedReceiver<Vec<Row>>,
+        rx: RowBatchStream,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
