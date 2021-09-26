@@ -233,7 +233,8 @@ impl fmt::Display for CoordError {
             CoordError::RelationOutsideTimeDomain { relation, names } => {
                 write!(
                     f,
-                    "transactions can only reference nearby relations; {} referenced here, but {}",
+                    "Transactions can only reference objects in the same timedomain. See {}. {} referenced here, but {}",
+                    "https://materialize.com/docs/sql/begin/#same-timedomain-error",
                     relation.quoted(),
                     match names.is_empty() {
                         true => "none available".to_string(),
