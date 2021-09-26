@@ -56,7 +56,7 @@ pub enum CoordError {
     /// A query in a transaction referenced a relation outside the first query's
     /// time domain.
     RelationOutsideTimeDomain {
-        relation: String,
+        relations: Vec<String>,
         names: Vec<String>,
     },
     /// The specified feature is not permitted in safe mode.
@@ -124,6 +124,25 @@ impl CoordError {
             }
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
+            CoordError::RelationOutsideTimeDomain { relations, names } => Some(format!(
+                "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
+                relations
+                    .iter()
+                    .map(|r| r.quoted().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                match names.is_empty() {
+                    true => "No relations are available.".to_string(),
+                    false => format!(
+                        "Only the following relations are available:\n{}",
+                        names
+                            .iter()
+                            .map(|name| name.quoted().to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                }
+            )),
             CoordError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -230,23 +249,11 @@ impl fmt::Display for CoordError {
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
             }
-            CoordError::RelationOutsideTimeDomain { relation, names } => {
+            CoordError::RelationOutsideTimeDomain { .. } => {
                 write!(
                     f,
-                    "Transactions can only reference objects in the same timedomain. See {}. {} referenced here, but {}",
+                    "Transactions can only reference objects in the same timedomain. See {}",
                     "https://materialize.com/docs/sql/begin/#same-timedomain-error",
-                    relation.quoted(),
-                    match names.is_empty() {
-                        true => "none available".to_string(),
-                        false => format!(
-                            "only the following are available: {}",
-                            names
-                                .iter()
-                                .map(|name| name.quoted().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    }
                 )
             }
             CoordError::SafeModeViolation(feature) => {
