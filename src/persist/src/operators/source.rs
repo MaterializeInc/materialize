@@ -23,7 +23,6 @@ use timely::Data as TimelyData;
 use crate::indexed::runtime::StreamReadHandle;
 use crate::indexed::ListenEvent;
 use crate::operators;
-use crate::operators::flatten_decoded_update;
 
 /// A Timely Dataflow operator that mirrors a persisted stream.
 pub trait PersistedSource<G: Scope<Timestamp = u64>, K: TimelyData, V: TimelyData> {
@@ -413,5 +412,17 @@ mod tests {
         assert_eq!(actual, expected);
 
         Ok(())
+    }
+}
+
+fn flatten_decoded_update<K, V>(
+    update: ((Result<K, String>, Result<V, String>), u64, isize),
+) -> Result<((K, V), u64, isize), Vec<(String, u64, isize)>> {
+    let ((k, v), ts, diff) = update;
+    match (k, v) {
+        (Ok(k), Ok(v)) => Ok(((k, v), ts, diff)),
+        (Err(k_err), Ok(_)) => Err(vec![(k_err, ts, diff)]),
+        (Ok(_), Err(v_err)) => Err(vec![(v_err, ts, diff)]),
+        (Err(k_err), Err(v_err)) => Err(vec![(k_err, ts, diff), (v_err, ts, diff)]),
     }
 }

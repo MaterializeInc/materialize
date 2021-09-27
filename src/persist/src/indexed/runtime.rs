@@ -15,11 +15,11 @@ use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
 use log;
 use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
@@ -29,7 +29,9 @@ use crate::error::Error;
 use crate::future::{Future, FutureHandle};
 use crate::indexed::encoding::Id;
 use crate::indexed::metrics::{metric_duration_ms, Metrics};
-use crate::indexed::{Indexed, IndexedSnapshot, ListenEvent, ListenFn, Snapshot};
+use crate::indexed::{
+    Indexed, IndexedSnapshot, IndexedSnapshotIter, ListenEvent, ListenFn, Snapshot,
+};
 use crate::storage::{Blob, Log, SeqNo};
 
 enum Cmd {
@@ -532,7 +534,6 @@ impl<K: Codec, V: Codec> MultiWriteHandle<K, V> {
 #[derive(Debug)]
 pub struct DecodedSnapshot<K, V> {
     snap: IndexedSnapshot,
-    buf: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
     _phantom: PhantomData<(K, V)>,
 }
 
@@ -540,7 +541,6 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     pub(crate) fn new(snap: IndexedSnapshot) -> Self {
         DecodedSnapshot {
             snap,
-            buf: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -559,59 +559,45 @@ impl<K: Codec, V: Codec> DecodedSnapshot<K, V> {
     pub fn since(&self) -> Antichain<u64> {
         self.snap.since()
     }
-}
 
-/// Extension methods on `DecodedSnapshot<K, V>` for use in tests and benchmarks.
-impl<K: Codec + Ord, V: Codec + Ord> DecodedSnapshot<K, V> {
-    /// A full read of the data in the snapshot.
-    pub fn read_to_end_flattened(&mut self) -> Result<Vec<((K, V), u64, isize)>, Error> {
-        let mut res = Vec::new();
-        let mut buf = Vec::new();
-
-        // Read in all of the potentially decoded data.
-        while self.read(&mut buf)? {}
-
-        for ((k, v), ts, diff) in buf.drain(..) {
-            res.push(((k?, v?), ts, diff));
-        }
-        res.sort();
-        Ok(res)
-    }
-}
-
-impl<K: Codec, V: Codec> Snapshot<Result<K, String>, Result<V, String>> for DecodedSnapshot<K, V> {
-    fn read<E: Extend<((Result<K, String>, Result<V, String>), u64, isize)>>(
-        &mut self,
-        buf: &mut E,
-    ) -> Result<bool, Error> {
-        let since = self.since();
-        let ret = self.snap.read(&mut self.buf)?;
-        buf.extend(self.buf.drain(..).map(|((k, v), mut ts, diff)| {
-            let k = K::decode(&k);
-            let v = V::decode(&v);
-            // When reading a snapshot, the contract of since is that all update
-            // timestamps will be advanced to it. We do this physically during
-            // compaction, but don't have hard guarantees about how long that
-            // takes, so we have to account for un-advanced batches on reads.
-            //
-            // TODO: This adjustment should logically live in IndexedSnapshot
-            // (where it could be lazy about only doing this on the relevant
-            // batches) but in the short-term it's much easier to do here. I'm
-            // hoping to clean up how snapshots work soon and make them more
-            // like iterators, at which point it will be much simpler to push
-            // this logic where it belongs.
-            ts.advance_by(since.borrow());
-            ((k, v), ts, diff)
-        }));
-        Ok(ret)
-    }
-}
-
-impl<K, V> DecodedSnapshot<K, V> {
     /// A logical upper bound on the times that had been added to the collection
     /// when this snapshot was taken
     pub fn get_seal(&self) -> Antichain<u64> {
         self.snap.get_seal()
+    }
+}
+
+impl<K: Codec, V: Codec> Snapshot<K, V> for DecodedSnapshot<K, V> {
+    type Iter = DecodedSnapshotIter<K, V>;
+
+    fn into_iters(self, num_iters: NonZeroUsize) -> Vec<Self::Iter> {
+        self.snap
+            .into_iters(num_iters)
+            .into_iter()
+            .map(|iter| DecodedSnapshotIter {
+                iter,
+                _phantom: PhantomData,
+            })
+            .collect()
+    }
+}
+
+/// An [Iterator] representing one part of the data in a [DecodedSnapshot].
+pub struct DecodedSnapshotIter<K, V> {
+    iter: IndexedSnapshotIter,
+    _phantom: PhantomData<(K, V)>,
+}
+
+impl<K: Codec, V: Codec> Iterator for DecodedSnapshotIter<K, V> {
+    type Item = Result<((K, V), u64, isize), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|x| {
+            let ((k, v), ts, diff) = x?;
+            let k = K::decode(&k)?;
+            let v = V::decode(&v)?;
+            Ok(((k, v), ts, diff))
+        })
     }
 }
 
@@ -875,6 +861,7 @@ impl<L: Log, B: Blob> RuntimeImpl<L, B> {
 
 #[cfg(test)]
 mod tests {
+    use crate::indexed::SnapshotExt;
     use crate::mem::{MemMultiRegistry, MemRegistry};
 
     use super::*;
@@ -890,7 +877,7 @@ mod tests {
 
         let (write, meta) = runtime.create_or_load("0")?;
         write.write(&data).recv()?;
-        assert_eq!(meta.snapshot()?.read_to_end_flattened()?, data);
+        assert_eq!(meta.snapshot()?.read_to_end()?, data);
 
         // Commands sent after stop return an error, but calling stop again is
         // fine.
@@ -916,7 +903,7 @@ mod tests {
         drop(client1);
         let (write, meta) = client2.create_or_load("0")?;
         write.write(&data).recv()?;
-        assert_eq!(meta.snapshot()?.read_to_end_flattened()?, data);
+        assert_eq!(meta.snapshot()?.read_to_end()?, data);
         client2.stop()?;
 
         Ok(())
@@ -950,7 +937,7 @@ mod tests {
         {
             let persister = registry.runtime_no_reentrance()?;
             let (_, meta) = persister.create_or_load("0")?;
-            assert_eq!(meta.snapshot()?.read_to_end_flattened()?, data);
+            assert_eq!(meta.snapshot()?.read_to_end()?, data);
         }
 
         Ok(())
@@ -984,14 +971,8 @@ mod tests {
             (c1s2.stream_id(), data[1..].to_vec()),
         ];
         multi.write_atomic(updates).recv()?;
-        assert_eq!(
-            c1s1_read.snapshot()?.read_to_end_flattened()?,
-            data[..1].to_vec()
-        );
-        assert_eq!(
-            c1s2_read.snapshot()?.read_to_end_flattened()?,
-            data[1..].to_vec()
-        );
+        assert_eq!(c1s1_read.snapshot()?.read_to_end()?, data[..1].to_vec());
+        assert_eq!(c1s2_read.snapshot()?.read_to_end()?, data[1..].to_vec());
 
         // Normal seal
         let ids = &[c1s1.stream_id(), c1s2.stream_id()];

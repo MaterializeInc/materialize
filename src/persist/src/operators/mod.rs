@@ -25,7 +25,7 @@ pub mod stream;
 
 fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Codec>(
     scope: &mut G,
-    mut snapshot: DecodedSnapshot<K, V>,
+    snapshot: DecodedSnapshot<K, V>,
 ) -> (
     Stream<G, ((K, V), u64, isize)>,
     Stream<G, (String, u64, isize)>,
@@ -34,11 +34,21 @@ fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Code
     // 0 because that was the simplest thing to do initially. Instead, we should
     // shard up the responsibility between all the workers.
     if scope.index() == 0 {
+        let snapshot_since = snapshot.since();
+        let iter = snapshot.into_iter();
         // TODO: Do this with a timely operator that reads the snapshot.
-        let (mut buf, mut ok, mut errors) = (Vec::new(), Vec::new(), Vec::new());
-        loop {
-            let ret = match snapshot.read(&mut buf) {
-                Ok(ret) => ret,
+        let (mut ok, mut errors) = (Vec::new(), Vec::new());
+        for x in iter {
+            match x {
+                Ok(u) => {
+                    // The raw update data held internally in the snapshot
+                    // may not be physically compacted up to the logical
+                    // compaction frontier of since. Snapshot handles
+                    // advancing any necessary data but we double check that
+                    // invariant here.
+                    debug_assert!(snapshot_since.less_equal(&u.1));
+                    ok.push(u);
+                }
                 Err(err) => {
                     // TODO: Make the responsibility for retries in the presence
                     // of transient storage failures lie with the snapshot (with
@@ -64,41 +74,11 @@ fn replay<G: Scope<Timestamp = u64>, K: TimelyData + Codec, V: TimelyData + Code
                     continue;
                 }
             };
-            for update in buf.drain(..) {
-                match flatten_decoded_update(update) {
-                    Ok(u) => {
-                        // The raw update data held internally in the snapshot
-                        // may not be physically compacted up to the logical
-                        // compaction frontier of since. Snapshot handles
-                        // advancing any necessary data but we double check that
-                        // invariant here.
-                        debug_assert!(snapshot.since().less_equal(&u.1));
-                        ok.push(u)
-                    }
-                    Err(errs) => errors.extend(errs),
-                }
-            }
-
-            if ret == false {
-                break;
-            }
         }
         let ok_previous = ok.into_iter().to_stream(scope);
         let err_previous = errors.into_iter().to_stream(scope);
         (ok_previous, err_previous)
     } else {
         (operator::empty(scope), operator::empty(scope))
-    }
-}
-
-fn flatten_decoded_update<K, V>(
-    update: ((Result<K, String>, Result<V, String>), u64, isize),
-) -> Result<((K, V), u64, isize), Vec<(String, u64, isize)>> {
-    let ((k, v), ts, diff) = update;
-    match (k, v) {
-        (Ok(k), Ok(v)) => Ok(((k, v), ts, diff)),
-        (Err(k_err), Ok(_)) => Err(vec![(k_err, ts, diff)]),
-        (Ok(_), Err(v_err)) => Err(vec![(v_err, ts, diff)]),
-        (Err(k_err), Err(v_err)) => Err(vec![(k_err, ts, diff), (v_err, ts, diff)]),
     }
 }
