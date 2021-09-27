@@ -3090,6 +3090,11 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let table_name = RawName::Name(self.parse_object_name()?);
         let alias = self.parse_optional_table_alias()?;
+        let using = if self.parse_keyword(USING) {
+            self.parse_comma_separated(Parser::parse_table_and_joins)?
+        } else {
+            vec![]
+        };
         let selection = if self.parse_keyword(WHERE) {
             Some(self.parse_expr()?)
         } else {
@@ -3099,6 +3104,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Delete(DeleteStatement {
             table_name,
             alias,
+            using,
             selection,
         }))
     }
