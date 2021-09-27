@@ -2967,6 +2967,7 @@ version = "0.0.0"
 dependencies = [
  "abomonation",
  "abomonation_derive",
+ "aws-util",
  "criterion",
  "crossbeam-channel",
  "differential-dataflow",
@@ -2976,11 +2977,14 @@ dependencies = [
  "ore",
  "persist-types",
  "rand 0.8.4",
+ "rusoto_core",
+ "rusoto_s3",
  "serde",
  "serde_json",
  "tempfile",
  "timely",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
