@@ -28,6 +28,11 @@ services:
     - KAFKA_ADDRS=kafka:9092
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     - MZ_SOFT_ASSERTIONS=1
+    - MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET=mtlz-test-persist-1d-lifecycle-delete
+    - AWS_DEFAULT_REGION
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN
     propagate_uid_gid: true
     depends_on: [kafka, zookeeper, schema-registry]
   zookeeper:
