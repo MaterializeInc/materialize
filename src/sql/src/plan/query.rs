@@ -36,9 +36,9 @@ use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident,
-    InsertSource, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select,
-    SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor, TableWithJoins,
-    UnresolvedObjectName, Value, Values,
+    InsertSource, IsExprConstruct, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw,
+    RawName, Select, SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor,
+    TableWithJoins, UnresolvedObjectName, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -2509,7 +2509,11 @@ pub fn plan_expr<'a>(
             }
             .into()
         }
-        Expr::IsExpr { expr, negated , construct: _} => plan_is_null_expr(ecx, expr, *negated)?.into(),
+        Expr::IsExpr {
+            expr,
+            construct,
+            negated,
+        } => plan_is_expr(ecx, expr, *construct, *negated)?.into(),
         Expr::Case {
             operand,
             conditions,
@@ -3120,9 +3124,10 @@ pub fn resolve_func(
     bail!("function {}({}) does not exist", name, types.join(", "))
 }
 
-fn plan_is_null_expr<'a>(
+fn plan_is_expr<'a>(
     ecx: &ExprContext,
     inner: &'a Expr<Aug>,
+    construct: IsExprConstruct,
     not: bool,
 ) -> Result<HirScalarExpr, anyhow::Error> {
     // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
@@ -3130,17 +3135,25 @@ fn plan_is_null_expr<'a>(
     // unconstrained parameters identically. Providing a type hint of string
     // means we wind up supporting both.
     let expr = plan_expr(ecx, inner)?.type_as_any(ecx)?;
-    let mut expr = HirScalarExpr::CallUnary {
-        func: UnaryFunc::IsNull(expr_func::IsNull),
+    let func = match construct {
+        IsExprConstruct::NULL => UnaryFunc::IsNull(expr_func::IsNull),
+        IsExprConstruct::TRUE => UnaryFunc::IsTrue(expr_func::IsTrue),
+        IsExprConstruct::FALSE => UnaryFunc::IsFalse(expr_func::IsFalse),
+        IsExprConstruct::UNKNOWN => UnaryFunc::IsUnknown(expr_func::IsUnknown),
+    };
+    let expr = HirScalarExpr::CallUnary {
+        func: func,
         expr: Box::new(expr),
     };
+
     if not {
-        expr = HirScalarExpr::CallUnary {
+        Ok(HirScalarExpr::CallUnary {
             func: UnaryFunc::Not(expr_func::Not),
             expr: Box::new(expr),
-        }
+        })
+    } else {
+        Ok(expr)
     }
-    Ok(expr)
 }
 
 fn plan_case<'a>(
