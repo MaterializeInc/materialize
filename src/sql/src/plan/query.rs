@@ -3130,11 +3130,27 @@ fn plan_is_expr<'a>(
     construct: IsExprConstruct,
     not: bool,
 ) -> Result<HirScalarExpr, anyhow::Error> {
-    // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
-    // with our type coercion rules, which treat `NULL` literals and
-    // unconstrained parameters identically. Providing a type hint of string
-    // means we wind up supporting both.
-    let expr = plan_expr(ecx, inner)?.type_as_any(ecx)?;
+    let planned_expr = plan_expr(ecx, inner)?;
+    let expr = if construct.requires_boolean_expr() {
+        match typeconv::plan_coerce(ecx, planned_expr, &ScalarType::Bool) {
+            Ok(res) => res,
+            Err(e) => {
+                let not_msg = if not { "NOT " } else { "" };
+                bail!(
+                    "IS{} {} requires boolean expression: {}",
+                    not_msg,
+                    construct,
+                    e
+                );
+            }
+        }
+    } else {
+        // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
+        // with our type coercion rules, which treat `NULL` literals and
+        // unconstrained parameters identically. Providing a type hint of string
+        // means we wind up supporting both.
+        planned_expr.type_as_any(ecx)?
+    };
     let func = match construct {
         IsExprConstruct::NULL => UnaryFunc::IsNull(expr_func::IsNull),
         IsExprConstruct::TRUE => UnaryFunc::IsTrue(expr_func::IsTrue),

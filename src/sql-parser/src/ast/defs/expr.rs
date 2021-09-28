@@ -58,7 +58,7 @@ pub enum Expr<T: AstInfo> {
         left: Box<Expr<T>>,
         right: Box<Expr<T>>,
     },
-    /// `IS NULL` expression
+    /// `IS {NULL, TRUE, FALSE, UNKNOWN}` expression
     IsExpr {
         expr: Box<Expr<T>>,
         construct: IsExprConstruct,
@@ -750,6 +750,26 @@ pub enum IsExprConstruct {
     TRUE,
     FALSE,
     UNKNOWN,
+}
+
+impl IsExprConstruct {
+    pub fn requires_boolean_expr(&self) -> bool {
+        match self {
+            IsExprConstruct::NULL => false,
+            IsExprConstruct::TRUE | IsExprConstruct::FALSE | IsExprConstruct::UNKNOWN => true,
+        }
+    }
+}
+
+impl fmt::Display for IsExprConstruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IsExprConstruct::NULL => f.write_str("NULL"),
+            IsExprConstruct::TRUE => f.write_str("TRUE"),
+            IsExprConstruct::FALSE => f.write_str("FALSE"),
+            IsExprConstruct::UNKNOWN => f.write_str("UNKNOWN"),
+        }
+    }
 }
 
 impl AstDisplay for IsExprConstruct {
