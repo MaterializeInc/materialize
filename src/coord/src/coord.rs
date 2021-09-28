@@ -73,7 +73,7 @@ use dataflow_types::{
 use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
     EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
@@ -86,7 +86,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
-    FetchStatement, Ident, ObjectType, Raw, Statement,
+    FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
 use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName};
@@ -970,6 +970,7 @@ impl Coordinator {
                 };
                 let stmt = portal.stmt.clone();
                 let params = portal.parameters.clone();
+
                 match stmt {
                     Some(stmt) => {
                         // Verify that this statetement type can be executed in the current
@@ -1017,7 +1018,6 @@ impl Coordinator {
                                 | Statement::Discard(_)
                                 | Statement::Explain(_)
                                 | Statement::Fetch(_)
-                                | Statement::Insert(_)
                                 | Statement::Rollback(_)
                                 | Statement::Select(_)
                                 | Statement::SetTransaction(_)
@@ -1036,6 +1036,19 @@ impl Coordinator {
                                     // Always safe.
                                 }
 
+                                Statement::Insert(ref insert_statment)
+                                    if matches!(
+                                        insert_statment.source,
+                                        InsertSource::Query(Query {
+                                            body: SetExpr::Values(..),
+                                            ..
+                                        }) | InsertSource::DefaultValues
+                                    ) =>
+                                {
+                                    // Inserting from default? values statements
+                                    // is always safe.
+                                }
+
                                 // Statements below must by run singly (in Started).
                                 Statement::AlterIndex(_)
                                 | Statement::AlterObjectRename(_)
@@ -1052,6 +1065,7 @@ impl Coordinator {
                                 | Statement::Delete(_)
                                 | Statement::DropDatabase(_)
                                 | Statement::DropObjects(_)
+                                | Statement::Insert(_)
                                 | Statement::SetVariable(_)
                                 | Statement::Update(_) => {
                                     let _ = tx.send(Response {
@@ -1703,7 +1717,7 @@ impl Coordinator {
                 tx.send(self.sequence_send_diffs(&mut session, plan), session);
             }
             Plan::Insert(plan) => {
-                tx.send(self.sequence_insert(&mut session, plan), session);
+                self.sequence_insert(tx, session, plan);
             }
             Plan::ReadThenWrite(plan) => {
                 self.sequence_read_then_write(tx, session, plan);
@@ -3248,45 +3262,93 @@ impl Coordinator {
 
     fn sequence_insert(
         &mut self,
-        session: &mut Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         plan: InsertPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
-        match self
-            .prep_relation_expr(plan.values, ExprPrepStyle::Write)?
-            .into_inner()
-        {
-            MirRelationExpr::Constant { rows, typ: _ } => {
-                let rows = rows?;
-                // Insert can be queued, so we need to re-verify the id exists.
-                let table = match self.catalog.try_get_by_id(plan.id) {
-                    Some(table) => table,
+    ) {
+        let optimized_mir = match self.prep_relation_expr(plan.values, ExprPrepStyle::Write) {
+            Ok(m) => m,
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
+            }
+        };
+
+        match optimized_mir.into_inner() {
+            constants @ MirRelationExpr::Constant { .. } => tx.send(
+                self.sequence_insert_constant(&mut session, plan.id, constants),
+                session,
+            ),
+            // All non-constant values must be planned as read-then-writes.
+            selection => {
+                let desc_arity = match self.catalog.try_get_by_id(plan.id) {
+                    Some(table) => table.desc().expect("desc called on table").arity(),
                     None => {
-                        return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                            plan.id.to_string(),
-                        )))
+                        tx.send(
+                            Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                plan.id.to_string(),
+                            ))),
+                            session,
+                        );
+                        return;
                     }
                 };
-                let desc = table.desc()?;
+
+                let finishing = RowSetFinishing {
+                    order_by: vec![],
+                    limit: None,
+                    offset: 0,
+                    project: (0..desc_arity).collect(),
+                };
+
+                let read_then_write_plan = ReadThenWritePlan {
+                    id: plan.id,
+                    selection,
+                    finishing,
+                    assignments: None,
+                    kind: MutationKind::Insert,
+                };
+
+                self.sequence_read_then_write(tx, session, read_then_write_plan);
+            }
+        }
+    }
+
+    fn sequence_insert_constant(
+        &mut self,
+        session: &mut Session,
+        id: GlobalId,
+        constants: MirRelationExpr,
+    ) -> Result<ExecuteResponse, CoordError> {
+        // Insert can be queued, so we need to re-verify the id exists.
+        let desc = match self.catalog.try_get_by_id(id) {
+            Some(table) => table.desc()?,
+            None => {
+                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                    id.to_string(),
+                )))
+            }
+        };
+
+        match constants {
+            MirRelationExpr::Constant { rows, typ: _ } => {
+                let rows = rows?;
                 for (row, _) in &rows {
                     for (i, datum) in row.unpack().iter().enumerate() {
                         desc.constraints_met(i, datum)?;
                     }
                 }
                 let diffs_plan = SendDiffsPlan {
-                    id: plan.id,
+                    id,
                     updates: rows,
                     kind: MutationKind::Insert,
                 };
                 self.sequence_send_diffs(session, diffs_plan)
             }
-            // If we couldn't optimize the INSERT statement to a constant, it
-            // must depend on another relation. We're not yet sophisticated
-            // enough to handle this.
-            _ => {
-                return Err(CoordError::Unsupported(
-                    "INSERT statements referencing other relations",
-                ))
-            }
+            o => panic!(
+                "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
+                o
+            ),
         }
     }
 
@@ -3299,11 +3361,13 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let catalog = self.catalog.for_session(session);
         let values = sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
-        let plan = InsertPlan {
-            id,
-            values: values.lower(),
-        };
-        self.sequence_insert(session, plan)
+
+        let constants = self
+            .prep_relation_expr(values.lower(), ExprPrepStyle::Write)?
+            .into_inner();
+
+        // Copied rows must always be constants.
+        self.sequence_insert_constant(session, id, constants)
     }
 
     // ReadThenWrite is a plan whose writes depend on the results of a
@@ -3326,7 +3390,7 @@ impl Coordinator {
             finishing,
         } = plan;
 
-        // Delete can be queued, so re-verify the id exists.
+        // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog.try_get_by_id(id) {
             Some(table) => table.desc().expect("desc called on table").clone(),
             None => {
@@ -3339,6 +3403,20 @@ impl Coordinator {
                 return;
             }
         };
+
+        // Ensure selection targets are valid, i.e. user-defined tables, or
+        // objects local to the dataflow.
+        for id in selection.global_uses() {
+            let valid = match self.catalog.try_get_by_id(id) {
+                // TODO: Widen this check when supporting temporary tables.
+                Some(entry) if id.is_user() => entry.is_table(),
+                _ => false,
+            };
+            if !valid {
+                tx.send(Err(CoordError::InvalidTableMutationSelection), session);
+                return;
+            }
+        }
 
         let ts = self.get_read_ts();
         let peek_response = match self.sequence_peek(
@@ -3368,6 +3446,10 @@ impl Coordinator {
                             let mut diffs = Vec::with_capacity(rows.len() * 2);
                             for row in rows {
                                 if let Some(ref assignments) = assignments {
+                                    assert!(
+                                        matches!(kind, MutationKind::Update),
+                                        "only updates support assignments"
+                                    );
                                     let mut datums = row.unpack();
                                     let mut updates = vec![];
                                     for (idx, expr) in assignments {
@@ -3386,8 +3468,15 @@ impl Coordinator {
                                     let updated = Row::pack_slice(&datums);
                                     diffs.push((updated, 1));
                                 }
-                                // Any read is either being deleted or updated, so always remove one row.
-                                diffs.push((row, -1));
+                                match kind {
+                                    // Updates and deletes always remove the
+                                    // current row. Updates will also add an
+                                    // updated value.
+                                    MutationKind::Update | MutationKind::Delete => {
+                                        diffs.push((row, -1))
+                                    }
+                                    MutationKind::Insert => diffs.push((row, 1)),
+                                }
                             }
                             Ok(diffs)
                         }(rows)

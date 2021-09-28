@@ -43,6 +43,8 @@ pub enum CoordError {
     InvalidAlterOnDisabledIndex(String),
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    /// The selection value for a table mutation operation refers to an invalid object.
+    InvalidTableMutationSelection,
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// The named operation cannot be run in a transaction.
@@ -217,6 +219,9 @@ impl fmt::Display for CoordError {
                 p.name().quoted(),
                 p.type_name().quoted()
             ),
+            CoordError::InvalidTableMutationSelection => {
+                f.write_str("invalid selection: operation may only refer to user-defined tables")
+            }
             CoordError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
