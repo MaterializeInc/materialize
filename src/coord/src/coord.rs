@@ -52,7 +52,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
-use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
 use timely::communication::WorkerGuards;
@@ -2672,13 +2671,8 @@ impl Coordinator {
             // reference could be caused by a user specifying an object in a different
             // schema than the first query. An index could be caused by a CREATE INDEX
             // after the transaction started.
-            //
-            // The call to `sorted` ensures the error message is deterministic.
-            if let Some(id) = stmt_ids
-                .difference(&read_txn.timedomain_ids)
-                .sorted()
-                .next()
-            {
+            let outside: Vec<_> = stmt_ids.difference(&read_txn.timedomain_ids).collect();
+            if !outside.is_empty() {
                 let mut names: Vec<_> = read_txn
                     .timedomain_ids
                     .iter()
@@ -2686,10 +2680,16 @@ impl Coordinator {
                     .filter_map(|id| self.catalog.try_get_by_id(*id))
                     .map(|item| item.name().to_string())
                     .collect();
+                let mut outside: Vec<_> = outside
+                    .into_iter()
+                    .filter_map(|id| self.catalog.try_get_by_id(*id))
+                    .map(|item| item.name().to_string())
+                    .collect();
                 // Sort so error messages are deterministic.
                 names.sort();
+                outside.sort();
                 return Err(CoordError::RelationOutsideTimeDomain {
-                    relation: self.catalog.get_by_id(&id).name().to_string(),
+                    relations: outside,
                     names,
                 });
             }
