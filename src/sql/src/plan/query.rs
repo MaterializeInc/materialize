@@ -3132,17 +3132,15 @@ fn plan_is_expr<'a>(
 ) -> Result<HirScalarExpr, anyhow::Error> {
     let planned_expr = plan_expr(ecx, inner)?;
     let expr = if construct.requires_boolean_expr() {
-        match typeconv::plan_coerce(ecx, planned_expr, &ScalarType::Bool) {
-            Ok(res) => res,
-            Err(e) => {
-                let not_msg = if not { "NOT " } else { "" };
-                bail!(
-                    "IS{} {} requires boolean expression: {}",
-                    not_msg,
-                    construct,
-                    e
-                );
-            }
+        let expr_coerced= typeconv::plan_coerce(ecx, planned_expr, &ScalarType::Bool)?;
+        let expr_ty = ecx.scalar_type(&expr_coerced);
+        // PostgreSQL allows booleans themselves or string representations of booleans only.
+        // Even though we can coerce an integer to a boolean, this should not succeed.
+        if expr_ty == ScalarType::Bool || expr_ty == ScalarType::String {
+            expr_coerced
+        } else {
+            let not_msg = if not { "NOT " } else { "" };
+            bail!("IS{} {} requires boolean expression", not_msg, construct)
         }
     } else {
         // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
