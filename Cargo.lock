@@ -5057,7 +5057,9 @@ dependencies = [
  "expr_test_util",
  "itertools",
  "lazy_static",
+ "lowertest",
  "ore",
+ "proc-macro2",
  "repr",
  "serde_json",
 ]

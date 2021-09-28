@@ -121,18 +121,39 @@ pub struct TestCatalog {
 }
 
 impl<'a> TestCatalog {
-    fn insert(&mut self, name: &str, typ: RelationType) {
-        // TODO(justin): error on dup name?
-        let id = GlobalId::User(self.objects.len() as u64);
+    /// Registers an object in the catalog.
+    ///
+    /// Specifying `transient` as true allows the object to be deleted by
+    /// [Self::remove_transient_objects].
+    ///
+    /// Returns the GlobalId assigned by the catalog to the object.
+    ///
+    /// Errors if an object of the same name is already in the catalog.
+    pub fn insert(
+        &mut self,
+        name: &str,
+        typ: RelationType,
+        transient: bool,
+    ) -> Result<GlobalId, String> {
+        if self.objects.contains_key(name) {
+            return Err(format!("Object {} already exists in catalog", name));
+        }
+        let id = if transient {
+            GlobalId::Transient(self.objects.len() as u64)
+        } else {
+            GlobalId::User(self.objects.len() as u64)
+        };
         self.objects.insert(name.to_string(), (id, typ));
         self.names.insert(id, name.to_string());
+        Ok(id)
     }
 
     fn get(&'a self, name: &str) -> Option<&'a (GlobalId, RelationType)> {
         self.objects.get(name)
     }
 
-    fn get_source_name(&'a self, id: &GlobalId) -> Option<&'a String> {
+    /// Looks up the name of the object referred to as `id`.
+    pub fn get_source_name(&'a self, id: &GlobalId) -> Option<&'a String> {
         self.names.get(id)
     }
 
@@ -178,7 +199,7 @@ impl<'a> TestCatalog {
                             let typ: RelationType =
                                 deserialize(&mut inner_iter, "RelationType", &RTI, &mut ctx)?;
 
-                            self.insert(&name, typ);
+                            self.insert(&name, typ, false)?;
                         }
                         s => return Err(format!("not a valid catalog command: {:?}", s)),
                     }
@@ -187,6 +208,24 @@ impl<'a> TestCatalog {
             }
         }
         Ok(())
+    }
+
+    /// Clears all transient objects from the catalog.
+    pub fn remove_transient_objects(&mut self) {
+        self.objects.retain(|_, (id, _)| {
+            if let GlobalId::Transient(_) = id {
+                false
+            } else {
+                true
+            }
+        });
+        self.names.retain(|k, _| {
+            if let GlobalId::Transient(_) = k {
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 

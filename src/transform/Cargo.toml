@@ -15,7 +15,9 @@ repr = { path = "../repr" }
 [dev-dependencies]
 anyhow = "1.0.44"
 datadriven = "0.6.0"
-lazy_static = "1.4.0"
 expr_test_util = {path = "../expr-test-util"}
+lazy_static = "1.4.0"
+lowertest = {path = "../lowertest"}
 ore = { path = "../ore"}
+proc-macro2 = "1.0.29"
 serde_json = "1.0.68"
