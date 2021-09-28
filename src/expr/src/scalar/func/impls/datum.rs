@@ -42,16 +42,6 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "isunknown"]
-    #[propagates_nulls = false]
-    #[introduces_nulls = false]
-    #[preserves_uniqueness = false]
-    fn is_unknown(a: Datum<'_>) -> Result<Option<bool>, EvalError> {
-        Ok(Some(a == Datum::Null))
-    }
-);
-
-sqlfunc!(
     #[sqlname = "pg_column_size"]
     #[propagates_nulls = true]
     #[introduces_nulls = false]

@@ -3400,7 +3400,6 @@ pub enum UnaryFunc {
     IsNull(IsNull),
     IsTrue(IsTrue),
     IsFalse(IsFalse),
-    IsUnknown(IsUnknown),
     BitNotInt16(BitNotInt16),
     BitNotInt32(BitNotInt32),
     BitNotInt64(BitNotInt64),
@@ -3657,7 +3656,6 @@ derive_unary!(
     IsNull,
     IsTrue,
     IsFalse,
-    IsUnknown,
     Sleep,
     ToTimestamp,
     CastFloat64ToString,
@@ -3721,7 +3719,6 @@ impl UnaryFunc {
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
-            | IsUnknown(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -3924,7 +3921,6 @@ impl UnaryFunc {
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
-            | IsUnknown(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4142,7 +4138,6 @@ impl UnaryFunc {
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
-            | IsUnknown(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4285,7 +4280,6 @@ impl UnaryFunc {
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
-            | IsUnknown(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4360,7 +4354,6 @@ impl UnaryFunc {
             | IsNull(_)
             | IsTrue(_)
             | IsFalse(_)
-            | IsUnknown(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
