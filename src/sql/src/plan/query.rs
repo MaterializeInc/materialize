@@ -3152,10 +3152,10 @@ fn plan_is_expr<'a>(
         planned_expr.type_as_any(ecx)?
     };
     let func = match construct {
-        IsExprConstruct::NULL => UnaryFunc::IsNull(expr_func::IsNull),
-        IsExprConstruct::TRUE => UnaryFunc::IsTrue(expr_func::IsTrue),
-        IsExprConstruct::FALSE => UnaryFunc::IsFalse(expr_func::IsFalse),
-        IsExprConstruct::UNKNOWN => UnaryFunc::IsUnknown(expr_func::IsUnknown),
+        IsExprConstruct::Null => UnaryFunc::IsNull(expr_func::IsNull),
+        IsExprConstruct::True => UnaryFunc::IsTrue(expr_func::IsTrue),
+        IsExprConstruct::False => UnaryFunc::IsFalse(expr_func::IsFalse),
+        IsExprConstruct::Unknown => UnaryFunc::IsUnknown(expr_func::IsUnknown),
     };
     let expr = HirScalarExpr::CallUnary {
         func: func,

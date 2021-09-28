@@ -746,17 +746,17 @@ impl_display_t!(FunctionArgs);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IsExprConstruct {
-    NULL,
-    TRUE,
-    FALSE,
-    UNKNOWN,
+    Null,
+    True,
+    False,
+    Unknown,
 }
 
 impl IsExprConstruct {
     pub fn requires_boolean_expr(&self) -> bool {
         match self {
-            IsExprConstruct::NULL => false,
-            IsExprConstruct::TRUE | IsExprConstruct::FALSE | IsExprConstruct::UNKNOWN => true,
+            IsExprConstruct::Null => false,
+            IsExprConstruct::True | IsExprConstruct::False | IsExprConstruct::Unknown => true,
         }
     }
 }
@@ -764,10 +764,10 @@ impl IsExprConstruct {
 impl fmt::Display for IsExprConstruct {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            IsExprConstruct::NULL => f.write_str("NULL"),
-            IsExprConstruct::TRUE => f.write_str("TRUE"),
-            IsExprConstruct::FALSE => f.write_str("FALSE"),
-            IsExprConstruct::UNKNOWN => f.write_str("UNKNOWN"),
+            IsExprConstruct::Null => f.write_str("NULL"),
+            IsExprConstruct::True => f.write_str("TRUE"),
+            IsExprConstruct::False => f.write_str("FALSE"),
+            IsExprConstruct::Unknown => f.write_str("UNKNOWN"),
         }
     }
 }
@@ -775,10 +775,10 @@ impl fmt::Display for IsExprConstruct {
 impl AstDisplay for IsExprConstruct {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            IsExprConstruct::NULL => f.write_str("NULL"),
-            IsExprConstruct::TRUE => f.write_str("TRUE"),
-            IsExprConstruct::FALSE => f.write_str("FALSE"),
-            IsExprConstruct::UNKNOWN => f.write_str("UNKNOWN"),
+            IsExprConstruct::Null => f.write_str("NULL"),
+            IsExprConstruct::True => f.write_str("TRUE"),
+            IsExprConstruct::False => f.write_str("FALSE"),
+            IsExprConstruct::Unknown => f.write_str("UNKNOWN"),
         }
     }
 }

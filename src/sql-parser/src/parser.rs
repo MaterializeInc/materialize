@@ -952,25 +952,25 @@ impl<'a> Parser<'a> {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
                             negated: negated,
-                            construct: IsExprConstruct::NULL,
+                            construct: IsExprConstruct::Null,
                         })
                     } else if self.parse_keyword(TRUE) {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
                             negated: negated,
-                            construct: IsExprConstruct::TRUE,
+                            construct: IsExprConstruct::True,
                         })
                     } else if self.parse_keyword(FALSE) {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
                             negated: negated,
-                            construct: IsExprConstruct::FALSE,
+                            construct: IsExprConstruct::False,
                         })
                     } else if self.parse_keyword(UNKNOWN) {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
                             negated: negated,
-                            construct: IsExprConstruct::UNKNOWN,
+                            construct: IsExprConstruct::Unknown,
                         })
                     } else {
                         self.expected(
@@ -983,7 +983,7 @@ impl<'a> Parser<'a> {
                 ISNULL => Ok(Expr::IsExpr {
                     expr: Box::new(expr),
                     negated: false,
-                    construct: IsExprConstruct::NULL,
+                    construct: IsExprConstruct::Null,
                 }),
                 NOT | IN | BETWEEN => {
                     self.prev_token();
