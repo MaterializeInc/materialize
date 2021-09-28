@@ -48,6 +48,8 @@ Wrap your release notes at the 80 character mark.
 Put breaking changes before other release notes.
 {{< /comment >}}
 
+{{% version-header v0.9.7 %}}
+
 {{% version-header v0.9.6 %}}
 
 - Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}
