@@ -2,6 +2,8 @@
 name: "Internal: release checklist"
 about: >
   A tracking issue for a new release of Materialize. Contributor use only.
+title: "Release: v"
+labels: release-tracker
 ---
 
 ## Current status: 🚢 Progressing 🚢
