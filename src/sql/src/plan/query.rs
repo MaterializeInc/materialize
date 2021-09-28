@@ -2509,7 +2509,7 @@ pub fn plan_expr<'a>(
             }
             .into()
         }
-        Expr::IsNull { expr, negated } => plan_is_null_expr(ecx, expr, *negated)?.into(),
+        Expr::IsExpr { expr, negated , construct: _} => plan_is_null_expr(ecx, expr, *negated)?.into(),
         Expr::Case {
             operand,
             conditions,

@@ -947,27 +947,43 @@ impl<'a> Parser<'a> {
         } else if let Token::Keyword(kw) = tok {
             match kw {
                 IS => {
+                    let negated = self.parse_keyword(NOT);
                     if self.parse_keyword(NULL) {
-                        Ok(Expr::IsNull {
+                        Ok(Expr::IsExpr {
                             expr: Box::new(expr),
-                            negated: false,
+                            negated: negated,
+                            construct: IsExprConstruct::NULL,
                         })
-                    } else if self.parse_keywords(&[NOT, NULL]) {
-                        Ok(Expr::IsNull {
+                    } else if self.parse_keyword(TRUE) {
+                        Ok(Expr::IsExpr {
                             expr: Box::new(expr),
-                            negated: true,
+                            negated: negated,
+                            construct: IsExprConstruct::TRUE,
+                        })
+                    } else if self.parse_keyword(FALSE) {
+                        Ok(Expr::IsExpr {
+                            expr: Box::new(expr),
+                            negated: negated,
+                            construct: IsExprConstruct::FALSE,
+                        })
+                    } else if self.parse_keyword(UNKNOWN) {
+                        Ok(Expr::IsExpr {
+                            expr: Box::new(expr),
+                            negated: negated,
+                            construct: IsExprConstruct::UNKNOWN,
                         })
                     } else {
                         self.expected(
                             self.peek_pos(),
-                            "NULL or NOT NULL after IS",
+                            "NULL, NOT NULL, TRUE, NOT TRUE, FALSE, NOT FALSE, UNKNOWN, NOT UNKNOWN after IS",
                             self.peek_token(),
                         )
                     }
                 }
-                ISNULL => Ok(Expr::IsNull {
+                ISNULL => Ok(Expr::IsExpr {
                     expr: Box::new(expr),
                     negated: false,
+                    construct: IsExprConstruct::NULL,
                 }),
                 NOT | IN | BETWEEN => {
                     self.prev_token();
