@@ -16,7 +16,7 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use futures::Stream;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
 use expr::GlobalId;
@@ -385,15 +385,42 @@ pub enum PortalState {
     NotStarted,
     /// Portal is a rows-returning statement in progress with 0 or more rows
     /// remaining.
-    InProgress(Option<RowBatchStream>),
+    InProgress(Option<InProgressRows>),
     /// Portal has completed and should not be re-executed. If the optional string
     /// is present, it is returned as a CommandComplete tag, otherwise an error
     /// is sent.
     Completed(Option<String>),
 }
 
-/// A stream of batched rows.
-pub type RowBatchStream = Box<dyn Stream<Item = Vec<Row>> + Send + Unpin>;
+/// State of an in-progress, rows-returning portal.
+pub struct InProgressRows {
+    /// The current batch of rows.
+    pub current: Option<Vec<Row>>,
+    /// A stream from which to fetch more row batches.
+    pub remaining: RowBatchStream,
+}
+
+impl InProgressRows {
+    /// Creates a new InProgressRows from a batch stream.
+    pub fn new(remaining: RowBatchStream) -> Self {
+        Self {
+            current: None,
+            remaining,
+        }
+    }
+
+    /// Creates a new InProgressRows from a single batch of rows.
+    pub fn single_batch(rows: Vec<Row>) -> Self {
+        let (_tx, rx) = unbounded_channel();
+        Self {
+            current: Some(rows),
+            remaining: rx,
+        }
+    }
+}
+
+/// A channel of batched rows.
+pub type RowBatchStream = UnboundedReceiver<Vec<Row>>;
 
 /// The transaction status of a session.
 ///
