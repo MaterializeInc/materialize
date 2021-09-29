@@ -49,6 +49,8 @@ Put breaking changes before other release notes.
 {{< /comment >}}
 
 {{% version-header v0.9.7 %}}
+- Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
+  variations). {{% gh 8455 %}}
 
 {{% version-header v0.9.6 %}}
 
