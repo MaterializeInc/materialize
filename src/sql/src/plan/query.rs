@@ -1261,7 +1261,7 @@ fn plan_values(
     let nrows = values.len();
 
     // Arrange input expressions by columns, not rows, so that we can
-    // call `plan_homogeneous_exprs` on each column.
+    // call `coerce_homogeneous_exprs` on each column.
     let mut cols = vec![vec![]; ncols];
     for row in values {
         if row.len() != ncols {
@@ -1288,16 +1288,40 @@ fn plan_values(
         col_iters.push(col.into_iter());
     }
 
-    // Build constant relation.
+    // `VALUES (<row1>), ... (<rown>)` is equivalent to
+    // `SELECT <row1> UNION ALL ... SELECT <rown>`.
+    // To reduce the number of nodes required to represent the expression, put
+    // all rows whose values are all literals into a single `HirRelationExpr::Constant`.
+    let mut literal_rows = vec![];
     let typ = RelationType::new(col_types);
     let mut rows = vec![];
     for _ in 0..nrows {
         let row: Vec<_> = (0..ncols).map(|i| col_iters[i].next().unwrap()).collect();
-        let empty = HirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]));
-        rows.push(empty.map(row));
+        if row.iter().all(|e| {
+            if let HirScalarExpr::Literal(_, _) = e {
+                true
+            } else {
+                false
+            }
+        }) {
+            let mut literal_row = repr::Row::with_capacity(ncols);
+            for e in row {
+                if let HirScalarExpr::Literal(datum, _) = e {
+                    literal_row.push(datum.unpack_first())
+                }
+            }
+            literal_rows.push(literal_row);
+        } else {
+            // Build constant relation.
+            let empty = HirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]));
+            rows.push(empty.map(row));
+        }
     }
     let out = HirRelationExpr::Union {
-        base: Box::new(HirRelationExpr::constant(vec![], typ)),
+        base: Box::new(HirRelationExpr::Constant {
+            rows: literal_rows,
+            typ,
+        }),
         inputs: rows,
     };
 
