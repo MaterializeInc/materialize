@@ -1993,9 +1993,7 @@ impl Coordinator {
                 materialized,
                 ..
             } = plan;
-            let optimized_expr = self
-                .view_optimizer
-                .optimize(source.expr, self.catalog.enabled_indexes())?;
+            let optimized_expr = self.view_optimizer.optimize(source.expr)?;
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
             let source = catalog::Source {
                 create_sql: source.create_sql,
@@ -3755,9 +3753,7 @@ impl Coordinator {
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
         if let ExprPrepStyle::Static = style {
-            let mut opt_expr = self
-                .view_optimizer
-                .optimize(expr, self.catalog.enabled_indexes())?;
+            let mut opt_expr = self.view_optimizer.optimize(expr)?;
             opt_expr.0.try_visit_mut(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
@@ -3778,9 +3774,7 @@ impl Coordinator {
             // constant expression that originally contains a global get? Is
             // there anything not containing a global get that cannot be
             // optimized to a constant expression?
-            Ok(self
-                .view_optimizer
-                .optimize(expr, self.catalog.enabled_indexes())?)
+            Ok(self.view_optimizer.optimize(expr)?)
         }
     }
 
