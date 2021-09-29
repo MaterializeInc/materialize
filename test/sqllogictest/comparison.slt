@@ -57,6 +57,14 @@ true
 query error clause must have type boolean
 select 'true'::text is true
 
+query error clause must have type boolean
+select 'true'::text is unknown
+
+query B
+select 'true'::text is NULL
+----
+false
+
 query B
 select NULL is true
 ----
@@ -70,5 +78,5 @@ select '1 = 1' is null
 ----
 false
 
-query error
+query error clause must have type boolean
 select 2 is true
