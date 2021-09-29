@@ -427,14 +427,14 @@ SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 ----
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: "+", expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: "+", expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: NULL, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: "+", expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: "+", expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: Null, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE
 ----
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: "+", expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: "+", expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: FALSE, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: "+", expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: "+", expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: False, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 
 parse-statement
