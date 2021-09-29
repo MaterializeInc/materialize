@@ -14,8 +14,6 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use dataflow_types::SinkAsOf;
-
 use super::*;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -196,29 +194,19 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Builds a dataflow description for the sink with the specified name,
     /// ID, source, and output connector.
+    ///
+    /// For as long as this dataflow is active, `id` can be used to reference
+    /// the sink (primarily to drop it, at the moment).
     pub fn build_sink_dataflow(
         &mut self,
         name: String,
         id: GlobalId,
-        from: GlobalId,
-        connector: SinkConnector,
-        envelope: Option<SinkEnvelope>,
-        as_of: SinkAsOf,
+        sink_description: dataflow_types::SinkDesc,
     ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);
-        dataflow.set_as_of(as_of.frontier.clone());
-        self.import_into_dataflow(&from, &mut dataflow);
-        let from_desc = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.export_sink(
-            id,
-            dataflow_types::SinkDesc {
-                from,
-                from_desc,
-                connector,
-                envelope,
-                as_of,
-            },
-        );
+        dataflow.set_as_of(sink_description.as_of.frontier.clone());
+        self.import_into_dataflow(&sink_description.from, &mut dataflow);
+        dataflow.export_sink(id, sink_description);
         dataflow
     }
 }

@@ -69,7 +69,7 @@ use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
     SinkConnector, SourceConnector, TailResponse, TailSinkConnector, TimestampSourceUpdate, Update,
 };
-use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
+use dataflow_types::{SinkAsOf, Timeline};
 use expr::{
     EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -1580,14 +1580,16 @@ impl Coordinator {
             frontier: self.determine_frontier(sink.from),
             strict: !sink.with_snapshot,
         };
-        let df = self.dataflow_builder().build_sink_dataflow(
-            name.to_string(),
-            id,
-            sink.from,
-            connector.clone(),
-            Some(sink.envelope),
+        let sink_description = dataflow_types::SinkDesc {
+            from: sink.from,
+            from_desc: self.catalog.get_by_id(&sink.from).desc().unwrap().clone(),
+            connector: connector.clone(),
+            envelope: Some(sink.envelope),
             as_of,
-        );
+        };
+        let df =
+            self.dataflow_builder()
+                .build_sink_dataflow(name.to_string(), id, sink_description);
 
         // For some sinks, we need to block compaction of each timestamp binding
         // until all sinks that depend on a given source have finished writing out that timestamp.
@@ -2911,21 +2913,23 @@ impl Coordinator {
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails.insert(sink_id, tx);
-        let df = self.dataflow_builder().build_sink_dataflow(
-            sink_name,
-            sink_id,
-            source_id,
-            SinkConnector::Tail(TailSinkConnector {
+        let sink_description = dataflow_types::SinkDesc {
+            from: source_id,
+            from_desc: self.catalog.get_by_id(&source_id).desc().unwrap().clone(),
+            connector: SinkConnector::Tail(TailSinkConnector {
                 emit_progress,
                 object_columns,
                 value_desc: desc,
             }),
-            None,
-            SinkAsOf {
+            envelope: None,
+            as_of: SinkAsOf {
                 frontier,
                 strict: !with_snapshot,
             },
-        );
+        };
+        let df = self
+            .dataflow_builder()
+            .build_sink_dataflow(sink_name, sink_id, sink_description);
         self.ship_dataflow(df);
 
         let resp = ExecuteResponse::Tailing { rx };
