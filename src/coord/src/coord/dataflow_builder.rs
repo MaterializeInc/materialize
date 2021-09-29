@@ -32,6 +32,28 @@ impl Coordinator {
             transient_id_counter: &mut self.transient_id_counter,
         }
     }
+
+    /// Prepares the arguments to an index build dataflow, by interrogating the catalog.
+    ///
+    /// Returns `None` if the index entry in the catalog in not enabled.
+    pub fn prepare_index_build(&self, index_id: &GlobalId) -> Option<(String, IndexDesc)> {
+        let index_entry = self.catalog.get_by_id(&index_id);
+        let index = match index_entry.item() {
+            CatalogItem::Index(index) => index,
+            _ => unreachable!("cannot create index dataflow on non-index"),
+        };
+        if !index.enabled {
+            None
+        } else {
+            Some((
+                index_entry.name().to_string(),
+                dataflow_types::IndexDesc {
+                    on_id: index.on,
+                    keys: index.keys.clone(),
+                },
+            ))
+        }
+    }
 }
 
 impl<'a> DataflowBuilder<'a> {
@@ -168,28 +190,18 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Builds a dataflow description for the index with the specified ID.
-    ///
-    /// Returns `None` if we infer that the specified index is disabled.
-    pub fn build_index_dataflow(&mut self, id: GlobalId) -> Option<DataflowDesc> {
-        let index_entry = self.catalog.get_by_id(&id);
-        let index = match index_entry.item() {
-            CatalogItem::Index(index) => index,
-            _ => unreachable!("cannot create index dataflow on non-index"),
-        };
-
-        // Disabled indexes should not have dataflows created for them.
-        if !index.enabled {
-            return None;
-        }
-
-        let on_entry = self.catalog.get_by_id(&index.on);
+    pub fn build_index_dataflow(
+        &mut self,
+        name: String,
+        id: GlobalId,
+        index_description: dataflow_types::IndexDesc,
+    ) -> DataflowDesc {
+        let on_entry = self.catalog.get_by_id(&index_description.on_id);
         let on_type = on_entry.desc().unwrap().typ().clone();
-        let mut dataflow = DataflowDesc::new(index_entry.name().to_string());
-        let on_id = index.on;
-        let keys = index.keys.clone();
-        self.import_into_dataflow(&on_id, &mut dataflow);
-        dataflow.export_index(id, IndexDesc { on_id, keys }, on_type);
-        Some(dataflow)
+        let mut dataflow = DataflowDesc::new(name);
+        self.import_into_dataflow(&index_description.on_id, &mut dataflow);
+        dataflow.export_index(id, index_description, on_type);
+        dataflow
     }
 
     /// Builds a dataflow description for the sink with the specified name,

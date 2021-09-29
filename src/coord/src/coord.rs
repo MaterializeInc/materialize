@@ -447,9 +447,15 @@ impl Coordinator {
                         let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
-                        self.dataflow_builder()
-                            .build_index_dataflow(entry.id())
-                            .map(|df| self.ship_dataflow(df));
+                        let index_id = entry.id();
+                        if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                            let df = self.dataflow_builder().build_index_dataflow(
+                                name,
+                                index_id,
+                                description,
+                            );
+                            self.ship_dataflow(df);
+                        }
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -1913,9 +1919,12 @@ impl Coordinator {
             },
         ]) {
             Ok(_) => {
-                self.dataflow_builder()
-                    .build_index_dataflow(index_id)
-                    .map(|df| self.ship_dataflow(df));
+                if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                    let df =
+                        self.dataflow_builder()
+                            .build_index_dataflow(name, index_id, description);
+                    self.ship_dataflow(df);
+                }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -1974,9 +1983,12 @@ impl Coordinator {
                 self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
             self.sources.insert(source_id, frontiers);
             if let Some(index_id) = idx_id {
-                self.dataflow_builder()
-                    .build_index_dataflow(index_id)
-                    .map(|df| self.ship_dataflow(df));
+                if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                    let df =
+                        self.dataflow_builder()
+                            .build_index_dataflow(name, index_id, description);
+                    self.ship_dataflow(df);
+                }
             }
         }
     }
@@ -2211,9 +2223,14 @@ impl Coordinator {
         match self.catalog_transact(ops) {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    self.dataflow_builder()
-                        .build_index_dataflow(index_id)
-                        .map(|df| self.ship_dataflow(df));
+                    if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                        let df = self.dataflow_builder().build_index_dataflow(
+                            name,
+                            index_id,
+                            description,
+                        );
+                        self.ship_dataflow(df);
+                    }
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2246,9 +2263,14 @@ impl Coordinator {
             Ok(()) => {
                 let mut dfs = vec![];
                 for index_id in index_ids {
-                    self.dataflow_builder()
-                        .build_index_dataflow(index_id)
-                        .map(|df| dfs.push(df));
+                    if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                        let df = self.dataflow_builder().build_index_dataflow(
+                            name,
+                            index_id,
+                            description,
+                        );
+                        dfs.push(df);
+                    }
                 }
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
@@ -2290,10 +2312,13 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]) {
             Ok(()) => {
-                self.dataflow_builder().build_index_dataflow(id).map(|df| {
+                if let Some((name, description)) = self.prepare_index_build(&id) {
+                    let df = self
+                        .dataflow_builder()
+                        .build_index_dataflow(name, id, description);
                     self.ship_dataflow(df);
                     self.set_index_options(id, options).expect("index enabled");
-                });
+                }
 
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
@@ -3550,10 +3575,10 @@ impl Coordinator {
         // If ops is not empty, index was disabled.
         if !ops.is_empty() {
             self.catalog_transact(ops)?;
+            let (name, description) = self.prepare_index_build(&plan.id).expect("index enabled");
             let df = self
                 .dataflow_builder()
-                .build_index_dataflow(plan.id)
-                .expect("index enabled");
+                .build_index_dataflow(name, plan.id, description);
             self.ship_dataflow(df);
         }
 
