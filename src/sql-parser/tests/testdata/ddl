@@ -679,11 +679,11 @@ CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
                               ^
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), from: UnresolvedObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [Value { name: Ident("replication_factor"), value: Number("7") }, Value { name: Ident("retention_ms"), value: Number("10000") }, Value { name: Ident("retention_bytes"), value: Number("10000000000") }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES
