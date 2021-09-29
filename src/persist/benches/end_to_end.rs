@@ -153,6 +153,7 @@ fn create_runtime(base_path: &Path, nonce: &str) -> Result<RuntimeClient, Error>
         FileLog::new(log_dir, lock_info.clone())?,
         FileBlob::new(blob_dir, lock_info)?,
         &MetricsRegistry::new(),
+        None,
     )?;
     Ok(runtime)
 }

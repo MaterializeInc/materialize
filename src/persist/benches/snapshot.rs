@@ -95,6 +95,7 @@ pub fn bench_file_snapshots(c: &mut Criterion) {
             FileLog::new(log_dir, lock_info.clone())?,
             FileBlob::new(blob_dir, lock_info)?,
             &MetricsRegistry::new(),
+            None,
         )
     });
 }

@@ -24,6 +24,7 @@ use log;
 use ore::metrics::MetricsRegistry;
 use persist_types::Codec;
 use timely::progress::Antichain;
+use tokio::runtime::Runtime;
 
 use crate::error::Error;
 use crate::future::{Future, FutureHandle};
@@ -56,34 +57,59 @@ enum Cmd {
 /// This returns a clone-able client handle. The runtime is stopped when any
 /// client calls [RuntimeClient::stop] or when all clients have been dropped.
 ///
-// TODO: At the moment, this runs IO and heavy cpu work in a single thread.
-// Move this work out into whatever async runtime the user likes, via something
-// like https://docs.rs/rdkafka/0.26.0/rdkafka/util/trait.AsyncRuntime.html
+/// If Some, the given [tokio::runtime::Runtime] is used for IO and cpu heavy
+/// operations. If None, a new Runtime is constructed for this. The latter
+/// requires that we are not in the context of an existing Runtime, so if this
+/// is the case, the caller must use the Some form.
+//
+// TODO: The rust doc above is still a bit of a lie. Actually use this runtime
+// for all IO and cpu heavy operations.
+//
+// TODO: The whole story around Runtime usage in persist is pretty awkward and
+// still pretty unprincipled. I think when we do the TODO to make the Log and
+// Blob storage traits async, this will clear up a bit.
 pub fn start<L, B>(
     config: RuntimeConfig,
     log: L,
     blob: B,
     reg: &MetricsRegistry,
+    pool: Option<Arc<Runtime>>,
 ) -> Result<RuntimeClient, Error>
 where
     L: Log + Send + 'static,
     B: Blob + Send + 'static,
 {
-    let metrics = Metrics::register_with(reg);
-    let indexed = Indexed::new(log, blob, metrics.clone())?;
     // TODO: Is an unbounded channel the right thing to do here?
     let (tx, rx) = crossbeam_channel::unbounded();
-    let runtime_impl_config = config.clone();
-    let runtime_impl_metrics = metrics.clone();
-    let runtime_f = move || {
-        // TODO: Set up the tokio or other async runtime context here.
-        let mut l = RuntimeImpl::new(runtime_impl_config, indexed, rx, runtime_impl_metrics);
-        while l.work() {}
+    let metrics = Metrics::register_with(reg);
+
+    // Any usage of S3Blob requires a runtime context to be set. `Indexed::new`
+    // use the blob impl to start the recovery process, so make sure this stays
+    // early.
+    let pool = match pool {
+        Some(pool) => pool,
+        None => Arc::new(Runtime::new()?),
     };
+    let pool_guard = pool.enter();
+
+    // Start up the runtime.
+    let indexed = Indexed::new(log, blob, metrics.clone())?;
+    let mut runtime = RuntimeImpl::new(config.clone(), indexed, rx, metrics.clone());
     let id = RuntimeId::new();
+    let runtime_pool = pool.clone();
     let impl_handle = thread::Builder::new()
         .name(format!("persist-runtime-{}", id.0))
-        .spawn(runtime_f)?;
+        .spawn(move || {
+            let pool_guard = runtime_pool.enter();
+            while runtime.work() {}
+            // Explictly drop the pool guard so the lifetime is obvious.
+            drop(pool_guard);
+        })?;
+
+    // Start up the ticker thread.
+    //
+    // TODO: Now that we have a runtime threaded here, we could use async stuff
+    // to do this.
     let ticker_tx = tx.clone();
     let ticker_handle = thread::Builder::new()
         .name(format!("persist-ticker"))
@@ -104,6 +130,8 @@ where
                 }
             }
         })?;
+
+    // Construct the client.
     let handles = Mutex::new(Some(RuntimeHandles {
         impl_handle,
         ticker_handle,
@@ -113,10 +141,15 @@ where
         tx,
         metrics,
     };
-    Ok(RuntimeClient {
+    let client = RuntimeClient {
         id,
         core: Arc::new(core),
-    })
+    };
+
+    // Explictly drop the pool guard so the lifetime is obvious.
+    drop(pool_guard);
+
+    Ok(client)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

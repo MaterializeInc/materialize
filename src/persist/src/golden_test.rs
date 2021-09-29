@@ -140,6 +140,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
         ErrorLog,
         blob,
         &MetricsRegistry::new(),
+        None,
     )?;
     let state = PersistState::slurp_from(&persist)?;
     persist.stop()?;
@@ -157,6 +158,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
             ErrorLog,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     })?;
     for req in reqs.iter() {

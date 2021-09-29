@@ -51,7 +51,13 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
         let lock_info = LockInfo::new("kafka_upsert".into(), "nonce".into())?;
         let log = FileLog::new(base_dir.join("log"), lock_info.clone())?;
         let blob = FileBlob::new(base_dir.join("blob"), lock_info)?;
-        runtime::start(RuntimeConfig::default(), log, blob, &MetricsRegistry::new())?
+        runtime::start(
+            RuntimeConfig::default(),
+            log,
+            blob,
+            &MetricsRegistry::new(),
+            None,
+        )?
     };
 
     timely::execute_directly(|worker| {
