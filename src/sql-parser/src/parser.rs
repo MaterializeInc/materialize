@@ -948,29 +948,19 @@ impl<'a> Parser<'a> {
             match kw {
                 IS => {
                     let negated = self.parse_keyword(NOT);
-                    if self.parse_keyword(NULL) {
+                    if let Some(construct) =
+                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN])
+                    {
                         Ok(Expr::IsExpr {
                             expr: Box::new(expr),
-                            negated: negated,
-                            construct: IsExprConstruct::Null,
-                        })
-                    } else if self.parse_keyword(TRUE) {
-                        Ok(Expr::IsExpr {
-                            expr: Box::new(expr),
-                            negated: negated,
-                            construct: IsExprConstruct::True,
-                        })
-                    } else if self.parse_keyword(FALSE) {
-                        Ok(Expr::IsExpr {
-                            expr: Box::new(expr),
-                            negated: negated,
-                            construct: IsExprConstruct::False,
-                        })
-                    } else if self.parse_keyword(UNKNOWN) {
-                        Ok(Expr::IsExpr {
-                            expr: Box::new(expr),
-                            negated: negated,
-                            construct: IsExprConstruct::Unknown,
+                            negated,
+                            construct: match construct {
+                                NULL => IsExprConstruct::Null,
+                                TRUE => IsExprConstruct::True,
+                                FALSE => IsExprConstruct::False,
+                                UNKNOWN => IsExprConstruct::Unknown,
+                                _ => unreachable!(),
+                            },
                         })
                     } else {
                         self.expected(
