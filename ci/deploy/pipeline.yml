@@ -34,7 +34,7 @@ steps:
     concurrency_group: deploy/pypi
 
   - label: ":bulb: Full SQL Logic Tests"
-    trigger: slt
+    trigger: sql-logic-tests
     async: true
     branches: "v*.*rc*"
     build:
