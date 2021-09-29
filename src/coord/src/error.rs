@@ -29,6 +29,8 @@ pub enum CoordError {
     },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
+    /// The cached plan or descriptor changed.
+    ChangedPlan,
     /// The specified session parameter is constrained to its current value.
     ConstrainedParameter(&'static (dyn Var + Send + Sync)),
     /// The cursor already exists.
@@ -215,6 +217,7 @@ impl fmt::Display for CoordError {
             CoordError::AutomaticTimestampFailure { .. } => {
                 f.write_str("unable to automatically determine a query timestamp")
             }
+            CoordError::ChangedPlan => f.write_str("cached plan must not change result type"),
             CoordError::Catalog(e) => e.fmt(f),
             CoordError::ConstrainedParameter(p) => write!(
                 f,

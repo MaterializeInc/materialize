@@ -239,8 +239,22 @@ impl Session {
     }
 
     /// Retrieves the prepared statement associated with `name`.
-    pub fn get_prepared_statement(&self, name: &str) -> Option<&PreparedStatement> {
+    ///
+    /// This is unverified and could be incorrect if the underlying catalog has
+    /// changed.
+    pub fn get_prepared_statement_unverified(&self, name: &str) -> Option<&PreparedStatement> {
         self.prepared_statements.get(name)
+    }
+
+    /// Retrieves the prepared statement associated with `name`.
+    ///
+    /// This is unverified and could be incorrect if the underlying catalog has
+    /// changed.
+    pub fn get_prepared_statement_mut_unverified(
+        &mut self,
+        name: &str,
+    ) -> Option<&mut PreparedStatement> {
+        self.prepared_statements.get_mut(name)
     }
 
     /// Returns the prepared statements for the session.
@@ -384,12 +398,22 @@ impl Session {
 pub struct PreparedStatement {
     sql: Option<Statement<Raw>>,
     desc: StatementDesc,
+    /// The most recent catalog revision that has verified this statement.
+    pub catalog_revision: u64,
 }
 
 impl PreparedStatement {
     /// Constructs a new prepared statement.
-    pub fn new(sql: Option<Statement<Raw>>, desc: StatementDesc) -> PreparedStatement {
-        PreparedStatement { sql, desc }
+    pub fn new(
+        sql: Option<Statement<Raw>>,
+        desc: StatementDesc,
+        catalog_revision: u64,
+    ) -> PreparedStatement {
+        PreparedStatement {
+            sql,
+            desc,
+            catalog_revision,
+        }
     }
 
     /// Returns the raw SQL string associated with this prepared statement,

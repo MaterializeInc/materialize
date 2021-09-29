@@ -131,29 +131,50 @@ ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DEALLOCATE"}
 ReadyForQuery {"status":"I"}
 
-# TODO(mjibson): Fix #8397.
-#send
-#Query {"query": "CREATE TABLE t (i INT)"}
-#Query {"query": "INSERT INTO t VALUES (1)"}
-#Query {"query": "PREPARE a AS SELECT * FROM t"}
-#Query {"query": "EXECUTE a"}
-#Query {"query": "DROP TABLE t"}
-#Query {"query": "EXECUTE a"}
-#Query {"query": "CREATE TABLE t (a TEXT, b FLOAT)"}
-#Query {"query": "INSERT INTO t VALUES ('a', 3)"}
-#Query {"query": "EXECUTE a"}
-#Query {"query": "DEALLOCATE a"}
-#----
-#
-#until
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#ReadyForQuery
-#----
+send
+Query {"query": "CREATE TABLE t (i INT)"}
+Query {"query": "INSERT INTO t VALUES (1)"}
+Query {"query": "PREPARE a AS SELECT * FROM t"}
+Query {"query": "EXECUTE a"}
+Query {"query": "DROP TABLE t"}
+Query {"query": "EXECUTE a"}
+Query {"query": "CREATE TABLE t (a TEXT, b FLOAT)"}
+Query {"query": "INSERT INTO t VALUES ('a', 3)"}
+Query {"query": "EXECUTE a"}
+Query {"query": "DEALLOCATE a"}
+----
+
+# TODO(mjibson): Ignore RowDescription here, see desc.pt for why.
+until no_error_fields ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DEALLOCATE"}
+ReadyForQuery {"status":"I"}

@@ -38,7 +38,7 @@ mod show;
 mod tcl;
 
 /// Describes the output of a SQL statement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StatementDesc {
     /// The shape of the rows produced by the statement, if the statement
     /// produces rows.

@@ -1200,6 +1200,15 @@ impl Coordinator {
                 let tx = ClientTransmitter::new(tx);
                 self.sequence_end_transaction(tx, session, action);
             }
+
+            Command::VerifyPreparedStatement {
+                name,
+                mut session,
+                tx,
+            } => {
+                let result = self.handle_verify_prepared_statement(&mut session, &name);
+                let _ = tx.send(Response { result, session });
+            }
         }
     }
 
@@ -1471,23 +1480,74 @@ impl Coordinator {
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), CoordError> {
-        let desc = if let Some(stmt) = stmt.clone() {
-            match describe(&self.catalog, stmt.clone(), &param_types, session) {
-                Ok(desc) => desc,
+        let desc = self.describe(session, stmt.clone(), param_types)?;
+        session.set_prepared_statement(
+            name,
+            PreparedStatement::new(stmt, desc, self.catalog.transient_revision()),
+        );
+        Ok(())
+    }
+
+    fn describe(
+        &self,
+        session: &Session,
+        stmt: Option<Statement<Raw>>,
+        param_types: Vec<Option<pgrepr::Type>>,
+    ) -> Result<StatementDesc, CoordError> {
+        if let Some(stmt) = stmt {
+            // Pre-compute this to avoid cloning stmt.
+            let postgres_can_handle = match self.symbiosis {
+                Some(ref postgres) => postgres.can_handle(&stmt),
+                None => false,
+            };
+            match describe(&self.catalog, stmt, &param_types, session) {
+                Ok(desc) => Ok(desc),
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
                 // only handles commands that do not return rows, so the
                 // `StatementDesc` is constructed accordingly.
-                Err(err) => match self.symbiosis {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => StatementDesc::new(None),
-                    _ => return Err(err),
-                },
+                Err(_) if postgres_can_handle => Ok(StatementDesc::new(None)),
+                Err(err) => Err(err),
             }
         } else {
-            StatementDesc::new(None)
+            Ok(StatementDesc::new(None))
+        }
+    }
+
+    /// Verify a prepared statement is still valid.
+    fn handle_verify_prepared_statement(
+        &self,
+        session: &mut Session,
+        name: &str,
+    ) -> Result<(), CoordError> {
+        let ps = match session.get_prepared_statement_unverified(&name) {
+            Some(ps) => ps,
+            None => return Err(CoordError::UnknownPreparedStatement(name.to_string())),
         };
-        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
-        Ok(())
+        if ps.catalog_revision != self.catalog.transient_revision() {
+            let desc = self.describe(
+                session,
+                ps.sql().cloned(),
+                ps.desc()
+                    .param_types
+                    .iter()
+                    .map(|ty| Some(ty.clone()))
+                    .collect(),
+            )?;
+            if &desc != ps.desc() {
+                Err(CoordError::ChangedPlan)
+            } else {
+                // If the descs are the same, we can bump our version to declare that ps is
+                // correct as of now.
+                let ps = session
+                    .get_prepared_statement_mut_unverified(name)
+                    .expect("known to exist");
+                ps.catalog_revision = self.catalog.transient_revision();
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
@@ -1787,12 +1847,19 @@ impl Coordinator {
                 }
             }
             Plan::Prepare(plan) => {
-                if session.get_prepared_statement(&plan.name).is_some() {
+                if session
+                    .get_prepared_statement_unverified(&plan.name)
+                    .is_some()
+                {
                     tx.send(Err(CoordError::PreparedStatementExists(plan.name)), session);
                 } else {
                     session.set_prepared_statement(
                         plan.name,
-                        PreparedStatement::new(Some(plan.stmt), plan.desc),
+                        PreparedStatement::new(
+                            Some(plan.stmt),
+                            plan.desc,
+                            self.catalog.transient_revision(),
+                        ),
                     );
                     tx.send(Ok(ExecuteResponse::Prepare), session);
                 }
@@ -1836,7 +1903,9 @@ impl Coordinator {
         session: &mut Session,
         plan: ExecutePlan,
     ) -> Result<String, CoordError> {
-        let ps = session.get_prepared_statement(&plan.name);
+        // Verify the stmt is still valid.
+        self.handle_verify_prepared_statement(session, &plan.name)?;
+        let ps = session.get_prepared_statement_unverified(&plan.name);
         match ps {
             Some(ps) => {
                 let sql = ps.sql().cloned();
@@ -4433,7 +4502,7 @@ pub fn describe(
     catalog: &Catalog,
     stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
-    session: &mut Session,
+    session: &Session,
 ) -> Result<StatementDesc, CoordError> {
     match stmt {
         // FETCH's description depends on the current session, which describe_statement
