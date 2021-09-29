@@ -17,6 +17,7 @@ steps:
     concurrency_group: deploy/devsite
 
   - command: bin/ci-builder run stable bin/pyactivate --dev -m ci.deploy.linux
+    key: linux
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/linux
@@ -37,6 +38,7 @@ steps:
     trigger: sql-logic-tests
     async: true
     branches: "v*.*rc*"
+    depends_on: linux
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
