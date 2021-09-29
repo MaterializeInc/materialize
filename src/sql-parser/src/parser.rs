@@ -947,27 +947,33 @@ impl<'a> Parser<'a> {
         } else if let Token::Keyword(kw) = tok {
             match kw {
                 IS => {
-                    if self.parse_keyword(NULL) {
-                        Ok(Expr::IsNull {
+                    let negated = self.parse_keyword(NOT);
+                    if let Some(construct) =
+                        self.parse_one_of_keywords(&[NULL, TRUE, FALSE, UNKNOWN])
+                    {
+                        Ok(Expr::IsExpr {
                             expr: Box::new(expr),
-                            negated: false,
-                        })
-                    } else if self.parse_keywords(&[NOT, NULL]) {
-                        Ok(Expr::IsNull {
-                            expr: Box::new(expr),
-                            negated: true,
+                            negated,
+                            construct: match construct {
+                                NULL => IsExprConstruct::Null,
+                                TRUE => IsExprConstruct::True,
+                                FALSE => IsExprConstruct::False,
+                                UNKNOWN => IsExprConstruct::Unknown,
+                                _ => unreachable!(),
+                            },
                         })
                     } else {
                         self.expected(
                             self.peek_pos(),
-                            "NULL or NOT NULL after IS",
+                            "NULL, NOT NULL, TRUE, NOT TRUE, FALSE, NOT FALSE, UNKNOWN, NOT UNKNOWN after IS",
                             self.peek_token(),
                         )
                     }
                 }
-                ISNULL => Ok(Expr::IsNull {
+                ISNULL => Ok(Expr::IsExpr {
                     expr: Box::new(expr),
                     negated: false,
+                    construct: IsExprConstruct::Null,
                 }),
                 NOT | IN | BETWEEN => {
                     self.prev_token();

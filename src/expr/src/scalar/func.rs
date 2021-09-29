@@ -3398,6 +3398,8 @@ trait UnaryFuncTrait {
 pub enum UnaryFunc {
     Not(Not),
     IsNull(IsNull),
+    IsTrue(IsTrue),
+    IsFalse(IsFalse),
     BitNotInt16(BitNotInt16),
     BitNotInt32(BitNotInt32),
     BitNotInt64(BitNotInt64),
@@ -3652,6 +3654,8 @@ derive_unary!(
     PgColumnSize,
     MzRowSize,
     IsNull,
+    IsTrue,
+    IsFalse,
     Sleep,
     ToTimestamp,
     CastFloat64ToString,
@@ -3713,6 +3717,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -3913,6 +3919,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4128,6 +4136,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4268,6 +4278,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)
@@ -4340,6 +4352,8 @@ impl UnaryFunc {
             | PgColumnSize(_)
             | MzRowSize(_)
             | IsNull(_)
+            | IsTrue(_)
+            | IsFalse(_)
             | CastFloat32ToString(_)
             | Sleep(_)
             | ToTimestamp(_)

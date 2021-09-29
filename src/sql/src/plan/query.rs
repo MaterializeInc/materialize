@@ -36,9 +36,9 @@ use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     Assignment, AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident,
-    InsertSource, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select,
-    SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor, TableWithJoins,
-    UnresolvedObjectName, Value, Values,
+    InsertSource, IsExprConstruct, JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw,
+    RawName, Select, SelectItem, SetExpr, SetOperator, Statement, TableAlias, TableFactor,
+    TableWithJoins, UnresolvedObjectName, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -2509,7 +2509,11 @@ pub fn plan_expr<'a>(
             }
             .into()
         }
-        Expr::IsNull { expr, negated } => plan_is_null_expr(ecx, expr, *negated)?.into(),
+        Expr::IsExpr {
+            expr,
+            construct,
+            negated,
+        } => plan_is_expr(ecx, expr, *construct, *negated)?.into(),
         Expr::Case {
             operand,
             conditions,
@@ -3120,27 +3124,40 @@ pub fn resolve_func(
     bail!("function {}({}) does not exist", name, types.join(", "))
 }
 
-fn plan_is_null_expr<'a>(
+fn plan_is_expr<'a>(
     ecx: &ExprContext,
     inner: &'a Expr<Aug>,
+    construct: IsExprConstruct,
     not: bool,
 ) -> Result<HirScalarExpr, anyhow::Error> {
-    // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
-    // with our type coercion rules, which treat `NULL` literals and
-    // unconstrained parameters identically. Providing a type hint of string
-    // means we wind up supporting both.
-    let expr = plan_expr(ecx, inner)?.type_as_any(ecx)?;
-    let mut expr = HirScalarExpr::CallUnary {
-        func: UnaryFunc::IsNull(expr_func::IsNull),
+    let planned_expr = plan_expr(ecx, inner)?;
+    let expr = if construct.requires_boolean_expr() {
+        planned_expr.type_as(ecx, &ScalarType::Bool)?
+    } else {
+        // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
+        // with our type coercion rules, which treat `NULL` literals and
+        // unconstrained parameters identically. Providing a type hint of string
+        // means we wind up supporting both.
+        planned_expr.type_as_any(ecx)?
+    };
+    let func = match construct {
+        IsExprConstruct::Null | IsExprConstruct::Unknown => UnaryFunc::IsNull(expr_func::IsNull),
+        IsExprConstruct::True => UnaryFunc::IsTrue(expr_func::IsTrue),
+        IsExprConstruct::False => UnaryFunc::IsFalse(expr_func::IsFalse),
+    };
+    let expr = HirScalarExpr::CallUnary {
+        func: func,
         expr: Box::new(expr),
     };
+
     if not {
-        expr = HirScalarExpr::CallUnary {
+        Ok(HirScalarExpr::CallUnary {
             func: UnaryFunc::Not(expr_func::Not),
             expr: Box::new(expr),
-        }
+        })
+    } else {
+        Ok(expr)
     }
-    Ok(expr)
 }
 
 fn plan_case<'a>(
