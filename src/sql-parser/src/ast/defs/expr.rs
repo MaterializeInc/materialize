@@ -761,17 +761,6 @@ impl IsExprConstruct {
     }
 }
 
-impl fmt::Display for IsExprConstruct {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            IsExprConstruct::Null => f.write_str("NULL"),
-            IsExprConstruct::True => f.write_str("TRUE"),
-            IsExprConstruct::False => f.write_str("FALSE"),
-            IsExprConstruct::Unknown => f.write_str("UNKNOWN"),
-        }
-    }
-}
-
 impl AstDisplay for IsExprConstruct {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -782,3 +771,4 @@ impl AstDisplay for IsExprConstruct {
         }
     }
 }
+impl_display!(IsExprConstruct);

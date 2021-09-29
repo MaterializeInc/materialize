@@ -54,6 +54,9 @@ select 'true' is true
 ----
 true
 
+query error clause must have type boolean
+select 'true'::text is true
+
 query B
 select NULL is true
 ----

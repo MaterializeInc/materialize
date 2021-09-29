@@ -21,6 +21,9 @@ sqlfunc!(
     }
 );
 
+// TODO: Once issue #7581 is fixed, we can remove `IsTrue` and `IsFalse` and
+// replace them with `BinaryFunc::eq`.  We can't do this yet because that
+// function propagates NULLs which we do not want here.
 sqlfunc!(
     #[sqlname = "istrue"]
     #[propagates_nulls = false]
