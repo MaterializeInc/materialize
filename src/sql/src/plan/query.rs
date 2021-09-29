@@ -44,11 +44,11 @@ use sql_parser::ast::{
 use ::expr::{GlobalId, Id, RowSetFinishing};
 use repr::adt::numeric;
 use repr::{
-    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
+    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType,
     Timestamp,
 };
 
-use crate::catalog::{Catalog, CatalogItemType};
+use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::PartialName;
 use crate::normalize;
@@ -57,10 +57,10 @@ use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
     ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, UnaryFunc, VariadicFunc,
 };
-use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
-use crate::plan::statement::StatementContext;
+use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
+use crate::plan::{plan_utils, Params};
 use crate::plan::{transform_ast, PlanContext};
 
 // Aug is the type variable assigned to an AST that has already been
@@ -119,7 +119,7 @@ impl AstInfo for Aug {
 
 #[derive(Debug)]
 struct NameResolver<'a> {
-    catalog: &'a dyn Catalog,
+    catalog: &'a dyn SessionCatalog,
     ctes: HashMap<String, LocalId>,
     status: Result<(), anyhow::Error>,
     ids: HashSet<GlobalId>,
@@ -251,7 +251,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 }
 
 pub fn resolve_names_stmt(
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
 ) -> Result<Statement<Aug>, anyhow::Error> {
     let mut n = NameResolver {
@@ -616,7 +616,7 @@ pub fn plan_copy_from(
 /// the datums in the given rows to match the order in the target table.
 pub fn plan_copy_from_rows(
     pcx: &PlanContext,
-    catalog: &dyn Catalog,
+    catalog: &dyn SessionCatalog,
     id: GlobalId,
     columns: Vec<usize>,
     rows: Vec<repr::Row>,
@@ -911,6 +911,55 @@ pub fn plan_default_expr(
     };
     let hir = plan_expr(ecx, &expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)?;
     Ok((hir, qcx.ids.into_iter().collect()))
+}
+
+pub fn plan_params<'a>(
+    scx: &'a StatementContext,
+    params: Vec<Expr<Raw>>,
+    desc: &StatementDesc,
+) -> Result<Params, anyhow::Error> {
+    if params.len() != desc.param_types.len() {
+        bail!(
+            "expected {} params, got {}",
+            desc.param_types.len(),
+            params.len()
+        );
+    }
+
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let scope = Scope::empty(None);
+    let rel_type = RelationType::empty();
+
+    let mut datums = Row::with_capacity(desc.param_types.len());
+    let mut types = Vec::new();
+    let temp_storage = &RowArena::new();
+    for (mut param, ty) in params.into_iter().zip(&desc.param_types) {
+        transform_ast::transform_expr(scx, &mut param)?;
+        let expr = resolve_names_expr(&mut qcx, param)?;
+
+        let ecx = &ExprContext {
+            qcx: &qcx,
+            name: "EXECUTE",
+            scope: &scope,
+            relation_type: &rel_type,
+            allow_aggregates: false,
+            allow_subqueries: false,
+        };
+        let ex = plan_expr(ecx, &expr)?.type_as_any(ecx)?;
+        let st = ecx.scalar_type(&ex);
+        if pgrepr::Type::from(&st) != *ty {
+            bail!(
+                "mismatched parameter type: expected {}, got {}",
+                ty.name(),
+                pgrepr::Type::from(&st).name()
+            );
+        }
+        let ex = ex.lower_uncorrelated()?;
+        let evaled = ex.eval(&[], temp_storage)?;
+        datums.push(evaled);
+        types.push(st);
+    }
+    Ok(Params { datums, types })
 }
 
 pub fn plan_index_exprs<'a>(
@@ -3632,7 +3681,7 @@ pub struct ExprContext<'a> {
 }
 
 impl<'a> ExprContext<'a> {
-    pub fn catalog(&self) -> &dyn Catalog {
+    pub fn catalog(&self) -> &dyn SessionCatalog {
         self.qcx.scx.catalog
     }
 

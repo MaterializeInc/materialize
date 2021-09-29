@@ -11,6 +11,7 @@
 
 #![warn(missing_docs)]
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::mem;
 
@@ -20,6 +21,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::sync::OwnedMutexGuard;
 
 use expr::GlobalId;
+use pgrepr::Format;
 use repr::{Datum, Diff, Row, ScalarType, Timestamp};
 use sql::ast::{Raw, Statement};
 use sql::plan::{Params, PlanContext, StatementDesc};
@@ -226,14 +228,24 @@ impl Session {
 
     /// Removes the prepared statement associated with `name`.
     ///
-    /// If there is no such prepared statement, this method does nothing.
-    pub fn remove_prepared_statement(&mut self, name: &str) {
-        let _ = self.prepared_statements.remove(name);
+    /// Returns whether a statement previously existed.
+    pub fn remove_prepared_statement(&mut self, name: &str) -> bool {
+        self.prepared_statements.remove(name).is_some()
+    }
+
+    /// Removes all prepared statements.
+    pub fn remove_all_prepared_statements(&mut self) {
+        self.prepared_statements.clear();
     }
 
     /// Retrieves the prepared statement associated with `name`.
     pub fn get_prepared_statement(&self, name: &str) -> Option<&PreparedStatement> {
         self.prepared_statements.get(name)
+    }
+
+    /// Returns the prepared statements for the session.
+    pub fn prepared_statements(&self) -> &HashMap<String, PreparedStatement> {
+        &self.prepared_statements
     }
 
     /// Binds the specified portal to the specified prepared statement.
@@ -292,6 +304,36 @@ impl Session {
     /// If there is no such portal, returns `None`.
     pub fn get_portal_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
         self.portals.get_mut(portal_name)
+    }
+
+    /// Creates and installs a new portal.
+    pub fn create_new_portal(
+        &mut self,
+        stmt: Option<Statement<Raw>>,
+        desc: StatementDesc,
+        parameters: Params,
+        result_formats: Vec<Format>,
+    ) -> Result<String, CoordError> {
+        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
+
+        for i in 0usize.. {
+            let name = format!("<unnamed portal {}>", i);
+            match self.portals.entry(name.clone()) {
+                Entry::Occupied(_) => continue,
+                Entry::Vacant(entry) => {
+                    entry.insert(Portal {
+                        stmt,
+                        desc,
+                        parameters,
+                        result_formats,
+                        state: PortalState::NotStarted,
+                    });
+                    return Ok(name);
+                }
+            }
+        }
+
+        coord_bail!("unable to create a new portal");
     }
 
     /// Resets the session to its initial state. Returns sinks that need to be

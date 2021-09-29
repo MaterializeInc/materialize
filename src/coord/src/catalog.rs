@@ -38,14 +38,14 @@ use repr::{RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
 use sql::catalog::{
-    Catalog as SqlCatalog, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, SessionCatalog,
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
 use sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use transform::Optimizer;
 use uuid::Uuid;
@@ -55,7 +55,7 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::persistcfg::{PersistConfig, PersistDetails, PersistMultiDetails, PersisterWithConfig};
-use crate::session::Session;
+use crate::session::{PreparedStatement, Session};
 
 mod builtin_table_updates;
 mod config;
@@ -215,6 +215,7 @@ pub struct ConnCatalog<'a> {
     database: String,
     search_path: &'a [&'a str],
     user: String,
+    prepared_statements: Option<&'a HashMap<String, PreparedStatement>>,
 }
 
 impl ConnCatalog<'_> {
@@ -969,13 +970,14 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn for_session(&self, session: &Session) -> ConnCatalog {
+    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
             user: session.user().into(),
+            prepared_statements: Some(session.prepared_statements()),
         }
     }
 
@@ -986,6 +988,7 @@ impl Catalog {
             database: "materialize".into(),
             search_path: &[],
             user,
+            prepared_statements: None,
         }
     }
 
@@ -2485,7 +2488,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 }
 
-impl SqlCatalog for ConnCatalog<'_> {
+impl SessionCatalog for ConnCatalog<'_> {
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str> {
         if include_system_schemas {
             self.search_path.to_vec()
@@ -2505,6 +2508,12 @@ impl SqlCatalog for ConnCatalog<'_> {
 
     fn user(&self) -> &str {
         &self.user
+    }
+
+    fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {
+        self.prepared_statements
+            .map(|ps| ps.get(name).map(|ps| ps.desc()))
+            .flatten()
     }
 
     fn default_database(&self) -> &str {

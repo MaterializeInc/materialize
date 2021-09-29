@@ -51,6 +51,8 @@ pub enum CoordError {
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
+    /// The named prepared statement already exists.
+    PreparedStatementExists(String),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
@@ -75,6 +77,7 @@ pub enum CoordError {
     UnknownLoginRole(String),
     /// The named parameter is unknown to the system.
     UnknownParameter(String),
+    UnknownPreparedStatement(String),
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
@@ -250,6 +253,9 @@ impl fmt::Display for CoordError {
             CoordError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            CoordError::PreparedStatementExists(name) => {
+                write!(f, "prepared statement {} already exists", name.quoted())
+            }
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
@@ -281,6 +287,9 @@ impl fmt::Display for CoordError {
             CoordError::Unsupported(features) => write!(f, "{} are not supported", features),
             CoordError::Unstructured(e) => write!(f, "{:#}", e),
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
+            CoordError::UnknownPreparedStatement(name) => {
+                write!(f, "prepared statement {} does not exist", name.quoted())
+            }
         }
     }
 }

@@ -71,6 +71,9 @@ pub enum Statement<T: AstInfo> {
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement),
     Close(CloseStatement),
+    Prepare(PrepareStatement<T>),
+    Execute(ExecuteStatement<T>),
+    Deallocate(DeallocateStatement),
 }
 
 impl<T: AstInfo> Statement<T> {
@@ -126,6 +129,9 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
+            Statement::Prepare(stmt) => f.write_node(stmt),
+            Statement::Execute(stmt) => f.write_node(stmt),
+            Statement::Deallocate(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -1655,3 +1661,57 @@ impl AstDisplay for FetchDirection {
     }
 }
 impl_display!(FetchDirection);
+
+/// `PREPARE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PrepareStatement<T: AstInfo> {
+    pub name: Ident,
+    pub stmt: Box<Statement<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for PrepareStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("PREPARE ");
+        f.write_node(&self.name);
+        f.write_str(" AS ");
+        f.write_node(&self.stmt);
+    }
+}
+impl_display_t!(PrepareStatement);
+
+/// `EXECUTE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExecuteStatement<T: AstInfo> {
+    pub name: Ident,
+    pub params: Vec<Expr<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ExecuteStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXECUTE ");
+        f.write_node(&self.name);
+        if !self.params.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.params));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(ExecuteStatement);
+
+/// `DEALLOCATE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeallocateStatement {
+    pub name: Option<Ident>,
+}
+
+impl AstDisplay for DeallocateStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DEALLOCATE ");
+        match &self.name {
+            Some(name) => f.write_node(name),
+            None => f.write_str("ALL"),
+        };
+    }
+}
+impl_display!(DeallocateStatement);

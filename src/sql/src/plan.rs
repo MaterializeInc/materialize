@@ -104,6 +104,9 @@ pub enum Plan {
     Fetch(FetchPlan),
     Close(ClosePlan),
     ReadThenWrite(ReadThenWritePlan),
+    Prepare(PreparePlan),
+    Execute(ExecutePlan),
+    Deallocate(DeallocatePlan),
 }
 
 #[derive(Debug)]
@@ -319,6 +322,24 @@ pub struct FetchPlan {
 #[derive(Debug)]
 pub struct ClosePlan {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct PreparePlan {
+    pub name: String,
+    pub stmt: Statement<Raw>,
+    pub desc: StatementDesc,
+}
+
+#[derive(Debug)]
+pub struct ExecutePlan {
+    pub name: String,
+    pub params: Params,
+}
+
+#[derive(Debug)]
+pub struct DeallocatePlan {
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug)]

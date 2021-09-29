@@ -87,15 +87,16 @@ use sql::ast::{
     CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
-use sql::catalog::{Catalog as _, CatalogError};
+use sql::catalog::{CatalogError, SessionCatalog as _};
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{
     AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan,
-    FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
-    Plan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
+    ExplainPlan, FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params,
+    PeekPlan, PeekWhen, Plan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    Source, TailPlan,
 };
 use sql::plan::{StatementDesc, View};
 use transform::Optimizer;
@@ -1013,10 +1014,13 @@ impl Coordinator {
                                 Statement::Close(_)
                                 | Statement::Commit(_)
                                 | Statement::Copy(_)
+                                | Statement::Deallocate(_)
                                 | Statement::Declare(_)
                                 | Statement::Discard(_)
+                                | Statement::Execute(_)
                                 | Statement::Explain(_)
                                 | Statement::Fetch(_)
+                                | Statement::Prepare(_)
                                 | Statement::Rollback(_)
                                 | Statement::Select(_)
                                 | Statement::SetTransaction(_)
@@ -1447,12 +1451,7 @@ impl Coordinator {
     ) -> Result<(), CoordError> {
         // handle_describe cares about symbiosis mode here. Declared cursors are
         // perhaps rare enough we can ignore that worry and just error instead.
-        let desc = describe(
-            &self.catalog.for_session(session),
-            stmt.clone(),
-            &param_types,
-            session,
-        )?;
+        let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![pgrepr::Format::Text; desc.arity()];
         session.set_portal(name, desc, Some(stmt), params, result_formats)?;
@@ -1467,12 +1466,7 @@ impl Coordinator {
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), CoordError> {
         let desc = if let Some(stmt) = stmt.clone() {
-            match describe(
-                &self.catalog.for_session(session),
-                stmt.clone(),
-                &param_types,
-                session,
-            ) {
+            match describe(&self.catalog, stmt.clone(), &param_types, session) {
                 Ok(desc) => desc,
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
@@ -1784,6 +1778,64 @@ impl Coordinator {
                     tx.send(Err(CoordError::UnknownCursor(plan.name)), session);
                 }
             }
+            Plan::Prepare(plan) => {
+                if session.get_prepared_statement(&plan.name).is_some() {
+                    tx.send(Err(CoordError::PreparedStatementExists(plan.name)), session);
+                } else {
+                    session.set_prepared_statement(
+                        plan.name,
+                        PreparedStatement::new(Some(plan.stmt), plan.desc),
+                    );
+                    tx.send(Ok(ExecuteResponse::Prepare), session);
+                }
+            }
+            Plan::Execute(plan) => {
+                match self.sequence_execute(&mut session, plan) {
+                    Ok(portal_name) => {
+                        let internal_cmd_tx = self.internal_cmd_tx.clone();
+                        tokio::spawn(async move {
+                            internal_cmd_tx
+                                .send(Message::Command(Command::Execute {
+                                    portal_name,
+                                    session,
+                                    tx: tx.take(),
+                                }))
+                                .expect("sending to internal_cmd_tx cannot fail");
+                        });
+                    }
+                    Err(err) => tx.send(Err(err), session),
+                };
+            }
+            Plan::Deallocate(plan) => match plan.name {
+                Some(name) => {
+                    if session.remove_prepared_statement(&name) {
+                        tx.send(Ok(ExecuteResponse::Deallocate { all: false }), session);
+                    } else {
+                        tx.send(Err(CoordError::UnknownPreparedStatement(name)), session);
+                    }
+                }
+                None => {
+                    session.remove_all_prepared_statements();
+                    tx.send(Ok(ExecuteResponse::Deallocate { all: true }), session);
+                }
+            },
+        }
+    }
+
+    // Returns the name of the portal to execute.
+    fn sequence_execute(
+        &mut self,
+        session: &mut Session,
+        plan: ExecutePlan,
+    ) -> Result<String, CoordError> {
+        let ps = session.get_prepared_statement(&plan.name);
+        match ps {
+            Some(ps) => {
+                let sql = ps.sql().cloned();
+                let desc = ps.desc().clone();
+                session.create_new_portal(sql, desc, plan.params, Vec::new())
+            }
+            None => Err(CoordError::UnknownPreparedStatement(plan.name)),
         }
     }
 
@@ -4457,7 +4509,7 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// supports describing FETCH statements which need access to bound portals
 /// through the session.
 pub fn describe(
-    catalog: &dyn sql::catalog::Catalog,
+    catalog: &Catalog,
     stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
     session: &mut Session,
@@ -4471,12 +4523,15 @@ pub fn describe(
                 None => Err(CoordError::UnknownCursor(name.to_string())),
             }
         }
-        _ => Ok(sql::plan::describe(
-            &session.pcx(),
-            catalog,
-            stmt,
-            param_types,
-        )?),
+        _ => {
+            let catalog = &catalog.for_session(session);
+            Ok(sql::plan::describe(
+                &session.pcx(),
+                catalog,
+                stmt,
+                param_types,
+            )?)
+        }
     }
 }
 
