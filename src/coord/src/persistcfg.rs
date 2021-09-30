@@ -16,6 +16,7 @@ use std::sync::Arc;
 use ore::metrics::MetricsRegistry;
 use persist::error::{Error, ErrorLog};
 use persist::indexed::encoding::Id;
+use persist::mem::MemBlob;
 use persist::s3::{Config as S3Config, S3Blob};
 use persist::storage::LockInfo;
 use repr::Row;
@@ -34,6 +35,8 @@ use uuid::Uuid;
 pub enum PersistStorage {
     File(PersistFileStorage),
     S3(PersistS3Storage),
+    // Used for testing.
+    Mem,
 }
 
 impl TryFrom<String> for PersistStorage {
@@ -141,6 +144,16 @@ impl PersistConfig {
                 PersistStorage::S3(s) => {
                     let config = S3Config::new(s.bucket.clone(), s.prefix.clone())?;
                     let blob = S3Blob::new(config, lock_info)?;
+                    runtime::start(
+                        RuntimeConfig::default(),
+                        log,
+                        blob,
+                        reg,
+                        self.runtime.clone(),
+                    )
+                }
+                PersistStorage::Mem => {
+                    let blob = MemBlob::new(lock_info);
                     runtime::start(
                         RuntimeConfig::default(),
                         log,

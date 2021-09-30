@@ -67,6 +67,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::FutureExt;
 use ore::metrics::MetricsRegistry;
+use persist::indexed::runtime::RuntimeClient;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::mpsc;
 
@@ -106,14 +107,24 @@ pub struct CoordTest {
     _metrics_registry: MetricsRegistry,
     persisted_sessions: HashMap<String, (SessionClient, StartupResponse)>,
     deferred_results: HashMap<String, Vec<ExecuteResponse>>,
+    // This is Some if and only if persist_user_tables was true.
+    persister: Option<RuntimeClient>,
 }
 
 impl CoordTest {
     pub async fn new() -> anyhow::Result<Self> {
         let catalog_file = NamedTempFile::new()?;
         let metrics_registry = MetricsRegistry::new();
-        let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp) =
-            coord::serve_debug(catalog_file.path(), metrics_registry.clone());
+        // If a test needs to disable persist, maybe make a new "init persist=false"
+        // directive that remakes the top level `ct`. Until a test cares, hard code
+        // to on.
+        let persist_user_tables = true;
+        let (handle, client, coord_feedback_tx, dataflow_feedback_rx, timestamp, persister) =
+            coord::serve_debug(
+                catalog_file.path(),
+                metrics_registry.clone(),
+                persist_user_tables,
+            );
         let coordtest = CoordTest {
             _handle: handle,
             client: Some(client),
@@ -128,6 +139,7 @@ impl CoordTest {
             queued_feedback: Vec::new(),
             persisted_sessions: HashMap::new(),
             deferred_results: HashMap::new(),
+            persister,
         };
         Ok(coordtest)
     }
@@ -309,10 +321,15 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
             let res: String = match tc.directive.as_str() {
                 "sql" => {
                     let query = ct.rewrite_query(&tc.input);
-                    let results = ct
+                    let results = match ct
                         .with_sc(|sc| Box::pin(async move { sql(sc, query).await }))
                         .await
-                        .unwrap();
+                    {
+                        Ok(results) => results,
+                        Err(err) => {
+                            return format!("{:#?}\n", err);
+                        }
+                    };
                     let mut strs = vec![];
                     for r in results {
                         strs.push(match r {
@@ -499,6 +516,10 @@ pub async fn run_test(mut tf: datadriven::TestFile) -> datadriven::TestFile {
                 "print-catalog" => {
                     let catalog = ct.make_catalog().await;
                     format!("{:#?}\n", catalog)
+                }
+                "stop-persist" => {
+                    ct.persister.as_mut().unwrap().stop().unwrap();
+                    "".into()
                 }
                 _ => panic!("unknown directive {}", tc.directive),
             };

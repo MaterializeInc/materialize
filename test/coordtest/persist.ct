@@ -1,0 +1,49 @@
+sql
+CREATE TABLE t (i INT);
+----
+CreatedTable {
+    existed: false,
+}
+
+sql
+INSERT INTO t VALUES (1);
+----
+Inserted(
+    1,
+)
+
+sql
+SELECT * FROM t;
+----
+Rows(
+    [
+        Row{[
+            Int32(
+                1,
+            ),
+        ]},
+    ],
+)
+
+stop-persist
+----
+
+sql
+INSERT INTO t VALUES (1);
+----
+Unstructured(
+    "runtime shutdown",
+)
+
+sql
+SELECT * FROM t;
+----
+Rows(
+    [
+        Row{[
+            Int32(
+                1,
+            ),
+        ]},
+    ],
+)

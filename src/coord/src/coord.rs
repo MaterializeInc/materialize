@@ -53,6 +53,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use lazy_static::lazy_static;
+use persist::indexed::runtime::RuntimeClient;
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::order::PartialOrder;
@@ -116,9 +117,9 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
     TransactionStatus, WriteOp,
 };
-use crate::sink_connector;
 use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
+use crate::{sink_connector, PersistStorage};
 
 mod antichain;
 mod arrangement_state;
@@ -4282,12 +4283,15 @@ pub async fn serve(
 pub fn serve_debug(
     catalog_path: &Path,
     metrics_registry: MetricsRegistry,
+    persist_user_tables: bool,
 ) -> (
     JoinOnDropHandle<()>,
     Client,
     tokio::sync::mpsc::UnboundedSender<dataflow::Response>,
     tokio::sync::mpsc::UnboundedReceiver<dataflow::Response>,
     Arc<Mutex<u64>>,
+    // This is a Some if and only if persist_user_tables was true.
+    Option<RuntimeClient>,
 ) {
     lazy_static! {
         static ref DEBUG_TIMESTAMP: Arc<Mutex<EpochMillis>> = Arc::new(Mutex::new(0));
@@ -4296,6 +4300,13 @@ pub fn serve_debug(
         *DEBUG_TIMESTAMP.lock().unwrap()
     }
 
+    let persist = PersistConfig {
+        runtime: None,
+        storage: PersistStorage::Mem,
+        user_table_enabled: persist_user_tables,
+        system_table_enabled: false,
+        lock_info: "testing".to_owned(),
+    };
     let (catalog, builtin_table_updates, persister) = catalog::Catalog::open(&catalog::Config {
         path: catalog_path,
         enable_logging: true,
@@ -4305,7 +4316,7 @@ pub fn serve_debug(
         num_workers: 0,
         timestamp_frequency: Duration::from_millis(1),
         now: get_debug_timestamp,
-        persist: PersistConfig::disabled(),
+        persist,
         skip_migrations: false,
         metrics_registry: &MetricsRegistry::new(),
         disable_user_indexes: false,
@@ -4326,7 +4337,7 @@ pub fn serve_debug(
         experimental_mode: true,
         now: get_debug_timestamp,
         metrics_registry: metrics_registry.clone(),
-        persist: persister,
+        persist: persister.clone(),
         feedback_tx,
     })
     .unwrap();
@@ -4414,6 +4425,7 @@ pub fn serve_debug(
         inner_feedback_tx,
         inner_feedback_rx,
         DEBUG_TIMESTAMP.clone(),
+        persister,
     )
 }
 

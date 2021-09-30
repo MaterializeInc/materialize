@@ -690,6 +690,7 @@ dependencies = [
  "expr",
  "futures",
  "ore",
+ "persist",
  "repr",
  "serde_json",
  "sql-parser",
