@@ -2785,8 +2785,6 @@ impl Coordinator {
 
         let dataflow_plan = self.finalize_dataflow(dataflow);
 
-        println!("{:?}", dataflow_plan);
-
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // It may be a `Constant`, a `Get`, or something we need to install to read out.
         // If there is exactly one object to build, and that object is a `Constant` or
@@ -2840,8 +2838,6 @@ impl Coordinator {
                 }
             }
         }
-
-        println!("EARLY: {:?}", early_exit);
 
         // There are three cases going forward, based on the variants of `early_exit`:
         // 1. `Some(Ok(rows))` indicates a constant expression that we can return.
