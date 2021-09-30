@@ -891,16 +891,16 @@ CREATE INDEX IF EXISTS myschema.ind ON foo(b)
 parse-statement
 DROP DATABASE mydb
 ----
-DROP DATABASE mydb
+DROP DATABASE mydb CASCADE
 =>
-DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false })
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, cascade: true })
 
 parse-statement
 DROP DATABASE IF EXISTS mydb
 ----
-DROP DATABASE IF EXISTS mydb
+DROP DATABASE IF EXISTS mydb CASCADE
 =>
-DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: true })
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: true, cascade: true })
 
 parse-statement
 DROP DATABASE mydb.nope
@@ -908,6 +908,34 @@ DROP DATABASE mydb.nope
 error: Expected end of statement, found dot
 DROP DATABASE mydb.nope
                   ^
+
+parse-statement
+DROP DATABASE mydb CASCADE
+----
+DROP DATABASE mydb CASCADE
+=>
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, cascade: true })
+
+parse-statement
+DROP DATABASE mydb RESTRICT
+----
+DROP DATABASE mydb
+=>
+DropDatabase(DropDatabaseStatement { name: Ident("mydb"), if_exists: false, cascade: false })
+
+parse-statement
+DROP DATABASE mydb CASCADE RESTRICT
+----
+error: Cannot specify both CASCADE and RESTRICT in DROP
+DROP DATABASE mydb CASCADE RESTRICT
+                           ^
+
+parse-statement
+DROP DATABASE mydb RESTRICT CASCADE
+----
+error: Expected end of statement, found CASCADE
+DROP DATABASE mydb RESTRICT CASCADE
+                            ^
 
 parse-statement
 DROP SCHEMA mydb.myschema

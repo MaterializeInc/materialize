@@ -117,6 +117,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
         schema: &SchemaName,
     ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a>;
 
+    /// Reports whether the specificied database contains any schemas.
+    ///
+    /// Panics if `database` does not specify a valid database.
+    fn database_has_schemas(&self, database: &str) -> bool;
+
     /// Gets an item by its ID.
     fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
 
@@ -429,6 +434,10 @@ impl SessionCatalog for DummyCatalog {
         &'a self,
         _: &SchemaName,
     ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a> {
+        unimplemented!();
+    }
+
+    fn database_has_schemas(&self, _: &str) -> bool {
         unimplemented!();
     }
 

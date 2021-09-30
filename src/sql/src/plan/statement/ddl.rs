@@ -2145,10 +2145,23 @@ pub fn describe_drop_database(
 
 pub fn plan_drop_database(
     scx: &StatementContext,
-    DropDatabaseStatement { name, if_exists }: DropDatabaseStatement,
+    DropDatabaseStatement {
+        name,
+        if_exists,
+        cascade,
+    }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
-        Ok(database) => database.name().into(),
+        Ok(database) => {
+            let name = String::from(database.name());
+            if !cascade && scx.catalog.database_has_schemas(&name) {
+                bail!(
+                    "database '{}' cannot be dropped without CASCADE while it contains schemas",
+                    database.name(),
+                );
+            }
+            name
+        }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.

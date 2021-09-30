@@ -2218,9 +2218,22 @@ impl<'a> Parser<'a> {
             DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
+                let if_exists = self.parse_if_exists()?;
+                let name = self.parse_identifier()?;
+                let cascade = self.parse_keyword(CASCADE);
+                let restrict = self.parse_keyword(RESTRICT);
+                let restrict_pos = self.peek_prev_pos();
+                if cascade && restrict {
+                    return parser_err!(
+                        self,
+                        restrict_pos,
+                        "Cannot specify both CASCADE and RESTRICT in DROP"
+                    );
+                }
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
-                    if_exists: self.parse_if_exists()?,
-                    name: self.parse_identifier()?,
+                    if_exists,
+                    name,
+                    cascade: !restrict,
                 }));
             }
             Some(INDEX) => ObjectType::Index,
