@@ -166,6 +166,13 @@ enum SetPrecedence {
     Intersect,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+enum ParseAtMostOneResult {
+    A,
+    B,
+    Neither,
+}
+
 impl<'a> Parser<'a> {
     /// Parse the specified tokens
     fn new(sql: &'a str, tokens: Vec<(Token, usize)>) -> Self {
@@ -529,15 +536,10 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let all = self.parse_keyword(ALL);
-        let distinct = self.parse_keyword(DISTINCT);
-        if all && distinct {
-            return parser_err!(
-                self,
-                self.peek_prev_pos(),
-                format!("Cannot specify both ALL and DISTINCT in function: {}", name)
-            );
-        }
+        let distinct = matches!(
+            self.parse_at_most_one_keyword(ALL, DISTINCT, &format!("function: {}", name))?,
+            ParseAtMostOneResult::B
+        );
         let args = self.parse_optional_args(true)?;
         let filter = if self.parse_keyword(FILTER) {
             self.expect_token(&Token::LParen)?;
@@ -1302,6 +1304,32 @@ impl<'a> Parser<'a> {
             true
         } else {
             false
+        }
+    }
+
+    fn parse_at_most_one_keyword(
+        &mut self,
+        a: Keyword,
+        b: Keyword,
+        location: &str,
+    ) -> Result<ParseAtMostOneResult, ParserError> {
+        let a_found = self.parse_keyword(a);
+        let b_found = self.parse_keyword(b);
+        // Catch them in either order
+        let a_found = a_found || self.parse_keyword(a);
+        let second_pos = self.peek_prev_pos();
+        match (a_found, b_found) {
+            (true, true) => parser_err!(
+                self,
+                second_pos,
+                "Cannot specify both {} and {} in {}",
+                a,
+                b,
+                location,
+            ),
+            (true, false) => Ok(ParseAtMostOneResult::A),
+            (false, true) => Ok(ParseAtMostOneResult::B),
+            (false, false) => Ok(ParseAtMostOneResult::Neither),
         }
     }
 
@@ -2220,18 +2248,10 @@ impl<'a> Parser<'a> {
             Some(DATABASE) => {
                 let if_exists = self.parse_if_exists()?;
                 let name = self.parse_identifier()?;
-                let cascade = self.parse_keyword(CASCADE);
-                let restrict = self.parse_keyword(RESTRICT);
-                // Catch them in either order
-                let cascade = cascade || self.parse_keyword(CASCADE);
-                let second_pos = self.peek_prev_pos();
-                if cascade && restrict {
-                    return parser_err!(
-                        self,
-                        second_pos,
-                        "Cannot specify both CASCADE and RESTRICT in DROP"
-                    );
-                }
+                let restrict = matches!(
+                    self.parse_at_most_one_keyword(CASCADE, RESTRICT, "DROP")?,
+                    ParseAtMostOneResult::B
+                );
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists,
                     name,
@@ -2258,18 +2278,10 @@ impl<'a> Parser<'a> {
 
         let if_exists = self.parse_if_exists()?;
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
-        let cascade = self.parse_keyword(CASCADE);
-        let restrict = self.parse_keyword(RESTRICT);
-        // Catch them in either order
-        let cascade = cascade || self.parse_keyword(CASCADE);
-        let second_pos = self.peek_prev_pos();
-        if cascade && restrict {
-            return parser_err!(
-                self,
-                second_pos,
-                "Cannot specify both CASCADE and RESTRICT in DROP"
-            );
-        }
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(CASCADE, RESTRICT, "DROP")?,
+            ParseAtMostOneResult::A
+        );
         Ok(Statement::DropObjects(DropObjectsStatement {
             materialized,
             object_type,
