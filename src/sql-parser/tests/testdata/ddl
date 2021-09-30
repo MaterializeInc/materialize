@@ -933,7 +933,7 @@ DROP DATABASE mydb CASCADE RESTRICT
 parse-statement
 DROP DATABASE mydb RESTRICT CASCADE
 ----
-error: Expected end of statement, found CASCADE
+error: Cannot specify both CASCADE and RESTRICT in DROP
 DROP DATABASE mydb RESTRICT CASCADE
                             ^
 

@@ -2222,11 +2222,13 @@ impl<'a> Parser<'a> {
                 let name = self.parse_identifier()?;
                 let cascade = self.parse_keyword(CASCADE);
                 let restrict = self.parse_keyword(RESTRICT);
-                let restrict_pos = self.peek_prev_pos();
+                // Catch them in either order
+                let cascade = cascade || self.parse_keyword(CASCADE);
+                let second_pos = self.peek_prev_pos();
                 if cascade && restrict {
                     return parser_err!(
                         self,
-                        restrict_pos,
+                        second_pos,
                         "Cannot specify both CASCADE and RESTRICT in DROP"
                     );
                 }
@@ -2258,11 +2260,13 @@ impl<'a> Parser<'a> {
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = self.parse_keyword(CASCADE);
         let restrict = self.parse_keyword(RESTRICT);
-        let restrict_pos = self.peek_prev_pos();
+        // Catch them in either order
+        let cascade = cascade || self.parse_keyword(CASCADE);
+        let second_pos = self.peek_prev_pos();
         if cascade && restrict {
             return parser_err!(
                 self,
-                restrict_pos,
+                second_pos,
                 "Cannot specify both CASCADE and RESTRICT in DROP"
             );
         }

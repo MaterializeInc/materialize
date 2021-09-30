@@ -199,7 +199,7 @@ v2_primary_idx  user
 
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE
-Expected end of statement, found CASCADE
+Cannot specify both CASCADE and RESTRICT in DROP
 ! DROP DATABASE d CASCADE RESTRICT
 Cannot specify both CASCADE and RESTRICT in DROP
 
