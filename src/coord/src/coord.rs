@@ -71,7 +71,7 @@ use dataflow_types::{
 };
 use dataflow_types::{SinkAsOf, Timeline};
 use expr::{
-    EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::cast::CastFrom;
@@ -2678,6 +2678,12 @@ impl Coordinator {
         Ok(timedomain_ids)
     }
 
+    /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
+    ///
+    /// Peeks are sequenced by assigning a timestamp for evaluation, and then determining and
+    /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
+    /// be a simple read out of an existing arrangement, or required a new dataflow to build
+    /// the results to return.
     fn sequence_peek(
         &mut self,
         session: &mut Session,
@@ -2783,159 +2789,47 @@ impl Coordinator {
             },
         )?;
 
-        // If this optimizes to a constant expression, we can immediately return the result.
-        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = &*source {
-            let rows = match rows {
-                Ok(rows) => rows,
-                Err(e) => return Err(e.clone().into()),
-            };
-            let mut results = Vec::new();
-            for &(ref row, count) in rows {
-                if count < 0 {
-                    Err(EvalError::InvalidParameterValue(format!(
-                        "Negative multiplicity in constant result: {}",
-                        count
-                    )))?
-                };
-                for _ in 0..count {
-                    results.push(row.clone());
-                }
-            }
-            finishing.finish(&mut results);
-            send_immediate_rows(results)
-        } else {
-            // Peeks describe a source of data and a timestamp at which to view its contents.
-            //
-            // We need to determine both an appropriate timestamp from the description, and
-            // also to ensure that there is a view in place to query, if the source of data
-            // for the peek is not a base relation.
+        // We create a dataflow and optimize it, to determine if we can avoid building it.
+        // This can happen if the result optimizes to a constant, or to a `Get` expression
+        // around a maintained arrangement.
+        let typ = source.typ();
+        let key: Vec<MirScalarExpr> = typ
+            .default_key()
+            .iter()
+            .map(|k| MirScalarExpr::Column(*k))
+            .collect();
+        // Two transient allocations. We could reclaim these if we don't use them, potentially.
+        // TODO: reclaim transient identifiers in fast path cases.
+        let view_id = self.allocate_transient_id()?;
+        let index_id = self.allocate_transient_id()?;
+        // The assembled dataflow contains a view and an index of that view.
+        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
+        dataflow.set_as_of(Antichain::from_elem(timestamp));
+        self.dataflow_builder()
+            .import_view_into_dataflow(&view_id, &source, &mut dataflow);
+        dataflow.export_index(
+            index_id,
+            IndexDesc {
+                on_id: view_id,
+                keys: key,
+            },
+            typ,
+        );
+        // Finalization optimizes the dataflow as much as possible.
+        let dataflow_plan = self.finalize_dataflow(dataflow);
 
-            // Choose a timestamp for all workers to use in the peek.
-            // We minimize over all participating views, to ensure that the query will not
-            // need to block on the arrival of further input data.
-            let (rows_tx, rows_rx) = mpsc::unbounded_channel();
+        // At this point, `dataflow_plan` contains our best optimized dataflow.
+        // We will check the plan to see if there is a fast path to escape full dataflow construction.
+        let fast_path = fast_path_peek::create_plan(dataflow_plan, view_id, index_id)?;
 
-            // Extract any surrounding linear operators to determine if we can simply read
-            // out the contents from an existing arrangement.
-            let (mut map_filter_project, inner) =
-                expr::MapFilterProject::extract_from_expression(&source);
-            map_filter_project.optimize();
-
-            // We can use a fast path approach if our query corresponds to a read out of
-            // an existing materialization. This is the case if the expression is now a
-            // `MirRelationExpr::Get` and its target is something we have materialized.
-            // Otherwise, we will need to build a new dataflow.
-            let mut fast_path: Option<(_, Option<Row>)> = None;
-            if let MirRelationExpr::Get {
-                id: Id::Global(id),
-                typ: _,
-            } = inner
-            {
-                // Here we should check for an index whose keys are constrained to literal
-                // values by predicate constraints in `map_filter_project`. If we find such
-                // an index, we can use it with the literal to perform look-ups at workers,
-                // and in principle avoid even contacting all but one worker (future work).
-                if let Some(indexes) = self.catalog.enabled_indexes().get(id) {
-                    // Determine for each index identifier, an optional row literal as key.
-                    // We want to extract the "best" option, where we prefer indexes with
-                    // literals and long keys, then indexes at all, then exit correctly.
-                    fast_path = indexes
-                        .iter()
-                        .map(|(id, exprs)| {
-                            let literal_row = map_filter_project.literal_constraints(exprs);
-                            // Prefer non-trivial literal rows foremost, then long expressions,
-                            // then we don't really care at that point.
-                            (literal_row.is_some(), exprs.len(), literal_row, *id)
-                        })
-                        .max()
-                        .map(|(_some, _len, literal, id)| (id, literal));
-                }
-            }
-
-            // Unpack what we have learned with default values if we found nothing.
-            let (fast_path, index_id, literal_row) = if let Some((id, row)) = fast_path {
-                (true, id, row)
-            } else {
-                (false, self.allocate_transient_id()?, None)
-            };
-
-            if !fast_path {
-                // Slow path. We need to perform some computation, so build
-                // a new transient dataflow that will be dropped after the
-                // peek completes.
-                let typ = source.typ();
-                map_filter_project = expr::MapFilterProject::new(typ.arity());
-                let key: Vec<MirScalarExpr> = typ
-                    .default_key()
-                    .iter()
-                    .map(|k| MirScalarExpr::Column(*k))
-                    .collect();
-                let view_id = self.allocate_transient_id()?;
-                let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
-                dataflow.set_as_of(Antichain::from_elem(timestamp));
-                self.dataflow_builder()
-                    .import_view_into_dataflow(&view_id, &source, &mut dataflow);
-                dataflow.export_index(
-                    index_id,
-                    IndexDesc {
-                        on_id: view_id,
-                        keys: key,
-                    },
-                    typ,
-                );
-                self.ship_dataflow(dataflow);
-            }
-
-            let mfp_plan = map_filter_project
-                .into_plan()
-                .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
-                .into_nontemporal()
-                .map_err(|_e| {
-                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(
-                        "Extracted plan has temporal constraints"
-                    ))
-                })?;
-
-            // Insert the pending peek, and indicate that no workers have responded yet.
-            self.pending_peeks
-                .insert(session.conn_id(), (rows_tx, HashSet::new()));
-            self.broadcast(dataflow::Command::Peek {
-                id: index_id,
-                key: literal_row,
-                conn_id: session.conn_id(),
-                timestamp,
-                finishing: finishing.clone(),
-                map_filter_project: mfp_plan,
-            });
-
-            if !fast_path {
-                self.drop_indexes(vec![index_id]);
-            }
-
-            let rows_rx = UnboundedReceiverStream::new(rows_rx)
-                .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
-                    match (memo, resp) {
-                        (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
-                            memo.extend(rows);
-                            PeekResponse::Rows(memo)
-                        }
-                        (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                            PeekResponse::Error(e)
-                        }
-                        (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                            PeekResponse::Canceled
-                        }
-                    }
-                })
-                .map(move |mut resp| {
-                    if let PeekResponse::Rows(rows) = &mut resp {
-                        finishing.finish(rows)
-                    }
-                    resp
-                });
-
-            ExecuteResponse::SendingRows(Box::pin(rows_rx))
-        };
+        // Implement the peek, and capture the response.
+        let resp = self.implement_fast_path_peek(
+            fast_path,
+            timestamp,
+            finishing,
+            conn_id,
+            source.arity(),
+        )?;
 
         match copy_to {
             None => Ok(resp),
@@ -3893,6 +3787,15 @@ impl Coordinator {
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
+    fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
+        for dataflow in dataflows.into_iter() {
+            dataflow_plans.push(self.finalize_dataflow(dataflow));
+        }
+        self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans));
+    }
+
+    /// Finalizes a dataflow.
     ///
     /// Finalization includes optimization, but also validation of various
     /// invariants such as ensuring that the `as_of` frontier is in advance of
@@ -3907,79 +3810,74 @@ impl Coordinator {
     /// Panics if as_of is < the `since` frontiers.
     ///
     /// Panics if the dataflow descriptions contain an invalid plan.
-    fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>) {
+    fn finalize_dataflow(
+        &mut self,
+        mut dataflow: DataflowDesc,
+    ) -> dataflow_types::DataflowDescription<dataflow::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and materialized will be in an unsafe
         // state if we do not correctly clean up the catalog.
 
-        // Each dataflow description will be planned into a `render::Plan` dataflow.
-        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for mut dataflow in dataflows.into_iter() {
-            // The identity for `join` is the minimum element.
-            let mut since = Antichain::from_elem(Timestamp::minimum());
+        // The identity for `join` is the minimum element.
+        let mut since = Antichain::from_elem(Timestamp::minimum());
 
-            // Populate "valid from" information for each source.
-            for (source_id, _description) in dataflow.source_imports.iter() {
-                // Extract `since` information about each source and apply here.
-                if let Some(source_since) = self.sources.since_of(source_id) {
-                    since.join_assign(&source_since);
-                }
+        // Populate "valid from" information for each source.
+        for (source_id, _description) in dataflow.source_imports.iter() {
+            // Extract `since` information about each source and apply here.
+            if let Some(source_since) = self.sources.since_of(source_id) {
+                since.join_assign(&source_since);
             }
-
-            // For each imported arrangement, lower bound `since` by its own frontier.
-            for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
-                since.join_assign(
-                    &self
-                        .indexes
-                        .since_of(global_id)
-                        .expect("global id missing at coordinator"),
-                );
-            }
-
-            // For each produced arrangement, start tracking the arrangement with
-            // a compaction frontier of at least `since`.
-            for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-                let frontiers = self.new_frontiers(
-                    *global_id,
-                    since.elements().to_vec(),
-                    self.logical_compaction_window_ms,
-                );
-                self.indexes.insert(*global_id, frontiers);
-            }
-
-            // TODO: Produce "valid from" information for each sink.
-            // For each sink, ... do nothing because we don't yield `since` for sinks.
-            // for (global_id, _description) in dataflow.sink_exports.iter() {
-            //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
-            //     self.sink_info[global_id].valid_from(&since);
-            // }
-
-            // Ensure that the dataflow's `as_of` is at least `since`.
-            if let Some(as_of) = &mut dataflow.as_of {
-                // It should not be possible to request an invalid time. SINK doesn't support
-                // AS OF. TAIL and Peek check that their AS OF is >= since.
-                assert!(
-                    <_ as PartialOrder>::less_equal(&since, as_of),
-                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
-                    dataflow.debug_name,
-                    as_of,
-                    since
-                );
-            } else {
-                // Bind the since frontier to the dataflow description.
-                dataflow.set_as_of(since);
-            }
-
-            // Optimize the dataflow across views, and any other ways that appeal.
-            transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
-            let dataflow_plan = dataflow::Plan::finalize_dataflow(dataflow)
-                .expect("Dataflow planning failed; unrecoverable error");
-            dataflow_plans.push(dataflow_plan);
         }
 
-        // Finalize the dataflow by broadcasting its construction to all workers.
-        self.broadcast(dataflow::Command::CreateDataflows(dataflow_plans));
+        // For each imported arrangement, lower bound `since` by its own frontier.
+        for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
+            since.join_assign(
+                &self
+                    .indexes
+                    .since_of(global_id)
+                    .expect("global id missing at coordinator"),
+            );
+        }
+
+        // For each produced arrangement, start tracking the arrangement with
+        // a compaction frontier of at least `since`.
+        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
+            let frontiers = self.new_frontiers(
+                *global_id,
+                since.elements().to_vec(),
+                self.logical_compaction_window_ms,
+            );
+            self.indexes.insert(*global_id, frontiers);
+        }
+
+        // TODO: Produce "valid from" information for each sink.
+        // For each sink, ... do nothing because we don't yield `since` for sinks.
+        // for (global_id, _description) in dataflow.sink_exports.iter() {
+        //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
+        //     self.sink_info[global_id].valid_from(&since);
+        // }
+
+        // Ensure that the dataflow's `as_of` is at least `since`.
+        if let Some(as_of) = &mut dataflow.as_of {
+            // It should not be possible to request an invalid time. SINK doesn't support
+            // AS OF. TAIL and Peek check that their AS OF is >= since.
+            assert!(
+                <_ as PartialOrder>::less_equal(&since, as_of),
+                "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
+                dataflow.debug_name,
+                as_of,
+                since
+            );
+        } else {
+            // Bind the since frontier to the dataflow description.
+            dataflow.set_as_of(since);
+        }
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        transform::optimize_dataflow(&mut dataflow, self.catalog.enabled_indexes());
+        dataflow::Plan::finalize_dataflow(dataflow)
+            .expect("Dataflow planning failed; unrecoverable error")
     }
 
     fn broadcast(&self, cmd: dataflow::Command) {
@@ -4619,4 +4517,237 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
         _ => (),
     }
     Ok(())
+}
+
+/// Logic and types for fast-path determination for dataflow execution.
+///
+/// This module determines if a dataflow can be short-cut, by returning constant values
+/// or by reading out of existing arrangements, and implements the appropriate plan.
+pub mod fast_path_peek {
+
+    use crate::CoordError;
+    use expr::{EvalError, GlobalId, Id};
+    use repr::{Diff, Row};
+
+    /// Possible ways in which the coordinator could produce the result for a goal view.
+    #[derive(Debug)]
+    pub enum Plan {
+        /// The view evaluates to a constant result that can be returned.
+        Constant(Result<Vec<(Row, repr::Timestamp, Diff)>, EvalError>),
+        /// The view can be read out of an existing arrangement.
+        PeekExisting(GlobalId, Option<Row>, expr::SafeMfpPlan),
+        /// The view must be installed as a dataflow and then read.
+        PeekDataflow(
+            dataflow_types::DataflowDescription<dataflow::Plan>,
+            GlobalId,
+        ),
+    }
+
+    /// Determine if the dataflow plan can be implemented without an actual dataflow.
+    ///
+    /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
+    /// we can avoid building a dataflow (and either just return the results, or peek
+    /// out of the arrangement, respectively).
+    pub fn create_plan(
+        dataflow_plan: dataflow_types::DataflowDescription<dataflow::Plan>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+    ) -> Result<Plan, CoordError> {
+        // At this point, `dataflow_plan` contains our best optimized dataflow.
+        // We will check the plan to see if there is a fast path to escape full dataflow construction.
+
+        // We need to restrict ourselves to settings where the inserted transient view is the first thing
+        // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
+        if dataflow_plan.objects_to_build.len() >= 1
+            && dataflow_plan.objects_to_build[0].id == view_id
+        {
+            match &dataflow_plan.objects_to_build[0].view {
+                // In the case of a constant, we can return the result now.
+                dataflow::Plan::Constant { rows } => {
+                    return Ok(Plan::Constant(rows.clone()));
+                }
+                // In the case of a bare `Get`, we may be able to directly index an arrangement.
+                dataflow::Plan::Get {
+                    id,
+                    keys: _,
+                    mfp,
+                    key_val,
+                } => {
+                    // Convert `mfp` to an executable, non-temporal plan.
+                    // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
+                    let map_filter_project = mfp
+                        .clone()
+                        .into_plan()
+                        .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
+                        .into_nontemporal()
+                        .map_err(|_e| {
+                            crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                                "OneShot plan has temporal constraints"
+                            ))
+                        })?;
+                    // We should only get excited if we can track down an index for `id`.
+                    // If `keys` is non-empty, that means we think one exists.
+                    for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                        if let Some((key, val)) = key_val {
+                            if Id::Global(desc.on_id) == *id && &desc.keys == key {
+                                // Indicate an early exit with a specific index and key_val.
+                                return Ok(Plan::PeekExisting(
+                                    *index_id,
+                                    Some(val.clone()),
+                                    map_filter_project,
+                                ));
+                            }
+                        } else if Id::Global(desc.on_id) == *id {
+                            // Indicate an early exit with a specific index and no key_val.
+                            return Ok(Plan::PeekExisting(*index_id, None, map_filter_project));
+                        }
+                    }
+                }
+                // nothing can be done for non-trivial expressions.
+                _ => {}
+            }
+        }
+        return Ok(Plan::PeekDataflow(dataflow_plan, index_id));
+    }
+
+    impl crate::coord::Coordinator {
+        /// Implements a peek plan produced by `create_plan` above.
+        pub fn implement_fast_path_peek(
+            &mut self,
+            fast_path: Plan,
+            timestamp: repr::Timestamp,
+            finishing: expr::RowSetFinishing,
+            conn_id: u32,
+            source_arity: usize,
+        ) -> Result<crate::ExecuteResponse, CoordError> {
+            // If the dataflow optimizes to a constant expression, we can immediately return the result.
+            if let Plan::Constant(rows) = fast_path {
+                let mut rows = match rows {
+                    Ok(rows) => rows,
+                    Err(e) => return Err(e.into()),
+                };
+                // retain exactly those updates less or equal to `timestamp`.
+                for (_, time, diff) in rows.iter_mut() {
+                    use timely::PartialOrder;
+                    if time.less_equal(&timestamp) {
+                        // clobber the timestamp, so consolidation occurs.
+                        *time = timestamp.clone();
+                    } else {
+                        // zero the difference, to prevent a contribution.
+                        *diff = 0;
+                    }
+                }
+                // Consolidate down the results to get correct totals.
+                differential_dataflow::consolidation::consolidate_updates(&mut rows);
+
+                let mut results = Vec::new();
+                for (ref row, _time, count) in rows {
+                    if count < 0 {
+                        Err(EvalError::InvalidParameterValue(format!(
+                            "Negative multiplicity in constant result: {}",
+                            count
+                        )))?
+                    };
+                    for _ in 0..count {
+                        // TODO: If `count` is too large, or `results` too full, we could error.
+                        results.push(row.clone());
+                    }
+                }
+                finishing.finish(&mut results);
+                return Ok(crate::coord::send_immediate_rows(results));
+            }
+
+            // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
+            // In both cases we will want to peek, and the main difference is that we might want to
+            // build a dataflow and drop it once the peek is issued. The peeks are also constructed
+            // differently.
+
+            // If we must build the view, ship the dataflow.
+            let (peek_command, drop_dataflow) = match fast_path {
+                Plan::PeekExisting(id, key, map_filter_project) => (
+                    dataflow::Command::Peek {
+                        id,
+                        key,
+                        conn_id,
+                        timestamp,
+                        finishing: finishing.clone(),
+                        map_filter_project,
+                    },
+                    None,
+                ),
+                Plan::PeekDataflow(dataflow, index_id) => {
+                    // Very important: actually create the dataflow (here, so we can destructure).
+                    self.broadcast(dataflow::Command::CreateDataflows(vec![dataflow]));
+
+                    // Create an identity MFP operator.
+                    let map_filter_project = expr::MapFilterProject::new(source_arity)
+                        .into_plan()
+                        .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
+                        .into_nontemporal()
+                        .map_err(|_e| {
+                            crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                                "OneShot plan has temporal constraints"
+                            ))
+                        })?;
+                    (
+                        dataflow::Command::Peek {
+                            id: index_id, // transient identifier produced by `dataflow_plan`.
+                            key: None,
+                            conn_id,
+                            timestamp,
+                            finishing: finishing.clone(),
+                            map_filter_project,
+                        },
+                        Some(index_id),
+                    )
+                }
+                _ => {
+                    unreachable!()
+                }
+            };
+
+            // Endpoints for sending and receiving peek responses.
+            let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            // The peek is ready to go for both cases, fast and non-fast.
+            // Stash the response mechanism, and broadcast dataflow construction.
+            self.pending_peeks
+                .insert(conn_id, (rows_tx, std::collections::HashSet::new()));
+            self.broadcast(peek_command);
+
+            use dataflow_types::PeekResponse;
+            use futures::FutureExt;
+            use futures::StreamExt;
+
+            // Prepare the receiver to return as a response.
+            let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
+                .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
+                    match (memo, resp) {
+                        (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
+                            memo.extend(rows);
+                            PeekResponse::Rows(memo)
+                        }
+                        (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
+                            PeekResponse::Error(e)
+                        }
+                        (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
+                            PeekResponse::Canceled
+                        }
+                    }
+                })
+                .map(move |mut resp| {
+                    if let PeekResponse::Rows(rows) = &mut resp {
+                        finishing.finish(rows)
+                    }
+                    resp
+                });
+
+            // If it was created, drop the dataflow once the peek command is sent.
+            if let Some(index_id) = drop_dataflow {
+                self.drop_indexes(vec![index_id]);
+            }
+
+            Ok(crate::ExecuteResponse::SendingRows(Box::pin(rows_rx)))
+        }
+    }
 }
