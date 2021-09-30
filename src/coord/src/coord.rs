@@ -2785,12 +2785,16 @@ impl Coordinator {
 
         let dataflow_plan = self.finalize_dataflow(dataflow);
 
+        println!("{:?}", dataflow_plan);
+
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // It may be a `Constant`, a `Get`, or something we need to install to read out.
         // If there is exactly one object to build, and that object is a `Constant` or
         // a `Get`, then we have a fast plan out of this.
         let mut early_exit = None;
-        if dataflow_plan.objects_to_build.len() == 1 {
+        // We need to restrict ourselves to settings where there are *two* objects to build,
+        // the transient view and the transient index.
+        if dataflow_plan.objects_to_build.len() == 2 {
             match &dataflow_plan.objects_to_build.iter().next().unwrap().view {
                 dataflow::Plan::Constant { rows } => {
                     early_exit = Some(Ok(rows.clone()));
@@ -2836,6 +2840,8 @@ impl Coordinator {
                 }
             }
         }
+
+        println!("EARLY: {:?}", early_exit);
 
         // There are three cases going forward, based on the variants of `early_exit`:
         // 1. `Some(Ok(rows))` indicates a constant expression that we can return.
