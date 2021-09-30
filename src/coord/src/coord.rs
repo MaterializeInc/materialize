@@ -69,7 +69,7 @@ use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
     SinkConnector, SourceConnector, TailResponse, TailSinkConnector, TimestampSourceUpdate, Update,
 };
-use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
+use dataflow_types::{SinkAsOf, Timeline};
 use expr::{
     EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -448,9 +448,15 @@ impl Coordinator {
                         let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
-                        self.dataflow_builder()
-                            .build_index_dataflow(entry.id())
-                            .map(|df| self.ship_dataflow(df));
+                        let index_id = entry.id();
+                        if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                            let df = self.dataflow_builder().build_index_dataflow(
+                                name,
+                                index_id,
+                                description,
+                            );
+                            self.ship_dataflow(df);
+                        }
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -1574,14 +1580,16 @@ impl Coordinator {
             frontier: self.determine_frontier(sink.from),
             strict: !sink.with_snapshot,
         };
-        let df = self.dataflow_builder().build_sink_dataflow(
-            name.to_string(),
-            id,
-            sink.from,
-            connector.clone(),
-            Some(sink.envelope),
+        let sink_description = dataflow_types::SinkDesc {
+            from: sink.from,
+            from_desc: self.catalog.get_by_id(&sink.from).desc().unwrap().clone(),
+            connector: connector.clone(),
+            envelope: Some(sink.envelope),
             as_of,
-        );
+        };
+        let df =
+            self.dataflow_builder()
+                .build_sink_dataflow(name.to_string(), id, sink_description);
 
         // For some sinks, we need to block compaction of each timestamp binding
         // until all sinks that depend on a given source have finished writing out that timestamp.
@@ -1963,9 +1971,12 @@ impl Coordinator {
             },
         ]) {
             Ok(_) => {
-                self.dataflow_builder()
-                    .build_index_dataflow(index_id)
-                    .map(|df| self.ship_dataflow(df));
+                if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                    let df =
+                        self.dataflow_builder()
+                            .build_index_dataflow(name, index_id, description);
+                    self.ship_dataflow(df);
+                }
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2024,9 +2035,12 @@ impl Coordinator {
                 self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
             self.sources.insert(source_id, frontiers);
             if let Some(index_id) = idx_id {
-                self.dataflow_builder()
-                    .build_index_dataflow(index_id)
-                    .map(|df| self.ship_dataflow(df));
+                if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                    let df =
+                        self.dataflow_builder()
+                            .build_index_dataflow(name, index_id, description);
+                    self.ship_dataflow(df);
+                }
             }
         }
     }
@@ -2045,9 +2059,7 @@ impl Coordinator {
                 materialized,
                 ..
             } = plan;
-            let optimized_expr = self
-                .view_optimizer
-                .optimize(source.expr, self.catalog.enabled_indexes())?;
+            let optimized_expr = self.view_optimizer.optimize(source.expr)?;
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
             let source = catalog::Source {
                 create_sql: source.create_sql,
@@ -2263,9 +2275,14 @@ impl Coordinator {
         match self.catalog_transact(ops) {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    self.dataflow_builder()
-                        .build_index_dataflow(index_id)
-                        .map(|df| self.ship_dataflow(df));
+                    if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                        let df = self.dataflow_builder().build_index_dataflow(
+                            name,
+                            index_id,
+                            description,
+                        );
+                        self.ship_dataflow(df);
+                    }
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2298,9 +2315,14 @@ impl Coordinator {
             Ok(()) => {
                 let mut dfs = vec![];
                 for index_id in index_ids {
-                    self.dataflow_builder()
-                        .build_index_dataflow(index_id)
-                        .map(|df| dfs.push(df));
+                    if let Some((name, description)) = self.prepare_index_build(&index_id) {
+                        let df = self.dataflow_builder().build_index_dataflow(
+                            name,
+                            index_id,
+                            description,
+                        );
+                        dfs.push(df);
+                    }
                 }
                 self.ship_dataflows(dfs);
                 Ok(ExecuteResponse::CreatedView { existed: false })
@@ -2342,10 +2364,13 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]) {
             Ok(()) => {
-                self.dataflow_builder().build_index_dataflow(id).map(|df| {
+                if let Some((name, description)) = self.prepare_index_build(&id) {
+                    let df = self
+                        .dataflow_builder()
+                        .build_index_dataflow(name, id, description);
                     self.ship_dataflow(df);
                     self.set_index_options(id, options).expect("index enabled");
-                });
+                }
 
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
@@ -2965,21 +2990,23 @@ impl Coordinator {
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails.insert(sink_id, tx);
-        let df = self.dataflow_builder().build_sink_dataflow(
-            sink_name,
-            sink_id,
-            source_id,
-            SinkConnector::Tail(TailSinkConnector {
+        let sink_description = dataflow_types::SinkDesc {
+            from: source_id,
+            from_desc: self.catalog.get_by_id(&source_id).desc().unwrap().clone(),
+            connector: SinkConnector::Tail(TailSinkConnector {
                 emit_progress,
                 object_columns,
                 value_desc: desc,
             }),
-            None,
-            SinkAsOf {
+            envelope: None,
+            as_of: SinkAsOf {
                 frontier,
                 strict: !with_snapshot,
             },
-        );
+        };
+        let df = self
+            .dataflow_builder()
+            .build_sink_dataflow(sink_name, sink_id, sink_description);
         self.ship_dataflow(df);
 
         let resp = ExecuteResponse::Tailing { rx };
@@ -3600,10 +3627,10 @@ impl Coordinator {
         // If ops is not empty, index was disabled.
         if !ops.is_empty() {
             self.catalog_transact(ops)?;
+            let (name, description) = self.prepare_index_build(&plan.id).expect("index enabled");
             let df = self
                 .dataflow_builder()
-                .build_index_dataflow(plan.id)
-                .expect("index enabled");
+                .build_index_dataflow(name, plan.id, description);
             self.ship_dataflow(df);
         }
 
@@ -3807,9 +3834,7 @@ impl Coordinator {
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
         if let ExprPrepStyle::Static = style {
-            let mut opt_expr = self
-                .view_optimizer
-                .optimize(expr, self.catalog.enabled_indexes())?;
+            let mut opt_expr = self.view_optimizer.optimize(expr)?;
             opt_expr.0.try_visit_mut(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
@@ -3830,9 +3855,7 @@ impl Coordinator {
             // constant expression that originally contains a global get? Is
             // there anything not containing a global get that cannot be
             // optimized to a constant expression?
-            Ok(self
-                .view_optimizer
-                .optimize(expr, self.catalog.enabled_indexes())?)
+            Ok(self.view_optimizer.optimize(expr)?)
         }
     }
 
