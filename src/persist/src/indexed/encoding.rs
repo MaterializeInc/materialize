@@ -18,18 +18,23 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::{fmt, io};
 
+use arrow2::io::ipc::read::{read_file_metadata, FileReader};
+use arrow2::io::ipc::write::FileWriter;
+use arrow2::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
-use protobuf::MessageField;
+use protobuf::{Message, MessageField};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::Error;
 use crate::gen::persist::{
-    ProtoArrangement, ProtoMeta, ProtoStreamRegistration, ProtoTraceBatchMeta, ProtoU64Antichain,
-    ProtoU64Description, ProtoUnsealedBatchMeta,
+    proto_batch_inline, ProtoArrangement, ProtoBatchInline, ProtoMeta, ProtoStreamRegistration,
+    ProtoTraceBatchInline, ProtoTraceBatchMeta, ProtoU64Antichain, ProtoU64Description,
+    ProtoUnsealedBatchInline, ProtoUnsealedBatchMeta,
 };
+use crate::indexed::columnar::ColumnarRecords;
 use crate::storage::SeqNo;
 
 /// An internally unique id for a persisted stream. External users identify
@@ -182,7 +187,7 @@ pub struct TraceBatchMeta {
 /// Invariants:
 /// - The [lower, upper) interval of sequence numbers in desc is non-empty.
 /// - The updates field is non-empty.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlobUnsealedBatch {
     /// Which updates are included in this batch.
     pub desc: Range<SeqNo>,
@@ -218,7 +223,7 @@ pub struct BlobUnsealedBatch {
 /// put multiple small batches in a single blob but also break a very large
 /// batch over multiple blobs. We also may want to break the latter into chunks
 /// for checksum and encryption?
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlobTraceBatch {
     /// Which updates are included in this batch.
     pub desc: Description<u64>,
@@ -809,6 +814,142 @@ impl From<&Description<u64>> for ProtoU64Description {
             cached_size: Default::default(),
         }
     }
+}
+
+impl From<BlobUnsealedBatch> for RecordBatch {
+    fn from(x: BlobUnsealedBatch) -> Self {
+        let inline = ProtoBatchInline {
+            batch_type: Some(proto_batch_inline::Batch_type::unsealed(
+                ProtoUnsealedBatchInline {
+                    seqno_lower: x.desc.start.0,
+                    seqno_upper: x.desc.end.0,
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                },
+            )),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        };
+        let inline_encoded = inline
+            .write_to_bytes()
+            .expect("no required fields means no initialization errors");
+        let mut metadata = HashMap::with_capacity(1);
+        metadata.insert("META".into(), base64::encode(inline_encoded));
+
+        let records: ColumnarRecords = x.updates.iter().collect();
+        records.to_record_batch(metadata)
+    }
+}
+
+impl From<BlobTraceBatch> for RecordBatch {
+    fn from(x: BlobTraceBatch) -> Self {
+        let inline = ProtoBatchInline {
+            batch_type: Some(proto_batch_inline::Batch_type::trace(
+                ProtoTraceBatchInline {
+                    desc: MessageField::some((&x.desc).into()),
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                },
+            )),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        };
+        let inline_encoded = inline
+            .write_to_bytes()
+            .expect("no required fields means no initialization errors");
+        let mut metadata = HashMap::with_capacity(1);
+        metadata.insert("META".into(), base64::encode(inline_encoded));
+
+        let records: ColumnarRecords = x.updates.iter().collect();
+        records.to_record_batch(metadata)
+    }
+}
+
+impl TryFrom<RecordBatch> for BlobUnsealedBatch {
+    type Error = Error;
+
+    fn try_from(x: RecordBatch) -> Result<Self, Self::Error> {
+        let inline_base64 = x
+            .schema()
+            .metadata()
+            .get("META")
+            .ok_or("missing batch metadata")?;
+        let inline_encoded = base64::decode(&inline_base64).map_err(|err| err.to_string())?;
+        let inline =
+            ProtoBatchInline::parse_from_bytes(&inline_encoded).map_err(|err| err.to_string())?;
+        let inline = match inline.batch_type {
+            Some(proto_batch_inline::Batch_type::unsealed(unsealed)) => unsealed,
+            x => return Err(format!("incorrect batch type: {:?}", x).into()),
+        };
+        let updates = ColumnarRecords::try_from(x)?;
+        Ok(BlobUnsealedBatch {
+            desc: SeqNo(inline.seqno_lower)..SeqNo(inline.seqno_upper),
+            updates: updates
+                .iter()
+                .map(|((k, v), ts, diff)| ((k.to_owned(), v.to_owned()), ts, diff))
+                .collect(),
+        })
+    }
+}
+
+impl TryFrom<RecordBatch> for BlobTraceBatch {
+    type Error = Error;
+
+    fn try_from(x: RecordBatch) -> Result<Self, Self::Error> {
+        let inline_base64 = x
+            .schema()
+            .metadata()
+            .get("META")
+            .ok_or("missing batch metadata")?;
+        let inline_encoded = base64::decode(&inline_base64).map_err(|err| err.to_string())?;
+        let inline =
+            ProtoBatchInline::parse_from_bytes(&inline_encoded).map_err(|err| err.to_string())?;
+        let inline = match inline.batch_type {
+            Some(proto_batch_inline::Batch_type::trace(trace)) => trace,
+            x => return Err(format!("incorrect batch type: {:?}", x).into()),
+        };
+        let updates = ColumnarRecords::try_from(x)?;
+        Ok(BlobTraceBatch {
+            desc: inline.desc.into_option().map_or_else(
+                || {
+                    Description::new(
+                        Antichain::from_elem(u64::minimum()),
+                        Antichain::from_elem(u64::minimum()),
+                        Antichain::from_elem(u64::minimum()),
+                    )
+                },
+                |x| x.into(),
+            ),
+            updates: updates
+                .iter()
+                .map(|((k, v), ts, diff)| ((k.to_owned(), v.to_owned()), ts, diff))
+                .collect(),
+        })
+    }
+}
+
+/// WIP
+pub fn encode_record_batch<W: io::Write>(w: &mut W, rb: &RecordBatch) -> Result<(), Error> {
+    let mut w = FileWriter::try_new(w, rb.schema()).map_err(|err| err.to_string())?;
+    w.write(&rb).map_err(|err| err.to_string())?;
+    w.finish().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+/// WIP
+pub fn decode_record_batch<R: io::Read + io::Seek>(r: &mut R) -> Result<RecordBatch, Error> {
+    let metadata = read_file_metadata(r).map_err(|err| err.to_string())?;
+    let projection = None;
+    let mut reader = FileReader::new(r, metadata, projection);
+    let rb = match reader.next() {
+        Some(rb) => rb,
+        None => return Err(format!("expected 1 record batch got 0").into()),
+    }
+    .map_err(|err| err.to_string())?;
+    if reader.next().is_some() {
+        return Err(format!("expected 1 record batch got 2+").into());
+    }
+    Ok(rb)
 }
 
 #[cfg(test)]

@@ -10,10 +10,12 @@
 //! A disk-backed cache for objects in blob storage.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+use arrow2::record_batch::RecordBatch;
 use futures_executor::block_on;
 use ore::cast::CastFrom;
 use persist_types::Codec;
@@ -21,7 +23,8 @@ use persist_types::Codec;
 use crate::error::Error;
 use crate::gen::persist::ProtoMeta;
 use crate::indexed::encoding::{
-    BlobMeta, BlobTraceBatch, BlobUnsealedBatch, TraceBatchMeta, UnsealedBatchMeta,
+    decode_record_batch, encode_record_batch, BlobMeta, BlobTraceBatch, BlobUnsealedBatch,
+    TraceBatchMeta, UnsealedBatchMeta,
 };
 use crate::indexed::metrics::Metrics;
 use crate::pfuture::PFuture;
@@ -92,9 +95,9 @@ impl<B: Blob> BlobCache<B> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
-        let batch: BlobUnsealedBatch = bincode::deserialize(&bytes).map_err(|err| {
-            Error::from(format!("invalid unsealed batch at key {}: {}", key, err))
-        })?;
+        let rb = decode_record_batch(&mut Cursor::new(&bytes))
+            .map_err(|err| format!("invalid unsealed batch at key {}: {}", key, err))?;
+        let batch = BlobUnsealedBatch::try_from(rb)?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
@@ -155,9 +158,10 @@ impl<B: Blob> BlobCache<B> {
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
-        // See https://github.com/bincode-org/bincode/issues/293 for why this is
-        // infallible.
-        let val = bincode::serialize(&batch).expect("infallible for BlobUnsealedBatch");
+        // WIP avoid this clone
+        let rb = RecordBatch::from(batch.clone());
+        let mut val = Vec::new();
+        encode_record_batch(&mut val, &rb).expect("writes to Vec are infallible");
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
@@ -199,8 +203,9 @@ impl<B: Blob> BlobCache<B> {
         self.metrics
             .blob_read_cache_fetch_bytes
             .inc_by(u64::cast_from(bytes.len()));
-        let batch: BlobTraceBatch = bincode::deserialize(&bytes)
-            .map_err(|err| Error::from(format!("invalid trace batch at key {}: {}", key, err)))?;
+        let rb = decode_record_batch(&mut Cursor::new(&bytes))
+            .map_err(|err| format!("invalid unsealed batch at key {}: {}", key, err))?;
+        let batch = BlobTraceBatch::try_from(rb)?;
 
         // NB: Batch blobs are write-once, so we're not worried about the race
         // of two get calls for the same key.
@@ -253,9 +258,10 @@ impl<B: Blob> BlobCache<B> {
         }
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
-        // See https://github.com/bincode-org/bincode/issues/293 for why this is
-        // infallible.
-        let val = bincode::serialize(&batch).expect("infallible for BlobTraceBatch");
+        // WIP avoid this clone
+        let rb = RecordBatch::from(batch.clone());
+        let mut val = Vec::new();
+        encode_record_batch(&mut val, &rb).expect("writes to Vec are infallible");
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();

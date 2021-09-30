@@ -1076,9 +1076,9 @@ mod tests {
         assert_eq!(
             cleared_unsealed_keys(&f.unsealed_batches),
             vec![
-                unsealed_batch_meta("KEY", 0, 1, 0, 0, 58),
-                unsealed_batch_meta("KEY", 1, 2, 1, 1, 58),
-                unsealed_batch_meta("KEY", 2, 3, 0, 1, 92),
+                unsealed_batch_meta("KEY", 0, 1, 0, 0, 1450),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 1450),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 1482),
             ],
         );
 
@@ -1106,8 +1106,8 @@ mod tests {
         assert_eq!(
             cleared_unsealed_keys(&f.unsealed_batches),
             vec![
-                unsealed_batch_meta("KEY", 1, 2, 1, 1, 58),
-                unsealed_batch_meta("KEY", 2, 3, 0, 1, 92),
+                unsealed_batch_meta("KEY", 1, 2, 1, 1, 1450),
+                unsealed_batch_meta("KEY", 2, 3, 0, 1, 1482),
             ],
         );
 
@@ -1221,7 +1221,7 @@ mod tests {
 
         assert_eq!(
             cleared_unsealed_keys(&f.unsealed_batches),
-            vec![unsealed_batch_meta("KEY", 0, 2, 1, 2, 92)],
+            vec![unsealed_batch_meta("KEY", 0, 2, 1, 2, 1482)],
         );
 
         Ok(())
@@ -1334,7 +1334,7 @@ mod tests {
         t.allow_compaction(Antichain::from_elem(3));
         let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
         // Change this to a >0 check if it starts to be a maintenance burden.
-        assert_eq!(written_bytes, 162);
+        assert_eq!(written_bytes, 1530);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -1355,13 +1355,13 @@ mod tests {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 162,
+                    size_bytes: 1530,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 9, 0),
                     level: 0,
-                    size_bytes: 90,
+                    size_bytes: 1482,
                 },
             ]
         );
@@ -1392,7 +1392,7 @@ mod tests {
         t.validate_allow_compaction(&Antichain::from_elem(10))?;
         t.allow_compaction(Antichain::from_elem(10));
         let (written_bytes, deleted_batches) = t.trace_step(&maintainer)?;
-        assert_eq!(written_bytes, 90);
+        assert_eq!(written_bytes, 1482);
         assert_eq!(
             deleted_batches
                 .into_iter()
@@ -1410,13 +1410,13 @@ mod tests {
                     key: "KEY".to_string(),
                     desc: desc_from(0, 3, 3),
                     level: 1,
-                    size_bytes: 162,
+                    size_bytes: 1530,
                 },
                 TraceBatchMeta {
                     key: "KEY".to_string(),
                     desc: desc_from(3, 10, 10),
                     level: 0,
-                    size_bytes: 90,
+                    size_bytes: 1482,
                 },
             ]
         );

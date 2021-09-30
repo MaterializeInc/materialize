@@ -74,3 +74,19 @@ message ProtoU64Description {
     ProtoU64Antichain upper = 2;
     ProtoU64Antichain since = 3;
 }
+
+message ProtoBatchInline {
+    oneof batch_type {
+        ProtoUnsealedBatchInline unsealed = 1;
+        ProtoTraceBatchInline trace = 2;
+    }
+}
+
+message ProtoUnsealedBatchInline {
+    uint64 seqno_lower = 2;
+    uint64 seqno_upper = 3;
+}
+
+message ProtoTraceBatchInline {
+    ProtoU64Description desc = 2;
+}
