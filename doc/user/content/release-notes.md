@@ -52,6 +52,9 @@ Put breaking changes before other release notes.
 - Support the `IS TRUE`, `IS FALSE`, `IS UNKNOWN` operators (and their `NOT`
   variations). {{% gh 8455 %}}
 
+- Support explicit `DROP DATABASE ... (CASCADE | RESTRICT)` statements.  The
+  default behavior remains CASCADE.
+
 {{% version-header v0.9.6 %}}
 
 - Correctly handle TOASTed columns when using PostgreSQL sources. {{% gh 8371 %}}

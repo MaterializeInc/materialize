@@ -246,7 +246,7 @@ insert ::=
 discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
 drop_database ::=
-    'DROP' 'DATABASE' ('IF EXISTS')? database_name
+    'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
     'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_role ::=
