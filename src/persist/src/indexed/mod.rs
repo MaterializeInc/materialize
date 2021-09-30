@@ -23,6 +23,7 @@ use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::time::Instant;
 
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use ore::cast::CastFrom;
@@ -73,6 +74,65 @@ impl PendingResponse {
     }
 }
 
+/// Sorts and consolidates `vec` by the 2nd then first element.
+pub fn consolidate_updates_time<D: Ord, T: Ord, R: Semigroup + std::ops::AddAssign + Copy>(
+    vec: &mut Vec<(D, T, R)>,
+) {
+    consolidate_updates_from(vec, 0);
+}
+
+/// Sorts and consolidate `vec[offset..]`.
+fn consolidate_updates_from<D: Ord, T: Ord, R: Semigroup + std::ops::AddAssign + Copy>(
+    vec: &mut Vec<(D, T, R)>,
+    offset: usize,
+) {
+    let length = consolidate_updates_slice(&mut vec[offset..]);
+    vec.truncate(offset + length);
+}
+
+/// Sorts and consolidates a slice, returning the valid prefix length.
+fn consolidate_updates_slice<D: Ord, T: Ord, R: Semigroup + std::ops::AddAssign + Copy>(
+    slice: &mut [(D, T, R)],
+) -> usize {
+    // We could do an insertion-sort like initial scan which builds up sorted, consolidated runs.
+    // In a world where there are not many results, we may never even need to call in to merge sort.
+    // XXX: changed here to sort by the second element, then the first.
+    slice.sort_unstable_by(|x, y| (&x.1, &x.0).cmp(&(&y.1, &y.0)));
+
+    // Counts the number of distinct known-non-zero accumulations. Indexes the write location.
+    let mut offset = 0;
+    for index in 1..slice.len() {
+        // The following unsafe block elides various bounds checks, using the reasoning that `offset`
+        // is always strictly less than `index` at the beginning of each iteration. This is initially
+        // true, and in each iteration `offset` can increase by at most one (whereas `index` always
+        // increases by one). As `index` is always in bounds, and `offset` starts at zero, it too is
+        // always in bounds.
+        //
+        // LLVM appears to struggle to optimize out Rust's split_at_mut, which would prove disjointness
+        // using run-time tests.
+        unsafe {
+            // LOOP INVARIANT: offset < index
+            let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+            let ptr2 = slice.as_mut_ptr().offset(index as isize);
+
+            if (*ptr1).0 == (*ptr2).0 && (*ptr1).1 == (*ptr2).1 {
+                (*ptr1).2 += (*ptr2).2;
+            } else {
+                if !(*ptr1).2.is_zero() {
+                    offset += 1;
+                }
+                let ptr1 = slice.as_mut_ptr().offset(offset as isize);
+                std::mem::swap(&mut *ptr1, &mut *ptr2);
+            }
+        }
+    }
+    if offset < slice.len() && !slice[offset].2.is_zero() {
+        offset += 1;
+    }
+
+    offset
+}
+
 /// A persistent, compacting, indexed data structure of `(Key, Value, Time,
 /// Diff)` updates.
 ///
@@ -120,7 +180,9 @@ pub struct Indexed<L: Log, B: Blob> {
     listeners: HashMap<Id, Vec<ListenFn<Vec<u8>, Vec<u8>>>>,
     metrics: Metrics,
     // Only drained by drain_pending_writes.
-    pending_writes: Vec<(Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>)>,
+    pending_writes: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
+    // Only drained by drain_pending.
+    pending_seals: HashMap<Id, u64>,
     // Only drained by drain_pending.
     pending_responses: Vec<PendingResponse>,
     prev_meta: BlobMeta,
@@ -171,7 +233,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             traces,
             listeners: HashMap::new(),
             metrics,
-            pending_writes: Vec::new(),
+            pending_writes: HashMap::new(),
+            pending_seals: HashMap::new(),
             pending_responses: Vec::new(),
             prev_meta: meta_copy,
         };
@@ -573,8 +636,8 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// but it's exposed this way so we can write deterministic tests.
     pub fn step(&mut self) -> Result<(), Error> {
         self.drain_pending()?;
-        self.drain_unsealed()?;
-        self.compact()?;
+        //self.drain_unsealed()?;
+        //self.compact()?;
         Ok(())
     }
 
@@ -607,7 +670,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         let resp = self.validate_write(&updates);
 
         if resp.is_ok() {
-            self.pending_writes.extend(updates);
+            for (id, updates) in updates {
+                self.pending_writes.entry(id).or_default().extend(updates);
+            }
         }
         self.pending_responses
             .push(PendingResponse::SeqNo(res, resp));
@@ -619,9 +684,9 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// restoring metadata if this fails.
     fn drain_pending_writes(
         &mut self,
-        mut writes_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
+        pending_writes: &mut HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>>,
     ) -> Result<(), Error> {
-        if writes_by_id.is_empty() {
+        if pending_writes.is_empty() {
             return Ok(());
         }
         // Give each write a unique, incrementing sequence number, and use
@@ -638,7 +703,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // a log. On the other hand, how would we distinguish unsealed batches
         // from each other?
         let desc = write_seqno..self.unsealeds_seqno_upper;
-        for (id, writes) in writes_by_id.drain() {
+        for (id, writes) in pending_writes.iter_mut() {
             let unsealed = self
                 .unsealeds
                 .get_mut(&id)
@@ -656,7 +721,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             let mut desc = desc.clone();
             desc.start = seqno_upper;
 
-            self.drain_pending_writes_inner(id, writes, &desc)?;
+            self.drain_pending_writes_inner(*id, writes, &desc)?;
         }
 
         self.unsealeds_seqno_upper = desc.end;
@@ -669,46 +734,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// The caller is responsible for draining any pending responses after this.
     fn drain_pending_inner(&mut self) -> Result<(), Error> {
-        let mut updates_by_id: HashMap<Id, Vec<((Vec<u8>, Vec<u8>), u64, isize)>> = HashMap::new();
-        for (id, updates) in self.pending_writes.drain(..) {
-            updates_by_id.entry(id).or_default().extend(updates);
-        }
-
-        let updates_for_listeners = updates_by_id.clone();
-        if let Err(e) = self.drain_pending_writes(updates_by_id) {
+        let mut pending_writes = std::mem::replace(&mut self.pending_writes, HashMap::new());
+        if let Err(e) = self.drain_pending_writes(&mut pending_writes) {
             self.restore();
+            self.pending_seals.clear();
             return Err(format!("failed to append to unsealed: {}", e).into());
-        }
-
-        let mut seal_updates: HashMap<Id, Antichain<u64>> = HashMap::new();
-
-        let prev_traces: HashMap<_, _> = self
-            .prev_meta
-            .traces
-            .clone()
-            .drain(..)
-            .map(|trace| (trace.id, trace))
-            .collect();
-        for (id, trace) in self.traces.iter() {
-            let id = *id;
-            let curr_seal = trace.get_seal();
-            let prev_seal = match prev_traces.get(&id) {
-                Some(trace) => &trace.seal,
-                None => {
-                    self.restore();
-                    return Err(format!(
-                        "invalid current {:?} and previous {:?} metadata: missing trace for {:?}",
-                        self.serialize_meta(),
-                        self.prev_meta,
-                        id
-                    )
-                    .into());
-                }
-            };
-
-            if PartialOrder::less_than(prev_seal, &curr_seal) {
-                seal_updates.insert(id, curr_seal);
-            }
         }
 
         // TODO: only update meta if something has changed, instead of unconditionally.
@@ -722,7 +752,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         {
             let mut update_count = 0;
             let mut update_bytes = 0;
-            for updates in updates_for_listeners.values() {
+            for updates in pending_writes.values() {
                 update_count += updates.len();
                 for ((k, v), _, _) in updates.iter() {
                     update_bytes += k.len() + v.len() + 8 + 8;
@@ -736,23 +766,25 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 .inc_by(u64::cast_from(update_bytes));
         }
 
-        for (id, updates) in updates_for_listeners.iter() {
+        for (id, updates) in pending_writes.drain() {
+            if updates.is_empty() {
+                continue;
+            }
             if let Some(listen_fns) = self.listeners.get(&id) {
-                for listen_fn in listen_fns.iter() {
-                    listen_fn(ListenEvent::Records(updates.clone()));
+                if listen_fns.len() == 1 {
+                    listen_fns[0](ListenEvent::Records(updates));
+                } else {
+                    for listen_fn in listen_fns.iter() {
+                        listen_fn(ListenEvent::Records(updates.clone()));
+                    }
                 }
             }
         }
 
-        for (id, seal) in seal_updates.iter() {
+        for (id, seal) in self.pending_seals.drain() {
             if let Some(listen_fns) = self.listeners.get(&id) {
                 for listen_fn in listen_fns.iter() {
-                    // TODO: perhaps this event should take an antichain directly? If
-                    // the downstream user held a timely::CapabilitySet they could
-                    // use the antichain directly as well.
-                    for seal_ts in seal.elements().iter() {
-                        listen_fn(ListenEvent::Sealed(*seal_ts));
-                    }
+                    listen_fn(ListenEvent::Sealed(seal));
                 }
             }
         }
@@ -768,25 +800,15 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn drain_pending_writes_inner(
         &mut self,
         id: Id,
-        mut updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+        updates: &mut Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
         desc: &Range<SeqNo>,
     ) -> Result<(), Error> {
-        let mut updates: Vec<_> = updates
-            .drain(..)
-            .map(|((k, v), t, d)| (t, (k, v), d))
-            .collect();
-        // Unsealed batches are required to be sorted and consolidated by ((ts, (k, v)).
-        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        consolidate_updates_time(updates);
 
         if updates.is_empty() {
             return Ok(());
         }
 
-        // Reshape updates back to the desired type.
-        let updates: Vec<_> = updates
-            .drain(..)
-            .map(|(t, (k, v), d)| ((k, v), t, d))
-            .collect();
         let batch = BlobUnsealedBatch {
             desc: Description::new(
                 Antichain::from_elem(desc.start),
@@ -794,7 +816,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 // We never compact Unsealed, so since is always the minimum.
                 Antichain::from_elem(SeqNo(0)),
             ),
-            updates,
+            updates: updates.clone(),
         };
         self.append_unsealed(id, batch)?;
 
@@ -902,6 +924,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     /// `sealed_frontier` for details.
     pub fn seal(&mut self, ids: Vec<Id>, seal_ts: u64, res: FutureHandle<()>) {
         let resp = self.do_seal(&ids, seal_ts);
+        if resp.is_ok() {
+            for id in ids.iter() {
+                self.pending_seals.insert(*id, seal_ts);
+            }
+        }
         self.pending_responses
             .push(PendingResponse::Unit(res, resp));
     }

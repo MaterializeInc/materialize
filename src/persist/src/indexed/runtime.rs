@@ -687,7 +687,7 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    const DEFAULT_MIN_STEP_INTERVAL: Duration = Duration::from_millis(1000);
+    const DEFAULT_MIN_STEP_INTERVAL: Duration = Duration::from_millis(100);
 
     /// An alternate configuration that minimizes latency at the cost of
     /// increased storage traffic.
