@@ -2653,6 +2653,12 @@ impl Coordinator {
         Ok(timedomain_ids)
     }
 
+    /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
+    ///
+    /// Peeks are sequenced by assigning a timestamp for evaluation, and then determining and
+    /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
+    /// be a simple read out of an existing arrangement, or required a new dataflow to build
+    /// the results to return.
     fn sequence_peek(
         &mut self,
         session: &mut Session,
@@ -2768,8 +2774,10 @@ impl Coordinator {
             .map(|k| MirScalarExpr::Column(*k))
             .collect();
         // Two transient allocations. We could reclaim these if we don't use them, potentially.
+        // TODO: reclaim transient identifiers in fast path cases.
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
+        // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
         dataflow.set_as_of(Antichain::from_elem(timestamp));
         self.dataflow_builder()
@@ -2782,21 +2790,23 @@ impl Coordinator {
             },
             typ,
         );
-
+        // Finalization optimizes the dataflow as much as possible.
         let dataflow_plan = self.finalize_dataflow(dataflow);
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
-        // It may be a `Constant`, a `Get`, or something we need to install to read out.
-        // If there is exactly one object to build, and that object is a `Constant` or
-        // a `Get`, then we have a fast plan out of this.
-        let mut early_exit = None;
-        // We need to restrict ourselves to settings where there are *two* objects to build,
-        // the transient view and the transient index.
-        if dataflow_plan.objects_to_build.len() == 2 {
-            match &dataflow_plan.objects_to_build.iter().next().unwrap().view {
+        // We will check the plan to see if there is a fast path to escape full dataflow construction.
+        let mut fast_path = None;
+        // We need to restrict ourselves to settings where the inserted transient view is the first thing
+        // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
+        if dataflow_plan.objects_to_build.len() >= 1
+            && dataflow_plan.objects_to_build[0].id == view_id
+        {
+            match &dataflow_plan.objects_to_build[0].view {
+                // In the case of a constant, we can return the result now.
                 dataflow::Plan::Constant { rows } => {
-                    early_exit = Some(Ok(rows.clone()));
+                    fast_path = Some(Ok(rows.clone()));
                 }
+                // In the case of a bare `Get`, we may be able to directly index an arrangement.
                 dataflow::Plan::Get {
                     id,
                     keys: _,
@@ -2821,7 +2831,7 @@ impl Coordinator {
                         if let Some((key, val)) = key_val {
                             if Id::Global(desc.on_id) == *id && &desc.keys == key {
                                 // Indicate an early exit with a specific index and key_val.
-                                early_exit = Some(Err((
+                                fast_path = Some(Err((
                                     *index_id,
                                     Some(val.clone()),
                                     map_filter_project.clone(),
@@ -2829,22 +2839,21 @@ impl Coordinator {
                             }
                         } else if Id::Global(desc.on_id) == *id {
                             // Indicate an early exit with a specific index and no key_val.
-                            early_exit = Some(Err((*index_id, None, map_filter_project.clone())))
+                            fast_path = Some(Err((*index_id, None, map_filter_project.clone())))
                         }
                     }
                 }
-                _ => {
-                    // nothing can be done for non-trivial expressions.
-                }
+                // nothing can be done for non-trivial expressions.
+                _ => {}
             }
         }
 
-        // There are three cases going forward, based on the variants of `early_exit`:
+        // There are three cases going forward, based on the variants of `fast_path`:
         // 1. `Some(Ok(rows))` indicates a constant expression that we can return.
         // 2. `Some(Err(id, key, mfp))` indicase an index read from `id`, using an optional `key`, with a `mfp` to push.
-        // 3. `None` means that `dataflow_plan` must be installed, and peeked.
+        // 3. `None` means that `dataflow_plan` must be installed, and then peeked.
         // The last two cases have a lot of code in common, and are lumped together.
-        let resp = if let Some(Ok(rows)) = early_exit {
+        let resp = if let Some(Ok(rows)) = fast_path {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             let mut rows = match rows {
                 Ok(rows) => rows,
@@ -2856,6 +2865,7 @@ impl Coordinator {
                     // clobber the timestamp, so consolidation occurs.
                     *time = timestamp.clone();
                 } else {
+                    // zero the difference, to prevent a contribution.
                     *diff = 0;
                 }
             }
@@ -2871,25 +2881,29 @@ impl Coordinator {
                     )))?
                 };
                 for _ in 0..count {
+                    // TODO: If `count` is too large, or `results` too full, we could error.
                     results.push(row.clone());
                 }
             }
             finishing.finish(&mut results);
             send_immediate_rows(results)
         } else {
-            // Undocumented.
-            let (rows_tx, rows_rx) = mpsc::unbounded_channel();
+            // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
+            // In both cases we will want to peek, and the main difference is that we might want to
+            // build a dataflow and drop it once the peek is issued. The peeks are also constructed
+            // differently.
 
-            // At this point, we must issue a peek. It can either be of an existing index, or of one
-            // we must construct.
-            let fast_path = early_exit.is_some();
+            // Record the fast path nature, so that we can deconstruct `fast_path` and still know.
+            let is_fast_path = fast_path.is_some();
 
-            // If we must build the view, build and ship it.
-            if !fast_path {
+            // If we must build the view, ship the dataflow.
+            if !is_fast_path {
                 self.broadcast(dataflow::Command::CreateDataflows(vec![dataflow_plan]));
             }
 
-            let peek_command = if let Some(Err((id, key, map_filter_project))) = early_exit {
+            // The peek command can derive either from a specified existing index, or from the transient
+            // index allocated for `dataflow_plan`.
+            let peek_command = if let Some(Err((id, key, map_filter_project))) = fast_path {
                 dataflow::Command::Peek {
                     id,
                     key,
@@ -2919,15 +2933,16 @@ impl Coordinator {
                 }
             };
 
+            // Endpoints for sending and receiving peek responses.
+            let (rows_tx, rows_rx) = mpsc::unbounded_channel();
+
+            // The peek is ready to go for both cases, fast and non-fast.
+            // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks
                 .insert(session.conn_id(), (rows_tx, HashSet::new()));
             self.broadcast(peek_command);
 
-            // Drop the constructed dataflow once the peek command is sent.
-            if !fast_path {
-                self.drop_indexes(vec![index_id]);
-            }
-
+            // Prepare the receiver to return as a response.
             let rows_rx = UnboundedReceiverStream::new(rows_rx)
                 .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
                     match (memo, resp) {
@@ -2949,6 +2964,11 @@ impl Coordinator {
                     }
                     resp
                 });
+
+            // If it was created, drop the dataflow once the peek command is sent.
+            if !is_fast_path {
+                self.drop_indexes(vec![index_id]);
+            }
 
             ExecuteResponse::SendingRows(Box::pin(rows_rx))
         };
