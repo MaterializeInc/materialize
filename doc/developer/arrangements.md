@@ -168,12 +168,11 @@ In -> <Other agg 1 branch > -> Concat -> CollationInA -> CollationOutA -> Out
 
 ### Aggregations on distinct values
 
-For non-append-only inputs, hierarchical aggregations on distinct values
-are computed the same as hierarchical aggregations on non-distinct values.
-In other words, `max(col1)` has the same result as `max(distinct col1)`,
-so it is ok to treat them the same.
+`Min` and `Max` aggregations on distinct values are computed the same as `min`
+and `max` aggregations on non-distinct values because they have the same
+result.
 
-Each non-hierarchical aggregation on distinct values requires an additional
+Each other aggregation on distinct values requires an additional
 pair of arrangements on top of the arrangements required for the particular
 aggregation type. The
 arrangements have row count `<count(distinct <key + aggregation columns>)>`
