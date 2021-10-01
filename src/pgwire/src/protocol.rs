@@ -17,18 +17,18 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
-use futures::stream::{self, StreamExt};
 use itertools::izip;
 use log::debug;
 use message::decode_copy_text_format;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::{self, Duration, Instant};
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use coord::session::{
-    EndTransactionAction, Portal, PortalState, RowBatchStream, Session, TransactionStatus,
+    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
+    TransactionStatus,
 };
 use coord::ExecuteResponse;
 use dataflow_types::PeekResponse;
@@ -1047,7 +1047,7 @@ where
                         self.send_rows(
                             row_desc,
                             portal_name,
-                            Box::new(stream::iter(vec![rows])),
+                            InProgressRows::single_batch(rows),
                             max_rows,
                             get_response,
                             fetch_portal_name,
@@ -1118,7 +1118,7 @@ where
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    Box::new(UnboundedReceiverStream::new(rx)),
+                    InProgressRows::new(rx),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1130,7 +1130,7 @@ where
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
-                    ExecuteResponse::Tailing { rx } => Box::new(UnboundedReceiverStream::new(rx)),
+                    ExecuteResponse::Tailing { rx } => rx,
                     ExecuteResponse::SendingRows(rx) => match rx.await {
                         // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
                         PeekResponse::Canceled => {
@@ -1146,7 +1146,11 @@ where
                                 .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
                                 .await;
                         }
-                        PeekResponse::Rows(rows) => Box::new(stream::iter(vec![rows])),
+                        PeekResponse::Rows(rows) => {
+                            let (tx, rx) = unbounded_channel();
+                            tx.send(rows).expect("send must succeed");
+                            rx
+                        }
                     },
                     _ => {
                         return self
@@ -1171,6 +1175,10 @@ where
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
+            ExecuteResponse::Prepare => command_complete!("PREPARE"),
+            ExecuteResponse::Deallocate { all } => {
+                command_complete!("DEALLOCATE{}", if all { " ALL" } else { "" })
+            }
         }
     }
 
@@ -1179,7 +1187,7 @@ where
         &mut self,
         row_desc: RelationDesc,
         portal_name: String,
-        mut rows: RowBatchStream,
+        mut rows: InProgressRows,
         max_rows: ExecuteCount,
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
@@ -1229,10 +1237,16 @@ where
         loop {
             // Fetch next batch of rows, waiting for a possible requested timeout or
             // cancellation.
-            let batch = tokio::select! {
-                _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
-                _ = self.coord_client.canceled() => FetchResult::Cancelled,
-                batch = rows.next() => FetchResult::Rows(batch),
+            let batch = if self.coord_client.canceled().now_or_never().is_some() {
+                FetchResult::Cancelled
+            } else if rows.current.is_some() {
+                FetchResult::Rows(rows.current.take())
+            } else {
+                tokio::select! {
+                    _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                    _ = self.coord_client.canceled() => FetchResult::Cancelled,
+                    batch = rows.remaining.recv() => FetchResult::Rows(batch),
+                }
             };
 
             match batch {
@@ -1293,7 +1307,7 @@ where
                     // (if any) back and stop sending.
                     if want_rows == 0 {
                         if !batch_rows.is_empty() {
-                            rows = Box::new(stream::iter(vec![batch_rows]).chain(rows));
+                            rows.current = Some(batch_rows);
                         }
                         break;
                     }
@@ -1416,7 +1430,7 @@ where
                         ))
                     .await;
                 },
-                batch = stream.next() => match batch {
+                batch = stream.recv() => match batch {
                     None => break,
                     Some(rows) => {
                         count += rows.len();

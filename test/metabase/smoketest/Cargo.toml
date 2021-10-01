@@ -11,5 +11,5 @@ itertools = "0.10.1"
 log = "0.4.13"
 metabase = { path = "../../../src/metabase" }
 ore = { path = "../../../src/ore" }
-tokio = "1.11.0"
+tokio = "1.12.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

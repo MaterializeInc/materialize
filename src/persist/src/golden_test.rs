@@ -14,6 +14,7 @@ use timely::progress::Antichain;
 
 use crate::error::{Error, ErrorLog};
 use crate::indexed::runtime::{self, RuntimeClient, RuntimeConfig};
+use crate::indexed::Snapshot;
 use crate::mem::{MemBlob, MemRegistry};
 use crate::nemesis::direct::Direct;
 use crate::nemesis::generator::{Generator, GeneratorConfig};
@@ -139,6 +140,7 @@ fn golden_state(blob_json: &str) -> Result<PersistState, Error> {
         ErrorLog,
         blob,
         &MetricsRegistry::new(),
+        None,
     )?;
     let state = PersistState::slurp_from(&persist)?;
     persist.stop()?;
@@ -156,6 +158,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
             ErrorLog,
             blob,
             &MetricsRegistry::new(),
+            None,
         )
     })?;
     for req in reqs.iter() {
@@ -207,12 +210,13 @@ impl PersistState {
         let mut streams = Vec::new();
         for name in ('a'..='e').map(|x| x.to_string()) {
             let (_, read) = persist.create_or_load(&name)?;
-            let mut snap = read.snapshot()?;
-            let snap_data = snap.read_to_end_flattened()?;
+            let snap = read.snapshot()?;
+            let (seal, since) = (snap.get_seal(), snap.since());
+            let snap_data = snap.into_iter().collect::<Result<Vec<_>, Error>>()?;
             streams.push(PersistStreamState {
                 name,
-                seal: snap.get_seal(),
-                since: snap.since(),
+                seal,
+                since,
                 snap: snap_data,
             });
         }
