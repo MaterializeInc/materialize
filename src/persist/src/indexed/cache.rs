@@ -146,7 +146,7 @@ impl<B: Blob> BlobCache<B> {
     pub fn set_unsealed_batch(
         &mut self,
         key: String,
-        batch: BlobUnsealedBatch,
+        batch: &BlobUnsealedBatch,
     ) -> Result<u64, Error> {
         if key == Self::META_KEY {
             return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
@@ -154,7 +154,7 @@ impl<B: Blob> BlobCache<B> {
         debug_assert_eq!(batch.validate(), Ok(()), "{:?}", &batch);
 
         let mut val = Vec::new();
-        unsafe { abomonation::encode(&batch, &mut val) }.expect("write to Vec is infallible");
+        unsafe { abomonation::encode(batch, &mut val) }.expect("write to Vec is infallible");
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
@@ -169,7 +169,7 @@ impl<B: Blob> BlobCache<B> {
         self.metrics.unsealed.blob_write_count.inc();
         self.metrics.unsealed.blob_write_bytes.inc_by(val_len);
 
-        self.unsealed.lock()?.insert(key, Arc::new(batch));
+        //self.unsealed.lock()?.insert(key, Arc::new(batch.clone()));
         Ok(val_len)
     }
 

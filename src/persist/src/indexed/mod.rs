@@ -693,6 +693,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // unsealeds_seqno_upper to track the sequence number of the next write.
         let write_seqno = self.unsealeds_seqno_upper;
         self.unsealeds_seqno_upper = SeqNo(write_seqno.0 + 1);
+        let mut new_pending = HashMap::new();
 
         // This range represents the [lower, upper) of sequence numbers assigned
         // to this write.
@@ -703,7 +704,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
         // a log. On the other hand, how would we distinguish unsealed batches
         // from each other?
         let desc = write_seqno..self.unsealeds_seqno_upper;
-        for (id, writes) in pending_writes.iter_mut() {
+        for (id, writes) in pending_writes.drain() {
             let unsealed = self
                 .unsealeds
                 .get_mut(&id)
@@ -721,8 +722,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
             let mut desc = desc.clone();
             desc.start = seqno_upper;
 
-            self.drain_pending_writes_inner(*id, writes, &desc)?;
+            let writes = self.drain_pending_writes_inner(id, writes, &desc)?;
+            new_pending.insert(id, writes);
         }
+
+        *pending_writes = new_pending;
 
         self.unsealeds_seqno_upper = desc.end;
 
@@ -800,13 +804,13 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     fn drain_pending_writes_inner(
         &mut self,
         id: Id,
-        updates: &mut Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
+        mut updates: Vec<((Vec<u8>, Vec<u8>), u64, isize)>,
         desc: &Range<SeqNo>,
-    ) -> Result<(), Error> {
-        consolidate_updates_time(updates);
+    ) -> Result<Vec<((Vec<u8>, Vec<u8>), u64, isize)>, Error> {
+        consolidate_updates_time(&mut updates);
 
         if updates.is_empty() {
-            return Ok(());
+            return Ok(updates);
         }
 
         let batch = BlobUnsealedBatch {
@@ -816,11 +820,11 @@ impl<L: Log, B: Blob> Indexed<L, B> {
                 // We never compact Unsealed, so since is always the minimum.
                 Antichain::from_elem(SeqNo(0)),
             ),
-            updates: updates.clone(),
+            updates,
         };
-        self.append_unsealed(id, batch)?;
+        self.append_unsealed(id, &batch)?;
 
-        Ok(())
+        Ok(batch.updates)
     }
 
     /// Atomically moves all writes in unsealed not in advance of the trace's
@@ -971,7 +975,7 @@ impl<L: Log, B: Blob> Indexed<L, B> {
     ///
     /// The caller is responsible for updating META after they've finished
     /// updating unsealeds.
-    fn append_unsealed(&mut self, id: Id, batch: BlobUnsealedBatch) -> Result<(), Error> {
+    fn append_unsealed(&mut self, id: Id, batch: &BlobUnsealedBatch) -> Result<(), Error> {
         let unsealed = self
             .unsealeds
             .get_mut(&id)
@@ -1318,8 +1322,8 @@ mod tests {
 
         // Sanity check that all the data made it into trace as expected.
         let IndexedSnapshot(unsealed, trace, _, _) = block_on(|res| i.snapshot(id, res))?;
-        assert_eq!(unsealed.read_to_end()?, vec![]);
         assert_eq!(trace.read_to_end()?, updates);
+        assert_eq!(unsealed.read_to_end()?, vec![]);
         Ok(())
     }
 

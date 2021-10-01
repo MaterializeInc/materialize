@@ -116,7 +116,7 @@ impl Unsealed {
     /// The input batch is expected to satisfy all [BlobUnsealedBatch] invariants.
     fn write_batch<L: Blob>(
         &mut self,
-        batch: BlobUnsealedBatch,
+        batch: &BlobUnsealedBatch,
         blob: &mut BlobCache<L>,
     ) -> Result<UnsealedBatchMeta, Error> {
         let key = self.new_blob_key();
@@ -151,7 +151,7 @@ impl Unsealed {
     /// updates to this unsealed.
     pub fn append<L: Blob>(
         &mut self,
-        batch: BlobUnsealedBatch,
+        batch: &BlobUnsealedBatch,
         blob: &mut BlobCache<L>,
     ) -> Result<(), Error> {
         if batch.desc.lower() != &self.seqno_upper() {
@@ -282,7 +282,7 @@ impl Unsealed {
             updates,
         };
 
-        self.write_batch(new_batch, blob)
+        self.write_batch(&new_batch, blob)
     }
 
     /// Take one step towards shrinking the representation of this unsealed.
@@ -391,7 +391,7 @@ impl Iterator for UnsealedSnapshotIter {
     }
 }
 
-#[cfg(test)]
+#[cfg(foo)]
 mod tests {
     use differential_dataflow::trace::Description;
 
